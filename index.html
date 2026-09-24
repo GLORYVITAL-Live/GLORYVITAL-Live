@@ -8,6 +8,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    // ใช้ธีมที่ผู้ใช้เลือกไว้ทันที ก่อนหน้าเว็บแสดงผล (กันจอกระพริบ)
+    try {
+      var t = localStorage.getItem('glory_booking_theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  </script>
   <style>
     :root {
       /* โทนแบรนด์ Glory Vital (#DE4481 จาก gloryofficialth.com) */
@@ -36,7 +43,7 @@
       color-scheme: light dark;
     }
     @media (prefers-color-scheme: dark) {
-      :root {
+      :root:not([data-theme="light"]) {
         --bg: #1A1016;
         --surface: #26171F;
         --ink: #FBEAF1;
@@ -60,6 +67,31 @@
         --shadow: none;
       }
     }
+    :root[data-theme="dark"] {
+      --bg: #1A1016;
+      --surface: #26171F;
+      --ink: #FBEAF1;
+      --muted: #C79FB2;
+      --line: #3D2632;
+      --accent: #F2699F;
+      --brand: #F2699F;
+      --brand-ink: #2B0A18;
+      --brand-soft: #46192E;
+      --warn-bg: #2E1D12;
+      --warn-line: #6E4323;
+      --warn-ink: #F6C49C;
+      --info-bg: #3A1627;
+      --info-ink: #F8B6CF;
+      --ok: #5BCF93;
+      --err: #FF8479;
+      --p0: #F2699F;
+      --p1: #F3A574;
+      --p2: #C39BF2;
+      --p3: #5CC9C0;
+      --shadow: none;
+      color-scheme: dark;
+    }
+    :root[data-theme="light"] { color-scheme: light; }
 
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
@@ -91,6 +123,22 @@
     .wordmark .star { color: var(--accent); letter-spacing: 0; margin: 0 .04em; }
     .brand-sub { font-size: 13px; font-weight: 500; color: var(--muted); }
 
+    .top-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .theme-btn {
+      width: 38px; height: 38px; flex-shrink: 0;
+      display: grid; place-items: center;
+      border-radius: 50%; cursor: pointer;
+      background: var(--surface); color: var(--ink);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    .theme-btn:hover { border-color: var(--accent); color: var(--brand); }
+    .theme-btn svg { width: 18px; height: 18px; }
+    .theme-btn .i-sun { display: none; }
+    .is-dark .theme-btn .i-sun { display: block; }
+    .is-dark .theme-btn .i-moon { display: none; }
+    body { transition: background-color .25s, color .25s; }
+
     .user-chip {
       display: flex; align-items: center; gap: 10px;
       background: var(--surface);
@@ -98,7 +146,7 @@
       box-shadow: var(--shadow);
       border-radius: 999px;
       padding: 4px 6px 4px 4px;
-      max-width: 62%;
+      min-width: 0;
     }
     .avatar {
       width: 30px; height: 30px; border-radius: 50%;
@@ -116,10 +164,17 @@
       padding: 6px 8px; border-radius: 999px; white-space: nowrap;
     }
     .signout:hover { background: var(--bg); color: var(--ink); }
+    .signout { display: inline-flex; align-items: center; gap: 4px; }
+    .signout svg { width: 16px; height: 16px; display: none; }
+    @media (max-width: 479px) {
+      .signout svg { display: block; }
+      .signout .lbl { display: none; }
+      .wordmark { font-size: 15px; letter-spacing: .1em; }
+    }
 
     @media (max-width: 479px) {
       .user-email, .brand-sub { display: none; }
-      .user-chip { max-width: 64%; }
+      .user-chip { min-width: 0; }
     }
     .hero { padding: 22px 0 16px; }
     .hero h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; font-weight: 700; color: var(--ink); }
@@ -168,6 +223,22 @@
       scroll-snap-type: x proximity;
     }
     .date-strip::-webkit-scrollbar { display: none; }
+    /* ลากด้วยเมาส์ได้ + ขอบจางบอกว่ายังมีวันที่ต่อ */
+    @media (pointer: fine) { .date-strip { cursor: grab; } }
+    .date-strip.is-dragging { cursor: grabbing; scroll-snap-type: none; user-select: none; }
+    .date-strip.is-dragging .chip { pointer-events: none; }
+    .date-strip.fade-r {
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+      mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+    }
+    .date-strip.fade-l {
+      -webkit-mask-image: linear-gradient(to right, transparent, #000 36px);
+      mask-image: linear-gradient(to right, transparent, #000 36px);
+    }
+    .date-strip.fade-l.fade-r {
+      -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+      mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+    }
     .chip {
       position: relative;
       flex: 0 0 auto;
@@ -207,6 +278,28 @@
       display: inline-flex; align-items: center; gap: 6px;
     }
     .filter[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; }
+
+    /* ---------- สลับมุมมอง การ์ด / ตาราง ---------- */
+    .toolbar-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .toolbar-row .filters { margin-top: 0; flex: 1; min-width: 0; }
+    .view-toggle {
+      display: inline-flex; margin-left: auto; flex-shrink: 0;
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 999px; padding: 2px;
+    }
+    .view-btn {
+      border: none; background: transparent; cursor: pointer;
+      border-radius: 999px; padding: 4px 11px;
+      font-size: 13px; color: var(--muted);
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .view-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+    .view-btn:hover { color: var(--ink); }
+    @media (max-width: 479px) {
+      .view-btn .lbl { display: none; }
+      .view-btn { padding: 5px 9px; }
+    }
+    .view-btn[aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); font-weight: 600; }
 
     /* ---------- รายการ slot ---------- */
     .day { padding-top: 18px; scroll-margin-top: calc(var(--toolbar-h) + 4px); }
@@ -259,6 +352,45 @@
     .slot.is-selected .check { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
     .slot.is-blocked { opacity: .42; }
     .slot.is-blocked:hover { border-color: var(--line); }
+
+    /* มุมมองตาราง: ใช้ปุ่ม slot ชุดเดิม แค่จัดวางเป็นแถว */
+    .table-head { display: none; }
+    body.view-table .slot-grid {
+      grid-template-columns: 1fr; gap: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    body.view-table .table-head,
+    body.view-table .slot {
+      display: grid;
+      grid-template-columns: 24px minmax(116px, 1fr) minmax(0, 1.2fr) 52px;
+      gap: 12px; align-items: center;
+    }
+    body.view-table .table-head {
+      padding: 8px 14px;
+      background: var(--brand-soft);
+      color: var(--info-ink);
+      font-size: 12px; font-weight: 600;
+    }
+    .table-head span:last-child { text-align: right; }
+    body.view-table .slot {
+      border: none; border-top: 1px solid var(--line);
+      border-radius: 0; box-shadow: none;
+      min-height: 50px; padding: 8px 14px;
+    }
+    body.view-table .slot-text,
+    body.view-table .slot-meta { display: contents; }
+    body.view-table .check { order: -1; width: 22px; height: 22px; }
+    body.view-table .check svg { width: 12px; height: 12px; }
+    body.view-table .slot-time { font-size: 15px; }
+    body.view-table .slot-meta .tag { font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    body.view-table .slot-meta > span:last-child { text-align: right; color: var(--muted); font-size: 13px; }
+    body.view-table .slot:hover { background: var(--bg); border-color: var(--line); }
+    body.view-table .slot.is-selected,
+    body.view-table .slot.is-selected:hover { background: var(--brand-soft); box-shadow: inset 3px 0 0 var(--brand); }
 
     /* ---------- สถานะ ---------- */
     .state { text-align: center; padding: 48px 16px; color: var(--muted); }
@@ -354,13 +486,19 @@
   <div class="page">
     <header class="topbar">
       <div class="brand"><span class="wordmark" aria-label="GLORY VITAL">GL<span class="star">✦</span>RY VITAL</span><span class="brand-sub">Live booking</span></div>
+      <div class="top-actions">
+      <button type="button" class="theme-btn" id="themeBtn">
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
+      </button>
       <div class="user-chip" id="userChip" hidden>
         <span class="avatar" id="userAvatar" aria-hidden="true"></span>
         <span class="user-text">
           <span class="user-name" id="userName"></span>
           <span class="user-email" id="userEmail"></span>
         </span>
-        <button type="button" class="signout" id="signOutBtn">ออกจากระบบ</button>
+        <button type="button" class="signout" id="signOutBtn" aria-label="ออกจากระบบ" title="ออกจากระบบ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/></svg><span class="lbl">ออกจากระบบ</span></button>
+      </div>
       </div>
     </header>
 
@@ -382,7 +520,19 @@
 
     <div class="toolbar" id="toolbar" hidden>
       <nav class="date-strip" id="dateStrip" aria-label="เลือกวันที่"></nav>
-      <div class="filters" id="filters" role="group" aria-label="กรองตามแพลตฟอร์ม" hidden></div>
+      <div class="toolbar-row">
+        <div class="filters" id="filters" role="group" aria-label="กรองตามแพลตฟอร์ม" hidden></div>
+        <div class="view-toggle" role="group" aria-label="รูปแบบการแสดงผล">
+          <button type="button" class="view-btn" data-view="card" aria-pressed="true" aria-label="แสดงแบบการ์ด">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></svg>
+            <span class="lbl">การ์ด</span>
+          </button>
+          <button type="button" class="view-btn" data-view="table" aria-pressed="false" aria-label="แสดงแบบตาราง">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+            <span class="lbl">ตาราง</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <main id="dayList"></main>
@@ -685,6 +835,10 @@
         h.appendChild(el('span', 'day-count'));
         sec.appendChild(h);
         const grid = el('div', 'slot-grid');
+        const head = el('div', 'table-head');
+        head.setAttribute('aria-hidden', 'true');
+        ['', 'เวลา', 'แพลตฟอร์ม', 'ชม.'].forEach(t => head.appendChild(el('span', '', t)));
+        grid.appendChild(head);
         groups.get(k).forEach(s => grid.appendChild(buildCard(s)));
         sec.appendChild(grid);
         list.appendChild(sec);
@@ -749,6 +903,68 @@
       });
     }
 
+    // ---------- ลากแถบวันที่ด้วยเมาส์ / เลื่อนด้วยลูกกลิ้ง ----------
+    // (บนมือถือปัดด้วยนิ้วได้อยู่แล้ว ส่วนนี้เพิ่มให้คอมพิวเตอร์)
+    function updateStripFade() {
+      const strip = $('dateStrip');
+      const max = strip.scrollWidth - strip.clientWidth;
+      strip.classList.toggle('fade-l', strip.scrollLeft > 2);
+      strip.classList.toggle('fade-r', strip.scrollLeft < max - 2);
+    }
+
+    function enableDragScroll(strip) {
+      let down = false, dragging = false, startX = 0, startLeft = 0, pid = null;
+
+      strip.addEventListener('pointerdown', e => {
+        if (e.pointerType !== 'mouse' || e.button !== 0) return;
+        down = true; dragging = false;
+        startX = e.clientX; startLeft = strip.scrollLeft; pid = e.pointerId;
+      });
+
+      strip.addEventListener('pointermove', e => {
+        if (!down || e.pointerId !== pid) return;
+        const dx = e.clientX - startX;
+        if (!dragging && Math.abs(dx) > 5) {
+          dragging = true;
+          strip.classList.add('is-dragging');
+          try { strip.setPointerCapture(pid); } catch (_) {}
+        }
+        if (dragging) {
+          strip.scrollLeft = startLeft - dx;
+          e.preventDefault();
+        }
+      });
+
+      function end() {
+        if (!down) return;
+        down = false;
+        if (!dragging) return;
+        strip.classList.remove('is-dragging');
+        try { strip.releasePointerCapture(pid); } catch (_) {}
+        // กันไม่ให้การปล่อยเมาส์หลังลาก ถูกนับเป็นการกดเลือกวัน
+        const swallow = ev => { ev.stopPropagation(); ev.preventDefault(); };
+        strip.addEventListener('click', swallow, { capture: true, once: true });
+        setTimeout(() => strip.removeEventListener('click', swallow, { capture: true }), 0);
+      }
+      strip.addEventListener('pointerup', end);
+      strip.addEventListener('pointercancel', end);
+      strip.addEventListener('dragstart', e => e.preventDefault());
+
+      // หมุนลูกกลิ้งเมาส์ขึ้น-ลง = เลื่อนวันที่ซ้าย-ขวา (สุดทางแล้วปล่อยให้หน้าเลื่อนตามปกติ)
+      strip.addEventListener('wheel', e => {
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+        const max = strip.scrollWidth - strip.clientWidth;
+        if (max <= 0) return;
+        if ((e.deltaY < 0 && strip.scrollLeft <= 0) || (e.deltaY > 0 && strip.scrollLeft >= max - 1)) return;
+        strip.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }, { passive: false });
+
+      strip.addEventListener('scroll', updateStripFade, { passive: true });
+      window.addEventListener('resize', updateStripFade);
+    }
+    enableDragScroll($('dateStrip'));
+
     function renderFilters() {
       const wrap = $('filters');
       wrap.innerHTML = '';
@@ -787,6 +1003,7 @@
         }
         if (visible) any = true;
       });
+      updateStripFade();
       $('filterEmpty').hidden = any || !slotByRow.size;
     }
 
@@ -813,6 +1030,41 @@
       }, { rootMargin: `-${top}px 0px -65% 0px` });
       document.querySelectorAll('.day').forEach(sec => dayObserver.observe(sec));
     }
+
+    // ---------- ธีมสว่าง / มืด (จำค่าไว้ในเครื่องผู้ใช้) ----------
+    const THEME_KEY = 'glory_booking_theme';
+    const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    function effectiveTheme() {
+      const t = document.documentElement.getAttribute('data-theme');
+      return t === 'light' || t === 'dark' ? t : (darkQuery.matches ? 'dark' : 'light');
+    }
+    function syncThemeUi() {
+      const dark = effectiveTheme() === 'dark';
+      document.documentElement.classList.toggle('is-dark', dark);
+      const btn = $('themeBtn');
+      btn.setAttribute('aria-label', dark ? 'เปลี่ยนเป็นธีมสว่าง' : 'เปลี่ยนเป็นธีมมืด');
+      btn.title = btn.getAttribute('aria-label');
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = dark ? '#1A1016' : '#FFF7FA';
+    }
+    $('themeBtn').addEventListener('click', () => {
+      const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+      syncThemeUi();
+    });
+    darkQuery.addEventListener('change', syncThemeUi);
+    syncThemeUi();
+
+    // ---------- มุมมอง การ์ด / ตาราง (จำค่าไว้ในเครื่องผู้ใช้) ----------
+    const VIEW_KEY = 'glory_booking_view';
+    function setView(mode) {
+      document.body.classList.toggle('view-table', mode === 'table');
+      document.querySelectorAll('.view-btn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === mode)));
+      try { localStorage.setItem(VIEW_KEY, mode); } catch (e) {}
+    }
+    document.querySelectorAll('.view-btn').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+    setView((() => { try { return localStorage.getItem(VIEW_KEY); } catch (e) { return null; } })() === 'table' ? 'table' : 'card');
 
     // ---------- เลือก slot ----------
     function blockReason(s) {
