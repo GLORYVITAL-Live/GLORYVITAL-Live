@@ -191,7 +191,7 @@
   <script>
     // ★★★ ตั้งค่าตรงนี้ ★★★
     // URL ของ Apps Script web app (ลงท้ายด้วย /exec) จาก Deploy > Manage deployments
-    const API_URL = 'https://script.google.com/macros/s/AKfycbytXzZG_-p41OIMjYMXphLoKdlXRoxvPiwCK9khlJMX7BlwpCddE9qSu74wfT8wbzXd/exec';
+    const API_URL = 'https://script.google.com/macros/s/AKfycbzKZN_rbSgtpsSfHJMg07frKFIVzBr11U1Y6pazSpOdX-oyyAvEmfr4YGApop_xemyq/exec';
     const GOOGLE_CLIENT_ID = '1061582080754-eblmgn19o2cvds5sg22d7p70me7qitbs.apps.googleusercontent.com';
 
     const TOKEN_KEY = 'glory_booking_id_token';
@@ -209,7 +209,32 @@
         body: JSON.stringify(Object.assign({ action: action }, payload || {})),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.json();
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        throw new Error('ระบบตอบกลับผิดรูปแบบ (Google อาจขัดข้องชั่วคราว)');
+      }
+    }
+
+    // ใช้กับคำสั่งที่อ่านข้อมูลอย่างเดียว (init, login) ลองซ้ำได้โดยไม่มีผลข้างเคียง
+    async function callApiWithRetry(action, payload, onRetry) {
+      const delays = [1000, 2500];
+      let lastErr;
+      for (let attempt = 0; attempt <= delays.length; attempt++) {
+        try {
+          const res = await callApi(action, payload);
+          if (res.ok || res.authError) return res;
+          lastErr = new Error(res.message || 'ไม่ทราบสาเหตุ');
+        } catch (err) {
+          lastErr = err;
+        }
+        if (attempt < delays.length) {
+          if (onRetry) onRetry(attempt + 1);
+          await new Promise(r => setTimeout(r, delays[attempt]));
+        }
+      }
+      throw lastErr;
     }
 
     // ---------- Token ----------
@@ -243,7 +268,7 @@
     async function signIn(credential, silent) {
       setAuthUi('checking');
       try {
-        const res = await callApi('login', { idToken: credential });
+        const res = await callApiWithRetry('login', { idToken: credential });
         if (res.ok) {
           idToken = credential;
           currentUser = { mcName: res.mcName, email: res.email };
@@ -295,8 +320,9 @@
       content.className = 'loading';
       content.textContent = 'กำลังโหลด slot ที่ว่าง...';
       try {
-        const res = await callApi('init');
-        if (!res.ok) throw new Error(res.message);
+        const res = await callApiWithRetry('init', null, n => {
+          content.textContent = `กำลังโหลด slot ที่ว่าง... (ลองใหม่ครั้งที่ ${n})`;
+        });
         applyNotices(res.siteNotice, res.scheduleNotice);
         renderSlots(res.slots || []);
       } catch (err) {
@@ -493,8 +519,10 @@
         }
         loadAll();
       } catch (err) {
-        showToast('เชื่อมต่อระบบไม่สำเร็จ: ' + err.message, 'error');
-        resetButton();
+        // ไม่ลองจองซ้ำอัตโนมัติ เพราะคำขออาจถึงระบบแล้วแต่คำตอบหายระหว่างทาง
+        // โหลดรายการใหม่แทน ถ้า slot หายไปแปลว่าจองสำเร็จแล้ว
+        showToast('ไม่ได้รับคำตอบจากระบบ กำลังโหลดรายการใหม่ ถ้า slot หายไปแปลว่าจองสำเร็จแล้ว', 'error');
+        loadAll();
       }
     }
 
