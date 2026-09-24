@@ -2,191 +2,423 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Booking Slot GLORY VITAL Live Streaming</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#FFF7FA">
+  <title>จองคิวไลฟ์ | GLORY VITAL</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    :root {
+      /* โทนแบรนด์ Glory Vital (#DE4481 จาก gloryofficialth.com) */
+      --bg: #FFF7FA;
+      --surface: #FFFFFF;
+      --ink: #3A1628;
+      --muted: #8C6879;
+      --line: #F2DCE6;
+      --accent: #DE4481;      /* ชมพูแบรนด์ ใช้กับจุดตกแต่ง */
+      --brand: #C62F6A;       /* ชมพูเข้ม ใช้กับปุ่ม/ตัวหนังสือ (อ่านง่ายกว่าบนพื้นขาว) */
+      --brand-ink: #FFFFFF;
+      --brand-soft: #FDE8F0;
+      --warn-bg: #FFF2E8;
+      --warn-line: #F6BE93;
+      --warn-ink: #8A4413;
+      --info-bg: #FDE8F0;
+      --info-ink: #9C2356;
+      --ok: #1C7A4E;
+      --err: #C0352B;
+      --p0: #DE4481;
+      --p1: #E8894F;
+      --p2: #9A5BD8;
+      --p3: #2E9C94;
+      --shadow: 0 1px 2px rgba(122, 31, 71, .05), 0 4px 14px rgba(122, 31, 71, .06);
+      --toolbar-h: 132px;
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1A1016;
+        --surface: #26171F;
+        --ink: #FBEAF1;
+        --muted: #C79FB2;
+        --line: #3D2632;
+        --accent: #F2699F;
+        --brand: #F2699F;
+        --brand-ink: #2B0A18;
+        --brand-soft: #46192E;
+        --warn-bg: #2E1D12;
+        --warn-line: #6E4323;
+        --warn-ink: #F6C49C;
+        --info-bg: #3A1627;
+        --info-ink: #F8B6CF;
+        --ok: #5BCF93;
+        --err: #FF8479;
+        --p0: #F2699F;
+        --p1: #F3A574;
+        --p2: #C39BF2;
+        --p3: #5CC9C0;
+        --shadow: none;
+      }
+    }
+
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { -webkit-text-size-adjust: 100%; }
     body {
-      font-family: 'Segoe UI', Tahoma, 'Noto Sans Thai', 'Leelawadee UI', sans-serif;
-      margin: 0 auto;
-      max-width: 900px;
-      padding: 20px;
-      background: #f5f5f7;
-      color: #1a1a1a;
-    }
-    h1 { font-size: 20px; margin-bottom: 4px; }
-    .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
-
-    .auth-box { margin-bottom: 16px; min-height: 44px; }
-    .auth-hint { font-size: 13px; color: #555; margin: 0 0 8px; }
-    .user-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      background: #e8f0fe;
-      color: #1a4a8a;
-      padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 13px;
-    }
-    .link-btn {
-      background: none;
-      border: none;
-      color: #1a73e8;
-      text-decoration: underline;
-      font-size: 13px;
-      cursor: pointer;
-      padding: 0;
-    }
-
-    .lock-banner, .info-banner {
-      padding: 12px 16px;
-      border-radius: 10px;
-      margin-bottom: 16px;
-      font-size: 14px;
-      display: none;
-    }
-    .lock-banner { background: #fef7e0; border: 1px solid #f9ab00; color: #7a5900; font-weight: 600; }
-    .info-banner { background: #e8f0fe; border: 1px solid #1a73e8; color: #174ea6; }
-
-    .date-jump-bar {
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      background: #f5f5f7;
-      padding: 10px 0 12px;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    .date-jump-bar label { font-size: 13px; color: #444; white-space: nowrap; }
-    .date-jump-bar select {
-      flex: 1;
-      min-width: 180px;
-      max-width: 280px;
-      padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-      font-size: 14px;
-      background: white;
-    }
-    .today-btn {
-      background: white;
-      border: 1px solid #1a73e8;
-      color: #1a73e8;
-      border-radius: 8px;
-      padding: 7px 14px;
-      font-size: 13px;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    .today-btn:hover { background: #e8f0fe; }
-
-    .day-group { margin-bottom: 20px; scroll-margin-top: 90px; }
-    .day-header {
-      font-weight: 600;
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: 'IBM Plex Sans Thai', 'Leelawadee UI', 'Noto Sans Thai', Tahoma, sans-serif;
       font-size: 15px;
-      padding-bottom: 4px;
-      border-bottom: 2px solid #ddd;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 8px;
+      line-height: 1.5;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
     }
-    .bulk-book-btn {
-      background: #1e8e3e;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      padding: 6px 14px;
+    body.has-bar { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+    button { font: inherit; color: inherit; }
+    button:focus-visible, a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .page { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+
+    /* ---------- ส่วนหัว ---------- */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: calc(14px + env(safe-area-inset-top, 0px)) 0 8px;
+    }
+    .brand { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+    .wordmark { font-weight: 700; font-size: 17px; letter-spacing: .14em; color: var(--ink); }
+    .wordmark .star { color: var(--accent); letter-spacing: 0; margin: 0 .04em; }
+    .brand-sub { font-size: 13px; font-weight: 500; color: var(--muted); }
+
+    .user-chip {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      border-radius: 999px;
+      padding: 4px 6px 4px 4px;
+      max-width: 62%;
+    }
+    .avatar {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: var(--brand-soft); color: var(--brand);
+      display: grid; place-items: center;
+      font-weight: 600; font-size: 14px; flex-shrink: 0;
+    }
+    .user-text { min-width: 0; line-height: 1.2; }
+    .user-name, .user-email { display: block; }
+    .user-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .user-email { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .signout {
+      border: none; background: none; cursor: pointer;
+      font-size: 12px; color: var(--muted);
+      padding: 6px 8px; border-radius: 999px; white-space: nowrap;
+    }
+    .signout:hover { background: var(--bg); color: var(--ink); }
+
+    @media (max-width: 479px) {
+      .user-email, .brand-sub { display: none; }
+      .user-chip { max-width: 64%; }
+    }
+    .hero { padding: 22px 0 16px; }
+    .hero h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; font-weight: 700; color: var(--ink); }
+    .hero h1::after {
+      content: ''; display: block; width: 36px; height: 3px; border-radius: 3px;
+      background: var(--accent); margin-top: 10px;
+    }
+    .hero p { margin: 0; color: var(--muted); max-width: 52ch; }
+
+    /* ---------- เข้าสู่ระบบ ---------- */
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      border-radius: 20px;
+      padding: 16px;
+      margin-bottom: 14px;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; flex-wrap: wrap;
+      transition: box-shadow .3s;
+    }
+    .login-card.is-flash { box-shadow: 0 0 0 3px var(--brand); }
+    .login-card strong { display: block; font-size: 15px; }
+    .login-card span { color: var(--muted); font-size: 13px; }
+    #gsiButton { min-height: 40px; }
+
+    /* ---------- ประกาศ ---------- */
+    .notice { border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; font-size: 14px; display: flex; gap: 10px; }
+    .notice-lock { background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn-ink); font-weight: 500; }
+    .notice-info { background: var(--info-bg); color: var(--info-ink); }
+
+    /* ---------- แถบวันที่ (ติดด้านบน) ---------- */
+    .toolbar {
+      position: sticky; top: 0; z-index: 20;
+      background: var(--bg);
+      padding: 10px 0 10px;
+      border-bottom: 1px solid var(--line);
+      margin: 0 -16px;
+      padding-left: 16px; padding-right: 16px;
+    }
+    .date-strip {
+      display: flex; gap: 8px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      padding: 2px 2px 4px;
+      scroll-snap-type: x proximity;
+    }
+    .date-strip::-webkit-scrollbar { display: none; }
+    .chip {
+      position: relative;
+      flex: 0 0 auto;
+      min-width: 58px;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 8px 8px 7px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      cursor: pointer;
+      scroll-snap-align: start;
+      line-height: 1.15;
+    }
+    .chip-wd { font-size: 12px; color: var(--muted); }
+    .chip-day { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .chip-mon { font-size: 11px; color: var(--muted); }
+    .chip-count { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .chip:hover { border-color: var(--accent); }
+    .chip.is-active { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); box-shadow: 0 4px 12px rgba(198, 47, 106, .28); }
+    .chip.is-active .chip-wd, .chip.is-active .chip-mon, .chip.is-active .chip-count { color: var(--brand-ink); opacity: .85; }
+    .chip.is-active.has-sel::after { background: var(--brand-ink); }
+    .chip.has-sel::after {
+      content: ''; position: absolute; top: 6px; right: 6px;
+      width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+    }
+
+    .filters { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; scrollbar-width: none; }
+    .filters::-webkit-scrollbar { display: none; }
+    .filter {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      background: transparent;
+      border-radius: 999px;
+      padding: 4px 12px;
       font-size: 13px;
       cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px;
     }
-    .bulk-book-btn:disabled { background: #ccc; cursor: not-allowed; }
-    .slot-card {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: white;
-      border-radius: 10px;
-      padding: 12px 16px;
-      margin-bottom: 8px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    .filter[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; }
+
+    /* ---------- รายการ slot ---------- */
+    .day { padding-top: 18px; scroll-margin-top: calc(var(--toolbar-h) + 4px); }
+    .day-title {
+      font-size: 16px; font-weight: 600; margin: 0 0 10px;
+      display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
     }
-    .slot-left { display: flex; align-items: center; flex: 1; }
-    .slot-checkbox { width: 20px; height: 20px; margin-right: 12px; cursor: pointer; flex-shrink: 0; }
-    .slot-info { font-size: 14px; }
-    .slot-platform { font-weight: 600; }
-    .slot-time { color: #555; }
-    .book-btn {
-      background: #1a73e8;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      padding: 8px 16px;
-      font-size: 14px;
+    .rel {
+      font-size: 12px; font-weight: 600;
+      color: var(--brand); background: var(--brand-soft);
+      padding: 1px 8px; border-radius: 999px;
+    }
+    .day-count { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: auto; }
+
+    .slot-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    @media (min-width: 560px) { .slot-grid { grid-template-columns: 1fr 1fr; } }
+
+    .slot {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      width: 100%;
+      text-align: left;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 12px 14px 12px 16px;
+      min-height: 66px;
       cursor: pointer;
+      transition: background .15s, border-color .15s, opacity .15s;
     }
-    .book-btn:hover { background: #1558b0; }
-    .book-btn:disabled { background: #aaa; cursor: not-allowed; }
-    button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+    .slot:hover { border-color: var(--accent); }
+    .slot-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .slot-time { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+    .slot-meta { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+    .tag { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 500; }
+    .tag::before, .filter.p0::before, .filter.p1::before, .filter.p2::before, .filter.p3::before {
+      content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--pc);
+    }
+    .p0 { --pc: var(--p0); } .p1 { --pc: var(--p1); } .p2 { --pc: var(--p2); } .p3 { --pc: var(--p3); }
 
-    .empty-state, .loading, .error-state { text-align: center; padding: 40px 20px; color: #666; }
+    .check {
+      width: 26px; height: 26px; border-radius: 50%;
+      border: 2px solid var(--line);
+      display: grid; place-items: center; flex-shrink: 0;
+      color: transparent;
+      transition: background .15s, border-color .15s;
+    }
+    .check svg { width: 14px; height: 14px; }
+    .slot.is-selected { background: var(--brand-soft); border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
+    .slot.is-selected .check { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+    .slot.is-blocked { opacity: .42; }
+    .slot.is-blocked:hover { border-color: var(--line); }
 
+    /* ---------- สถานะ ---------- */
+    .state { text-align: center; padding: 48px 16px; color: var(--muted); }
+    .state strong { display: block; color: var(--ink); font-size: 16px; margin-bottom: 4px; }
+    .retry-btn {
+      margin-top: 12px; border: 1px solid var(--brand); color: var(--brand); background: var(--surface);
+      border-radius: 999px; padding: 8px 18px; cursor: pointer;
+    }
+    .skeleton { padding-top: 18px; }
+    .sk-line { height: 18px; width: 40%; border-radius: 6px; background: var(--line); margin-bottom: 12px; }
+    .sk-card { height: 66px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); margin-bottom: 8px; }
+
+    /* ---------- แถบล่าง ---------- */
+    .bar {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+      background: var(--surface);
+      border-top: 1px solid var(--line);
+      box-shadow: 0 -6px 24px rgba(122, 31, 71, .10);
+      padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+      transform: translateY(110%);
+      transition: transform .22s ease-out;
+    }
+    .bar.is-open { transform: translateY(0); }
+    .bar-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 10px; }
+    .bar-info { flex: 1; min-width: 0; line-height: 1.25; }
+    .bar-count { font-weight: 600; }
+    .bar-hours { font-size: 13px; color: var(--muted); }
+    .btn {
+      border: none; border-radius: 999px; cursor: pointer;
+      padding: 12px 20px; font-weight: 600; white-space: nowrap;
+    }
+    .btn-primary { background: var(--brand); color: var(--brand-ink); box-shadow: 0 4px 12px rgba(198, 47, 106, .25); }
+    .btn-primary:hover { filter: brightness(1.06); }
+    .btn-primary:disabled { opacity: .6; cursor: wait; }
+    .btn-ghost { background: transparent; color: var(--muted); padding: 12px 12px; }
+    .btn-ghost:hover { color: var(--ink); }
+
+    /* ---------- หน้าต่างยืนยัน ---------- */
+    dialog {
+      border: none; padding: 0;
+      background: var(--surface); color: var(--ink);
+      width: min(520px, 100%);
+      max-height: 85vh;
+      border-radius: 24px;
+    }
+    dialog::backdrop { background: rgba(58, 22, 40, .45); }
+    @media (max-width: 559px) {
+      dialog { margin: auto 0 0; max-width: 100%; border-radius: 24px 24px 0 0; }
+    }
+    .sheet { display: flex; flex-direction: column; max-height: 85vh; }
+    .sheet-head { padding: 20px 20px 8px; }
+    .sheet-head h2 { margin: 0 0 4px; font-size: 20px; }
+    .sheet-head p { margin: 0; color: var(--muted); font-size: 14px; }
+    .sheet-list { list-style: none; margin: 0; padding: 8px 20px; overflow-y: auto; }
+    .sheet-list li {
+      display: flex; justify-content: space-between; gap: 12px;
+      padding: 12px 0; border-bottom: 1px solid var(--line);
+    }
+    .sheet-list li:last-child { border-bottom: none; }
+    .sum-main { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .sum-sub { font-size: 13px; color: var(--muted); }
+    .sum-status { font-size: 13px; text-align: right; flex-shrink: 0; max-width: 50%; }
+    .sum-status.ok { color: var(--ok); font-weight: 600; }
+    .sum-status.err { color: var(--err); }
+    .sheet-actions {
+      display: flex; gap: 8px; justify-content: flex-end;
+      padding: 12px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+      border-top: 1px solid var(--line);
+    }
+    .sheet-actions .btn-primary { flex: 1; }
+    @media (min-width: 560px) { .sheet-actions .btn-primary { flex: 0 0 auto; } }
+
+    /* ---------- toast ---------- */
     .toast {
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: #333;
-      color: white;
-      padding: 12px 20px;
-      border-radius: 8px;
-      font-size: 14px;
-      max-width: 90%;
-      text-align: center;
-      display: none;
-      z-index: 100;
+      position: fixed; left: 50%; bottom: 24px; z-index: 50;
+      transform: translate(-50%, 20px);
+      opacity: 0; pointer-events: none;
+      background: var(--ink); color: var(--bg);
+      padding: 11px 18px; border-radius: 12px;
+      font-size: 14px; max-width: calc(100% - 32px); width: max-content; text-align: center;
+      transition: opacity .2s, transform .2s;
     }
-    .toast.success { background: #1e8e3e; }
-    .toast.error { background: #c5221f; }
+    .toast.is-show { opacity: 1; transform: translate(-50%, 0); }
+    .toast.error { background: var(--err); color: #fff; }
+    body.has-bar .toast { bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
   </style>
 </head>
 <body>
-  <h1>ระบบจองคิวไลฟ์ Mc</h1>
-  <div class="subtitle">เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ เลือก slot ที่ว่างแล้วกด "จอง" ระบบจะขึ้นปฏิทินให้ทันที</div>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand"><span class="wordmark" aria-label="GLORY VITAL">GL<span class="star">✦</span>RY VITAL</span><span class="brand-sub">Live booking</span></div>
+      <div class="user-chip" id="userChip" hidden>
+        <span class="avatar" id="userAvatar" aria-hidden="true"></span>
+        <span class="user-text">
+          <span class="user-name" id="userName"></span>
+          <span class="user-email" id="userEmail"></span>
+        </span>
+        <button type="button" class="signout" id="signOutBtn">ออกจากระบบ</button>
+      </div>
+    </header>
 
-  <div id="lockBanner" class="lock-banner"></div>
-  <div id="infoBanner" class="info-banner"></div>
+    <section class="hero">
+      <h1>จองคิวไลฟ์</h1>
+      <p>แตะเลือก slot ที่ต้องการ แล้วกดจองที่แถบด้านล่าง ระบบจะลงปฏิทินให้อัตโนมัติ</p>
+    </section>
 
-  <div class="auth-box">
-    <div id="signedOut" style="display:none;">
-      <p class="auth-hint">เข้าสู่ระบบก่อนจึงจะจองได้</p>
+    <div class="login-card" id="loginCard" hidden>
+      <div>
+        <strong id="loginTitle">เข้าสู่ระบบก่อนจอง</strong>
+        <span id="loginHint">ใช้อีเมลที่ลงทะเบียนไว้กับทีมงาน</span>
+      </div>
       <div id="gsiButton"></div>
     </div>
-    <div id="authChecking" class="auth-hint" style="display:none;">กำลังตรวจสอบบัญชี...</div>
-    <div id="signedIn" class="user-badge" style="display:none;">
-      <span id="signedInText"></span>
-      <button type="button" class="link-btn" id="signOutBtn">ออกจากระบบ</button>
+
+    <div class="notice notice-lock" id="lockBanner" role="status" hidden></div>
+    <div class="notice notice-info" id="infoBanner" hidden></div>
+
+    <div class="toolbar" id="toolbar" hidden>
+      <nav class="date-strip" id="dateStrip" aria-label="เลือกวันที่"></nav>
+      <div class="filters" id="filters" role="group" aria-label="กรองตามแพลตฟอร์ม" hidden></div>
+    </div>
+
+    <main id="dayList"></main>
+    <div class="state" id="filterEmpty" hidden>
+      <strong>ไม่มี slot ว่างของแพลตฟอร์มนี้</strong>
+      ลองเลือก "ทั้งหมด" เพื่อดู slot อื่น
     </div>
   </div>
 
-  <div class="date-jump-bar">
-    <label for="dateJump">กระโดดไปวันที่:</label>
-    <select id="dateJump">
-      <option value="">-- เลือกวันที่ --</option>
-    </select>
-    <button type="button" class="today-btn" id="jumpTopBtn">⬆ กลับขึ้นบนสุด</button>
+  <div class="bar" id="bar" aria-hidden="true" inert>
+    <div class="bar-inner">
+      <div class="bar-info">
+        <div class="bar-count" id="barCount"></div>
+        <div class="bar-hours" id="barHours"></div>
+      </div>
+      <button type="button" class="btn btn-ghost" id="barClear">ล้าง</button>
+      <button type="button" class="btn btn-primary" id="barAction"></button>
+    </div>
   </div>
 
-  <div id="content" class="loading">กำลังโหลด slot ที่ว่าง...</div>
+  <dialog id="dlg" aria-labelledby="dlgTitle">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2 id="dlgTitle"></h2>
+        <p id="dlgNote"></p>
+      </div>
+      <ul class="sheet-list" id="dlgList"></ul>
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-ghost" id="dlgCancel">ยกเลิก</button>
+        <button type="button" class="btn btn-primary" id="dlgConfirm">ยืนยันการจอง</button>
+        <button type="button" class="btn btn-primary" id="dlgDone" hidden>เสร็จสิ้น</button>
+      </div>
+    </div>
+  </dialog>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
     // ★★★ ตั้งค่าตรงนี้ ★★★
@@ -194,11 +426,55 @@
     const API_URL = 'https://script.google.com/macros/s/AKfycbzKZN_rbSgtpsSfHJMg07frKFIVzBr11U1Y6pazSpOdX-oyyAvEmfr4YGApop_xemyq/exec';
     const GOOGLE_CLIENT_ID = '1061582080754-eblmgn19o2cvds5sg22d7p70me7qitbs.apps.googleusercontent.com';
 
+    // ให้ตรงกับค่าใน Apps Script (ฝั่ง server เช็คซ้ำอีกชั้นเสมอ)
+    const MAX_SLOTS_PER_DAY = 2;
+    const MAX_HOURS_PER_DAY = 4;
+    const MAX_PER_REQUEST = 10;
+
     const TOKEN_KEY = 'glory_booking_id_token';
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     let idToken = null;
     let currentUser = null;
     let isLocked = false;
+    let activeFilter = 'all';
+    let platformIndex = {};
+    let dayObserver = null;
     let toastTimer = null;
+    const slotByRow = new Map();
+    const cardByRow = new Map();
+    const selected = new Map();
+
+    const $ = id => document.getElementById(id);
+    function el(tag, cls, text) {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text !== undefined) n.textContent = text;
+      return n;
+    }
+
+    // ---------- วันที่ภาษาไทย (ปี ค.ศ. ให้ตรงกับชีต) ----------
+    const fmtDayLong = new Intl.DateTimeFormat('th-TH-u-ca-gregory', { weekday: 'long', day: 'numeric', month: 'long' });
+    const fmtDayShort = new Intl.DateTimeFormat('th-TH-u-ca-gregory', { weekday: 'short', day: 'numeric', month: 'short' });
+    const fmtWeekShort = new Intl.DateTimeFormat('th-TH-u-ca-gregory', { weekday: 'short' });
+    const fmtMonthShort = new Intl.DateTimeFormat('th-TH-u-ca-gregory', { month: 'short' });
+
+    function parseKey(k) { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); }
+    function keyOf(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+    function relLabel(k) {
+      const t = new Date(); t.setHours(0, 0, 0, 0);
+      if (k === keyOf(t)) return 'วันนี้';
+      t.setDate(t.getDate() + 1);
+      if (k === keyOf(t)) return 'พรุ่งนี้';
+      return '';
+    }
+    function hoursOf(s) {
+      let h = (s.endMs - s.startMs) / 3600000;
+      if (h <= 0) h += 24; // slot ข้ามเที่ยงคืน
+      return h;
+    }
+    function fmtHours(h) { return (Number.isInteger(h) ? h : h.toFixed(1)) + ' ชม.'; }
+    function platformOf(s) { return s.platform || 'Live'; }
 
     // ---------- เรียก API ----------
     // ส่งแบบ text/plain เพื่อไม่ให้ browser ส่ง preflight (Apps Script ไม่รองรับ OPTIONS)
@@ -218,7 +494,7 @@
     }
 
     // ใช้กับคำสั่งที่อ่านข้อมูลอย่างเดียว (init, login) ลองซ้ำได้โดยไม่มีผลข้างเคียง
-    async function callApiWithRetry(action, payload, onRetry) {
+    async function callApiWithRetry(action, payload) {
       const delays = [1000, 2500];
       let lastErr;
       for (let attempt = 0; attempt <= delays.length; attempt++) {
@@ -229,10 +505,7 @@
         } catch (err) {
           lastErr = err;
         }
-        if (attempt < delays.length) {
-          if (onRetry) onRetry(attempt + 1);
-          await new Promise(r => setTimeout(r, delays[attempt]));
-        }
+        if (attempt < delays.length) await new Promise(r => setTimeout(r, delays[attempt]));
       }
       throw lastErr;
     }
@@ -247,22 +520,25 @@
         return 0;
       }
     }
-    function tokenIsFresh(token) {
-      return !!token && tokenExpMs(token) - Date.now() > 60 * 1000;
-    }
+    function tokenIsFresh(token) { return !!token && tokenExpMs(token) - Date.now() > 60 * 1000; }
     function saveToken(t) { try { sessionStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
     function loadToken() { try { return sessionStorage.getItem(TOKEN_KEY); } catch (e) { return null; } }
     function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {} }
 
-    // ---------- Login ----------
+    // ---------- เข้าสู่ระบบ ----------
     function setAuthUi(state) {
-      document.getElementById('signedOut').style.display = state === 'out' ? 'block' : 'none';
-      document.getElementById('authChecking').style.display = state === 'checking' ? 'block' : 'none';
-      document.getElementById('signedIn').style.display = state === 'in' ? 'inline-flex' : 'none';
+      $('loginCard').hidden = state === 'in';
+      $('gsiButton').hidden = state !== 'out';
+      $('loginTitle').textContent = state === 'checking' ? 'กำลังตรวจสอบบัญชี...' : 'เข้าสู่ระบบก่อนจอง';
+      $('loginHint').hidden = state === 'checking';
+      $('userChip').hidden = state !== 'in';
       if (state === 'in' && currentUser) {
-        document.getElementById('signedInText').textContent =
-          `✓ เข้าสู่ระบบในนาม Mc ${currentUser.mcName} (${currentUser.email})`;
+        const initial = (currentUser.mcName.match(/[ก-ฮA-Za-z0-9]/) || ['M'])[0];
+        $('userAvatar').textContent = initial;
+        $('userName').textContent = 'Mc ' + currentUser.mcName;
+        $('userEmail').textContent = currentUser.email;
       }
+      updateBar();
     }
 
     async function signIn(credential, silent) {
@@ -274,7 +550,7 @@
           currentUser = { mcName: res.mcName, email: res.email };
           saveToken(credential);
           setAuthUi('in');
-          if (!silent) showToast(`ยินดีต้อนรับ Mc ${res.mcName}`, 'success');
+          if (!silent) showToast(`ยินดีต้อนรับ Mc ${res.mcName}`);
         } else {
           signOut();
           showToast(res.message, 'error');
@@ -300,251 +576,420 @@
         callback: response => signIn(response.credential, false),
         auto_select: true,
       });
-      google.accounts.id.renderButton(document.getElementById('gsiButton'), {
-        theme: 'outline',
-        size: 'large',
-        text: 'signin_with',
-        locale: 'th',
+      google.accounts.id.renderButton($('gsiButton'), {
+        theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with', locale: 'th',
       });
       if (!currentUser && !loadToken()) google.accounts.id.prompt();
     }
 
-    document.getElementById('signOutBtn').addEventListener('click', () => {
+    function goToLogin() {
+      window.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
+      const card = $('loginCard');
+      card.classList.add('is-flash');
+      setTimeout(() => card.classList.remove('is-flash'), 1400);
+    }
+
+    $('signOutBtn').addEventListener('click', () => {
       signOut();
-      showToast('ออกจากระบบแล้ว', 'success');
+      showToast('ออกจากระบบแล้ว');
     });
 
     // ---------- โหลดข้อมูล ----------
+    function showSkeleton() {
+      const list = $('dayList');
+      list.innerHTML = '';
+      const sk = el('div', 'skeleton');
+      sk.setAttribute('aria-label', 'กำลังโหลด slot ที่ว่าง');
+      sk.appendChild(el('div', 'sk-line'));
+      for (let i = 0; i < 4; i++) sk.appendChild(el('div', 'sk-card'));
+      list.appendChild(sk);
+      $('filterEmpty').hidden = true;
+    }
+
+    function showState(title, detail, withRetry) {
+      const list = $('dayList');
+      list.innerHTML = '';
+      const box = el('div', 'state');
+      box.appendChild(el('strong', '', title));
+      box.appendChild(document.createTextNode(detail));
+      if (withRetry) {
+        box.appendChild(document.createElement('br'));
+        const b = el('button', 'retry-btn', 'ลองอีกครั้ง');
+        b.type = 'button';
+        b.onclick = loadAll;
+        box.appendChild(b);
+      }
+      list.appendChild(box);
+      $('toolbar').hidden = true;
+      $('filterEmpty').hidden = true;
+    }
+
     async function loadAll() {
-      const content = document.getElementById('content');
-      content.className = 'loading';
-      content.textContent = 'กำลังโหลด slot ที่ว่าง...';
+      showSkeleton();
       try {
-        const res = await callApiWithRetry('init', null, n => {
-          content.textContent = `กำลังโหลด slot ที่ว่าง... (ลองใหม่ครั้งที่ ${n})`;
-        });
+        const res = await callApiWithRetry('init');
         applyNotices(res.siteNotice, res.scheduleNotice);
         renderSlots(res.slots || []);
       } catch (err) {
-        content.className = 'error-state';
-        content.textContent = 'โหลดข้อมูลไม่สำเร็จ: ' + err.message + ' ลองรีเฟรชหน้าอีกครั้ง';
+        showState('โหลด slot ไม่สำเร็จ', err.message, true);
       }
     }
 
     function applyNotices(siteNotice, scheduleNotice) {
-      const lock = document.getElementById('lockBanner');
       isLocked = !!siteNotice;
-      lock.textContent = siteNotice ? '⚠️ ' + siteNotice : '';
-      lock.style.display = siteNotice ? 'block' : 'none';
-
-      const info = document.getElementById('infoBanner');
-      info.textContent = scheduleNotice ? 'ℹ️ ' + scheduleNotice : '';
-      info.style.display = scheduleNotice ? 'block' : 'none';
+      $('lockBanner').textContent = siteNotice ? '⚠️ ' + siteNotice : '';
+      $('lockBanner').hidden = !siteNotice;
+      $('infoBanner').textContent = scheduleNotice || '';
+      $('infoBanner').hidden = !scheduleNotice;
+      if (isLocked) selected.clear();
     }
 
     // ---------- แสดง slot ----------
     function renderSlots(slots) {
-      const content = document.getElementById('content');
-      content.className = '';
-      content.innerHTML = '';
+      slotByRow.clear();
+      cardByRow.clear();
+      slots.forEach(s => slotByRow.set(s.row, s));
+      for (const row of Array.from(selected.keys())) if (!slotByRow.has(row)) selected.delete(row);
+
+      platformIndex = {};
+      slots.forEach(s => {
+        const p = platformOf(s);
+        if (!(p in platformIndex)) platformIndex[p] = Object.keys(platformIndex).length % 4;
+      });
+      if (activeFilter !== 'all' && !(activeFilter in platformIndex)) activeFilter = 'all';
+
+      const list = $('dayList');
+      list.innerHTML = '';
 
       if (!slots.length) {
-        content.className = 'empty-state';
-        content.textContent = 'ตอนนี้ยังไม่มี slot ว่างให้จอง';
-        populateDateJump({});
+        showState('ยังไม่มี slot ว่างให้จอง', 'แวะกลับมาดูใหม่เมื่อทีมงานอัปเดตตาราง', false);
+        updateBar();
         return;
       }
+      $('toolbar').hidden = false;
 
-      const groups = {};
-      slots.forEach(slot => {
-        if (!groups[slot.date]) groups[slot.date] = { display: slot.dateDisplay, items: [] };
-        groups[slot.date].items.push(slot);
+      const groups = new Map();
+      slots.forEach(s => {
+        if (!groups.has(s.date)) groups.set(s.date, []);
+        groups.get(s.date).push(s);
+      });
+      const keys = Array.from(groups.keys()).sort();
+
+      keys.forEach(k => {
+        const sec = el('section', 'day');
+        sec.id = 'day-' + k;
+        sec.dataset.date = k;
+        const h = el('h2', 'day-title', fmtDayLong.format(parseKey(k)));
+        const rel = relLabel(k);
+        if (rel) h.appendChild(el('span', 'rel', rel));
+        h.appendChild(el('span', 'day-count'));
+        sec.appendChild(h);
+        const grid = el('div', 'slot-grid');
+        groups.get(k).forEach(s => grid.appendChild(buildCard(s)));
+        sec.appendChild(grid);
+        list.appendChild(sec);
       });
 
-      Object.keys(groups).sort().forEach(dateKey => {
-        const group = groups[dateKey];
-        const dayDiv = document.createElement('div');
-        dayDiv.className = 'day-group';
-        dayDiv.id = 'day-' + dateKey;
+      renderDateStrip(keys);
+      setActiveChip(keys[0]);
+      renderFilters();
+      applyFilter();
+      refreshStates();
+      updateBar();
+      observeDays();
+      document.documentElement.style.setProperty('--toolbar-h', $('toolbar').offsetHeight + 'px');
+    }
 
-        const header = document.createElement('div');
-        header.className = 'day-header';
-        const titleSpan = document.createElement('span');
-        titleSpan.textContent = group.display;
-        const bulkBtn = document.createElement('button');
-        bulkBtn.type = 'button';
-        bulkBtn.className = 'bulk-book-btn';
-        bulkBtn.textContent = 'จองที่เลือก (0)';
-        bulkBtn.disabled = true;
-        header.appendChild(titleSpan);
-        header.appendChild(bulkBtn);
-        dayDiv.appendChild(header);
+    const CHECK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>';
 
-        const checkedRows = new Set();
-        const slotEntries = [];
+    function buildCard(s) {
+      const b = el('button', 'slot');
+      b.type = 'button';
+      b.dataset.row = s.row;
+      b.dataset.platform = platformOf(s);
 
-        function updateBulkBtn() {
-          bulkBtn.textContent = `จองที่เลือก (${checkedRows.size})`;
-          bulkBtn.disabled = checkedRows.size === 0 || isLocked;
-        }
+      const text = el('span', 'slot-text');
+      text.appendChild(el('span', 'slot-time', `${s.start} – ${s.end}`));
+      const meta = el('span', 'slot-meta');
+      meta.appendChild(el('span', 'tag p' + platformIndex[platformOf(s)], platformOf(s)));
+      meta.appendChild(el('span', '', fmtHours(hoursOf(s))));
+      text.appendChild(meta);
 
-        function refreshCheckboxAvailability() {
-          const selected = slotEntries.filter(e => checkedRows.has(e.row));
-          slotEntries.forEach(entry => {
-            if (checkedRows.has(entry.row)) return;
-            const overlaps = selected.some(sel => entry.startMs < sel.endMs && entry.endMs > sel.startMs);
-            entry.checkboxEl.disabled = overlaps || isLocked;
-            entry.checkboxEl.closest('.slot-card').style.opacity = overlaps ? '0.45' : '1';
-          });
-        }
+      const check = el('span', 'check');
+      check.setAttribute('aria-hidden', 'true');
+      check.innerHTML = CHECK_SVG;
 
-        bulkBtn.onclick = () => {
-          const rows = Array.from(checkedRows);
-          bulkBtn.disabled = true;
-          bulkBtn.textContent = 'กำลังจอง...';
-          bookRows(rows, () => updateBulkBtn());
-        };
+      b.appendChild(text);
+      b.appendChild(check);
+      b.setAttribute('aria-label', `${platformOf(s)} ${s.start} ถึง ${s.end}`);
+      b.addEventListener('click', () => toggle(s.row));
+      cardByRow.set(s.row, b);
+      return b;
+    }
 
-        group.items.forEach(slot => {
-          const card = document.createElement('div');
-          card.className = 'slot-card';
-
-          const checkbox = document.createElement('input');
-          checkbox.type = 'checkbox';
-          checkbox.className = 'slot-checkbox';
-          checkbox.disabled = isLocked;
-          checkbox.setAttribute('aria-label', `เลือก ${slot.platform || 'Live'} ${slot.start}-${slot.end}`);
-          checkbox.onchange = () => {
-            if (checkbox.checked) checkedRows.add(slot.row);
-            else checkedRows.delete(slot.row);
-            updateBulkBtn();
-            refreshCheckboxAvailability();
-          };
-          slotEntries.push({ row: slot.row, startMs: slot.startMs, endMs: slot.endMs, checkboxEl: checkbox });
-
-          const info = document.createElement('div');
-          info.className = 'slot-info';
-          const plat = document.createElement('div');
-          plat.className = 'slot-platform';
-          plat.textContent = slot.platform || 'Live';
-          const time = document.createElement('div');
-          time.className = 'slot-time';
-          time.textContent = `${slot.start} - ${slot.end}`;
-          info.appendChild(plat);
-          info.appendChild(time);
-
-          const left = document.createElement('div');
-          left.className = 'slot-left';
-          left.appendChild(checkbox);
-          left.appendChild(info);
-
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'book-btn';
-          btn.textContent = 'จอง';
-          btn.disabled = isLocked;
-          btn.onclick = () => {
-            btn.disabled = true;
-            btn.textContent = 'กำลังจอง...';
-            bookRows([slot.row], () => { btn.disabled = isLocked; btn.textContent = 'จอง'; });
-          };
-
-          card.appendChild(left);
-          card.appendChild(btn);
-          dayDiv.appendChild(card);
+    function renderDateStrip(keys) {
+      const strip = $('dateStrip');
+      strip.innerHTML = '';
+      keys.forEach(k => {
+        const d = parseKey(k);
+        const c = el('button', 'chip');
+        c.type = 'button';
+        c.id = 'chip-' + k;
+        c.dataset.date = k;
+        c.appendChild(el('span', 'chip-wd', relLabel(k) || fmtWeekShort.format(d)));
+        c.appendChild(el('span', 'chip-day', String(d.getDate())));
+        c.appendChild(el('span', 'chip-mon', fmtMonthShort.format(d)));
+        c.appendChild(el('span', 'chip-count'));
+        c.addEventListener('click', () => {
+          const sec = $('day-' + k);
+          if (sec) sec.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+          setActiveChip(k);
         });
-
-        content.appendChild(dayDiv);
-      });
-
-      populateDateJump(groups);
-    }
-
-    function populateDateJump(groups) {
-      const select = document.getElementById('dateJump');
-      select.innerHTML = '<option value="">-- เลือกวันที่ --</option>';
-      Object.keys(groups).sort().forEach(dateKey => {
-        const opt = document.createElement('option');
-        opt.value = dateKey;
-        opt.textContent = groups[dateKey].display + ` (${groups[dateKey].items.length} slot)`;
-        select.appendChild(opt);
+        strip.appendChild(c);
       });
     }
 
-    // ---------- จอง ----------
-    async function bookRows(rows, resetButton) {
-      if (isLocked) {
-        showToast('ระบบปิดรับจองชั่วคราว', 'error');
-        resetButton();
-        return;
+    function renderFilters() {
+      const wrap = $('filters');
+      wrap.innerHTML = '';
+      const names = Object.keys(platformIndex);
+      if (names.length < 2) { wrap.hidden = true; return; }
+      wrap.hidden = false;
+      ['all'].concat(names).forEach(n => {
+        const b = el('button', 'filter' + (n === 'all' ? '' : ' p' + platformIndex[n]), n === 'all' ? 'ทั้งหมด' : n);
+        b.type = 'button';
+        b.setAttribute('aria-pressed', String(activeFilter === n));
+        b.addEventListener('click', () => {
+          activeFilter = n;
+          renderFilters();
+          applyFilter();
+          document.documentElement.style.setProperty('--toolbar-h', $('toolbar').offsetHeight + 'px');
+        });
+        wrap.appendChild(b);
+      });
+    }
+
+    function applyFilter() {
+      let any = false;
+      document.querySelectorAll('.day').forEach(sec => {
+        let visible = 0;
+        sec.querySelectorAll('.slot').forEach(card => {
+          const show = activeFilter === 'all' || card.dataset.platform === activeFilter;
+          card.hidden = !show;
+          if (show) visible++;
+        });
+        sec.hidden = visible === 0;
+        sec.querySelector('.day-count').textContent = `ว่าง ${visible} slot`;
+        const chip = $('chip-' + sec.dataset.date);
+        if (chip) {
+          chip.hidden = visible === 0;
+          chip.querySelector('.chip-count').textContent = `${visible} slot`;
+        }
+        if (visible) any = true;
+      });
+      $('filterEmpty').hidden = any || !slotByRow.size;
+    }
+
+    function setActiveChip(k) {
+      document.querySelectorAll('.chip').forEach(c => c.classList.toggle('is-active', c.dataset.date === k));
+      const chip = $('chip-' + k);
+      const strip = $('dateStrip');
+      if (chip) {
+        strip.scrollTo({
+          left: chip.offsetLeft - strip.clientWidth / 2 + chip.clientWidth / 2,
+          behavior: reducedMotion ? 'auto' : 'smooth',
+        });
       }
-      if (!currentUser) {
-        showToast('กรุณาเข้าสู่ระบบด้วย Google ก่อนจอง', 'error');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        resetButton();
-        return;
+    }
+
+    function observeDays() {
+      if (dayObserver) dayObserver.disconnect();
+      if (!('IntersectionObserver' in window)) return;
+      const top = $('toolbar').offsetHeight + 8;
+      dayObserver = new IntersectionObserver(entries => {
+        const visible = entries.filter(e => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible.length) setActiveChip(visible[0].target.dataset.date);
+      }, { rootMargin: `-${top}px 0px -65% 0px` });
+      document.querySelectorAll('.day').forEach(sec => dayObserver.observe(sec));
+    }
+
+    // ---------- เลือก slot ----------
+    function blockReason(s) {
+      if (isLocked) return 'ระบบปิดรับจองชั่วคราว';
+      const chosen = Array.from(selected.values());
+      if (chosen.some(x => s.startMs < x.endMs && s.endMs > x.startMs)) return 'เวลานี้ทับกับ slot ที่เลือกไว้แล้ว';
+      if (chosen.length >= MAX_PER_REQUEST) return `เลือกได้ครั้งละไม่เกิน ${MAX_PER_REQUEST} slot`;
+      const sameDay = chosen.filter(x => x.date === s.date);
+      if (sameDay.length >= MAX_SLOTS_PER_DAY) return `เลือกได้สูงสุด ${MAX_SLOTS_PER_DAY} slot ต่อวัน`;
+      const hrs = sameDay.reduce((a, x) => a + hoursOf(x), 0);
+      if (hrs + hoursOf(s) > MAX_HOURS_PER_DAY) return `รวมแล้วเกิน ${MAX_HOURS_PER_DAY} ชม. ต่อวัน`;
+      return '';
+    }
+
+    function toggle(row) {
+      const s = slotByRow.get(row);
+      if (!s) return;
+      if (selected.has(row)) {
+        selected.delete(row);
+      } else {
+        const reason = blockReason(s);
+        if (reason) { showToast(reason, 'error'); return; }
+        selected.set(row, s);
       }
+      refreshStates();
+      updateBar();
+    }
+
+    function refreshStates() {
+      cardByRow.forEach((card, row) => {
+        const isSel = selected.has(row);
+        card.classList.toggle('is-selected', isSel);
+        card.setAttribute('aria-pressed', String(isSel));
+        card.classList.toggle('is-blocked', !isSel && !!blockReason(slotByRow.get(row)));
+      });
+      const daysWithSel = new Set(Array.from(selected.values()).map(s => s.date));
+      document.querySelectorAll('.chip').forEach(c => c.classList.toggle('has-sel', daysWithSel.has(c.dataset.date)));
+    }
+
+    function sortedSelected() {
+      return Array.from(selected.values()).sort((a, b) => a.startMs - b.startMs);
+    }
+
+    function updateBar() {
+      const bar = $('bar');
+      const n = selected.size;
+      const show = n > 0 && !isLocked;
+      bar.classList.toggle('is-open', show);
+      bar.setAttribute('aria-hidden', String(!show));
+      bar.inert = !show;
+      document.body.classList.toggle('has-bar', show);
+      if (!n) return;
+      const hrs = sortedSelected().reduce((a, s) => a + hoursOf(s), 0);
+      $('barCount').textContent = `เลือกแล้ว ${n} slot`;
+      $('barHours').textContent = `รวม ${fmtHours(hrs)}`;
+      $('barAction').textContent = currentUser ? `จอง ${n} slot` : 'เข้าสู่ระบบเพื่อจอง';
+    }
+
+    $('barClear').addEventListener('click', () => {
+      selected.clear();
+      refreshStates();
+      updateBar();
+    });
+
+    $('barAction').addEventListener('click', () => {
+      if (!currentUser) { goToLogin(); return; }
+      openConfirm();
+    });
+
+    // ---------- ยืนยันการจอง ----------
+    const dlg = $('dlg');
+
+    function summaryItem(s, result) {
+      const li = el('li');
+      const left = el('div');
+      if (s) {
+        left.appendChild(el('div', 'sum-main', `${s.start} – ${s.end}`));
+        left.appendChild(el('div', 'sum-sub', `${fmtDayShort.format(parseKey(s.date))}  |  ${platformOf(s)}`));
+      } else {
+        left.appendChild(el('div', 'sum-main', 'slot'));
+      }
+      li.appendChild(left);
+      if (result) {
+        li.appendChild(el('div', 'sum-status ' + (result.success ? 'ok' : 'err'),
+          result.success ? '✓ จองแล้ว' : result.message));
+      } else if (s) {
+        li.appendChild(el('div', 'sum-status', fmtHours(hoursOf(s))));
+      }
+      return li;
+    }
+
+    function setDialogState(state) {
+      dlg.dataset.state = state;
+      $('dlgCancel').hidden = state === 'done';
+      $('dlgConfirm').hidden = state === 'done';
+      $('dlgDone').hidden = state !== 'done';
+      $('dlgConfirm').disabled = state === 'busy';
+      $('dlgCancel').disabled = state === 'busy';
+      $('dlgConfirm').textContent = state === 'busy' ? 'กำลังจอง...' : 'ยืนยันการจอง';
+    }
+
+    function openConfirm() {
       if (!tokenIsFresh(idToken)) {
         signOut();
-        showToast('การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่แล้วกดจองอีกครั้ง', 'error');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        resetButton();
+        showToast('การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่', 'error');
+        goToLogin();
         return;
       }
+      const list = $('dlgList');
+      list.innerHTML = '';
+      sortedSelected().forEach(s => list.appendChild(summaryItem(s)));
+      $('dlgTitle').textContent = `ยืนยันการจอง ${selected.size} slot`;
+      $('dlgNote').textContent = `จองในนาม Mc ${currentUser.mcName} ระบบจะลงปฏิทินให้อัตโนมัติ`;
+      setDialogState('confirm');
+      dlg.showModal();
+    }
 
+    async function submitBooking() {
+      setDialogState('busy');
+      const rows = sortedSelected().map(s => s.row);
       try {
         const res = await callApi('book', { idToken: idToken, rows: rows });
         if (!res.ok) {
           if (res.authError) {
+            dlg.close();
             signOut();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            goToLogin();
+          } else {
+            setDialogState('confirm');
           }
           showToast(res.message, 'error');
-          resetButton();
           return;
         }
-
-        const results = res.results || [];
-        const okCount = results.filter(r => r.success).length;
-        const failMsgs = results.filter(r => !r.success).map(r => r.message);
-
-        if (failMsgs.length === 0) {
-          showToast(okCount === 1
-            ? 'จองสำเร็จ! ระบบขึ้นปฏิทินให้เรียบร้อยแล้ว'
-            : `จองสำเร็จทั้งหมด ${okCount} slot! ระบบขึ้นปฏิทินให้เรียบร้อยแล้ว`, 'success');
-        } else if (okCount === 0) {
-          showToast('จองไม่สำเร็จ: ' + failMsgs.join(', '), 'error');
-        } else {
-          showToast(`จองสำเร็จ ${okCount} จาก ${results.length} slot ที่เหลือ: ${failMsgs.join(', ')}`, 'error');
-        }
-        loadAll();
+        showResults(res.results || []);
       } catch (err) {
         // ไม่ลองจองซ้ำอัตโนมัติ เพราะคำขออาจถึงระบบแล้วแต่คำตอบหายระหว่างทาง
-        // โหลดรายการใหม่แทน ถ้า slot หายไปแปลว่าจองสำเร็จแล้ว
-        showToast('ไม่ได้รับคำตอบจากระบบ กำลังโหลดรายการใหม่ ถ้า slot หายไปแปลว่าจองสำเร็จแล้ว', 'error');
-        loadAll();
+        showResults(null);
       }
     }
 
-    // ---------- อื่นๆ ----------
-    function showToast(message, type) {
-      const toast = document.getElementById('toast');
-      toast.textContent = message;
-      toast.className = 'toast ' + type;
-      toast.style.display = 'block';
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
+    function showResults(results) {
+      const list = $('dlgList');
+      list.innerHTML = '';
+      if (!results) {
+        $('dlgTitle').textContent = 'ไม่ได้รับคำตอบจากระบบ';
+        $('dlgNote').textContent = 'การจองอาจสำเร็จแล้ว กด "เสร็จสิ้น" เพื่อโหลดรายการใหม่ ถ้า slot หายไปจากรายการแปลว่าจองสำเร็จ';
+        sortedSelected().forEach(s => list.appendChild(summaryItem(s)));
+      } else {
+        const ok = results.filter(r => r.success).length;
+        $('dlgTitle').textContent = ok === results.length
+          ? `จองสำเร็จ ${ok} slot`
+          : ok === 0 ? 'จองไม่สำเร็จ' : `จองสำเร็จ ${ok} จาก ${results.length} slot`;
+        $('dlgNote').textContent = ok > 0
+          ? 'ระบบลงปฏิทินให้เรียบร้อยแล้ว'
+          : 'ดูเหตุผลด้านล่าง แล้วเลือก slot อื่น';
+        results.forEach(r => list.appendChild(summaryItem(slotByRow.get(r.row), r)));
+      }
+      setDialogState('done');
+      selected.clear();
+      refreshStates();
+      updateBar();
     }
 
-    document.getElementById('dateJump').addEventListener('change', function () {
-      if (!this.value) return;
-      const target = document.getElementById('day-' + this.value);
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+    $('dlgCancel').addEventListener('click', () => dlg.close());
+    $('dlgConfirm').addEventListener('click', submitBooking);
+    $('dlgDone').addEventListener('click', () => dlg.close());
+    dlg.addEventListener('cancel', e => { if (dlg.dataset.state === 'busy') e.preventDefault(); });
+    dlg.addEventListener('close', () => { if (dlg.dataset.state === 'done') loadAll(); });
 
-    document.getElementById('jumpTopBtn').addEventListener('click', () => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
+    // ---------- toast ----------
+    function showToast(message, type) {
+      const t = $('toast');
+      t.textContent = message;
+      t.className = 'toast is-show' + (type === 'error' ? ' error' : '');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { t.className = 'toast' + (type === 'error' ? ' error' : ''); }, 3500);
+    }
 
     // ---------- เริ่มต้น ----------
     const savedToken = loadToken();
