@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Booking Slot GLORY VITAL Live Streaming</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, 'Noto Sans Thai', 'Leelawadee UI', sans-serif;
+      margin: 0 auto;
+      max-width: 900px;
+      padding: 20px;
+      background: #f5f5f7;
+      color: #1a1a1a;
+    }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
+
+    .auth-box { margin-bottom: 16px; min-height: 44px; }
+    .auth-hint { font-size: 13px; color: #555; margin: 0 0 8px; }
+    .user-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      background: #e8f0fe;
+      color: #1a4a8a;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+    }
+    .link-btn {
+      background: none;
+      border: none;
+      color: #1a73e8;
+      text-decoration: underline;
+      font-size: 13px;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .lock-banner, .info-banner {
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      display: none;
+    }
+    .lock-banner { background: #fef7e0; border: 1px solid #f9ab00; color: #7a5900; font-weight: 600; }
+    .info-banner { background: #e8f0fe; border: 1px solid #1a73e8; color: #174ea6; }
+
+    .date-jump-bar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #f5f5f7;
+      padding: 10px 0 12px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .date-jump-bar label { font-size: 13px; color: #444; white-space: nowrap; }
+    .date-jump-bar select {
+      flex: 1;
+      min-width: 180px;
+      max-width: 280px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      font-size: 14px;
+      background: white;
+    }
+    .today-btn {
+      background: white;
+      border: 1px solid #1a73e8;
+      color: #1a73e8;
+      border-radius: 8px;
+      padding: 7px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .today-btn:hover { background: #e8f0fe; }
+
+    .day-group { margin-bottom: 20px; scroll-margin-top: 90px; }
+    .day-header {
+      font-weight: 600;
+      font-size: 15px;
+      padding-bottom: 4px;
+      border-bottom: 2px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .bulk-book-btn {
+      background: #1e8e3e;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .bulk-book-btn:disabled { background: #ccc; cursor: not-allowed; }
+    .slot-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: white;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .slot-left { display: flex; align-items: center; flex: 1; }
+    .slot-checkbox { width: 20px; height: 20px; margin-right: 12px; cursor: pointer; flex-shrink: 0; }
+    .slot-info { font-size: 14px; }
+    .slot-platform { font-weight: 600; }
+    .slot-time { color: #555; }
+    .book-btn {
+      background: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .book-btn:hover { background: #1558b0; }
+    .book-btn:disabled { background: #aaa; cursor: not-allowed; }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+
+    .empty-state, .loading, .error-state { text-align: center; padding: 40px 20px; color: #666; }
+
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #333;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      max-width: 90%;
+      text-align: center;
+      display: none;
+      z-index: 100;
+    }
+    .toast.success { background: #1e8e3e; }
+    .toast.error { background: #c5221f; }
+  </style>
+</head>
+<body>
+  <h1>ระบบจองคิวไลฟ์ Mc</h1>
+  <div class="subtitle">เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ เลือก slot ที่ว่างแล้วกด "จอง" ระบบจะขึ้นปฏิทินให้ทันที</div>
+
+  <div id="lockBanner" class="lock-banner"></div>
+  <div id="infoBanner" class="info-banner"></div>
+
+  <div class="auth-box">
+    <div id="signedOut" style="display:none;">
+      <p class="auth-hint">เข้าสู่ระบบก่อนจึงจะจองได้</p>
+      <div id="gsiButton"></div>
+    </div>
+    <div id="authChecking" class="auth-hint" style="display:none;">กำลังตรวจสอบบัญชี...</div>
+    <div id="signedIn" class="user-badge" style="display:none;">
+      <span id="signedInText"></span>
+      <button type="button" class="link-btn" id="signOutBtn">ออกจากระบบ</button>
+    </div>
+  </div>
+
+  <div class="date-jump-bar">
+    <label for="dateJump">กระโดดไปวันที่:</label>
+    <select id="dateJump">
+      <option value="">-- เลือกวันที่ --</option>
+    </select>
+    <button type="button" class="today-btn" id="jumpTopBtn">⬆ กลับขึ้นบนสุด</button>
+  </div>
+
+  <div id="content" class="loading">กำลังโหลด slot ที่ว่าง...</div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    // ★★★ ตั้งค่าตรงนี้ ★★★
+    // URL ของ Apps Script web app (ลงท้ายด้วย /exec) จาก Deploy > Manage deployments
+    const API_URL = 'วาง_URL_/exec_ของ_Apps_Script_ตรงนี้';
+    const GOOGLE_CLIENT_ID = '1061582080754-eblmgn19o2cvds5sg22d7p70me7qitbs.apps.googleusercontent.com';
+
+    const TOKEN_KEY = 'glory_booking_id_token';
+    let idToken = null;
+    let currentUser = null;
+    let isLocked = false;
+    let toastTimer = null;
+
+    // ---------- เรียก API ----------
+    // ส่งแบบ text/plain เพื่อไม่ให้ browser ส่ง preflight (Apps Script ไม่รองรับ OPTIONS)
+    async function callApi(action, payload) {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ action: action }, payload || {})),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+
+    // ---------- Token ----------
+    function tokenExpMs(token) {
+      try {
+        let p = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (p.length % 4) p += '=';
+        return JSON.parse(atob(p)).exp * 1000;
+      } catch (e) {
+        return 0;
+      }
+    }
+    function tokenIsFresh(token) {
+      return !!token && tokenExpMs(token) - Date.now() > 60 * 1000;
+    }
+    function saveToken(t) { try { sessionStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
+    function loadToken() { try { return sessionStorage.getItem(TOKEN_KEY); } catch (e) { return null; } }
+    function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
+    // ---------- Login ----------
+    function setAuthUi(state) {
+      document.getElementById('signedOut').style.display = state === 'out' ? 'block' : 'none';
+      document.getElementById('authChecking').style.display = state === 'checking' ? 'block' : 'none';
+      document.getElementById('signedIn').style.display = state === 'in' ? 'inline-flex' : 'none';
+      if (state === 'in' && currentUser) {
+        document.getElementById('signedInText').textContent =
+          `✓ เข้าสู่ระบบในนาม Mc ${currentUser.mcName} (${currentUser.email})`;
+      }
+    }
+
+    async function signIn(credential, silent) {
+      setAuthUi('checking');
+      try {
+        const res = await callApi('login', { idToken: credential });
+        if (res.ok) {
+          idToken = credential;
+          currentUser = { mcName: res.mcName, email: res.email };
+          saveToken(credential);
+          setAuthUi('in');
+          if (!silent) showToast(`ยินดีต้อนรับ Mc ${res.mcName}`, 'success');
+        } else {
+          signOut();
+          showToast(res.message, 'error');
+        }
+      } catch (err) {
+        signOut();
+        showToast('เชื่อมต่อระบบไม่สำเร็จ: ' + err.message, 'error');
+      }
+    }
+
+    function signOut() {
+      idToken = null;
+      currentUser = null;
+      clearToken();
+      if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect();
+      setAuthUi('out');
+    }
+
+    // เรียกเมื่อสคริปต์ Google Sign-In โหลดเสร็จ
+    function initGsi() {
+      google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: response => signIn(response.credential, false),
+        auto_select: true,
+      });
+      google.accounts.id.renderButton(document.getElementById('gsiButton'), {
+        theme: 'outline',
+        size: 'large',
+        text: 'signin_with',
+        locale: 'th',
+      });
+      if (!currentUser && !loadToken()) google.accounts.id.prompt();
+    }
+
+    document.getElementById('signOutBtn').addEventListener('click', () => {
+      signOut();
+      showToast('ออกจากระบบแล้ว', 'success');
+    });
+
+    // ---------- โหลดข้อมูล ----------
+    async function loadAll() {
+      const content = document.getElementById('content');
+      content.className = 'loading';
+      content.textContent = 'กำลังโหลด slot ที่ว่าง...';
+      try {
+        const res = await callApi('init');
+        if (!res.ok) throw new Error(res.message);
+        applyNotices(res.siteNotice, res.scheduleNotice);
+        renderSlots(res.slots || []);
+      } catch (err) {
+        content.className = 'error-state';
+        content.textContent = 'โหลดข้อมูลไม่สำเร็จ: ' + err.message + ' ลองรีเฟรชหน้าอีกครั้ง';
+      }
+    }
+
+    function applyNotices(siteNotice, scheduleNotice) {
+      const lock = document.getElementById('lockBanner');
+      isLocked = !!siteNotice;
+      lock.textContent = siteNotice ? '⚠️ ' + siteNotice : '';
+      lock.style.display = siteNotice ? 'block' : 'none';
+
+      const info = document.getElementById('infoBanner');
+      info.textContent = scheduleNotice ? 'ℹ️ ' + scheduleNotice : '';
+      info.style.display = scheduleNotice ? 'block' : 'none';
+    }
+
+    // ---------- แสดง slot ----------
+    function renderSlots(slots) {
+      const content = document.getElementById('content');
+      content.className = '';
+      content.innerHTML = '';
+
+      if (!slots.length) {
+        content.className = 'empty-state';
+        content.textContent = 'ตอนนี้ยังไม่มี slot ว่างให้จอง';
+        populateDateJump({});
+        return;
+      }
+
+      const groups = {};
+      slots.forEach(slot => {
+        if (!groups[slot.date]) groups[slot.date] = { display: slot.dateDisplay, items: [] };
+        groups[slot.date].items.push(slot);
+      });
+
+      Object.keys(groups).sort().forEach(dateKey => {
+        const group = groups[dateKey];
+        const dayDiv = document.createElement('div');
+        dayDiv.className = 'day-group';
+        dayDiv.id = 'day-' + dateKey;
+
+        const header = document.createElement('div');
+        header.className = 'day-header';
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = group.display;
+        const bulkBtn = document.createElement('button');
+        bulkBtn.type = 'button';
+        bulkBtn.className = 'bulk-book-btn';
+        bulkBtn.textContent = 'จองที่เลือก (0)';
+        bulkBtn.disabled = true;
+        header.appendChild(titleSpan);
+        header.appendChild(bulkBtn);
+        dayDiv.appendChild(header);
+
+        const checkedRows = new Set();
+        const slotEntries = [];
+
+        function updateBulkBtn() {
+          bulkBtn.textContent = `จองที่เลือก (${checkedRows.size})`;
+          bulkBtn.disabled = checkedRows.size === 0 || isLocked;
+        }
+
+        function refreshCheckboxAvailability() {
+          const selected = slotEntries.filter(e => checkedRows.has(e.row));
+          slotEntries.forEach(entry => {
+            if (checkedRows.has(entry.row)) return;
+            const overlaps = selected.some(sel => entry.startMs < sel.endMs && entry.endMs > sel.startMs);
+            entry.checkboxEl.disabled = overlaps || isLocked;
+            entry.checkboxEl.closest('.slot-card').style.opacity = overlaps ? '0.45' : '1';
+          });
+        }
+
+        bulkBtn.onclick = () => {
+          const rows = Array.from(checkedRows);
+          bulkBtn.disabled = true;
+          bulkBtn.textContent = 'กำลังจอง...';
+          bookRows(rows, () => updateBulkBtn());
+        };
+
+        group.items.forEach(slot => {
+          const card = document.createElement('div');
+          card.className = 'slot-card';
+
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.className = 'slot-checkbox';
+          checkbox.disabled = isLocked;
+          checkbox.setAttribute('aria-label', `เลือก ${slot.platform || 'Live'} ${slot.start}-${slot.end}`);
+          checkbox.onchange = () => {
+            if (checkbox.checked) checkedRows.add(slot.row);
+            else checkedRows.delete(slot.row);
+            updateBulkBtn();
+            refreshCheckboxAvailability();
+          };
+          slotEntries.push({ row: slot.row, startMs: slot.startMs, endMs: slot.endMs, checkboxEl: checkbox });
+
+          const info = document.createElement('div');
+          info.className = 'slot-info';
+          const plat = document.createElement('div');
+          plat.className = 'slot-platform';
+          plat.textContent = slot.platform || 'Live';
+          const time = document.createElement('div');
+          time.className = 'slot-time';
+          time.textContent = `${slot.start} - ${slot.end}`;
+          info.appendChild(plat);
+          info.appendChild(time);
+
+          const left = document.createElement('div');
+          left.className = 'slot-left';
+          left.appendChild(checkbox);
+          left.appendChild(info);
+
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'book-btn';
+          btn.textContent = 'จอง';
+          btn.disabled = isLocked;
+          btn.onclick = () => {
+            btn.disabled = true;
+            btn.textContent = 'กำลังจอง...';
+            bookRows([slot.row], () => { btn.disabled = isLocked; btn.textContent = 'จอง'; });
+          };
+
+          card.appendChild(left);
+          card.appendChild(btn);
+          dayDiv.appendChild(card);
+        });
+
+        content.appendChild(dayDiv);
+      });
+
+      populateDateJump(groups);
+    }
+
+    function populateDateJump(groups) {
+      const select = document.getElementById('dateJump');
+      select.innerHTML = '<option value="">-- เลือกวันที่ --</option>';
+      Object.keys(groups).sort().forEach(dateKey => {
+        const opt = document.createElement('option');
+        opt.value = dateKey;
+        opt.textContent = groups[dateKey].display + ` (${groups[dateKey].items.length} slot)`;
+        select.appendChild(opt);
+      });
+    }
+
+    // ---------- จอง ----------
+    async function bookRows(rows, resetButton) {
+      if (isLocked) {
+        showToast('ระบบปิดรับจองชั่วคราว', 'error');
+        resetButton();
+        return;
+      }
+      if (!currentUser) {
+        showToast('กรุณาเข้าสู่ระบบด้วย Google ก่อนจอง', 'error');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        resetButton();
+        return;
+      }
+      if (!tokenIsFresh(idToken)) {
+        signOut();
+        showToast('การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่แล้วกดจองอีกครั้ง', 'error');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        resetButton();
+        return;
+      }
+
+      try {
+        const res = await callApi('book', { idToken: idToken, rows: rows });
+        if (!res.ok) {
+          if (res.authError) {
+            signOut();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+          showToast(res.message, 'error');
+          resetButton();
+          return;
+        }
+
+        const results = res.results || [];
+        const okCount = results.filter(r => r.success).length;
+        const failMsgs = results.filter(r => !r.success).map(r => r.message);
+
+        if (failMsgs.length === 0) {
+          showToast(okCount === 1
+            ? 'จองสำเร็จ! ระบบขึ้นปฏิทินให้เรียบร้อยแล้ว'
+            : `จองสำเร็จทั้งหมด ${okCount} slot! ระบบขึ้นปฏิทินให้เรียบร้อยแล้ว`, 'success');
+        } else if (okCount === 0) {
+          showToast('จองไม่สำเร็จ: ' + failMsgs.join(', '), 'error');
+        } else {
+          showToast(`จองสำเร็จ ${okCount} จาก ${results.length} slot ที่เหลือ: ${failMsgs.join(', ')}`, 'error');
+        }
+        loadAll();
+      } catch (err) {
+        showToast('เชื่อมต่อระบบไม่สำเร็จ: ' + err.message, 'error');
+        resetButton();
+      }
+    }
+
+    // ---------- อื่นๆ ----------
+    function showToast(message, type) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = 'toast ' + type;
+      toast.style.display = 'block';
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
+    }
+
+    document.getElementById('dateJump').addEventListener('change', function () {
+      if (!this.value) return;
+      const target = document.getElementById('day-' + this.value);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    document.getElementById('jumpTopBtn').addEventListener('click', () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    // ---------- เริ่มต้น ----------
+    const savedToken = loadToken();
+    if (tokenIsFresh(savedToken)) {
+      signIn(savedToken, true); // รีเฟรชหน้าภายใน 1 ชม. ไม่ต้อง login ใหม่
+    } else {
+      clearToken();
+      setAuthUi('out');
+    }
+    loadAll();
+  </script>
+  <script src="https://accounts.google.com/gsi/client" async defer onload="initGsi()"></script>
+</body>
+</html>
