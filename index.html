@@ -557,13 +557,25 @@
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
+    /* ---------- บทบาท Mc / Admin ---------- */
+    .rule-note { font-size: 13px; color: var(--muted); margin: -4px 0 14px; }
+    .role-switch {
+      display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+      height: 38px; padding: 0 14px; border-radius: 999px; cursor: pointer;
+      font: inherit; font-size: 13px; font-weight: 600;
+      background: var(--brand-soft); color: var(--brand); border: 1px solid transparent;
+    }
+    .role-switch:hover { border-color: var(--brand); }
+    .role-switch svg { width: 15px; height: 15px; }
+    @media (max-width: 479px) { .role-switch .lbl { display: none; } .role-switch { padding: 0 11px; } }
   </style>
 </head>
 <body>
   <div class="page">
     <header class="topbar">
-      <div class="brand"><span class="wordmark" aria-label="GLORY VITAL">GL<span class="star">✦</span>RY VITAL</span><span class="brand-sub">Live booking</span></div>
+      <div class="brand"><span class="wordmark" aria-label="GLORY VITAL">GL<span class="star">✦</span>RY VITAL</span><span class="brand-sub" id="brandSub">Live booking</span></div>
       <div class="top-actions">
+      <button type="button" class="role-switch" id="roleSwitch" hidden></button>
       <button type="button" class="theme-btn" id="themeBtn">
         <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
         <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
@@ -583,17 +595,18 @@
     </header>
 
     <section class="hero">
-      <h1>จองคิวไลฟ์</h1>
-      <p>แตะเลือก slot ที่ต้องการ แล้วกดจองที่แถบด้านล่าง ระบบจะลงปฏิทินให้อัตโนมัติ</p>
+      <h1 id="heroTitle">ตารางไลฟ์ GLORY VITAL</h1>
+      <p id="heroSub">เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ ระบบจะพาไปหน้าของ Mc หรือ Admin ให้อัตโนมัติ</p>
     </section>
 
     <div class="login-card" id="loginCard" hidden>
       <div>
-        <strong id="loginTitle">เข้าสู่ระบบก่อนจอง</strong>
+        <strong id="loginTitle">เข้าสู่ระบบ</strong>
         <span id="loginHint">ใช้อีเมลที่ลงทะเบียนไว้กับทีมงาน</span>
       </div>
       <div id="gsiButton"></div>
     </div>
+    <p class="rule-note" id="ruleNote" hidden></p>
 
     <div class="notice notice-lock" id="lockBanner" role="status" hidden></div>
     <div class="notice notice-info" id="infoBanner" hidden></div>
@@ -698,7 +711,41 @@
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     let idToken = null;
-    let currentUser = null;
+    let currentUser = null;   // { email, mcName, adminName }
+    let role = null;          // หน้าที่กำลังแสดง: 'mc' | 'admin'
+    let loadSeq = 0;
+    const ROLE_KEY = 'glory_booking_role';
+    const ADMIN_MAX_SLOTS_PER_DAY = 2;
+
+    // ข้อความและคำสั่ง API ของแต่ละบทบาท
+    const MODES = {
+      mc: {
+        sub: 'Live booking', title: 'จองคิวไลฟ์', docTitle: 'จองคิวไลฟ์ | GLORY VITAL',
+        hint: 'แตะเลือก slot ที่ต้องการ แล้วกดจองที่แถบด้านล่าง ระบบจะลงปฏิทินให้อัตโนมัติ',
+        rule: '',
+        init: 'init', submit: 'book', my: 'mySlots',
+        countLbl: 'ว่าง', verb: 'จอง', done: '✓ จองแล้ว', lockMsg: 'ระบบปิดรับจองชั่วคราว',
+        empty: ['ยังไม่มี slot ว่างให้จอง', 'แวะกลับมาดูใหม่เมื่อทีมงานอัปเดตตาราง'],
+        myEmpty: 'เลือก slot ที่ว่างแล้วกดจองได้เลย',
+        doneNote: 'ระบบลงปฏิทินให้เรียบร้อยแล้ว',
+      },
+      admin: {
+        sub: 'Admin', title: 'จัดคิว Admin', docTitle: 'จัดคิว Admin | GLORY VITAL',
+        hint: 'แตะเลือก slot ที่ต้องการรับ ระบบจะใส่ชื่อและเบอร์โทรของคุณในปฏิทินของ Mc ให้อัตโนมัติ',
+        rule: 'รับได้สูงสุด 2 slot ต่อวัน และ 2 slot ในวันเดียวกันต้องต่อเนื่องกัน เช่น 09:30–11:30 กับ 11:30–13:30',
+        init: 'adminInit', submit: 'adminAssign', my: 'adminMySlots',
+        countLbl: 'รอ Admin', verb: 'รับคิว', done: '✓ รับคิวแล้ว', lockMsg: 'ระบบปิดรับจัดคิวชั่วคราว',
+        empty: ['ตอนนี้ไม่มี slot ที่รอ Admin', 'ทุก slot มี Admin ครบแล้ว แวะกลับมาดูใหม่ภายหลัง'],
+        myEmpty: 'เลือก slot ที่รอ Admin แล้วกดรับคิวได้เลย',
+        doneNote: 'อัปเดตหมายเหตุในปฏิทินของ Mc ให้แล้ว (ถ้ามี Mc จอง slot นั้นอยู่)',
+      },
+    };
+    function M() { return MODES[role || 'mc']; }
+    function rolesOf(u) { const r = []; if (u && u.mcName) r.push('mc'); if (u && u.adminName) r.push('admin'); return r; }
+    function displayName() {
+      if (!currentUser) return '';
+      return role === 'admin' ? currentUser.adminName : 'Mc ' + currentUser.mcName;
+    }
     let isLocked = false;
     const activeFilters = new Set(); // ว่าง = แสดงทุกแพลตฟอร์ม
     let platformIndex = {};
@@ -793,17 +840,53 @@
     function setAuthUi(state) {
       $('loginCard').hidden = state === 'in';
       $('gsiButton').hidden = state !== 'out';
-      $('loginTitle').textContent = state === 'checking' ? 'กำลังตรวจสอบบัญชี...' : 'เข้าสู่ระบบก่อนจอง';
+      $('loginTitle').textContent = state === 'checking' ? 'กำลังตรวจสอบบัญชี...' : 'เข้าสู่ระบบ';
       $('loginHint').hidden = state === 'checking';
       $('userChip').hidden = state !== 'in';
       if (state === 'in' && currentUser) {
-        const initial = (currentUser.mcName.match(/[ก-ฮA-Za-z0-9]/) || ['M'])[0];
-        $('userAvatar').textContent = initial;
-        $('userName').textContent = 'Mc ' + currentUser.mcName;
+        const name = role === 'admin' ? currentUser.adminName : currentUser.mcName;
+        $('userAvatar').textContent = (String(name).match(/[ก-ฮA-Za-z0-9]/) || ['?'])[0];
+        $('userName').textContent = displayName();
         $('userEmail').textContent = currentUser.email;
       }
+      applyMode();
       updateBar();
     }
+
+    // ปรับหัวข้อ/ข้อความตามบทบาทที่กำลังแสดง และปุ่มสลับบทบาท (ถ้าอีเมลนี้เป็นทั้ง Mc และ Admin)
+    function applyMode() {
+      const m = currentUser && role ? M() : null;
+      $('brandSub').textContent = m ? m.sub : 'Live booking';
+      $('heroTitle').textContent = m ? m.title : 'ตารางไลฟ์ GLORY VITAL';
+      $('heroSub').textContent = m ? m.hint : 'เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ ระบบจะพาไปหน้าของ Mc หรือ Admin ให้อัตโนมัติ';
+      $('ruleNote').textContent = m ? m.rule : '';
+      $('ruleNote').hidden = !(m && m.rule);
+      document.title = m ? m.docTitle : 'GLORY VITAL Live';
+      const roles = rolesOf(currentUser);
+      const sw = $('roleSwitch');
+      sw.hidden = roles.length < 2;
+      if (roles.length >= 2) {
+        const other = role === 'admin' ? 'Mc' : 'Admin';
+        sw.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h9l-2.5-2.5M13 11H4l2.5 2.5"/></svg>';
+        sw.appendChild(el('span', 'lbl', 'หน้า ' + other));
+        sw.setAttribute('aria-label', 'สลับไปหน้า ' + other);
+        sw.title = 'สลับไปหน้า ' + other;
+      }
+    }
+
+    function setRole(next) {
+      role = next;
+      try { localStorage.setItem(ROLE_KEY, next); } catch (e) {}
+      selected.clear();
+      activeFilters.clear();
+      setAuthUi('in');
+      loadAll();
+    }
+
+    $('roleSwitch').addEventListener('click', () => {
+      setRole(role === 'admin' ? 'mc' : 'admin');
+      showToast('สลับไปหน้า ' + (role === 'admin' ? 'Admin' : 'Mc') + ' แล้ว');
+    });
 
     async function signIn(credential, silent) {
       setAuthUi('checking');
@@ -811,10 +894,15 @@
         const res = await callApiWithRetry('login', { idToken: credential });
         if (res.ok) {
           idToken = credential;
-          currentUser = { mcName: res.mcName, email: res.email };
+          currentUser = { email: res.email, mcName: res.mcName || null, adminName: res.adminName || null };
+          const roles = rolesOf(currentUser);
+          let saved = null;
+          try { saved = localStorage.getItem(ROLE_KEY); } catch (e) {}
+          role = roles.indexOf(saved) !== -1 ? saved : roles[0];
           saveToken(credential);
           setAuthUi('in');
-          if (!silent) showToast(`ยินดีต้อนรับ Mc ${res.mcName}`);
+          loadAll();
+          if (!silent) showToast(`ยินดีต้อนรับ ${displayName()}`);
         } else {
           signOut();
           showToast(res.message, 'error');
@@ -828,7 +916,11 @@
     function signOut() {
       idToken = null;
       currentUser = null;
+      role = null;
+      loadSeq++;
       myCache.clear();
+      selected.clear();
+      showLoggedOut();
       clearToken();
       if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect();
       setAuthUi('out');
@@ -889,14 +981,40 @@
       $('filterEmpty').hidden = true;
     }
 
+    function showLoggedOut() {
+      const list = $('dayList');
+      if (!list) return;
+      list.innerHTML = '';
+      const box = el('div', 'state');
+      box.appendChild(el('strong', '', 'เข้าสู่ระบบเพื่อดูตาราง'));
+      box.appendChild(document.createTextNode('Mc จะเห็น slot ที่เปิดให้จอง ส่วน Admin จะเห็น slot ที่รอ Admin'));
+      list.appendChild(box);
+      $('toolbar').hidden = true;
+      $('filterEmpty').hidden = true;
+      $('lockBanner').hidden = true;
+      $('infoBanner').hidden = true;
+      if (typeof updateBar === 'function') updateBar();
+    }
+
     async function loadAll() {
+      if (!currentUser || !role) { showLoggedOut(); return; }
+      if (!tokenIsFresh(idToken)) {
+        signOut();
+        showToast('การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่', 'error');
+        return;
+      }
+      const seq = ++loadSeq;
+      const mode = role;
       showSkeleton();
       try {
-        const res = await callApiWithRetry('init');
+        const res = await callApiWithRetry(MODES[mode].init, { idToken: idToken });
+        if (seq !== loadSeq) return; // ผู้ใช้สลับบทบาทหรือออกจากระบบไปแล้ว
+        if (res.authError) { signOut(); showToast(res.message, 'error'); return; }
         applyNotices(res.siteNotice, res.scheduleNotice);
         renderSlots(res.slots || []);
       } catch (err) {
-        showState('โหลด slot ไม่สำเร็จ', err.message, true);
+        if (seq !== loadSeq) return;
+        showState('โหลดข้อมูลไม่สำเร็จ', err.message, true);
       }
     }
 
@@ -927,7 +1045,7 @@
       list.innerHTML = '';
 
       if (!slots.length) {
-        showState('ยังไม่มี slot ว่างให้จอง', 'แวะกลับมาดูใหม่เมื่อทีมงานอัปเดตตาราง', false);
+        showState(M().empty[0], M().empty[1], false);
         updateBar();
         return;
       }
@@ -1117,7 +1235,7 @@
           if (show) visible++;
         });
         sec.hidden = visible === 0;
-        sec.querySelector('.day-count').textContent = `ว่าง ${visible} slot`;
+        sec.querySelector('.day-count').textContent = `${M().countLbl} ${visible} slot`;
         const chip = $('chip-' + sec.dataset.date);
         if (chip) {
           chip.hidden = visible === 0;
@@ -1190,11 +1308,18 @@
 
     // ---------- เลือก slot ----------
     function blockReason(s) {
-      if (isLocked) return 'ระบบปิดรับจองชั่วคราว';
+      if (isLocked) return M().lockMsg;
       const chosen = Array.from(selected.values());
       if (chosen.some(x => s.startMs < x.endMs && s.endMs > x.startMs)) return 'เวลานี้ทับกับ slot ที่เลือกไว้แล้ว';
       if (chosen.length >= MAX_PER_REQUEST) return `เลือกได้ครั้งละไม่เกิน ${MAX_PER_REQUEST} slot`;
       const sameDay = chosen.filter(x => x.date === s.date);
+      if (role === 'admin') {
+        if (sameDay.length >= ADMIN_MAX_SLOTS_PER_DAY) return `รับได้สูงสุด ${ADMIN_MAX_SLOTS_PER_DAY} slot ต่อวัน`;
+        if (sameDay.length === 1 && !(s.startMs === sameDay[0].endMs || s.endMs === sameDay[0].startMs)) {
+          return '2 slot ในวันเดียวกันต้องต่อเนื่องกัน';
+        }
+        return '';
+      }
       if (sameDay.length >= MAX_SLOTS_PER_DAY) return `เลือกได้สูงสุด ${MAX_SLOTS_PER_DAY} slot ต่อวัน`;
       const hrs = sameDay.reduce((a, x) => a + hoursOf(x), 0);
       if (hrs + hoursOf(s) > MAX_HOURS_PER_DAY) return `รวมแล้วเกิน ${MAX_HOURS_PER_DAY} ชม. ต่อวัน`;
@@ -1242,7 +1367,7 @@
       const hrs = sortedSelected().reduce((a, s) => a + hoursOf(s), 0);
       $('barCount').textContent = `เลือกแล้ว ${n} slot`;
       $('barHours').textContent = `รวม ${fmtHours(hrs)}`;
-      $('barAction').textContent = currentUser ? `จอง ${n} slot` : 'เข้าสู่ระบบเพื่อจอง';
+      $('barAction').textContent = currentUser ? `${M().verb} ${n} slot` : 'เข้าสู่ระบบ';
     }
 
     $('barClear').addEventListener('click', () => {
@@ -1271,7 +1396,7 @@
       li.appendChild(left);
       if (result) {
         li.appendChild(el('div', 'sum-status ' + (result.success ? 'ok' : 'err'),
-          result.success ? '✓ จองแล้ว' : result.message));
+          result.success ? M().done : result.message));
       } else if (s) {
         li.appendChild(el('div', 'sum-status', fmtHours(hoursOf(s))));
       }
@@ -1285,7 +1410,7 @@
       $('dlgDone').hidden = state !== 'done';
       $('dlgConfirm').disabled = state === 'busy';
       $('dlgCancel').disabled = state === 'busy';
-      $('dlgConfirm').textContent = state === 'busy' ? 'กำลังจอง...' : 'ยืนยันการจอง';
+      $('dlgConfirm').textContent = state === 'busy' ? `กำลัง${M().verb}...` : `ยืนยันการ${M().verb}`;
     }
 
     function openConfirm() {
@@ -1298,8 +1423,10 @@
       const list = $('dlgList');
       list.innerHTML = '';
       sortedSelected().forEach(s => list.appendChild(summaryItem(s)));
-      $('dlgTitle').textContent = `ยืนยันการจอง ${selected.size} slot`;
-      $('dlgNote').textContent = `จองในนาม Mc ${currentUser.mcName} ระบบจะลงปฏิทินให้อัตโนมัติ`;
+      $('dlgTitle').textContent = `ยืนยันการ${M().verb} ${selected.size} slot`;
+      $('dlgNote').textContent = role === 'admin'
+        ? `รับคิวในชื่อ ${currentUser.adminName} ระบบจะใส่ชื่อและเบอร์โทรในปฏิทินของ Mc ให้`
+        : `จองในนาม Mc ${currentUser.mcName} ระบบจะลงปฏิทินให้อัตโนมัติ`;
       setDialogState('confirm');
       dlg.showModal();
     }
@@ -1308,7 +1435,7 @@
       setDialogState('busy');
       const rows = sortedSelected().map(s => s.row);
       try {
-        const res = await callApi('book', { idToken: idToken, rows: rows });
+        const res = await callApi(M().submit, { idToken: idToken, rows: rows });
         if (!res.ok) {
           if (res.authError) {
             dlg.close();
@@ -1332,15 +1459,15 @@
       list.innerHTML = '';
       if (!results) {
         $('dlgTitle').textContent = 'ไม่ได้รับคำตอบจากระบบ';
-        $('dlgNote').textContent = 'การจองอาจสำเร็จแล้ว กด "เสร็จสิ้น" เพื่อโหลดรายการใหม่ ถ้า slot หายไปจากรายการแปลว่าจองสำเร็จ';
+        $('dlgNote').textContent = `การ${M().verb}อาจสำเร็จแล้ว กด "เสร็จสิ้น" เพื่อโหลดรายการใหม่ ถ้า slot หายไปจากรายการแปลว่าสำเร็จ`;
         sortedSelected().forEach(s => list.appendChild(summaryItem(s)));
       } else {
         const ok = results.filter(r => r.success).length;
         $('dlgTitle').textContent = ok === results.length
-          ? `จองสำเร็จ ${ok} slot`
-          : ok === 0 ? 'จองไม่สำเร็จ' : `จองสำเร็จ ${ok} จาก ${results.length} slot`;
+          ? `${M().verb}สำเร็จ ${ok} slot`
+          : ok === 0 ? `${M().verb}ไม่สำเร็จ` : `${M().verb}สำเร็จ ${ok} จาก ${results.length} slot`;
         $('dlgNote').textContent = ok > 0
-          ? 'ระบบลงปฏิทินให้เรียบร้อยแล้ว'
+          ? M().doneNote
           : 'ดูเหตุผลด้านล่าง แล้วเลือก slot อื่น';
         results.forEach(r => list.appendChild(summaryItem(slotByRow.get(r.row), r)));
       }
@@ -1369,7 +1496,7 @@
       if (!currentUser) return;
       const now = new Date();
       myMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      $('myWho').textContent = `Mc ${currentUser.mcName}`;
+      $('myWho').textContent = displayName();
       myDlg.showModal();
       loadMyMonth();
     }
@@ -1390,7 +1517,8 @@
       $('myMonth').textContent = fmtMonthLong.format(myMonth);
       const body = $('myBody');
 
-      if (myCache.has(key)) { renderMyMonth(myCache.get(key)); return; }
+      const cacheKey = role + '|' + key;
+      if (myCache.has(cacheKey)) { renderMyMonth(myCache.get(cacheKey)); return; }
 
       if (!tokenIsFresh(idToken)) {
         myDlg.close();
@@ -1405,13 +1533,13 @@
       body.innerHTML = '';
       body.appendChild(el('div', 'my-state', 'กำลังโหลด...'));
       try {
-        const res = await callApiWithRetry('mySlots', { idToken: idToken, month: key });
+        const res = await callApiWithRetry(M().my, { idToken: idToken, month: key });
         if (reqId !== myReqId) return; // ผู้ใช้เปลี่ยนเดือนไปแล้ว
         if (!res.ok) {
           if (res.authError) { myDlg.close(); signOut(); goToLogin(); }
           throw new Error(res.message || 'ไม่ทราบสาเหตุ');
         }
-        myCache.set(key, res.items || []);
+        myCache.set(cacheKey, res.items || []);
         renderMyMonth(res.items || []);
       } catch (err) {
         if (reqId !== myReqId) return;
@@ -1439,7 +1567,7 @@
       if (!items.length) {
         const box = el('div', 'my-state');
         box.appendChild(el('strong', '', 'เดือนนี้ยังไม่มีคิว'));
-        box.appendChild(document.createTextNode('เลือก slot ที่ว่างแล้วกดจองได้เลย'));
+        box.appendChild(document.createTextNode(M().myEmpty));
         body.appendChild(box);
         return;
       }
@@ -1511,8 +1639,8 @@
     } else {
       clearToken();
       setAuthUi('out');
+      showLoggedOut();
     }
-    loadAll();
   </script>
   <script src="https://accounts.google.com/gsi/client" async defer onload="initGsi()"></script>
 </body>
