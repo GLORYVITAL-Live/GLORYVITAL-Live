@@ -857,7 +857,7 @@
         countLbl: 'ว่าง', verb: 'จอง', done: '✓ จองแล้ว', lockMsg: 'ระบบปิดรับจองชั่วคราว',
         empty: ['ยังไม่มี slot ว่างให้จอง', 'แวะกลับมาดูใหม่เมื่อทีมงานอัปเดตตาราง'],
         myEmpty: 'เลือก slot ที่ว่างแล้วกดจองได้เลย',
-        doneNote: 'ระบบลงปฏิทินให้เรียบร้อยแล้ว',
+        doneNote: 'จองเรียบร้อย ระบบจะลงปฏิทินให้ภายใน 1–2 นาที',
       },
       admin: {
         sub: 'Admin', title: 'จัดคิว Admin', docTitle: 'จัดคิว Admin | GLORY VITAL',
@@ -867,7 +867,7 @@
         countLbl: 'รอ Admin', verb: 'รับคิว', done: '✓ รับคิวแล้ว', lockMsg: 'ระบบปิดรับจัดคิวชั่วคราว',
         empty: ['ตอนนี้ไม่มี slot ที่รอ Admin', 'ทุก slot มี Admin ครบแล้ว แวะกลับมาดูใหม่ภายหลัง'],
         myEmpty: 'เลือก slot ที่รอ Admin แล้วกดรับคิวได้เลย',
-        doneNote: 'อัปเดตหมายเหตุในปฏิทินของ Mc ให้แล้ว (ถ้ามี Mc จอง slot นั้นอยู่)',
+        doneNote: 'รับคิวเรียบร้อย ระบบจะลงปฏิทินของคุณและอัปเดตปฏิทินของ Mc ให้ภายใน 1–2 นาที',
       },
     };
     MODES.owner = {
@@ -1216,6 +1216,7 @@
         applyNotices(res.siteNotice, res.scheduleNotice);
         renderSlots(res.slots || []);
         writeViewCache(cacheKey, res);
+        setTimeout(prefetchMySchedule, 800); // เตรียม "ตารางของฉัน" ไว้เบื้องหลัง
       } catch (err) {
         if (seq !== loadSeq) return;
         if (cached) showToast('อัปเดตข้อมูลไม่สำเร็จ กำลังแสดงข้อมูลล่าสุดที่บันทึกไว้', 'error');
@@ -1699,6 +1700,8 @@
       }
       setDialogState('done');
       myCache.clear(); // ให้ "ตารางของฉัน" ดึงข้อมูลใหม่หลังจอง
+      myPrefetch = null;
+      if (results) removeBookedFromView(results.filter(r => r.success).map(r => r.row));
       selected.clear();
       refreshStates();
       updateBar();
@@ -1746,6 +1749,8 @@
 
       const cacheKey = role + '|' + key;
       if (myCache.has(cacheKey)) { renderMyMonth(myCache.get(cacheKey)); return; }
+      const storeKey = 'glory_my_' + role + '_' + currentUser.email + '_' + key;
+      const stored = readViewCache(storeKey);
 
       if (!tokenIsFresh(idToken)) {
         myDlg.close();
@@ -1756,23 +1761,29 @@
       }
 
       const reqId = ++myReqId;
-      setStats('–', '–', '–');
-      body.innerHTML = '';
-      body.appendChild(el('div', 'my-state', 'กำลังโหลด...'));
+      if (stored) {
+        applyMyMeta(stored);
+        renderMyMonth(stored.items || []); // แสดงข้อมูลที่จำไว้ทันที
+        setRefreshing(true);
+      } else {
+        setStats('–', '–', '–');
+        body.innerHTML = '';
+        body.appendChild(el('div', 'my-state', 'กำลังโหลด...'));
+      }
       try {
-        const res = await callApiWithRetry(M().my, { idToken: idToken, month: key });
+        const res = await fetchMyMonth(key);
         if (reqId !== myReqId) return; // ผู้ใช้เปลี่ยนเดือนไปแล้ว
         if (!res.ok) {
           if (res.authError) { myDlg.close(); signOut(); goToLogin(); }
           throw new Error(res.message || 'ไม่ทราบสาเหตุ');
         }
-        if (res.cancelMinHours) myMeta.cancelMinHours = res.cancelMinHours;
-        if ('adminChatUrl' in res) myMeta.adminChatUrl = res.adminChatUrl || '';
-        if (role === 'admin') myMeta.adminCanCancel = !!res.canCancel;
+        applyMyMeta(res);
         myCache.set(cacheKey, res.items || []);
+        writeViewCache(storeKey, res);
         renderMyMonth(res.items || []);
       } catch (err) {
         if (reqId !== myReqId) return;
+        if (stored) { showToast('อัปเดตตารางไม่สำเร็จ กำลังแสดงข้อมูลล่าสุดที่บันทึกไว้', 'error'); return; }
         body.innerHTML = '';
         const box = el('div', 'my-state');
         box.appendChild(el('strong', '', 'โหลดข้อมูลไม่สำเร็จ'));
@@ -1783,7 +1794,57 @@
         box.appendChild(el('br'));
         box.appendChild(retry);
         body.appendChild(box);
+      } finally {
+        if (reqId === myReqId) setRefreshing(false);
       }
+    }
+
+    // เอา slot ที่เพิ่งจองสำเร็จออกจากรายการและข้อมูลที่จำไว้ทันที ไม่ต้องรอโหลดใหม่
+    function removeBookedFromView(rows) {
+      if (!rows.length || !currentUser || !role) return;
+      const gone = new Set(rows);
+      const key = 'glory_view_' + role + '_' + currentUser.email;
+      const saved = readViewCache(key);
+      if (saved && saved.slots) {
+        saved.slots = saved.slots.filter(sl => !gone.has(sl.row));
+        writeViewCache(key, saved);
+      }
+      try {
+        const prefix = 'glory_my_' + role + '_' + currentUser.email + '_';
+        Object.keys(localStorage).filter(k => k.indexOf(prefix) === 0).forEach(k => localStorage.removeItem(k));
+      } catch (e) {}
+    }
+
+    function applyMyMeta(res) {
+      if (res.cancelMinHours) myMeta.cancelMinHours = res.cancelMinHours;
+      if ('adminChatUrl' in res) myMeta.adminChatUrl = res.adminChatUrl || '';
+      if (role === 'admin') myMeta.adminCanCancel = !!res.canCancel;
+    }
+
+    // ใช้คำขอที่โหลดล่วงหน้าไว้ (ถ้ามี) ไม่งั้นค่อยยิงใหม่
+    let myPrefetch = null;
+    function fetchMyMonth(key) {
+      if (myPrefetch && myPrefetch.key === key && myPrefetch.role === role) {
+        const p = myPrefetch.promise;
+        myPrefetch = null;
+        return p.then(r => (r && r.ok) ? r : callApiWithRetry(M().my, { idToken: idToken, month: key }));
+      }
+      return callApiWithRetry(M().my, { idToken: idToken, month: key });
+    }
+
+    // โหลด "ตารางของฉัน" เดือนนี้ไว้ล่วงหน้าหลังหน้าเว็บพร้อม กดเปิดเมื่อไหร่ก็ขึ้นทันที
+    function prefetchMySchedule() {
+      if (!currentUser || !role || role === 'owner' || !tokenIsFresh(idToken)) return;
+      const n = new Date();
+      const key = monthKey(new Date(n.getFullYear(), n.getMonth(), 1));
+      if (myCache.has(role + '|' + key)) return;
+      const promise = callApiWithRetry(M().my, { idToken: idToken, month: key });
+      promise.then(res => {
+        if (!res || !res.ok || !currentUser) return;
+        applyMyMeta(res);
+        writeViewCache('glory_my_' + role + '_' + currentUser.email + '_' + key, res);
+      }).catch(() => {});
+      myPrefetch = { key: key, role: role, promise: promise };
     }
 
     function renderMyMonth(items) {
