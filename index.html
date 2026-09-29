@@ -569,6 +569,71 @@
     .role-switch svg { width: 15px; height: 15px; }
     @media (max-width: 479px) { .role-switch .lbl { display: none; } .role-switch { padding: 0 11px; } }
     .sk-note { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+    /* ---------- เลือกหน้า (Mc / Admin / สรุป) ---------- */
+    .role-select {
+      -webkit-appearance: none; appearance: none; flex-shrink: 0;
+      height: 38px; padding: 0 34px 0 14px; border-radius: 999px; cursor: pointer;
+      font: inherit; font-size: 13px; font-weight: 600;
+      background-color: var(--brand-soft); color: var(--brand); border: 1px solid transparent;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23DE4481' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; background-size: 14px;
+    }
+    .role-select:hover { border-color: var(--brand); }
+    @media (max-width: 479px) { .role-select { max-width: 104px; padding-left: 10px; } }
+
+    /* ---------- คู่ Mc/Admin + ยกเลิก ---------- */
+    .my-pair {
+      grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      font-size: 13px; color: var(--muted); margin-top: -2px; flex-wrap: wrap;
+    }
+    .my-pair a { color: var(--brand); text-decoration: none; font-weight: 600; }
+    .my-pair a:hover { text-decoration: underline; }
+    .cx-btn {
+      border: 1px solid var(--line); background: var(--surface); color: var(--err);
+      border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .cx-btn:hover { border-color: var(--err); }
+    .slot-meta .pair { color: var(--brand); font-weight: 600; }
+    body.view-table .slot-meta .pair { display: none; }
+    .btn-danger { background: var(--err); color: #fff; }
+    a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+    .my-links { padding: 0 20px 12px; }
+    .link-btn { border: none; background: none; color: var(--brand); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; }
+    .link-btn:hover { text-decoration: underline; }
+
+    /* ---------- กฎการทำงาน ---------- */
+    #rulesDlg { width: min(480px, 100%); }
+    .rules-body { padding: 4px 20px 8px; overflow-y: auto; }
+    .rules-h { font-size: 13px; color: var(--muted); margin: 12px 0 8px; font-weight: 600; }
+    .late-tiers, .rules-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+    .late-tiers li {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+    }
+    .tier-cut { font-weight: 700; font-size: 13px; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+    .tier-cut.ok { background: var(--brand-soft); color: var(--ok); }
+    .tier-cut.mid { background: var(--warn-bg); color: var(--warn-ink); }
+    .tier-cut.high { background: var(--warn-bg); color: var(--err); }
+    .rules-list li { font-size: 14px; padding-left: 18px; position: relative; }
+    .rules-list li::before { content: '✦'; position: absolute; left: 0; color: var(--accent); font-size: 11px; top: 3px; }
+
+    /* ---------- หน้าสรุปเจ้าของ ---------- */
+    .owner .month-nav { padding: 0 0 12px; }
+    .owner .stats { padding: 0 0 18px; }
+    .owner-sec { margin-bottom: 22px; }
+    .owner-sec h2 { font-size: 16px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: baseline; }
+    .owner-sec h2 span { font-size: 13px; font-weight: 500; color: var(--muted); }
+    .sum-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+    .sum-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 420px; }
+    .sum-table th {
+      text-align: left; font-size: 12px; font-weight: 600; color: var(--info-ink);
+      background: var(--brand-soft); padding: 9px 14px; white-space: nowrap;
+    }
+    .sum-table td { padding: 10px 14px; border-top: 1px solid var(--line); }
+    .sum-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .sum-table tfoot td { font-weight: 700; background: var(--bg); }
+    .owner-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 24px; }
+    .owner-empty { color: var(--muted); font-size: 14px; padding: 14px; }
   </style>
 </head>
 <body>
@@ -576,7 +641,7 @@
     <header class="topbar">
       <div class="brand"><span class="wordmark" aria-label="GLORY VITAL">GL<span class="star">✦</span>RY VITAL</span><span class="brand-sub" id="brandSub">Live booking</span></div>
       <div class="top-actions">
-      <button type="button" class="role-switch" id="roleSwitch" hidden></button>
+      <select class="role-select" id="roleSwitch" aria-label="เลือกหน้า" hidden></select>
       <button type="button" class="theme-btn" id="themeBtn">
         <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
         <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
@@ -687,7 +752,46 @@
         <div class="stat"><span class="stat-num" id="statHours">–</span><span class="stat-lbl">ชั่วโมง</span></div>
         <div class="stat"><span class="stat-num" id="statDays">–</span><span class="stat-lbl">วันที่มีคิว</span></div>
       </div>
+      <div class="my-links"><button type="button" class="link-btn" id="myRulesBtn">📋 กฎการทำงาน</button></div>
       <div class="my-body" id="myBody"></div>
+    </div>
+  </dialog>
+
+  <dialog id="cxDlg" aria-labelledby="cxTitle">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2 id="cxTitle">ยกเลิกคิวนี้?</h2>
+        <p id="cxNote"></p>
+      </div>
+      <ul class="sheet-list" id="cxList"></ul>
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-ghost" id="cxCancel">ไม่ยกเลิก</button>
+        <button type="button" class="btn btn-danger" id="cxConfirm">ยืนยันยกเลิก</button>
+        <a class="btn btn-ghost" id="cxChat" target="_blank" rel="noopener" hidden>ทักแชทแอดมิน</a>
+        <button type="button" class="btn btn-primary" id="cxDone" hidden>ปิด</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="rulesDlg" aria-labelledby="rulesTitle">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2 id="rulesTitle">กฎการทำงาน</h2>
+        <p id="rulesHello"></p>
+      </div>
+      <div class="rules-body">
+        <h3 class="rules-h">การมาสาย</h3>
+        <ul class="late-tiers">
+          <li><span class="tier-time">สายไม่เกิน 5 นาที</span><span class="tier-cut ok">ไม่หัก</span></li>
+          <li><span class="tier-time">สาย 5 – 30 นาที</span><span class="tier-cut mid">หัก 30%</span></li>
+          <li><span class="tier-time">สายเกิน 30 นาที ถึง 1 ชั่วโมง</span><span class="tier-cut high">หัก 50%</span></li>
+        </ul>
+        <h3 class="rules-h">อื่นๆ</h3>
+        <ul class="rules-list" id="rulesOther"></ul>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-primary" id="rulesOk">รับทราบ</button>
+      </div>
     </div>
   </dialog>
 
@@ -741,10 +845,27 @@
         doneNote: 'อัปเดตหมายเหตุในปฏิทินของ Mc ให้แล้ว (ถ้ามี Mc จอง slot นั้นอยู่)',
       },
     };
+    MODES.owner = {
+      sub: 'Owner', title: 'สรุปรายเดือน', docTitle: 'สรุปรายเดือน | GLORY VITAL',
+      hint: 'สรุปจำนวน slot และชั่วโมงของ Mc และ Admin ทั้งเดือน ดาวน์โหลดเป็นไฟล์ไปใช้คิดค่าจ้างได้',
+      rule: '', label: 'หน้าสรุป',
+    };
+    MODES.mc.label = 'หน้า Mc';
+    MODES.admin.label = 'หน้า Admin';
+    const CANCEL_MIN_HOURS_DEFAULT = 6;
+    let myMeta = { cancelMinHours: CANCEL_MIN_HOURS_DEFAULT, adminChatUrl: '' };
+
     function M() { return MODES[role || 'mc']; }
-    function rolesOf(u) { const r = []; if (u && u.mcName) r.push('mc'); if (u && u.adminName) r.push('admin'); return r; }
+    function rolesOf(u) {
+      const r = [];
+      if (u && u.mcName) r.push('mc');
+      if (u && u.adminName) r.push('admin');
+      if (u && u.ownerName) r.push('owner');
+      return r;
+    }
     function displayName() {
       if (!currentUser) return '';
+      if (role === 'owner') return currentUser.ownerName;
       return role === 'admin' ? currentUser.adminName : 'Mc ' + currentUser.mcName;
     }
     let isLocked = false;
@@ -860,7 +981,7 @@
       $('loginHint').hidden = state === 'checking';
       $('userChip').hidden = state !== 'in';
       if (state === 'in' && currentUser) {
-        const name = role === 'admin' ? currentUser.adminName : currentUser.mcName;
+        const name = role === 'owner' ? currentUser.ownerName : role === 'admin' ? currentUser.adminName : currentUser.mcName;
         $('userAvatar').textContent = (String(name).match(/[ก-ฮA-Za-z0-9]/) || ['?'])[0];
         $('userName').textContent = displayName();
         $('userEmail').textContent = currentUser.email;
@@ -881,13 +1002,11 @@
       const roles = rolesOf(currentUser);
       const sw = $('roleSwitch');
       sw.hidden = roles.length < 2;
-      if (roles.length >= 2) {
-        const other = role === 'admin' ? 'Mc' : 'Admin';
-        sw.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h9l-2.5-2.5M13 11H4l2.5 2.5"/></svg>';
-        sw.appendChild(el('span', 'lbl', 'หน้า ' + other));
-        sw.setAttribute('aria-label', 'สลับไปหน้า ' + other);
-        sw.title = 'สลับไปหน้า ' + other;
-      }
+      sw.innerHTML = '';
+      roles.forEach(r => { const o = el('option', '', MODES[r].label); o.value = r; sw.appendChild(o); });
+      if (role) sw.value = role;
+      $('profileBtn').title = role === 'owner' ? '' : 'ดูตารางของฉัน';
+      document.querySelector('.profile-caret').style.display = role === 'owner' ? 'none' : '';
     }
 
     function setRole(next) {
@@ -899,9 +1018,9 @@
       loadAll();
     }
 
-    $('roleSwitch').addEventListener('click', () => {
-      setRole(role === 'admin' ? 'mc' : 'admin');
-      showToast('สลับไปหน้า ' + (role === 'admin' ? 'Admin' : 'Mc') + ' แล้ว');
+    $('roleSwitch').addEventListener('change', e => {
+      setRole(e.target.value);
+      showToast('ไปที่' + M().label + 'แล้ว');
     });
 
     async function signIn(credential, silent) {
@@ -910,7 +1029,7 @@
         const res = await callApiWithRetry('login', { idToken: credential });
         if (res.ok) {
           idToken = credential;
-          currentUser = { email: res.email, mcName: res.mcName || null, adminName: res.adminName || null };
+          currentUser = { email: res.email, mcName: res.mcName || null, adminName: res.adminName || null, ownerName: res.ownerName || null };
           const roles = rolesOf(currentUser);
           let saved = null;
           try { saved = localStorage.getItem(ROLE_KEY); } catch (e) {}
@@ -919,6 +1038,7 @@
           setAuthUi('in');
           loadAll();
           if (!silent) showToast(`ยินดีต้อนรับ ${displayName()}`);
+          maybeShowRules();
         } else {
           signOut();
           showToast(res.message, 'error');
@@ -1025,6 +1145,7 @@
       }
       const seq = ++loadSeq;
       const mode = role;
+      if (mode === 'owner') { loadOwner(seq); return; }
       showSkeleton();
       try {
         const res = await callApiWithRetry(MODES[mode].init, { idToken: idToken });
@@ -1120,6 +1241,7 @@
       const meta = el('span', 'slot-meta');
       meta.appendChild(el('span', 'tag p' + platformIndex[platformOf(s)], platformOf(s)));
       meta.appendChild(el('span', '', fmtHours(hoursOf(s))));
+      if (role === 'admin' && s.pairName) meta.appendChild(el('span', 'pair', s.pairName));
       text.appendChild(meta);
 
       const check = el('span', 'check');
@@ -1513,6 +1635,7 @@
     function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
 
     function openMySchedule() {
+      if (role === 'owner') return;
       if (!currentUser) return;
       const now = new Date();
       myMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1559,6 +1682,8 @@
           if (res.authError) { myDlg.close(); signOut(); goToLogin(); }
           throw new Error(res.message || 'ไม่ทราบสาเหตุ');
         }
+        if (res.cancelMinHours) myMeta.cancelMinHours = res.cancelMinHours;
+        if ('adminChatUrl' in res) myMeta.adminChatUrl = res.adminChatUrl || '';
         myCache.set(cacheKey, res.items || []);
         renderMyMonth(res.items || []);
       } catch (err) {
@@ -1613,10 +1738,270 @@
           if (i.cancelled) right.appendChild(el('span', 'my-badge', i.status || 'ยกเลิก'));
           else right.textContent = fmtHours(i.hours);
           row.appendChild(right);
+          if (!i.cancelled) row.appendChild(buildPairLine(i, now));
           day.appendChild(row);
         });
         body.appendChild(day);
       });
+    }
+
+    function phoneLink(phone) {
+      const a = el('a', '', phone);
+      a.href = 'tel:' + String(phone).replace(/[^0-9+]/g, '');
+      return a;
+    }
+
+    // บรรทัดใต้คิว: คู่ Admin/Mc ของ slot นั้น + ปุ่มยกเลิก (เฉพาะ Mc และยังเหลือเวลาพอ)
+    function buildPairLine(i, now) {
+      const line = el('div', 'my-pair');
+      const who = el('span');
+      if (i.pairName) {
+        who.appendChild(document.createTextNode(role === 'admin' ? `ไลฟ์กับ ${i.pairName}` : `Admin: ${i.pairName}`));
+        if (i.pairPhone) {
+          who.appendChild(document.createTextNode(' · '));
+          who.appendChild(phoneLink(i.pairPhone));
+        }
+      } else {
+        who.textContent = role === 'admin' ? 'Mc: ยังไม่มี Mc จอง' : 'Admin: ยังไม่มี Admin';
+      }
+      line.appendChild(who);
+      const canCancel = role === 'mc' && i.row && i.startMs - now >= myMeta.cancelMinHours * 3600000;
+      if (canCancel) {
+        const b = el('button', 'cx-btn', 'ยกเลิกคิว');
+        b.type = 'button';
+        b.addEventListener('click', () => openCancel(i));
+        line.appendChild(b);
+      }
+      return line;
+    }
+
+    // ---------- ยกเลิกคิว (Mc) ----------
+    const cxDlg = $('cxDlg');
+    let cxItem = null;
+
+    function setCancelState(state, note) {
+      cxDlg.dataset.state = state;
+      $('cxCancel').hidden = state === 'done';
+      $('cxConfirm').hidden = state === 'done';
+      $('cxDone').hidden = state !== 'done';
+      $('cxChat').hidden = !(state === 'done' && myMeta.adminChatUrl);
+      $('cxConfirm').disabled = state === 'busy';
+      $('cxCancel').disabled = state === 'busy';
+      $('cxConfirm').textContent = state === 'busy' ? 'กำลังยกเลิก...' : 'ยืนยันยกเลิก';
+      if (note !== undefined) $('cxNote').textContent = note;
+    }
+
+    function openCancel(i) {
+      cxItem = i;
+      const list = $('cxList');
+      list.innerHTML = '';
+      const li = el('li');
+      const left = el('div');
+      left.appendChild(el('div', 'sum-main', `${i.start} – ${i.end}`));
+      left.appendChild(el('div', 'sum-sub', `${fmtDayShort.format(parseKey(i.date))}  |  ${i.platform || 'Live'}`));
+      li.appendChild(left);
+      li.appendChild(el('div', 'sum-status', fmtHours(i.hours)));
+      list.appendChild(li);
+      $('cxTitle').textContent = 'ยกเลิกคิวนี้?';
+      if (myMeta.adminChatUrl) $('cxChat').href = myMeta.adminChatUrl;
+      setCancelState('confirm',
+        `ยกเลิกผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${myMeta.cancelMinHours} ชั่วโมง ระบบจะลบ event ในปฏิทินและเปิด slot นี้ให้ Mc คนอื่นจองทันที หลังยกเลิกกรุณาทักแชทแจ้งแอดมินด้วย`);
+      cxDlg.showModal();
+    }
+
+    async function submitCancel() {
+      if (!cxItem) return;
+      if (!tokenIsFresh(idToken)) {
+        cxDlg.close(); myDlg.close(); signOut();
+        showToast('การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่', 'error');
+        return;
+      }
+      setCancelState('busy');
+      try {
+        // ไม่ลองซ้ำอัตโนมัติ: ถ้าคำขอแรกสำเร็จแล้ว ครั้งที่สองจะขึ้นว่าไม่ใช่คิวของคุณ
+        const res = await callApi('cancel', { idToken: idToken, row: cxItem.row });
+        if (res.authError) { cxDlg.close(); myDlg.close(); signOut(); showToast(res.message, 'error'); return; }
+        if (!res.ok) { setCancelState('confirm', res.message); showToast(res.message, 'error'); return; }
+        if ('adminChatUrl' in res) myMeta.adminChatUrl = res.adminChatUrl || '';
+        if (myMeta.adminChatUrl) $('cxChat').href = myMeta.adminChatUrl;
+        $('cxTitle').textContent = 'ยกเลิกคิวแล้ว';
+        setCancelState('done', '⚠️ อย่าลืมทักแชทแจ้งแอดมินว่ายกเลิกคิวนี้ เพื่อให้ทีมหาคนแทนได้ทัน');
+        myCache.clear();
+        loadMyMonth();
+      } catch (err) {
+        setCancelState('done', 'ไม่ได้รับคำตอบจากระบบ ปิดหน้าต่างนี้แล้วเปิด "ตารางของฉัน" ใหม่ ถ้าคิวหายไปแปลว่ายกเลิกสำเร็จแล้ว');
+        myCache.clear();
+      }
+    }
+
+    $('cxCancel').addEventListener('click', () => cxDlg.close());
+    $('cxConfirm').addEventListener('click', submitCancel);
+    $('cxDone').addEventListener('click', () => cxDlg.close());
+    cxDlg.addEventListener('cancel', e => { if (cxDlg.dataset.state === 'busy') e.preventDefault(); });
+    cxDlg.addEventListener('close', () => { if (cxDlg.dataset.state === 'done') { loadMyMonth(); loadAll(); } });
+
+    // ---------- กฎการทำงาน (เด้งวันละครั้งหลัง login และเปิดดูได้จาก "ตารางของฉัน") ----------
+    const rulesDlg = $('rulesDlg');
+    function openRules() {
+      $('rulesHello').textContent = `สวัสดี ${displayName()} โปรดอ่านและปฏิบัติตามกฎทุกครั้ง`;
+      const other = $('rulesOther');
+      other.innerHTML = '';
+      const items = [];
+      if (role === 'mc') {
+        items.push(`ยกเลิกคิวผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${myMeta.cancelMinHours} ชั่วโมง และต้องทักแชทแจ้งแอดมินทุกครั้ง`);
+        items.push(`ถ้าเหลือน้อยกว่า ${myMeta.cancelMinHours} ชั่วโมง ยกเลิกผ่านเว็บไม่ได้ ต้องติดต่อแอดมินโดยตรง`);
+      }
+      if (role === 'admin') items.push('รับได้สูงสุด 2 slot ต่อวัน และ 2 slot ในวันเดียวกันต้องต่อเนื่องกัน');
+      items.push('ปฏิทิน Google จะแจ้งเตือนก่อนไลฟ์ 1 วัน และก่อนไลฟ์ 10 นาที (ตั้งค่าการแจ้งเตือนในปฏิทินของตัวเองตามที่ทีมงานแนะนำ)');
+      items.forEach(t => other.appendChild(el('li', '', t)));
+      if (!rulesDlg.open) rulesDlg.showModal();
+    }
+    function maybeShowRules() {
+      if (!currentUser || role === 'owner') return;
+      const key = 'glory_rules_seen_' + currentUser.email + '_' + role;
+      const today = keyOf(new Date());
+      let seen = null;
+      try { seen = localStorage.getItem(key); } catch (e) {}
+      if (seen === today) return;
+      openRules();
+      try { localStorage.setItem(key, today); } catch (e) {}
+    }
+    $('rulesOk').addEventListener('click', () => rulesDlg.close());
+    $('myRulesBtn').addEventListener('click', openRules);
+
+    // ---------- หน้าสรุปสำหรับเจ้าของ ----------
+    const ownerCache = new Map();
+    let ownerMonth = null;
+
+    async function loadOwner(seq) {
+      if (!ownerMonth) { const n = new Date(); ownerMonth = new Date(n.getFullYear(), n.getMonth(), 1); }
+      $('toolbar').hidden = true;
+      $('filterEmpty').hidden = true;
+      $('lockBanner').hidden = true;
+      $('infoBanner').hidden = true;
+      isLocked = false;
+      selected.clear();
+      updateBar();
+      const key = monthKey(ownerMonth);
+      if (ownerCache.has(key)) { renderOwner(ownerCache.get(key)); return; }
+      showSkeleton();
+      try {
+        const res = await callApiWithRetry('ownerSummary', { idToken: idToken, month: key });
+        if (seq !== loadSeq) return;
+        if (res.authError) { signOut(); showToast(res.message, 'error'); return; }
+        ownerCache.set(key, res);
+        renderOwner(res);
+      } catch (err) {
+        if (seq !== loadSeq) return;
+        showState('โหลดสรุปไม่สำเร็จ', err.message, true);
+      }
+    }
+
+    function shiftOwnerMonth(delta) {
+      ownerMonth = new Date(ownerMonth.getFullYear(), ownerMonth.getMonth() + delta, 1);
+      loadAll();
+    }
+
+    function num(h) { return Number.isInteger(h) ? String(h) : h.toFixed(2).replace(/0$/, ''); }
+
+    function sumTable(rows) {
+      const wrap = el('div', 'sum-wrap');
+      if (!rows.length) { wrap.appendChild(el('div', 'owner-empty', 'ไม่มีคิวในเดือนนี้')); return wrap; }
+      const t = el('table', 'sum-table');
+      const head = el('tr');
+      [['ชื่อ', ''], ['slot', 'num'], ['ชั่วโมง', 'num'], ['วัน', 'num'], ['ยกเลิก', 'num']].forEach(([h, c]) => head.appendChild(el('th', c, h)));
+      const thead = el('thead'); thead.appendChild(head); t.appendChild(thead);
+      const tb = el('tbody');
+      let ts = 0, th = 0;
+      rows.forEach(r => {
+        const tr = el('tr');
+        tr.appendChild(el('td', '', r.name));
+        tr.appendChild(el('td', 'num', String(r.slots)));
+        tr.appendChild(el('td', 'num', num(r.hours)));
+        tr.appendChild(el('td', 'num', String(r.days)));
+        tr.appendChild(el('td', 'num', r.cancelled ? String(r.cancelled) : '–'));
+        tb.appendChild(tr);
+        ts += r.slots; th += r.hours;
+      });
+      t.appendChild(tb);
+      const tf = el('tfoot'); const fr = el('tr');
+      fr.appendChild(el('td', '', `รวม ${rows.length} คน`));
+      fr.appendChild(el('td', 'num', String(ts)));
+      fr.appendChild(el('td', 'num', num(th)));
+      fr.appendChild(el('td', 'num', ''));
+      fr.appendChild(el('td', 'num', ''));
+      tf.appendChild(fr); t.appendChild(tf);
+      wrap.appendChild(t);
+      return wrap;
+    }
+
+    function renderOwner(data) {
+      const list = $('dayList');
+      list.innerHTML = '';
+      const box = el('div', 'owner');
+
+      const nav = el('div', 'month-nav');
+      const prev = el('button', 'icon-btn'); prev.type = 'button'; prev.setAttribute('aria-label', 'เดือนก่อนหน้า');
+      prev.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>';
+      const next = el('button', 'icon-btn'); next.type = 'button'; next.setAttribute('aria-label', 'เดือนถัดไป');
+      next.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+      prev.addEventListener('click', () => shiftOwnerMonth(-1));
+      next.addEventListener('click', () => shiftOwnerMonth(1));
+      nav.appendChild(prev); nav.appendChild(el('strong', '', fmtMonthLong.format(ownerMonth))); nav.appendChild(next);
+      box.appendChild(nav);
+
+      const mcH = data.mc.reduce((a, r) => a + r.hours, 0);
+      const adH = data.admin.reduce((a, r) => a + r.hours, 0);
+      const stats = el('div', 'stats');
+      [[num(mcH), 'ชม. Mc'], [num(adH), 'ชม. Admin'], [String(data.mc.reduce((a, r) => a + r.slots, 0)), 'slot Mc']].forEach(([n, l]) => {
+        const st = el('div', 'stat'); st.appendChild(el('span', 'stat-num', n)); st.appendChild(el('span', 'stat-lbl', l)); stats.appendChild(st);
+      });
+      box.appendChild(stats);
+
+      const actions = el('div', 'owner-actions');
+      const b1 = el('button', 'btn btn-primary', 'ดาวน์โหลดสรุป (CSV)'); b1.type = 'button';
+      const b2 = el('button', 'btn btn-ghost', 'ดาวน์โหลดรายละเอียด (CSV)'); b2.type = 'button';
+      b1.addEventListener('click', () => downloadSummaryCsv(data));
+      b2.addEventListener('click', () => downloadDetailCsv(data));
+      actions.appendChild(b1); actions.appendChild(b2);
+      box.appendChild(actions);
+
+      [['Mc', data.mc], ['Admin', data.admin]].forEach(([title, rows]) => {
+        const sec = el('section', 'owner-sec');
+        const h = el('h2', '', title);
+        h.appendChild(el('span', '', 'ไม่นับคิวที่ยกเลิก'));
+        sec.appendChild(h);
+        sec.appendChild(sumTable(rows));
+        box.appendChild(sec);
+      });
+      list.appendChild(box);
+    }
+
+    // CSV + BOM ให้ Excel อ่านภาษาไทยได้ถูก
+    function csvCell(v) {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+    function downloadCsv(filename, rows) {
+      const text = '\ufeff' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+      const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }
+    function downloadSummaryCsv(data) {
+      const rows = [['ประเภท', 'ชื่อ', 'จำนวน slot', 'ชั่วโมงรวม', 'จำนวนวัน', 'ยกเลิก']];
+      data.mc.forEach(r => rows.push(['Mc', r.name, r.slots, r.hours, r.days, r.cancelled]));
+      data.admin.forEach(r => rows.push(['Admin', r.name, r.slots, r.hours, r.days, r.cancelled]));
+      downloadCsv(`glory-summary-${data.month}.csv`, rows);
+    }
+    function downloadDetailCsv(data) {
+      const rows = [['ประเภท', 'ชื่อ', 'วันที่', 'เริ่ม', 'จบ', 'Platform', 'ชั่วโมง', 'คู่ (Admin/Mc)', 'สถานะ']];
+      data.details.forEach(d => rows.push([d.type, d.name, d.date, d.start, d.end, d.platform, d.hours, d.pair, d.cancelled ? (d.status || 'ยกเลิก') : (d.status || '')]));
+      downloadCsv(`glory-detail-${data.month}.csv`, rows);
     }
 
     $('profileBtn').addEventListener('click', openMySchedule);
