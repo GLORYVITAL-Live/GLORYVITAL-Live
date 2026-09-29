@@ -86,6 +86,32 @@ async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSl
   return out;
 }
 
+// ---------- รหัสซ้ำในชีต ----------
+
+type SlotKey = Pick<DbSlot, "platform" | "live_date" | "start_time" | "end_time">;
+const sameSlot = (a: SlotKey, b: SlotKey) =>
+  a.platform === b.platform && a.live_date === b.live_date && a.start_time === b.start_time && a.end_time === b.end_time;
+
+/**
+ * รหัสที่อยู่หลายแถว (เช่น คัดลอกทั้งแถวรวมคอลัมน์ V) -> เลขแถว (เริ่ม 1) ที่เป็นเจ้าของรหัสจริง
+ *   = แถวแรกที่แพลตฟอร์ม/วัน/เวลาตรงกับ DB ถ้าไม่มีแถวไหนตรง = แถวแรก
+ * แถวอื่นที่มีรหัสเดียวกันถือเป็นแถวคัดลอก ห้ามเอาไปแก้ slot เดิม
+ */
+export function duplicateOwners(tab: TabKey, rows: Row[], slots: Map<number, DbSlot>) {
+  const rowsOf = new Map<number, { r: number; p: SheetSlot }[]>();
+  rows.forEach((vals, i) => {
+    const p = parseRow(tab, vals);
+    if (p?.id) rowsOf.set(p.id, [...(rowsOf.get(p.id) ?? []), { r: i + 1, p }]);
+  });
+  const owner = new Map<number, number>();
+  for (const [id, list] of rowsOf) {
+    if (list.length < 2) continue;
+    const s = slots.get(id);
+    owner.set(id, ((s && list.find((x) => sameSlot(x.p, s))) || list[0]).r);
+  }
+  return owner;
+}
+
 // ---------- เว็บ -> ชีต ----------
 
 /** ค่าที่ควรอยู่ในแต่ละช่องของแถว (คอลัมน์ -> ค่า) */
@@ -155,11 +181,13 @@ async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
   const byKey = new Map<string, Item[]>(); // แถวที่ยังไม่มีรหัส (เผื่อจับคู่ด้วยวัน/เวลา)
   const keyOf = (p: { platform: string; live_date: string; start_time: string; end_time: string }) =>
     `${p.platform}|${p.live_date}|${p.start_time}|${p.end_time}`;
-  for (const it of items) {
+  const owner = duplicateOwners(tab, items.map((it) => it.vals), slots);
+  items.forEach((it, i) => {
     const p = parseRow(tab, it.vals);
-    if (p?.id) byId.set(p.id, it);
-    else if (p) byKey.set(keyOf(p), [...(byKey.get(keyOf(p)) ?? []), it]);
-  }
+    if (p?.id) {
+      if (!owner.has(p.id) || owner.get(p.id) === i + 1) byId.set(p.id, it); // ไม่เขียนทับแถวคัดลอก
+    } else if (p) byKey.set(keyOf(p), [...(byKey.get(keyOf(p)) ?? []), it]);
+  });
 
   const cellWrites: { item: Item; col: number; value: Cell }[] = [];
   const inserts: number[] = []; // index ตอนแทรก (ตามลำดับ)
@@ -279,13 +307,27 @@ export async function processSheetJobs() {
   return result ?? { done: 0, failed: 0, skipped: "มีงานซิงค์ชีตอื่นกำลังทำอยู่" };
 }
 
-/** ลบแถวในชีตของ slot ที่ถูกลบในเว็บ */
-export async function deleteSheetRows(table: Table, ids: number[]) {
+/**
+ * ลบแถวในชีตของ slot ที่ถูกลบในเว็บ (ส่งค่าของ slot ก่อนลบมาด้วย)
+ * ถ้ารหัสอยู่หลายแถว ลบเฉพาะแถวที่แพลตฟอร์ม/วัน/เวลาตรงกับ slot ไม่ลบแถวคัดลอกทิ้งไปด้วย
+ */
+export async function deleteSheetRows(table: Table, deleted: (SlotKey & { id: number })[]) {
   const tab = table === "mc_slots" ? "mc" : "admin";
+  const want = new Map(deleted.map((s) => [s.id, { ...s, start_time: hm(s.start_time), end_time: hm(s.end_time) }]));
   await withSheetLock(async () => {
     const rows = await readTab(tab);
-    const want = new Set(ids);
-    const idx = rows.map((r, i) => (want.has(parseRow(tab, r)?.id ?? -1) ? i : -1)).filter((i) => i >= 0).sort((a, b) => b - a);
+    const found = new Map<number, { i: number; p: SheetSlot }[]>();
+    rows.forEach((r, i) => {
+      const p = parseRow(tab, r);
+      if (p?.id && want.has(p.id)) found.set(p.id, [...(found.get(p.id) ?? []), { i, p }]);
+    });
+    const idx: number[] = [];
+    for (const [id, list] of found) {
+      const hits = list.length === 1 ? list : list.filter((x) => sameSlot(x.p, want.get(id)!));
+      if (!hits.length) console.warn(`รหัส ${id} อยู่ ${list.length} แถวในชีตแต่ไม่มีแถวไหนตรงกับ slot ที่ลบ จึงไม่ลบแถว`);
+      idx.push(...hits.slice(0, 1).map((x) => x.i));
+    }
+    idx.sort((a, b) => b - a);
     if (!idx.length) return;
     const sheetId = await sheetIdOf(tab);
     await sheetsApi().spreadsheets.batchUpdate({
@@ -371,8 +413,14 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     let updated = 0, created = 0;
     const calendar: { slot_table: Table; slot_id: number }[] = [];
     const idWrites: sheets_v4.Schema$ValueRange[] = [];
+    // แถวคัดลอกที่ติดรหัสของแถวอื่นมา = slot ใหม่ (สร้างใหม่แล้วเขียนรหัสใหม่ทับ) ไม่ใช่การแก้ slot เดิม
+    const owner = duplicateOwners(tab, all, slots);
 
     for (const { r, p } of targets) {
+      if (p.id && owner.has(p.id) && owner.get(p.id) !== r) {
+        console.warn(`แถว ${r} ในแท็บ ${TABS[tab]} มีรหัส ${p.id} ซ้ำกับแถว ${owner.get(p.id)} จึงสร้างเป็น slot ใหม่`);
+        p.id = null;
+      }
       if (p.id) {
         const s = slots.get(p.id);
         if (!s || pending.has(p.id)) continue; // ลบในเว็บแล้ว / เว็บเพิ่งแก้

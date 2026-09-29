@@ -204,21 +204,25 @@ export async function DELETE(request: Request) {
   const r = await requireOwner();
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
-  const targets: { table: Table; id: number }[] = [];
+  type SlotRow = { id: number; platform: string; live_date: string; start_time: string; end_time: string };
+  const targets: { table: Table; id: number; row?: SlotRow }[] = [];
   if (Number.isInteger(body?.mcId)) targets.push({ table: "mc_slots", id: body.mcId });
   if (Number.isInteger(body?.adminId)) targets.push({ table: "admin_slots", id: body.adminId });
   if (!targets.length) return fail("ไม่ได้เลือก slot");
 
   const db = createAdminClient();
   // ลบได้เฉพาะ slot ที่ไม่มีคนและไม่มี event ในปฏิทินค้าง (ไม่งั้น event จะค้างในปฏิทิน)
+  // เก็บแพลตฟอร์ม/วัน/เวลาไว้ใช้หาแถวในชีตหลังลบ (กันลบแถวคัดลอกที่รหัสซ้ำ)
   for (const t of targets) {
     const personCol = t.table === "mc_slots" ? "mc_id" : "admin_id";
-    const { data, error } = await db.from(t.table).select(`${personCol}, calendar_event_id`).eq("id", t.id).maybeSingle();
+    const { data, error } = await db.from(t.table)
+      .select(`id, platform, live_date, start_time, end_time, ${personCol}, calendar_event_id`).eq("id", t.id).maybeSingle();
     if (error) return fail(error.message, 500);
     const row = data as Record<string, unknown> | null;
     if (row && (row[personCol] || row.calendar_event_id)) {
       return fail("slot นี้มีคนอยู่ หรือยังมี event ในปฏิทิน ให้เอาคนออกก่อน แล้วรอ 1 นาทีค่อยลบ");
     }
+    if (row) t.row = row as unknown as SlotRow;
   }
   for (const t of targets) {
     const { error } = await db.from(t.table).delete().eq("id", t.id);
@@ -227,7 +231,7 @@ export async function DELETE(request: Request) {
   after(async () => {
     // ลบแถวของ slot นี้ในชีตด้วย
     for (const t of targets) {
-      try { await deleteSheetRows(t.table, [t.id]); } catch (err) { console.warn("ลบแถวในชีตไม่สำเร็จ:", err); }
+      try { if (t.row) await deleteSheetRows(t.table, [t.row]); } catch (err) { console.warn("ลบแถวในชีตไม่สำเร็จ:", err); }
       await log(r.me, "ลบ slot", t.table, [t.id], "สำเร็จ");
     }
   });
