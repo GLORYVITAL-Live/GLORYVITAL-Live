@@ -1,0 +1,28 @@
+import { fail, ok, requireMe } from "@/lib/api";
+import { getSettings, openAdminSlots, openMcSlots, scheduleNotice } from "@/lib/data";
+
+// หน้าแรก: ประกาศ + slot ที่ว่าง (?role=mc | admin) — แทน action "init" / "adminInit"
+export async function GET(request: Request) {
+  const r = await requireMe();
+  if ("res" in r) return r.res;
+  const role = new URL(request.url).searchParams.get("role");
+  const settings = await getSettings();
+  const notices = { siteNotice: settings.site_notice, scheduleNotice: scheduleNotice(settings) };
+
+  if (role === "mc") {
+    if (!r.me.mc) return fail("บัญชีนี้ไม่มีสิทธิ์จองคิว Mc", 403);
+    return ok({ ...notices, slots: await openMcSlots(settings) });
+  }
+  if (role === "admin") {
+    if (!r.me.admin) return fail("บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Admin", 403);
+    if (!r.me.admin.isExtra) {
+      return ok({
+        siteNotice: "",
+        scheduleNotice: `${r.me.admin.name} เป็น Admin ประจำ คิวของคุณจัดโดยทีมงาน กดที่ชื่อมุมขวาบนเพื่อดู "ตารางของฉัน"`,
+        slots: [],
+      });
+    }
+    return ok({ ...notices, slots: await openAdminSlots(settings) });
+  }
+  return fail("ไม่รู้จักบทบาทนี้");
+}

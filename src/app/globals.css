@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+/* ใช้ class "dark" ที่ <html> (ตั้งจากปุ่มสลับธีม หรือค่าของระบบ) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* โทนแบรนด์ Glory Vital (#DE4481 จาก gloryofficialth.com) */
+:root {
+  --bg: #fff7fa;
+  --surface: #ffffff;
+  --ink: #3a1628;
+  --muted: #8c6879;
+  --line: #f2dce6;
+  --accent: #de4481;
+  --brand: #c62f6a;
+  --brand-ink: #ffffff;
+  --brand-soft: #fde8f0;
+  --warn-bg: #fff2e8;
+  --warn-line: #f6be93;
+  --warn-ink: #8a4413;
+  --info-bg: #fde8f0;
+  --info-ink: #9c2356;
+  --ok: #1c7a4e;
+  --err: #c0352b;
+  --p0: #de4481;
+  --p1: #e8894f;
+  --p2: #9a5bd8;
+  --p3: #2e9c94;
+  color-scheme: light;
+}
+:root.dark {
+  --bg: #1a1016;
+  --surface: #26171f;
+  --ink: #fbeaf1;
+  --muted: #c79fb2;
+  --line: #3d2632;
+  --accent: #f2699f;
+  --brand: #f2699f;
+  --brand-ink: #2b0a18;
+  --brand-soft: #46192e;
+  --warn-bg: #2e1d12;
+  --warn-line: #6e4323;
+  --warn-ink: #f6c49c;
+  --info-bg: #3a1627;
+  --info-ink: #f8b6cf;
+  --ok: #5bcf93;
+  --err: #ff8479;
+  --p0: #f2699f;
+  --p1: #f3a574;
+  --p2: #c39bf2;
+  --p3: #5cc9c0;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-soft: var(--brand-soft);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-line: var(--warn-line);
+  --color-warn-ink: var(--warn-ink);
+  --color-info-bg: var(--info-bg);
+  --color-info-ink: var(--info-ink);
+  --color-ok: var(--ok);
+  --color-err: var(--err);
+  --color-p0: var(--p0);
+  --color-p1: var(--p1);
+  --color-p2: var(--p2);
+  --color-p3: var(--p3);
+  --font-sans: var(--font-thai), "Leelawadee UI", "Noto Sans Thai", Tahoma, sans-serif;
+  --shadow-card: 0 1px 2px rgb(122 31 71 / 0.05), 0 4px 14px rgb(122 31 71 / 0.06);
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* หน้าต่าง (dialog): แผ่นล่างบนมือถือ กลางจอบนคอม */
+dialog.sheet {
+  margin: auto auto 0;
+  width: 100%;
+  max-width: 560px;
+  max-height: 88dvh;
+  padding: 0;
+  border: none;
+  border-radius: 20px 20px 0 0;
+  background: var(--surface);
+  color: var(--ink);
+}
+@media (min-width: 640px) {
+  dialog.sheet { margin: auto; border-radius: 20px; }
+}
+dialog.sheet::backdrop { background: rgb(26 8 18 / 0.45); }
+
+/* แถบกำลังโหลดเบื้องหลังด้านบนสุด */
+.refresh-bar {
+  position: fixed; inset: 0 0 auto; height: 3px; z-index: 100;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 50% 100%; background-repeat: no-repeat;
+  animation: refreshbar 1.1s linear infinite;
+}
+@keyframes refreshbar { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .refresh-bar { animation: none; background: var(--accent); opacity: 0.5; }
+}
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

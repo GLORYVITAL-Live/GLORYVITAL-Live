@@ -1,0 +1,7 @@
+# ห้ามอัปโหลดไฟล์ค่าลับขึ้น Vercel (ตั้งค่าใน Vercel > Settings > Environment Variables แทน)
+.env
+.env.*
+!.env.example
+node_modules
+.next
+supabase/.temp
