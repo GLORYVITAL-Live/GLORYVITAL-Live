@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#FFF7FA">
   <title>จองคิวไลฟ์ | GLORY VITAL</title>
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com">
+  <link rel="preconnect" href="https://accounts.google.com">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -647,6 +650,15 @@
       border-radius: 999px; padding: 4px 10px; white-space: nowrap;
     }
     .day-chip b { font-weight: 600; color: var(--brand); }
+    /* กำลังอัปเดตข้อมูลเบื้องหลัง: แถบบางๆ ด้านบน */
+    body.is-refreshing::before {
+      content: ''; position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 100;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      background-size: 50% 100%; background-repeat: no-repeat;
+      animation: refreshbar 1.1s linear infinite;
+    }
+    @keyframes refreshbar { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+    @media (prefers-reduced-motion: reduce) { body.is-refreshing::before { animation: none; background: var(--accent); opacity: .5; } }
   </style>
 </head>
 <body>
@@ -1036,8 +1048,23 @@
       showToast('ไปที่' + M().label + 'แล้ว');
     });
 
-    async function signIn(credential, silent) {
-      setAuthUi('checking');
+    // โหลดข้อมูลหน้าแรกล่วงหน้าไปพร้อมกับการตรวจบัญชี (เดาบทบาทจากที่เคยใช้ล่าสุด ไม่เคยใช้ = Mc)
+    let prefetch = null;
+    function startPrefetch(credential) {
+      let guess = null;
+      try { guess = localStorage.getItem(ROLE_KEY); } catch (e) {}
+      if (!MODES[guess] || !MODES[guess].init) guess = 'mc';
+      const promise = callApiWithRetry(MODES[guess].init, { idToken: credential });
+      promise.catch(() => {}); // ถ้าพลาด loadAll จะโหลดใหม่เอง
+      prefetch = { role: guess, promise: promise };
+    }
+
+    async function signIn(credential, silent, restored) {
+      const lastRole = role;
+      if (!restored) {
+        setAuthUi('checking'); // ผู้ใช้ที่กลับมา: แสดงหน้าไปก่อน ตรวจบัญชีเบื้องหลัง
+        startPrefetch(credential);
+      }
       try {
         const res = await callApiWithRetry('login', { idToken: credential });
         if (res.ok) {
@@ -1048,8 +1075,10 @@
           try { saved = localStorage.getItem(ROLE_KEY); } catch (e) {}
           role = roles.indexOf(saved) !== -1 ? saved : roles[0];
           saveToken(credential);
+          const alreadyShowing = restored && lastRole === role;
+          saveProfile(currentUser);
           setAuthUi('in');
-          loadAll();
+          if (!alreadyShowing) loadAll(); // ถ้าเปิดจากข้อมูลที่จำไว้แล้ว ไม่ต้องโหลดซ้ำ
           if (!silent) showToast(`ยินดีต้อนรับ ${displayName()}`);
           maybeShowRules();
         } else {
@@ -1066,6 +1095,8 @@
       idToken = null;
       currentUser = null;
       role = null;
+      prefetch = null;
+      try { sessionStorage.removeItem('glory_booking_profile'); } catch (e) {}
       loadSeq++;
       myCache.clear();
       selected.clear();
@@ -1159,17 +1190,57 @@
       const seq = ++loadSeq;
       const mode = role;
       if (mode === 'owner') { loadOwner(seq); return; }
-      showSkeleton();
+
+      // แสดงข้อมูลล่าสุดที่เคยโหลดไว้ในเครื่องทันที แล้วค่อยแทนด้วยข้อมูลใหม่จาก server
+      // (การจองยังตรวจกับข้อมูลจริงฝั่ง server เสมอ ข้อมูลในเครื่องใช้แค่แสดงผลระหว่างรอ)
+      const cacheKey = 'glory_view_' + mode + '_' + currentUser.email;
+      const cached = readViewCache(cacheKey);
+      if (cached) {
+        applyNotices(cached.siteNotice, cached.scheduleNotice);
+        renderSlots(dropPast(cached.slots || []));
+        setRefreshing(true);
+      } else {
+        showSkeleton();
+      }
       try {
-        const res = await callApiWithRetry(MODES[mode].init, { idToken: idToken });
+        let res = null;
+        if (prefetch && prefetch.role === mode) {
+          const p = prefetch.promise;
+          prefetch = null;
+          try { res = await p; } catch (e) { res = null; }
+          if (res && !res.ok && !res.authError) res = null;
+        }
+        if (!res) res = await callApiWithRetry(MODES[mode].init, { idToken: idToken });
         if (seq !== loadSeq) return; // ผู้ใช้สลับบทบาทหรือออกจากระบบไปแล้ว
         if (res.authError) { signOut(); showToast(res.message, 'error'); return; }
         applyNotices(res.siteNotice, res.scheduleNotice);
         renderSlots(res.slots || []);
+        writeViewCache(cacheKey, res);
       } catch (err) {
         if (seq !== loadSeq) return;
-        showState('โหลดข้อมูลไม่สำเร็จ', err.message, true);
+        if (cached) showToast('อัปเดตข้อมูลไม่สำเร็จ กำลังแสดงข้อมูลล่าสุดที่บันทึกไว้', 'error');
+        else showState('โหลดข้อมูลไม่สำเร็จ', err.message, true);
+      } finally {
+        if (seq === loadSeq) setRefreshing(false);
       }
+    }
+
+    const VIEW_CACHE_MAX_AGE = 12 * 3600 * 1000;
+    function readViewCache(key) {
+      try {
+        const o = JSON.parse(localStorage.getItem(key) || 'null');
+        return o && Date.now() - o.t < VIEW_CACHE_MAX_AGE ? o.d : null;
+      } catch (e) { return null; }
+    }
+    function writeViewCache(key, data) {
+      try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), d: data })); } catch (e) {}
+    }
+    function dropPast(slots) {
+      const now = Date.now();
+      return slots.filter(s => s.endMs > now);
+    }
+    function setRefreshing(on) {
+      document.body.classList.toggle('is-refreshing', on);
     }
 
     function applyNotices(siteNotice, scheduleNotice) {
@@ -2174,8 +2245,24 @@
     }
 
     // ---------- เริ่มต้น ----------
+    const PROFILE_KEY = 'glory_booking_profile';
+    function saveProfile(u) { try { sessionStorage.setItem(PROFILE_KEY, JSON.stringify(u)); } catch (e) {} }
+    function loadProfile() { try { return JSON.parse(sessionStorage.getItem(PROFILE_KEY) || 'null'); } catch (e) { return null; } }
+
     const savedToken = loadToken();
-    if (tokenIsFresh(savedToken)) {
+    const savedProfile = loadProfile();
+    if (tokenIsFresh(savedToken) && savedProfile && savedProfile.email) {
+      // เปิดหน้าทันทีจากข้อมูลที่จำไว้ พร้อมยิงตรวจบัญชีและโหลดข้อมูลพร้อมกัน (ไม่ต้องรอทีละขั้น)
+      idToken = savedToken;
+      currentUser = savedProfile;
+      const roles = rolesOf(currentUser);
+      let pref = null;
+      try { pref = localStorage.getItem(ROLE_KEY); } catch (e) {}
+      role = roles.indexOf(pref) !== -1 ? pref : roles[0];
+      setAuthUi('in');
+      loadAll();
+      signIn(savedToken, true, true);
+    } else if (tokenIsFresh(savedToken)) {
       signIn(savedToken, true); // รีเฟรชหน้าภายใน 1 ชม. ไม่ต้อง login ใหม่
     } else {
       clearToken();
