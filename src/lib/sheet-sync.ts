@@ -4,7 +4,7 @@ import { deleteCalendarEvent } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
-  COLS, SHEET_ID, TABLE_OF, TABS, colLetter, dateSerial, hoursOf, normalizeMcName, parseRow, readTab, sheetIdOf,
+  COLS, SHEET_ID, TABLE_OF, TAB_OF, TABS, colLetter, dateSerial, hoursOf, normalizeMcName, parseRow, readTab, sheetIdOf,
   sheetsApi, str, timeSerial, type Cell, type Row, type SheetSlot, type TabKey,
 } from "@/lib/sheet";
 
@@ -17,6 +17,8 @@ import {
  *
  * ชีต -> เว็บ (applySheetEdits): อ่านแถวที่ถูกแก้ แล้วอัปเดต DB เฉพาะฟิลด์ในคอลัมน์ที่ถูกแก้
  *   แถวที่ยังไม่มีรหัสและกรอกวัน/เวลาครบ = slot ใหม่ สร้างใน DB แล้วเขียนรหัสลงคอลัมน์ V
+ *
+ * แถวคู่: พิมพ์แถวใหม่/แก้เวลาในแท็บหนึ่ง = สร้าง/ย้ายแถวคู่ในอีกแท็บ (ดูหัวข้อ "slot คู่" ด้านล่าง)
  *
  * ลบแถวในชีต (removeSlotsDeletedInSheet): slot ตั้งแต่วันนี้ที่รหัสไม่อยู่ในชีตแล้ว = ถูกลบในชีต
  *   ลบออกจาก DB (+ ลบ event ในปฏิทิน) เว็บจะไม่แสดงให้จองอีก และไม่เขียนแถวกลับลงชีต
@@ -151,18 +153,26 @@ function sameCell(tab: TabKey, col: number, have: Cell, want: Cell) {
 
 type Item = { vals: Row; isNew?: boolean };
 
-/** ตำแหน่งแทรกแถวใหม่: ต่อจากแถวสุดท้ายของวันเดียวกันที่เวลาเริ่ม <= slot ใหม่ */
-export function insertIndex(tab: TabKey, items: Item[], s: Pick<DbSlot, "live_date" | "start_time">) {
+/**
+ * ตำแหน่งแทรกแถวใหม่ ให้อยู่ในกลุ่ม วันเดียวกัน -> แพลตฟอร์มเดียวกัน -> เรียงตามเวลาเริ่ม (แบบที่ทีมจัดในชีต)
+ *   1) ต่อจากแถวสุดท้ายของวัน+แพลตฟอร์มเดียวกันที่เวลาเริ่ม <= slot ใหม่
+ *   2) ไม่มี (slot ใหม่เริ่มเร็วสุดของแพลตฟอร์มนั้น) = ก่อนแถวแรกของวัน+แพลตฟอร์มเดียวกัน
+ *   3) วันนั้นยังไม่มีแพลตฟอร์มนี้ = ต่อท้ายกลุ่มวันนั้น
+ *   4) ยังไม่มีวันนั้น = ต่อจากวันก่อนหน้าที่ใกล้ที่สุด
+ */
+export function insertIndex(tab: TabKey, items: Item[], s: Pick<DbSlot, "platform" | "live_date" | "start_time">) {
   const c = COLS[tab];
   const day = dateSerial(s.live_date);
   const start = Math.round(timeSerial(s.start_time) * 1440);
-  let lastLE = -1, first = -1, prevIdx = -1, prevDay = -Infinity;
+  let lastLE = -1, firstSame = -1, lastOfDay = -1, prevIdx = -1, prevDay = -Infinity;
   items.forEach((it, i) => {
     const dv = it.vals[c.date];
     if (typeof dv !== "number" || dv < 1) return;
     const d = Math.floor(dv);
     if (d === day) {
-      if (first < 0) first = i;
+      lastOfDay = i;
+      if (str(it.vals[c.platform]) !== s.platform) return;
+      if (firstSame < 0) firstSame = i;
       const sv = minutes(it.vals[c.start]);
       if (sv !== null && sv <= start) lastLE = i;
     } else if (d < day && d >= prevDay) {
@@ -171,7 +181,8 @@ export function insertIndex(tab: TabKey, items: Item[], s: Pick<DbSlot, "live_da
     }
   });
   if (lastLE >= 0) return lastLE + 1;
-  if (first >= 0) return first;
+  if (firstSame >= 0) return firstSame;
+  if (lastOfDay >= 0) return lastOfDay + 1;
   if (prevIdx >= 0) return prevIdx + 1;
   return items.length;
 }
@@ -326,31 +337,110 @@ export async function processSheetJobs() {
  * ถ้ารหัสอยู่หลายแถว ลบเฉพาะแถวที่แพลตฟอร์ม/วัน/เวลาตรงกับ slot ไม่ลบแถวคัดลอกทิ้งไปด้วย
  */
 export async function deleteSheetRows(table: Table, deleted: (SlotKey & { id: number })[]) {
+  await withSheetLock(() => deleteRowsLocked(table, deleted));
+}
+
+/** ตัวทำงานของ deleteSheetRows (เรียกเมื่อถือล็อกชีตอยู่แล้วเท่านั้น) */
+async function deleteRowsLocked(table: Table, deleted: (SlotKey & { id: number })[]) {
   const tab = table === "mc_slots" ? "mc" : "admin";
   const want = new Map(deleted.map((s) => [s.id, { ...s, start_time: hm(s.start_time), end_time: hm(s.end_time) }]));
-  await withSheetLock(async () => {
-    const rows = await readTab(tab);
-    const found = new Map<number, { i: number; p: SheetSlot }[]>();
-    rows.forEach((r, i) => {
-      const p = parseRow(tab, r);
-      if (p?.id && want.has(p.id)) found.set(p.id, [...(found.get(p.id) ?? []), { i, p }]);
-    });
-    const idx: number[] = [];
-    for (const [id, list] of found) {
-      const hits = list.length === 1 ? list : list.filter((x) => sameSlot(x.p, want.get(id)!));
-      if (!hits.length) console.warn(`รหัส ${id} อยู่ ${list.length} แถวในชีตแต่ไม่มีแถวไหนตรงกับ slot ที่ลบ จึงไม่ลบแถว`);
-      idx.push(...hits.slice(0, 1).map((x) => x.i));
-    }
-    idx.sort((a, b) => b - a);
-    if (!idx.length) return;
-    const sheetId = await sheetIdOf(tab);
-    await sheetsApi().spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: idx.map((i) => ({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: i, endIndex: i + 1 } } })),
-      },
-    });
+  const rows = await readTab(tab);
+  const found = new Map<number, { i: number; p: SheetSlot }[]>();
+  rows.forEach((r, i) => {
+    const p = parseRow(tab, r);
+    if (p?.id && want.has(p.id)) found.set(p.id, [...(found.get(p.id) ?? []), { i, p }]);
   });
+  const idx: number[] = [];
+  for (const [id, list] of found) {
+    const hits = list.length === 1 ? list : list.filter((x) => sameSlot(x.p, want.get(id)!));
+    if (!hits.length) console.warn(`รหัส ${id} อยู่ ${list.length} แถวในชีตแต่ไม่มีแถวไหนตรงกับ slot ที่ลบ จึงไม่ลบแถว`);
+    idx.push(...hits.slice(0, 1).map((x) => x.i));
+  }
+  idx.sort((a, b) => b - a);
+  if (!idx.length) return;
+  const sheetId = await sheetIdOf(tab);
+  await sheetsApi().spreadsheets.batchUpdate({
+    spreadsheetId: SHEET_ID,
+    requestBody: {
+      requests: idx.map((i) => ({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: i, endIndex: i + 1 } } })),
+    },
+  });
+}
+
+// ---------- slot คู่ (Mc <-> Admin ของไลฟ์เดียวกัน) ----------
+// พิมพ์แถวใหม่ในแท็บหนึ่ง = สร้างแถวคู่ในอีกแท็บให้ / แก้แพลตฟอร์ม-วัน-เวลา = แถวคู่เปลี่ยนตาม
+// ลบแถว (= ยกเลิกไลฟ์) = ลบแถวคู่ในอีกแท็บที่ยังไม่มีคนจอง/รับ
+
+const EXTRA_ADMIN = "Admin เสริม";
+const otherTable = (t: Table): Table => (t === "mc_slots" ? "admin_slots" : "mc_slots");
+const personColOf = (t: Table) => (t === "mc_slots" ? "mc_id" : "admin_id");
+
+/** slot ในอีกตารางที่แพลตฟอร์ม/วัน/เวลาตรงกัน */
+async function findPartners(table: Table, k: SlotKey) {
+  const other = otherTable(table);
+  const col = personColOf(other);
+  const { data, error } = await createAdminClient().from(other).select(`id, ${col}`)
+    .eq("platform", k.platform).eq("live_date", k.live_date)
+    .eq("start_time", hm(k.start_time)).eq("end_time", hm(k.end_time));
+  if (error) throw error;
+  return ((data ?? []) as unknown as Record<string, number | null>[])
+    .map((x) => ({ id: x.id as number, personId: x[col] ?? null }));
+}
+
+/** slot ใหม่จากชีต (ตั้งแต่วันนี้): ถ้าอีกแท็บยังไม่มี slot คู่ สร้างให้ (แท็บ Admin ใส่หมายเหตุ "Admin เสริม") */
+async function mirrorNewSlot(table: Table, k: SlotKey) {
+  if (k.live_date < bkkToday() || (await findPartners(table, k)).length) return 0;
+  const other = otherTable(table);
+  const { error } = await createAdminClient().from(other).insert({
+    platform: k.platform, live_date: k.live_date, start_time: hm(k.start_time), end_time: hm(k.end_time),
+    ...(other === "admin_slots" ? { remark: EXTRA_ADMIN } : {}),
+  });
+  if (error) throw error;
+  return 1;
+}
+
+/** แก้แพลตฟอร์ม/วัน/เวลาในชีต: ย้าย slot คู่ในอีกแท็บตาม (เฉพาะเมื่อมีคู่ตัวเดียว ไม่งั้นไม่แน่ใจว่าตัวไหน) */
+async function mirrorKeyChange(table: Table, old: SlotKey, row: Record<string, unknown>) {
+  const change: Record<string, unknown> = {};
+  for (const k of ["platform", "live_date", "start_time", "end_time"] as const) {
+    if (k in row && row[k] !== old[k]) change[k] = row[k];
+  }
+  if (!Object.keys(change).length) return;
+  const partners = await findPartners(table, old);
+  if (partners.length !== 1) return;
+  const other = otherTable(table);
+  const db = createAdminClient();
+  const { error } = await db.from(other).update(change).eq("id", partners[0].id);
+  if (error) throw error;
+  if (partners[0].personId) await db.from("calendar_jobs").insert({ slot_table: other, slot_id: partners[0].id });
+}
+
+/**
+ * ลบแถว = ยกเลิกไลฟ์นั้น: ลบ slot คู่ในอีกแท็บที่ยังไม่มีคนจอง/รับ (DB + แถวในชีต)
+ * คู่ที่มีคนแล้วไม่แตะ (ให้ทีมจัดการเอง ระบบอัปเดตหมายเหตุในปฏิทินให้)
+ */
+async function removeFreePartners(table: Table, gone: (SlotKey & { starts_at: string; ends_at: string })[]) {
+  const db = createAdminClient();
+  const other = otherTable(table);
+  type Partner = SlotKey & { id: number };
+  const partners: Partner[] = [];
+  for (const s of gone) {
+    const { data, error } = await db.from(other).select("id, platform, live_date, start_time, end_time")
+      .eq("platform", s.platform).eq("starts_at", s.starts_at).eq("ends_at", s.ends_at)
+      .is(personColOf(other), null).gte("live_date", bkkToday());
+    if (error) throw error;
+    partners.push(...((data ?? []) as Partner[]));
+  }
+  if (!partners.length) return 0;
+  const { error } = await db.from(other).delete().in("id", partners.map((p) => p.id));
+  if (error) throw error;
+  await deleteRowsLocked(other, partners);
+  await db.from("booking_logs").insert(partners.map((p) => ({
+    role: "Sheet", name: TABS[TAB_OF[table]], action: `ลบ slot คู่ (ลบแถวในแท็บ ${TABS[TAB_OF[table]]})`,
+    slot_table: other, slot_id: p.id, platform: p.platform, live_date: p.live_date,
+    time_range: `${hm(p.start_time)}-${hm(p.end_time)}`, result: "สำเร็จ",
+  })));
+  return partners.length;
 }
 
 // ---------- ลบแถวในชีต -> ลบในเว็บ ----------
@@ -427,6 +517,7 @@ async function deleteGoneSlots(table: Table, ids: number[]) {
     const { error } = await db.from(table).delete().in("id", rows.slice(i, i + 200).map((s) => s.id));
     if (error) throw error;
   }
+  await removeFreePartners(table, rows);
 
   // slot คู่ของอีกฝั่ง: หมายเหตุใน event มีชื่อคนของ slot ที่ถูกลบ
   const other: Table = table === "mc_slots" ? "admin_slots" : "mc_slots";
@@ -569,11 +660,12 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
       return (cur ?? null) !== (v ?? null);
     });
 
-    let updated = 0, created = 0;
+    let updated = 0, created = 0, paired = 0;
     const calendar: { slot_table: Table; slot_id: number }[] = [];
     const idWrites: sheets_v4.Schema$ValueRange[] = [];
     // แถวคัดลอกที่ติดรหัสของแถวอื่นมา = slot ใหม่ (สร้างใหม่แล้วเขียนรหัสใหม่ทับ) ไม่ใช่การแก้ slot เดิม
     const owner = duplicateOwners(tab, all, slots);
+    const present = sheetContents(tab, all);
 
     for (const { r, p } of targets) {
       if (p.id && owner.has(p.id) && owner.get(p.id) !== r) {
@@ -594,12 +686,31 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         if (error) throw error;
         calendar.push({ slot_table: table, slot_id: p.id });
         updated++;
+        if (rowNumbers) await mirrorKeyChange(table, s, row);
       } else {
-        const { data, error } = await db.from(table).insert(toRow(p, FIELDS)).select("id").single();
-        if (error) throw error;
-        idWrites.push({ range: `'${TABS[tab]}'!${colLetter(c.id)}${r}`, values: [[data.id]] });
-        if (p.person) calendar.push({ slot_table: table, slot_id: data.id });
-        created++;
+        // มี slot นี้อยู่แล้วแต่ยังไม่มีแถวในชีต (เช่น ระบบเพิ่งสร้างเป็นแถวคู่ให้ แต่ยังเขียนลงชีตไม่ทัน)
+        // = ผูกแถวนี้กับ slot เดิม ไม่สร้างซ้ำ
+        const { data: same, error: sameErr } = await db.from(table).select("id")
+          .eq("platform", p.platform).eq("live_date", p.live_date).eq("start_time", p.start_time).eq("end_time", p.end_time);
+        if (sameErr) throw sameErr;
+        const unplaced = (same ?? []).find((x) => !present.ids.has(x.id));
+        let id: number;
+        if (unplaced) {
+          id = unplaced.id;
+          const { error } = await db.from(table).update(toRow(p, FIELDS)).eq("id", id);
+          if (error) throw error;
+          updated++;
+        } else {
+          const { data, error } = await db.from(table).insert(toRow(p, FIELDS)).select("id").single();
+          if (error) throw error;
+          id = data.id;
+          created++;
+          if (rowNumbers) paired += await mirrorNewSlot(table, p);
+        }
+        present.ids.add(id);
+        idWrites.push({ range: `'${TABS[tab]}'!${colLetter(c.id)}${r}`, values: [[id]] });
+        // slot เดิมอาจมีคนอยู่แล้ว (มี event ในปฏิทิน) -> sync ปฏิทินเสมอ
+        if (p.person || unplaced) calendar.push({ slot_table: table, slot_id: id });
       }
     }
 
@@ -615,7 +726,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     // = ตรวจหา slot ที่ไม่มีแถวในชีตแล้วลบออก
     const cleared = rowNumbers?.some((r) => isBlankRow(tab, all[r - 1] ?? [])) ?? true;
     const removed = cleared ? await removeMissing(tab, all) : 0;
-    return { updated, created, removed };
+    return { updated, created, removed, paired };
   });
   if (!result) throw new Error("ระบบกำลังซิงค์ชีตอยู่ กรุณาลองใหม่อีกครั้ง");
   return result;
