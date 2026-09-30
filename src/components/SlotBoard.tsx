@@ -11,7 +11,15 @@ import { Icon, Sheet, SheetHead, StateBox, Tag, api, btn, useLocal, useToast, wr
 const MAX_SLOTS_PER_DAY = 2;
 const MAX_HOURS_PER_DAY = 4;
 const MAX_PER_REQUEST = 10;
-const ADMIN_MAX_SLOTS_PER_DAY = 2;
+const ADMIN_MAX_SLOTS_PER_DAY = 4;
+const ADMIN_MAX_HOURS_PER_DAY = 8;
+const ADMIN_MAX_BLOCKS_PER_DAY = 2; // ช่วง = slot ที่ต่อกัน เช่น 09:30–11:30 + 11:30–13:30
+
+/** จำนวนช่วงเวลาต่อเนื่อง (slot ที่เวลาจบ = เวลาเริ่มของอีก slot นับเป็นช่วงเดียวกัน) */
+function blocksOf(list: OpenSlot[]) {
+  const sorted = [...list].sort((a, b) => a.startMs - b.startMs);
+  return sorted.filter((x, i) => i === 0 || sorted[i - 1].endMs !== x.startMs).length;
+}
 const VIEW_KEY = "glory_booking_view";
 const POLL_MS = 15_000; // โหลด slot ใหม่อัตโนมัติระหว่างเปิดหน้าอยู่ (แก้/ลบในชีต มีคนจองไปแล้ว)
 const fmtClock = new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Bangkok" });
@@ -155,8 +163,9 @@ export function SlotBoard({ me, role }: { me: Me; role: "mc" | "admin" }) {
     const sameDay = chosen.filter((x) => x.date === s.date);
     if (role === "admin") {
       if (sameDay.length >= ADMIN_MAX_SLOTS_PER_DAY) return `รับได้สูงสุด ${ADMIN_MAX_SLOTS_PER_DAY} slot ต่อวัน`;
-      if (sameDay.length === 1 && !(s.startMs === sameDay[0].endMs || s.endMs === sameDay[0].startMs)) {
-        return "2 slot ในวันเดียวกันต้องต่อเนื่องกัน";
+      if (sameDay.reduce((a, x) => a + hoursOf(x), 0) + hoursOf(s) > ADMIN_MAX_HOURS_PER_DAY) return `รวมแล้วเกิน ${ADMIN_MAX_HOURS_PER_DAY} ชม. ต่อวัน`;
+      if (blocksOf([...sameDay, s]) > ADMIN_MAX_BLOCKS_PER_DAY) {
+        return `แบ่งได้ไม่เกิน ${ADMIN_MAX_BLOCKS_PER_DAY} ช่วงต่อวัน เลือก slot ที่ต่อกับช่วงที่เลือกไว้`;
       }
       return "";
     }
