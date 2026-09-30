@@ -1,4 +1,5 @@
 import "server-only";
+import { lateCut, paidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary } from "@/lib/types";
 
@@ -26,9 +27,10 @@ type SlotRow = {
   confirmed: boolean | null;
   status: string;
   is_cancelled: boolean;
+  late_minutes: number | null;
 };
 
-const SLOT_COLS = "id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed, status, is_cancelled";
+const SLOT_COLS = "id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed, status, is_cancelled, late_minutes";
 
 /** PostgREST คืนได้ครั้งละ 1000 แถว อ่านทีละหน้าจนหมด */
 async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>) {
@@ -153,6 +155,7 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
       hours: hoursOf(r),
       status: r.status,
       cancelled: r.is_cancelled,
+      lateMinutes: r.late_minutes ?? null,
       pairName: p ? (role === "admin" ? `Mc ${p.name}` : p.name) : "",
       pairPhone: p?.phone ?? "",
     };
@@ -189,6 +192,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
       details.push({
         type, name, date: r.live_date, start: hm(r.start_time), end: hm(r.end_time), platform: r.platform,
         hours: hoursOf(r), startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
+        lateMinutes: r.late_minutes ?? null,
       });
     }
   };
@@ -202,18 +206,23 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   details.sort((a, b) => a.type.localeCompare(b.type) || a.startMs - b.startMs);
 
   const summarize = (type: "Mc" | "Admin"): OwnerPerson[] => {
-    const people = new Map<string, { slots: number; hours: number; days: Set<string>; cancelled: number }>();
+    const people = new Map<string, { slots: number; hours: number; paid: number; late: number; days: Set<string>; cancelled: number }>();
     for (const d of details) {
       if (d.type !== type) continue;
-      const p = people.get(d.name) ?? { slots: 0, hours: 0, days: new Set<string>(), cancelled: 0 };
+      const p = people.get(d.name) ?? { slots: 0, hours: 0, paid: 0, late: 0, days: new Set<string>(), cancelled: 0 };
       people.set(d.name, p);
       if (d.cancelled) { p.cancelled++; continue; }
       p.slots++;
       p.hours += d.hours;
+      p.paid += paidHours(d.hours, d.lateMinutes);
+      if (lateCut(d.lateMinutes) > 0) p.late++;
       p.days.add(d.date);
     }
+    const r2 = (n: number) => Math.round(n * 100) / 100;
     return [...people.entries()]
-      .map(([name, p]) => ({ name, slots: p.slots, hours: Math.round(p.hours * 100) / 100, days: p.days.size, cancelled: p.cancelled }))
+      .map(([name, p]) => ({
+        name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, days: p.days.size, cancelled: p.cancelled,
+      }))
       .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name, "th"));
   };
 

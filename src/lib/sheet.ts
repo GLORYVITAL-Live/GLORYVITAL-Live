@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { googleAuth } from "@/lib/google";
+import { parseLateMinutes } from "@/lib/pay";
 
 /**
  * โครงสร้างชีต "LIVE GLORY 2026" + ตัวแปลงค่า (ใช้ร่วมกันระหว่างซิงค์สองทางและสคริปต์)
@@ -15,10 +16,13 @@ export type TabKey = keyof typeof TABS;
 export const TABLE_OF: Record<TabKey, "mc_slots" | "admin_slots"> = { mc: "mc_slots", admin: "admin_slots" };
 export const TAB_OF = { mc_slots: "mc", admin_slots: "admin" } as const;
 
-/** คอลัมน์ (เริ่ม 0 = A) — V เก็บรหัส slot ในระบบใหม่ (ระบบเขียนเอง ห้ามแก้) */
+/**
+ * คอลัมน์ (เริ่ม 0 = A) — V เก็บรหัส slot ในระบบใหม่ (ระบบเขียนเอง ห้ามแก้)
+ * late = ช่องที่ทีมบันทึกเวลามาสาย (Mc ใช้ช่อง Remark (L) / Admin ใช้คอลัมน์ M) ระบบอ่านอย่างเดียว
+ */
 export const COLS = {
-  mc: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, campaign: 7, person: 8, confirm: 9, status: 10, remark: 11, id: 21 },
-  admin: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, person: 7, confirm: 8, remark: 9, status: 10, id: 21 },
+  mc: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, campaign: 7, person: 8, confirm: 9, status: 10, remark: 11, late: 11, id: 21 },
+  admin: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, person: 7, confirm: 8, remark: 9, status: 10, late: 12, id: 21 },
 } as const;
 export const LAST_COL = "V";
 
@@ -59,6 +63,7 @@ export type SheetSlot = {
   confirmed: boolean | null;
   status: string;
   remark: string;
+  late: number | null; // นาทีที่มาสาย
   id: number | null;
 };
 
@@ -77,6 +82,7 @@ export function parseRow(tab: TabKey, r: Row): SheetSlot | null {
     confirmed: confirmedOf(r[c.confirm]),
     status: str(r[c.status]),
     remark: str(r[c.remark]),
+    late: parseLateMinutes(r[c.late]),
     id: Number.isInteger(idNum) && idNum > 0 ? idNum : null,
   };
 }

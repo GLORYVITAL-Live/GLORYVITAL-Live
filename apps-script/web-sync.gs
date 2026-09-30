@@ -14,24 +14,28 @@
  * สคริปต์จะส่งเลขแถวที่แก้ไปให้เว็บอ่านและอัปเดตเอง (การเขียนชีตจากเว็บไม่ทำให้สคริปต์นี้ทำงานซ้ำ)
  * ลบแถว (คลิกขวา > ลบแถว) = ลบ slot นั้นในเว็บด้วย (เฉพาะ slot ตั้งแต่วันนี้)
  * คอลัมน์ V (Slot ID) ระบบเขียนเอง ห้ามแก้
+ * เวลามาสาย (ใช้หักเงิน): Deal Mc คอลัมน์ L / Admin เสริม คอลัมน์ M เช่น "15" หรือ "สาย 15 นาที"
  */
 
 const WEB_SYNC_URL = 'https://glory-vital-live.vercel.app/api/sync/sheet';
 const WEB_SYNC_SHEET_ID = '1r17--dnbXyVk416Zc3mGwUb-aDw3OCxelOC25NJW7Xo'; // ชีต LIVE GLORY 2026 (ใช้ได้แม้สคริปต์ไม่ได้ผูกกับชีต)
 const WEB_SYNC_TABS = ['ลงตาราง Deal Mc', 'ลงตาราง Admin เสริม'];
-const WEB_SYNC_LAST_COL = 12; // สนใจเฉพาะคอลัมน์ A-L (ข้อมูล slot)
+// คอลัมน์สุดท้ายที่เป็นข้อมูล slot ของแต่ละแท็บ
+//   Deal Mc: A-L (L = Remark / เวลามาสายของ Mc)   Admin เสริม: A-M (M = เวลามาสายของ Admin)
+const WEB_SYNC_LAST_COL = { 'ลงตาราง Deal Mc': 12, 'ลงตาราง Admin เสริม': 13 };
 
 function onEditToWeb(e) {
   if (!e || !e.range) return;
   const sheet = e.range.getSheet();
   if (WEB_SYNC_TABS.indexOf(sheet.getName()) === -1) return;
+  const maxCol = WEB_SYNC_LAST_COL[sheet.getName()];
   const firstCol = e.range.getColumn();
   const lastCol = e.range.getLastColumn();
-  if (firstCol > WEB_SYNC_LAST_COL) return; // แก้คอลัมน์โน้ตด้านขวา ไม่เกี่ยวกับ slot
+  if (firstCol > maxCol) return; // แก้คอลัมน์โน้ตด้านขวา ไม่เกี่ยวกับ slot
 
   const rows = [];
   for (let r = e.range.getRow(); r <= e.range.getLastRow() && rows.length < 1000; r++) rows.push(r);
-  postToWeb_(e.source, { tab: sheet.getName(), rows: rows, firstCol: firstCol, lastCol: Math.min(lastCol, WEB_SYNC_LAST_COL) });
+  postToWeb_(e.source, { tab: sheet.getName(), rows: rows, firstCol: firstCol, lastCol: Math.min(lastCol, maxCol) });
 }
 
 /** ลบแถว: onEdit ไม่ทำงานตอนลบแถว จึงใช้ onChange แล้วให้เว็บตรวจทั้งแท็บว่า slot ไหนหายไป */

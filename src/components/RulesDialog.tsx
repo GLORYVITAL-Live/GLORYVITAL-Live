@@ -1,14 +1,16 @@
 "use client";
 
 import { Sheet, SheetHead, btn } from "@/components/ui";
+import { LATE_TIERS } from "@/lib/pay";
 
 const CANCEL_MIN_HOURS = 6;
 
-const TIERS = [
-  ["สายไม่เกิน 5 นาที", "ไม่หัก", "bg-ok/15 text-ok"],
-  ["สาย 5 – 30 นาที", "หัก 30%", "bg-warn-bg text-warn-ink"],
-  ["สายเกิน 30 นาที ถึง 1 ชั่วโมง", "หัก 50%", "bg-err/15 text-err"],
-] as const;
+// กฎมาสายมาจาก src/lib/pay.ts (ตัวเดียวกับที่ใช้คิดเงิน)
+const TIERS = LATE_TIERS.map((t) => [
+  t.label,
+  t.cut ? `หัก ${Math.round(t.cut * 100)}%` : "ไม่หัก",
+  !t.cut ? "bg-ok/15 text-ok" : t.cut < 0.5 ? "bg-warn-bg text-warn-ink" : "bg-err/15 text-err",
+] as const);
 
 /** กฎการทำงาน (เด้งวันละครั้งหลัง login และเปิดดูได้จาก "ตารางของฉัน") */
 export function RulesDialog({ open, onClose, role, who }: {

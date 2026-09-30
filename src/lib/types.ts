@@ -39,6 +39,7 @@ export type MyItem = {
   endMs: number;
   status: string;
   cancelled: boolean;
+  lateMinutes: number | null; // นาทีที่มาสาย (จากชีต) ใช้หักเงิน
   pairName: string;
   pairPhone: string;
 };
@@ -50,6 +51,8 @@ export type MyResponse = {
   adminChatUrl: string;
   canCancel: boolean;
   items: MyItem[];
+  /** โปรไฟล์ของตัวเอง rate = ค่าจ้างต่อชั่วโมง (0 = ยังไม่ได้ตั้ง) */
+  profile: { name: string; email: string; phone: string; rate: number };
 };
 
 export type OwnerDetail = {
@@ -64,9 +67,13 @@ export type OwnerDetail = {
   status: string;
   cancelled: boolean;
   pair: string;
+  lateMinutes: number | null;
 };
 
-export type OwnerPerson = { name: string; slots: number; hours: number; days: number; cancelled: number };
+/** paidHours = ชั่วโมงที่ได้เงินหลังหักมาสาย (ยอดเงิน = paidHours x ค่าจ้าง/ชม.) lateSlots = จำนวนคิวที่โดนหัก */
+export type OwnerPerson = {
+  name: string; slots: number; hours: number; paidHours: number; lateSlots: number; days: number; cancelled: number;
+};
 
 export type OwnerSummary = {
   ok: true;
