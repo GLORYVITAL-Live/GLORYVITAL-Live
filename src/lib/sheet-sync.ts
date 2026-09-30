@@ -1,5 +1,7 @@
 import "server-only";
 import type { sheets_v4 } from "googleapis";
+import { deleteCalendarEvent } from "@/lib/calendar";
+import { bkkToday } from "@/lib/data";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   COLS, SHEET_ID, TABLE_OF, TABS, colLetter, dateSerial, hoursOf, normalizeMcName, parseRow, readTab, sheetIdOf,
@@ -15,6 +17,9 @@ import {
  *
  * ชีต -> เว็บ (applySheetEdits): อ่านแถวที่ถูกแก้ แล้วอัปเดต DB เฉพาะฟิลด์ในคอลัมน์ที่ถูกแก้
  *   แถวที่ยังไม่มีรหัสและกรอกวัน/เวลาครบ = slot ใหม่ สร้างใน DB แล้วเขียนรหัสลงคอลัมน์ V
+ *
+ * ลบแถวในชีต (removeSlotsDeletedInSheet): slot ตั้งแต่วันนี้ที่รหัสไม่อยู่ในชีตแล้ว = ถูกลบในชีต
+ *   ลบออกจาก DB (+ ลบ event ในปฏิทิน) เว็บจะไม่แสดงให้จองอีก และไม่เขียนแถวกลับลงชีต
  *
  * ทุกงานที่แก้ชีตทำภายใต้ล็อกเดียวกัน (sync_locks) เพราะการแทรก/ลบแถวทำให้เลขแถวเลื่อน
  * ถ้าแก้ slot เดียวกันพร้อมกันทั้งสองที่ ค่าที่แก้ทีหลังชนะ
@@ -91,6 +96,7 @@ async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSl
 type SlotKey = Pick<DbSlot, "platform" | "live_date" | "start_time" | "end_time">;
 const sameSlot = (a: SlotKey, b: SlotKey) =>
   a.platform === b.platform && a.live_date === b.live_date && a.start_time === b.start_time && a.end_time === b.end_time;
+const keyOf = (p: SlotKey) => `${p.platform}|${p.live_date}|${hm(p.start_time)}|${hm(p.end_time)}`;
 
 /**
  * รหัสที่อยู่หลายแถว (เช่น คัดลอกทั้งแถวรวมคอลัมน์ V) -> เลขแถว (เริ่ม 1) ที่เป็นเจ้าของรหัสจริง
@@ -174,13 +180,12 @@ async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
   const table = TABLE_OF[tab];
   const c = COLS[tab];
   const slots = await loadSlots(table, ids);
-  if (!slots.size) return { updated: 0, inserted: 0 };
+  if (!slots.size) return { updated: 0, inserted: 0, removed: 0 };
 
   const items: Item[] = (await readTab(tab)).map((vals) => ({ vals }));
+  const present = sheetContents(tab, items.map((it) => it.vals));
   const byId = new Map<number, Item>();
   const byKey = new Map<string, Item[]>(); // แถวที่ยังไม่มีรหัส (เผื่อจับคู่ด้วยวัน/เวลา)
-  const keyOf = (p: { platform: string; live_date: string; start_time: string; end_time: string }) =>
-    `${p.platform}|${p.live_date}|${p.start_time}|${p.end_time}`;
   const owner = duplicateOwners(tab, items.map((it) => it.vals), slots);
   items.forEach((it, i) => {
     const p = parseRow(tab, it.vals);
@@ -192,12 +197,20 @@ async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
   const cellWrites: { item: Item; col: number; value: Cell }[] = [];
   const inserts: number[] = []; // index ตอนแทรก (ตามลำดับ)
   const newItems: { item: Item; slot: DbSlot }[] = [];
+  // slot ที่เคยอยู่ในชีตแล้วแต่ตอนนี้หาแถวไม่เจอ = ถูกลบแถวในชีต ห้ามแทรกกลับ
+  const wasInSheet = await everInSheet(table, [...slots.keys()].filter((id) => !byId.has(id)));
+  const gone: number[] = [];
 
   for (const s of slots.values()) {
     let it = byId.get(s.id);
     if (!it) {
       it = byKey.get(keyOf(s))?.shift();
       if (it) cellWrites.push({ item: it, col: c.id, value: s.id });
+    }
+    if (!it && present.ids.has(s.id)) continue; // รหัสอยู่ในแถวที่อ่านไม่ได้ (เช่น เวลาเริ่ม = เวลาจบ) ไม่แทรกซ้ำ
+    if (!it && wasInSheet.has(s.id)) {
+      gone.push(s.id);
+      continue;
     }
     if (!it) {
       const vals: Row = [];
@@ -273,7 +286,8 @@ async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
       requestBody: { valueInputOption: "USER_ENTERED", data },
     });
   }
-  return { updated: cellWrites.length, inserted: newItems.length };
+  const removed = gone.length ? await deleteGoneSlots(table, gone) : 0;
+  return { updated: cellWrites.length, inserted: newItems.length, removed };
 }
 
 /** เขียนการเปลี่ยนแปลงจากเว็บลงชีต (งานค้างใน sheet_jobs) */
@@ -337,6 +351,151 @@ export async function deleteSheetRows(table: Table, deleted: (SlotKey & { id: nu
       },
     });
   });
+}
+
+// ---------- ลบแถวในชีต -> ลบในเว็บ ----------
+
+/** แถวที่ไม่มีแพลตฟอร์ม/วัน/เวลาเลย (ถูกล้างข้อมูล หรือแถวว่าง) */
+const isBlankRow = (tab: TabKey, r: Row) => {
+  const c = COLS[tab];
+  return [c.platform, c.date, c.start, c.end].every((i) => str(r[i]) === "");
+};
+
+/** รหัสที่ยังอยู่ในชีต + วัน/เวลาของแถวที่ยังไม่มีรหัส (แถวที่ล้างข้อมูลทั้งแถวแล้วไม่นับ แม้คอลัมน์ V ยังค้าง) */
+function sheetContents(tab: TabKey, rows: Row[]) {
+  const c = COLS[tab];
+  const ids = new Set<number>(), keys = new Set<string>();
+  for (const r of rows) {
+    if (isBlankRow(tab, r)) continue;
+    const id = Number(str(r[c.id]));
+    if (Number.isInteger(id) && id > 0) ids.add(id);
+    const p = parseRow(tab, r);
+    if (p && !p.id) keys.add(keyOf(p));
+  }
+  return { ids, keys };
+}
+
+/** slot ที่เคยอยู่ในชีตแน่ๆ: นำเข้าจากชีต (sheet_row) หรือเคยเขียนลงชีตสำเร็จแล้ว */
+async function everInSheet(table: Table, ids: number[]) {
+  const db = createAdminClient();
+  const out = new Set<number>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const part = ids.slice(i, i + 200);
+    const [imported, written] = await Promise.all([
+      db.from(table).select("id").in("id", part).not("sheet_row", "is", null),
+      db.from("sheet_jobs").select("slot_id").eq("slot_table", table).in("slot_id", part).not("done_at", "is", null),
+    ]);
+    if (imported.error) throw imported.error;
+    if (written.error) throw written.error;
+    for (const x of imported.data ?? []) out.add(x.id);
+    for (const x of written.data ?? []) out.add(x.slot_id);
+  }
+  return out;
+}
+
+/**
+ * ลบ slot ที่ถูกลบแถวในชีตออกจาก DB (เฉพาะตั้งแต่วันนี้ ของเก่าเก็บไว้ให้สรุปรายเดือน)
+ * ลบ event ในปฏิทินก่อน แล้วให้ slot คู่ของอีกฝั่งอัปเดตหมายเหตุใน event
+ */
+async function deleteGoneSlots(table: Table, ids: number[]) {
+  const db = createAdminClient();
+  const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
+  type Gone = SlotKey & {
+    id: number; starts_at: string; ends_at: string; calendar_email: string | null; calendar_event_id: string | null;
+  } & Record<string, unknown>;
+  const rows: Gone[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await db.from(table)
+      .select(`id, platform, live_date, start_time, end_time, starts_at, ends_at, ${personCol}, calendar_email, calendar_event_id`)
+      .in("id", ids.slice(i, i + 200)).gte("live_date", bkkToday());
+    if (error) throw error;
+    rows.push(...((data ?? []) as unknown as Gone[]));
+  }
+  if (!rows.length) return 0;
+
+  const calendarFailed = new Set<number>();
+  for (const s of rows) {
+    if (!s.calendar_email || !s.calendar_event_id) continue;
+    try {
+      await deleteCalendarEvent(s.calendar_email, s.calendar_event_id);
+    } catch (err) {
+      calendarFailed.add(s.id);
+      console.warn(`ลบ event ของ slot ${s.id} ไม่สำเร็จ:`, err);
+    }
+  }
+  for (let i = 0; i < rows.length; i += 200) {
+    const { error } = await db.from(table).delete().in("id", rows.slice(i, i + 200).map((s) => s.id));
+    if (error) throw error;
+  }
+
+  // slot คู่ของอีกฝั่ง: หมายเหตุใน event มีชื่อคนของ slot ที่ถูกลบ
+  const other: Table = table === "mc_slots" ? "admin_slots" : "mc_slots";
+  const otherCol = other === "mc_slots" ? "mc_id" : "admin_id";
+  const partnerJobs: { slot_table: Table; slot_id: number }[] = [];
+  for (const s of rows.filter((x) => x[personCol])) {
+    const { data } = await db.from(other).select("id")
+      .eq("platform", s.platform).eq("starts_at", s.starts_at).eq("ends_at", s.ends_at).not(otherCol, "is", null);
+    for (const p of data ?? []) partnerJobs.push({ slot_table: other, slot_id: p.id });
+  }
+  if (partnerJobs.length) await db.from("calendar_jobs").insert(partnerJobs);
+
+  await db.from("booking_logs").insert(rows.map((s) => ({
+    role: "Sheet", name: TABS[table === "mc_slots" ? "mc" : "admin"], action: "ลบ slot (ลบแถวในชีต)",
+    slot_table: table, slot_id: s.id, platform: s.platform, live_date: s.live_date,
+    time_range: `${hm(s.start_time)}-${hm(s.end_time)}`,
+    result: calendarFailed.has(s.id) ? "ลบแล้ว แต่ลบ event ในปฏิทินไม่สำเร็จ" : "สำเร็จ",
+  })));
+  console.log(`ลบ slot ที่ถูกลบแถวในชีต (${table}): ${rows.map((s) => s.id).join(", ")}`);
+  return rows.length;
+}
+
+/**
+ * หา slot ตั้งแต่วันนี้ที่เคยอยู่ในชีตแต่ตอนนี้ไม่มีแถวแล้ว แล้วลบออกจาก DB (เรียกภายใต้ล็อกชีต)
+ * ข้าม slot ที่เว็บเพิ่งสร้าง/แก้แต่ยังไม่ได้เขียนลงชีต
+ */
+async function removeMissing(tab: TabKey, rows: Row[]) {
+  const db = createAdminClient();
+  const table = TABLE_OF[tab];
+  type Future = SlotKey & { id: number };
+  const future: Future[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from(table).select("id, platform, live_date, start_time, end_time")
+      .gte("live_date", bkkToday()).order("id").range(from, from + 999);
+    if (error) throw error;
+    future.push(...((data ?? []) as Future[]));
+    if (!data || data.length < 1000) break;
+  }
+
+  const present = sheetContents(tab, rows);
+  const missing = future.filter((s) => !present.ids.has(s.id) && !present.keys.has(keyOf(s))).map((s) => s.id);
+  if (!missing.length) return 0;
+
+  const known = await everInSheet(table, missing);
+  const pending = new Set<number>();
+  for (let i = 0; i < missing.length; i += 200) {
+    const { data: jobs, error } = await db.from("sheet_jobs").select("slot_id")
+      .eq("slot_table", table).is("done_at", null).in("slot_id", missing.slice(i, i + 200));
+    if (error) throw error;
+    for (const j of jobs ?? []) pending.add(j.slot_id);
+  }
+  const gone = missing.filter((id) => known.has(id) && !pending.has(id));
+  if (!gone.length) return 0;
+
+  // กันพลาด: ถ้าหายไปเกินครึ่ง อาจอ่านชีตผิด/คอลัมน์ V ถูกล้าง ไม่ลบให้อัตโนมัติ
+  if (gone.length > 20 && gone.length > future.length / 2) {
+    throw new Error(
+      `slot ในแท็บ "${TABS[tab]}" หายจากชีต ${gone.length} จาก ${future.length} slot ` +
+      "ระบบจึงไม่ลบให้อัตโนมัติ (ตรวจว่าคอลัมน์ V ไม่ถูกลบ) ถ้าตั้งใจลบจริง ให้ลบใน \"จัดการ slot\" ของเว็บ",
+    );
+  }
+  return deleteGoneSlots(table, gone);
+}
+
+/** เรียกเมื่อมีการลบแถวในแท็บ (Apps Script onChange) / ซิงค์ทั้งหมด / cron */
+export async function removeSlotsDeletedInSheet(tab: TabKey) {
+  const result = await withSheetLock(async () => removeMissing(tab, await readTab(tab)));
+  if (result === null) throw new Error("ระบบกำลังซิงค์ชีตอยู่ กรุณาลองใหม่อีกครั้ง");
+  return { removed: result };
 }
 
 // ---------- ชีต -> เว็บ ----------
@@ -421,6 +580,11 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         console.warn(`แถว ${r} ในแท็บ ${TABS[tab]} มีรหัส ${p.id} ซ้ำกับแถว ${owner.get(p.id)} จึงสร้างเป็น slot ใหม่`);
         p.id = null;
       }
+      // แก้แถวที่รหัสไม่มีในระบบแล้ว (เช่น ลบแถวแล้วกดย้อนกลับ) = สร้าง slot ใหม่ให้แถวนี้
+      if (p.id && rowNumbers && !slots.has(p.id)) {
+        console.warn(`แถว ${r} ในแท็บ ${TABS[tab]} มีรหัส ${p.id} ที่ไม่มีในระบบแล้ว จึงสร้างเป็น slot ใหม่`);
+        p.id = null;
+      }
       if (p.id) {
         const s = slots.get(p.id);
         if (!s || pending.has(p.id)) continue; // ลบในเว็บแล้ว / เว็บเพิ่งแก้
@@ -446,7 +610,12 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
       });
     }
     if (calendar.length) await db.from("calendar_jobs").insert(calendar);
-    return { updated, created };
+
+    // ซิงค์ทั้งหมด หรือมีแถวถูกล้างข้อมูลทั้งแถว (เลือกแถวแล้วกด Delete ซึ่งรหัสในคอลัมน์ V อาจหายไปด้วย)
+    // = ตรวจหา slot ที่ไม่มีแถวในชีตแล้วลบออก
+    const cleared = rowNumbers?.some((r) => isBlankRow(tab, all[r - 1] ?? [])) ?? true;
+    const removed = cleared ? await removeMissing(tab, all) : 0;
+    return { updated, created, removed };
   });
   if (!result) throw new Error("ระบบกำลังซิงค์ชีตอยู่ กรุณาลองใหม่อีกครั้ง");
   return result;

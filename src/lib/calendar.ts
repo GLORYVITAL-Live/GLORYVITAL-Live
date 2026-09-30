@@ -129,7 +129,21 @@ async function syncOne(cal: calendar_v3.Calendar, table: Table, s: Slot, partner
       if (!isNotFound(err)) console.warn("ลบ event ของคนเดิมไม่สำเร็จ:", err);
     }
   }
-  await db.from(table).update({ calendar_email: email, calendar_event_id: created.data.id }).eq("id", s.id);
+  const { data: saved } = await db.from(table)
+    .update({ calendar_email: email, calendar_event_id: created.data.id }).eq("id", s.id).select("id");
+  // slot ถูกลบไประหว่างสร้าง event (เช่น ลบแถวในชีต) -> ลบ event ที่เพิ่งสร้าง ไม่ให้ค้างในปฏิทิน
+  if (saved && !saved.length && created.data.id) await deleteCalendarEvent(email, created.data.id);
+}
+
+/** ลบ event ของ slot ที่กำลังจะถูกลบออกจาก DB (event หายไปแล้วถือว่าสำเร็จ) */
+export async function deleteCalendarEvent(email: string, eventId: string) {
+  const cal = calendarApi();
+  if (!cal) throw new Error("ยังไม่ได้เชื่อมบัญชี Google (bun run google:auth)");
+  try {
+    await cal.events.delete({ calendarId: email, eventId });
+  } catch (err) {
+    if (!isNotFound(err)) throw err;
+  }
 }
 
 /** sync slot นี้และ slot คู่ของอีกฝั่ง */

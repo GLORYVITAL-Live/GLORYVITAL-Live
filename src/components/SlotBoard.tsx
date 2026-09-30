@@ -13,6 +13,8 @@ const MAX_HOURS_PER_DAY = 4;
 const MAX_PER_REQUEST = 10;
 const ADMIN_MAX_SLOTS_PER_DAY = 2;
 const VIEW_KEY = "glory_booking_view";
+const POLL_MS = 15_000; // โหลด slot ใหม่อัตโนมัติระหว่างเปิดหน้าอยู่ (แก้/ลบในชีต มีคนจองไปแล้ว)
+const fmtClock = new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Bangkok" });
 
 const TEXT = {
   mc: {
@@ -45,19 +47,54 @@ export function SlotBoard({ me, role }: { me: Me; role: "mc" | "admin" }) {
   const stripRef = useRef<HTMLElement>(null);
 
   const [tick, setTick] = useState(0);
+  const [updatedAt, setUpdatedAt] = useState(0);
+  const pickedRef = useRef(picked);
+  const dialogRef = useRef(dialog);
+  useEffect(() => { pickedRef.current = picked; dialogRef.current = dialog; }, [picked, dialog]);
 
   useEffect(() => {
     let alive = true;
     api<SlotsResponse>(`/api/slots?role=${role}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.message);
+        if (!alive) return;
         const now = Date.now();
-        if (alive) { setData({ ...res, slots: res.slots.filter((s) => s.endMs > now) }); setLoadError(""); }
+        const fresh = res.slots.filter((s) => s.endMs > now);
+        setData({ ...res, slots: fresh });
+        setLoadError("");
+        setUpdatedAt(now);
+        // slot ที่เลือกไว้หายไป (มีคนจองไปก่อน / ทีมงานลบหรือแก้ในชีต)
+        const ids = new Set(fresh.map((s) => s.id));
+        const lost = [...pickedRef.current.keys()].filter((id) => !ids.has(id));
+        if (lost.length) {
+          setSelected((prev) => new Map([...prev].filter(([id]) => ids.has(id))));
+          toast(`slot ที่เลือกไว้ ${lost.length} slot ไม่ว่างแล้ว (มีคน${t.verb}ไปก่อน หรือทีมงานแก้ตาราง)`, "error");
+        }
       })
       .catch((err) => { if (alive) setLoadError((err as Error).message); })
       .finally(() => { if (alive) setRefreshing(false); });
     return () => { alive = false; };
-  }, [role, tick]);
+  }, [role, tick, toast, t.verb]);
+
+  // อัปเดตอัตโนมัติ: ทุก POLL_MS ระหว่างเปิดหน้าอยู่ + ทันทีที่กลับมาที่แท็บนี้ (ไม่รีเฟรชระหว่างเปิดหน้าต่างยืนยัน)
+  useEffect(() => {
+    let last = Date.now();
+    const refresh = (force: boolean) => {
+      if (document.visibilityState !== "visible" || dialogRef.current !== "closed") return;
+      if (!force && Date.now() - last < POLL_MS - 1000) return;
+      last = Date.now();
+      setTick((n) => n + 1);
+    };
+    const timer = setInterval(() => refresh(false), POLL_MS);
+    const onShow = () => { if (Date.now() - last > 3000) refresh(true); };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", onShow);
+    };
+  }, []);
 
   // โหลดใหม่จากปุ่ม/หลังจอง (แสดงแถบโหลดด้านบนระหว่างรอ)
   function reload() {
@@ -214,6 +251,22 @@ export function SlotBoard({ me, role }: { me: Me; role: "mc" | "admin" }) {
       ) : null}
       {data?.scheduleNotice ? (
         <div className="my-2 rounded-xl bg-info-bg px-3 py-2.5 text-sm text-info-ink">{data.scheduleNotice}</div>
+      ) : null}
+      {data && updatedAt ? (
+        <div className="my-1 flex items-center justify-end gap-2 text-xs text-muted">
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className={`size-1.5 rounded-full ${loadError ? "bg-err" : "animate-pulse bg-ok"}`} />
+            {loadError ? "เชื่อมต่อไม่สำเร็จ แสดงข้อมูลล่าสุดเมื่อ" : "อัปเดตอัตโนมัติ ล่าสุด"} {fmtClock.format(updatedAt)}
+          </span>
+          <button
+            type="button"
+            onClick={reload}
+            disabled={refreshing}
+            className="rounded-full border border-line bg-surface px-2.5 py-0.5 font-medium text-ink hover:border-accent disabled:opacity-50"
+          >
+            {refreshing ? "กำลังโหลด..." : "รีเฟรช"}
+          </button>
+        </div>
       ) : null}
 
       {!data && !loadError ? <Skeleton /> : null}

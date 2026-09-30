@@ -35,11 +35,14 @@ export function SlotManager() {
   async function syncFromSheet() {
     setSyncing(true);
     try {
-      type Stat = { updated: number; created: number };
+      type Stat = { updated: number; created: number; removed: number };
       const res = await api<{ mc: Stat; admin: Stat }>("/api/owner/sync-sheet", {});
       if (!res.ok) throw new Error(res.message);
       const changed = res.mc.updated + res.admin.updated, created = res.mc.created + res.admin.created;
-      toast(changed || created ? `ซิงค์แล้ว: แก้ ${changed} slot, เพิ่มใหม่ ${created} slot` : "ข้อมูลในเว็บตรงกับชีตแล้ว");
+      const removed = res.mc.removed + res.admin.removed;
+      toast(changed || created || removed
+        ? `ซิงค์แล้ว: แก้ ${changed} slot, เพิ่มใหม่ ${created} slot, ลบ ${removed} slot`
+        : "ข้อมูลในเว็บตรงกับชีตแล้ว");
       reload();
     } catch (err) {
       toast((err as Error).message, "error");
@@ -58,6 +61,17 @@ export function SlotManager() {
       .catch((err) => { if (alive) setFailed({ date, message: (err as Error).message }); });
     return () => { alive = false; };
   }, [date, tick]);
+
+  // กลับมาที่แท็บนี้ (เช่น ไปแก้ในชีตมา) -> โหลดใหม่ + โหลดใหม่ทุก 30 วินาทีระหว่างเปิดหน้าอยู่
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === "visible") setTick((n) => n + 1); };
+    const timer = setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
 
   const day = data?.date === date ? data : null;
   const error = failed?.date === date ? failed.message : "";

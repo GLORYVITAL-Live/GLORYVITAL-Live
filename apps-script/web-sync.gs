@@ -8,9 +8,11 @@
  *   1. Project Settings (ไอคอนเฟือง) > Script Properties > Add script property
  *        Property: SYNC_SECRET   Value: ค่า SHEET_SYNC_SECRET (เดียวกับใน Vercel)
  *   2. เลือกฟังก์ชัน setupWebSync ด้านบน แล้วกด Run (อนุญาตสิทธิ์ตามที่ Google ถาม)
+ *      (อัปเดตไฟล์นี้แล้วต้องกด Run setupWebSync อีกครั้ง เพื่อติดตั้ง trigger ใหม่)
  *
  * หลังจากนั้นทุกครั้งที่แก้แท็บ "ลงตาราง Deal Mc" หรือ "ลงตาราง Admin เสริม"
  * สคริปต์จะส่งเลขแถวที่แก้ไปให้เว็บอ่านและอัปเดตเอง (การเขียนชีตจากเว็บไม่ทำให้สคริปต์นี้ทำงานซ้ำ)
+ * ลบแถว (คลิกขวา > ลบแถว) = ลบ slot นั้นในเว็บด้วย (เฉพาะ slot ตั้งแต่วันนี้)
  * คอลัมน์ V (Slot ID) ระบบเขียนเอง ห้ามแก้
  */
 
@@ -28,6 +30,20 @@ function onEditToWeb(e) {
 
   const rows = [];
   for (let r = e.range.getRow(); r <= e.range.getLastRow() && rows.length < 1000; r++) rows.push(r);
+  postToWeb_(e.source, { tab: sheet.getName(), rows: rows, firstCol: firstCol, lastCol: Math.min(lastCol, WEB_SYNC_LAST_COL) });
+}
+
+/** ลบแถว: onEdit ไม่ทำงานตอนลบแถว จึงใช้ onChange แล้วให้เว็บตรวจทั้งแท็บว่า slot ไหนหายไป */
+function onChangeToWeb(e) {
+  if (!e || e.changeType !== 'REMOVE_ROW') return;
+  const ss = e.source || SpreadsheetApp.getActive();
+  const active = ss.getActiveSheet().getName();
+  // ปกติคือแท็บที่กำลังเปิดอยู่ ถ้าไม่ใช่แท็บ slot (เช่น ลบผ่านเมนูจากแท็บอื่น) ตรวจทั้งสองแท็บ
+  const tabs = WEB_SYNC_TABS.indexOf(active) === -1 ? WEB_SYNC_TABS : [active];
+  tabs.forEach(function (tab) { postToWeb_(ss, { tab: tab, removedRows: true }); });
+}
+
+function postToWeb_(ss, payload) {
   const secret = PropertiesService.getScriptProperties().getProperty('SYNC_SECRET');
   if (!secret) throw new Error('ยังไม่ได้ตั้ง Script Property ชื่อ SYNC_SECRET');
 
@@ -39,12 +55,17 @@ function onEditToWeb(e) {
       method: 'post',
       contentType: 'application/json',
       headers: { Authorization: 'Bearer ' + secret },
-      payload: JSON.stringify({ tab: sheet.getName(), rows: rows, firstCol: firstCol, lastCol: Math.min(lastCol, WEB_SYNC_LAST_COL) }),
+      payload: JSON.stringify(payload),
       muteHttpExceptions: true,
     });
     if (res.getResponseCode() !== 200) {
       console.warn('ซิงค์ไปเว็บไม่สำเร็จ (' + res.getResponseCode() + '): ' + res.getContentText());
-      e.source.toast('ซิงค์ไปเว็บไม่สำเร็จ กด "ซิงค์จากชีตทั้งหมด" ในหน้าเจ้าของอีกครั้ง', 'GLORY VITAL', 8);
+      let msg = '';
+      try { msg = JSON.parse(res.getContentText()).message || ''; } catch (err) {}
+      ss.toast((msg ? msg + ' — ' : '') + 'กด "ซิงค์จากชีตทั้งหมด" ในหน้าเจ้าของอีกครั้ง', 'ซิงค์ไปเว็บไม่สำเร็จ', 10);
+    } else if (payload.removedRows) {
+      const removed = JSON.parse(res.getContentText()).removed || 0;
+      if (removed) ss.toast('ลบ ' + removed + ' slot ออกจากเว็บแล้ว', 'GLORY VITAL', 5);
     }
   } finally {
     lock.releaseLock();
@@ -53,17 +74,22 @@ function onEditToWeb(e) {
 
 /** รันครั้งเดียวเพื่อติดตั้ง trigger (รันซ้ำได้ ไม่สร้างซ้ำ) */
 function setupWebSync() {
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'onEditToWeb') ScriptApp.deleteTrigger(t);
-  });
-  ScriptApp.newTrigger('onEditToWeb').forSpreadsheet(SpreadsheetApp.getActive()).onEdit().create();
-  console.log('เปิดซิงค์ชีต -> เว็บแล้ว');
+  removeTriggers_();
+  const ss = SpreadsheetApp.getActive();
+  ScriptApp.newTrigger('onEditToWeb').forSpreadsheet(ss).onEdit().create();
+  ScriptApp.newTrigger('onChangeToWeb').forSpreadsheet(ss).onChange().create();
+  console.log('เปิดซิงค์ชีต -> เว็บแล้ว (แก้ไข + ลบแถว)');
 }
 
 /** ปิดซิงค์ชีต -> เว็บ */
 function removeWebSync() {
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'onEditToWeb') ScriptApp.deleteTrigger(t);
-  });
+  removeTriggers_();
   console.log('ปิดซิงค์ชีต -> เว็บแล้ว');
+}
+
+function removeTriggers_() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    const fn = t.getHandlerFunction();
+    if (fn === 'onEditToWeb' || fn === 'onChangeToWeb') ScriptApp.deleteTrigger(t);
+  });
 }
