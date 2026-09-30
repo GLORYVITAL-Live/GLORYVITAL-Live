@@ -17,6 +17,7 @@
  */
 
 const WEB_SYNC_URL = 'https://glory-vital-live.vercel.app/api/sync/sheet';
+const WEB_SYNC_SHEET_ID = '1r17--dnbXyVk416Zc3mGwUb-aDw3OCxelOC25NJW7Xo'; // ชีต LIVE GLORY 2026 (ใช้ได้แม้สคริปต์ไม่ได้ผูกกับชีต)
 const WEB_SYNC_TABS = ['ลงตาราง Deal Mc', 'ลงตาราง Admin เสริม'];
 const WEB_SYNC_LAST_COL = 12; // สนใจเฉพาะคอลัมน์ A-L (ข้อมูล slot)
 
@@ -36,11 +37,9 @@ function onEditToWeb(e) {
 /** ลบแถว: onEdit ไม่ทำงานตอนลบแถว จึงใช้ onChange แล้วให้เว็บตรวจทั้งแท็บว่า slot ไหนหายไป */
 function onChangeToWeb(e) {
   if (!e || e.changeType !== 'REMOVE_ROW') return;
-  const ss = e.source || SpreadsheetApp.getActive();
-  const active = ss.getActiveSheet().getName();
-  // ปกติคือแท็บที่กำลังเปิดอยู่ ถ้าไม่ใช่แท็บ slot (เช่น ลบผ่านเมนูจากแท็บอื่น) ตรวจทั้งสองแท็บ
-  const tabs = WEB_SYNC_TABS.indexOf(active) === -1 ? WEB_SYNC_TABS : [active];
-  tabs.forEach(function (tab) { postToWeb_(ss, { tab: tab, removedRows: true }); });
+  const ss = e.source || SpreadsheetApp.openById(WEB_SYNC_SHEET_ID);
+  // onChange ไม่บอกว่าลบในแท็บไหน จึงให้เว็บตรวจทั้งสองแท็บ
+  WEB_SYNC_TABS.forEach(function (tab) { postToWeb_(ss, { tab: tab, removedRows: true }); });
 }
 
 function postToWeb_(ss, payload) {
@@ -62,22 +61,26 @@ function postToWeb_(ss, payload) {
       console.warn('ซิงค์ไปเว็บไม่สำเร็จ (' + res.getResponseCode() + '): ' + res.getContentText());
       let msg = '';
       try { msg = JSON.parse(res.getContentText()).message || ''; } catch (err) {}
-      ss.toast((msg ? msg + ' — ' : '') + 'กด "ซิงค์จากชีตทั้งหมด" ในหน้าเจ้าของอีกครั้ง', 'ซิงค์ไปเว็บไม่สำเร็จ', 10);
+      toast_(ss, (msg ? msg + ' — ' : '') + 'กด "ซิงค์จากชีตทั้งหมด" ในหน้าเจ้าของอีกครั้ง', 'ซิงค์ไปเว็บไม่สำเร็จ', 10);
     } else if (payload.removedRows) {
       const removed = JSON.parse(res.getContentText()).removed || 0;
-      if (removed) ss.toast('ลบ ' + removed + ' slot ออกจากเว็บแล้ว', 'GLORY VITAL', 5);
+      if (removed) toast_(ss, 'ลบ ' + removed + ' slot ออกจากเว็บแล้ว', 'GLORY VITAL', 5);
     }
   } finally {
     lock.releaseLock();
   }
 }
 
+/** แจ้งเตือนมุมล่างของชีต (สคริปต์ที่ไม่ได้ผูกกับชีตอาจแสดงไม่ได้ ไม่เป็นไร) */
+function toast_(ss, msg, title, seconds) {
+  try { ss.toast(msg, title, seconds); } catch (err) { console.warn(msg); }
+}
+
 /** รันครั้งเดียวเพื่อติดตั้ง trigger (รันซ้ำได้ ไม่สร้างซ้ำ) */
 function setupWebSync() {
   removeTriggers_();
-  const ss = SpreadsheetApp.getActive();
-  ScriptApp.newTrigger('onEditToWeb').forSpreadsheet(ss).onEdit().create();
-  ScriptApp.newTrigger('onChangeToWeb').forSpreadsheet(ss).onChange().create();
+  ScriptApp.newTrigger('onEditToWeb').forSpreadsheet(WEB_SYNC_SHEET_ID).onEdit().create();
+  ScriptApp.newTrigger('onChangeToWeb').forSpreadsheet(WEB_SYNC_SHEET_ID).onChange().create();
   console.log('เปิดซิงค์ชีต -> เว็บแล้ว (แก้ไข + ลบแถว)');
 }
 
