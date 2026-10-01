@@ -4,8 +4,11 @@ export type Me = {
   email: string;
   mc: { id: number; name: string } | null;
   admin: { id: number; name: string; isExtra: boolean } | null;
-  owner: { id: number; name: string } | null;
+  /** mc / admin = สิทธิ์จัดการฝั่งนั้น (ติ๊กทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อ Owner) */
+  owner: { id: number; name: string; mc: boolean; admin: boolean } | null;
 };
+
+export type OwnerScope = { mc: boolean; admin: boolean };
 
 /** slot ที่ยังว่าง (หน้าแรกของ Mc / Admin) */
 export type OpenSlot = {
@@ -78,6 +81,7 @@ export type OwnerPerson = {
 export type OwnerSummary = {
   ok: true;
   month: string;
+  scope: OwnerScope; // ฝั่งที่ Owner คนนี้เห็นได้ (ฝั่งที่ไม่มีสิทธิ์ส่งมาเป็นรายการว่าง)
   rates: { mc: Record<string, number>; admin: Record<string, number>; defaultMc: number; defaultAdmin: number };
   mc: OwnerPerson[];
   admin: OwnerPerson[];

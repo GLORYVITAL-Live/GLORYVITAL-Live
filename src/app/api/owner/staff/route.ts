@@ -1,5 +1,5 @@
 import { after } from "next/server";
-import { fail, ok, requireMe } from "@/lib/api";
+import { fail, ok, requireOwner as requireOwnerScope } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
 import { createAdminClient } from "@/lib/supabase/server";
 import { processSyncJobs } from "@/lib/sync";
@@ -8,8 +8,10 @@ import type { Me } from "@/lib/types";
 // จัดการรายชื่อพนักงาน (แทนแท็บ Mc Email / Admin Email / Owner Email / เบอร์โทร MC)
 //   GET     รายชื่อทั้งหมด + จำนวนคิวตั้งแต่วันนี้
 //   POST    เพิ่มคน
-//   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Admin เสริม
+//   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Admin เสริม / สิทธิ์ Owner
 //   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
+// สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
+//         รายชื่อและสิทธิ์ของ Owner จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
 
 type Role = "mc" | "admin" | "owner";
 const ROLES: Role[] = ["mc", "admin", "owner"];
@@ -18,13 +20,13 @@ const TABLE: Record<"mc" | "admin", { table: "mc_slots" | "admin_slots"; col: st
   mc: { table: "mc_slots", col: "mc_id" },
   admin: { table: "admin_slots", col: "admin_id" },
 };
+const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
 
-async function requireOwner() {
-  const r = await requireMe();
-  if ("res" in r) return r;
-  if (!r.me.owner) return { res: fail("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน", 403) };
-  return r;
-}
+const requireOwner = () => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน");
+type Scope = { mc: boolean; admin: boolean; full: boolean };
+const canRole = (scope: Scope, role: Role) => (role === "owner" ? scope.full : scope[role]);
+const noRole = (role: Role) =>
+  fail(role === "owner" ? "จัดการรายชื่อ Owner ได้เฉพาะ Owner ที่มีสิทธิ์ทั้ง Mc และ Admin" : `บัญชีนี้ไม่มีสิทธิ์จัดการรายชื่อ ${ROLE_LABEL[role]}`, 403);
 
 async function log(me: Me, action: string) {
   await createAdminClient().from("booking_logs").insert({ email: me.email, role: "Owner", name: me.owner?.name ?? "", action, result: "สำเร็จ" });
@@ -53,6 +55,10 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     out.hourly_rate = rate;
   }
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
+  if (role === "owner") {
+    if (!partial || "can_manage_mc" in body) out.can_manage_mc = body.can_manage_mc !== false;
+    if (!partial || "can_manage_admin" in body) out.can_manage_admin = body.can_manage_admin !== false;
+  }
   return { data: out };
 }
 
@@ -66,9 +72,10 @@ export async function GET() {
   const r = await requireOwner();
   if ("res" in r) return r.res;
   const db = createAdminClient();
-  const { data: staff, error } = await db.from("staff")
-    .select("id, role, name, email, phone, hourly_rate, is_extra_admin").order("name");
+  const { data: rows, error } = await db.from("staff")
+    .select("id, role, name, email, phone, hourly_rate, is_extra_admin, can_manage_mc, can_manage_admin").order("name");
   if (error) return fail(error.message, 500);
+  const staff = (rows ?? []).filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id);
 
   // จำนวนคิวตั้งแต่วันนี้ (ไม่นับที่ยกเลิก)
   const upcoming = new Map<number, number>();
@@ -96,7 +103,9 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const role = body?.role as Role;
   if (!ROLES.includes(role)) return fail("กรุณาเลือกบทบาท");
+  if (!canRole(r.scope, role)) return noRole(role);
   const c = clean(role, body, false);
+  if (role === "owner" && !c.data?.can_manage_mc && !c.data?.can_manage_admin) return fail("ติ๊กสิทธิ์อย่างน้อย 1 ฝั่ง (Mc หรือ Admin)");
   if (c.error) return fail(c.error);
 
   const { data, error } = await createAdminClient().from("staff").insert({ role, ...c.data }).select("id").single();
@@ -115,15 +124,28 @@ export async function PATCH(request: Request) {
   if (!Number.isInteger(id)) return fail("ไม่พบรายชื่อนี้");
 
   const db = createAdminClient();
-  const { data: cur, error: curErr } = await db.from("staff").select("id, role, name, email, phone").eq("id", id).maybeSingle();
+  const { data: cur, error: curErr } = await db.from("staff")
+    .select("id, role, name, email, phone, can_manage_mc, can_manage_admin").eq("id", id).maybeSingle();
   if (curErr) return fail(curErr.message, 500);
   if (!cur) return fail("ไม่พบรายชื่อนี้");
   const role = cur.role as Role;
+  const isMe = role === "owner" && id === r.me.owner?.id;
+  if (!canRole(r.scope, role) && !isMe) return noRole(role);
   const c = clean(role, body, true);
   if (c.error) return fail(c.error);
   const changes = c.data!;
-  if (role === "owner" && id === r.me.owner?.id && "email" in changes && changes.email !== cur.email) {
+  if (isMe && "email" in changes && changes.email !== cur.email) {
     return fail("เปลี่ยนอีเมลของตัวเองไม่ได้ (จะเข้าหน้าเจ้าของไม่ได้อีก) ให้ Owner คนอื่นเปลี่ยนให้");
+  }
+  if (role === "owner") {
+    const scopeChanged = ("can_manage_mc" in changes && changes.can_manage_mc !== cur.can_manage_mc)
+      || ("can_manage_admin" in changes && changes.can_manage_admin !== cur.can_manage_admin);
+    if (scopeChanged && isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้ง Mc และ Admin แก้ให้");
+    if (scopeChanged && !r.scope.full) return noRole("owner");
+    const mc = "can_manage_mc" in changes ? changes.can_manage_mc : cur.can_manage_mc;
+    const admin = "can_manage_admin" in changes ? changes.can_manage_admin : cur.can_manage_admin;
+    if (!mc && !admin) return fail("ติ๊กสิทธิ์อย่างน้อย 1 ฝั่ง (Mc หรือ Admin)");
+    if (isMe) { delete changes.can_manage_mc; delete changes.can_manage_admin; }
   }
 
   const { error } = await db.from("staff").update(changes).eq("id", id);
@@ -179,6 +201,7 @@ export async function DELETE(request: Request) {
   const db = createAdminClient();
   const { data: cur } = await db.from("staff").select("role, name").eq("id", id).maybeSingle();
   if (!cur) return fail("ไม่พบรายชื่อนี้");
+  if (!canRole(r.scope, cur.role as Role)) return noRole(cur.role as Role);
   const { error } = await db.from("staff").delete().eq("id", id);
   if (error) {
     return fail(error.code === "23503"

@@ -1,5 +1,5 @@
 import { after } from "next/server";
-import { fail, ok, requireMe } from "@/lib/api";
+import { canTable, fail, ok, requireOwner as requireOwnerScope } from "@/lib/api";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -10,6 +10,7 @@ import type { Me } from "@/lib/types";
 //   POST   สร้าง slot หลายวัน x หลายช่วงเวลา (ข้ามที่มีอยู่แล้ว)
 //   PATCH  แก้ slot เดียว: คน / สถานะ / เปิดรับ Admin เสริม
 //   DELETE ลบ slot ที่ยังไม่มีคน
+// ทุกคำสั่งทำได้เฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (Mc / Admin)
 
 type Table = "mc_slots" | "admin_slots";
 const EXTRA = "Admin เสริม";
@@ -17,12 +18,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const MAX_CREATE = 500;
 
-async function requireOwner() {
-  const r = await requireMe();
-  if ("res" in r) return r;
-  if (!r.me.owner) return { res: fail("บัญชีนี้ไม่มีสิทธิ์จัดการ slot", 403) };
-  return r;
-}
+const requireOwner = () => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการ slot");
+const noScope = (table: Table) => fail(`บัญชีนี้ไม่มีสิทธิ์จัดการฝั่ง ${table === "mc_slots" ? "Mc" : "Admin"}`, 403);
 
 const hm = (t: string) => t.slice(0, 5);
 
@@ -94,14 +91,21 @@ export async function GET(request: Request) {
     rows.set(k, row);
   }
 
+  // ซ่อนฝั่งที่ไม่มีสิทธิ์ (slot ที่มีแต่ฝั่งนั้นไม่แสดงเลย)
+  const { mc: canMc, admin: canAdmin } = r.scope;
+  const visible = [...rows.values()]
+    .map((x) => ({ ...x, mc: canMc ? x.mc : null, admin: canAdmin ? x.admin : null }))
+    .filter((x) => x.mc || x.admin);
+
   const platforms = [...new Set((recent.data ?? []).map((p) => p.platform).filter(Boolean))].sort();
   return ok({
     date,
-    slots: [...rows.values()].sort((a, b) => a.startMs - b.startMs || a.platform.localeCompare(b.platform)),
+    slots: visible.sort((a, b) => a.startMs - b.startMs || a.platform.localeCompare(b.platform)),
     staff: {
-      mc: (staff.data ?? []).filter((s) => s.role === "mc").map((s) => ({ id: s.id, name: s.name, hasEmail: !!s.email })),
-      admin: (staff.data ?? []).filter((s) => s.role === "admin")
-        .map((s) => ({ id: s.id, name: s.name, hasEmail: !!s.email, extra: s.is_extra_admin })),
+      mc: canMc ? (staff.data ?? []).filter((s) => s.role === "mc").map((s) => ({ id: s.id, name: s.name, hasEmail: !!s.email })) : [],
+      admin: canAdmin
+        ? (staff.data ?? []).filter((s) => s.role === "admin").map((s) => ({ id: s.id, name: s.name, hasEmail: !!s.email, extra: s.is_extra_admin }))
+        : [],
     },
     platforms,
   });
@@ -135,9 +139,10 @@ export async function POST(request: Request) {
   };
   const [haveMc, haveAdmin] = await Promise.all([existing("mc_slots"), existing("admin_slots")]);
 
+  // สร้างเฉพาะฝั่งที่มีสิทธิ์ (Owner ที่มีสิทธิ์ทั้งคู่ได้ทั้ง Mc + Admin เหมือนเดิม)
   const wanted = dates.flatMap((d) => times.map((t) => ({ live_date: d, start_time: t.start, end_time: t.end })));
-  const newMc = wanted.filter((w) => !haveMc.has(k(w.live_date, w.start_time, w.end_time))).map((w) => ({ ...w, platform }));
-  const newAdmin = wanted.filter((w) => !haveAdmin.has(k(w.live_date, w.start_time, w.end_time)))
+  const newMc = !r.scope.mc ? [] : wanted.filter((w) => !haveMc.has(k(w.live_date, w.start_time, w.end_time))).map((w) => ({ ...w, platform }));
+  const newAdmin = !r.scope.admin ? [] : wanted.filter((w) => !haveAdmin.has(k(w.live_date, w.start_time, w.end_time)))
     .map((w) => ({ ...w, platform, remark: extraAdmin ? EXTRA : "" }));
 
   const insMc = newMc.length ? await db.from("mc_slots").insert(newMc).select("id") : { data: [], error: null };
@@ -150,7 +155,8 @@ export async function POST(request: Request) {
     await log(r.me, "สร้าง slot", "mc_slots", (insMc.data ?? []).map((x) => x.id), "สำเร็จ");
     await log(r.me, "สร้าง slot", "admin_slots", (insAdmin.data ?? []).map((x) => x.id), "สำเร็จ");
   });
-  return ok({ created: newMc.length, skipped: wanted.length - newMc.length, adminCreated: newAdmin.length });
+  const created = r.scope.mc ? newMc.length : newAdmin.length;
+  return ok({ created, skipped: wanted.length - created, adminCreated: newAdmin.length });
 }
 
 // ---------- PATCH: แก้ slot ----------
@@ -162,6 +168,7 @@ export async function PATCH(request: Request) {
   const table = body?.table as Table;
   const id = Number(body?.id);
   if ((table !== "mc_slots" && table !== "admin_slots") || !Number.isInteger(id)) return fail("ข้อมูล slot ไม่ถูกต้อง");
+  if (!canTable(r.scope, table)) return noScope(table);
 
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
   const role = table === "mc_slots" ? "mc" : "admin";
@@ -209,6 +216,8 @@ export async function DELETE(request: Request) {
   if (Number.isInteger(body?.mcId)) targets.push({ table: "mc_slots", id: body.mcId });
   if (Number.isInteger(body?.adminId)) targets.push({ table: "admin_slots", id: body.adminId });
   if (!targets.length) return fail("ไม่ได้เลือก slot");
+  const denied = targets.find((t) => !canTable(r.scope, t.table));
+  if (denied) return noScope(denied.table);
 
   const db = createAdminClient();
   // ลบได้เฉพาะ slot ที่ไม่มีคนและไม่มี event ในปฏิทินค้าง (ไม่งั้น event จะค้างในปฏิทิน)

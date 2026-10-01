@@ -3,23 +3,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sheet, SheetHead, StateBox, api, btn, useToast } from "@/components/ui";
 import { money } from "@/lib/format";
+import type { OwnerScope } from "@/lib/types";
 
 type Role = "mc" | "admin" | "owner";
 type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
   hourly_rate: number | null; is_extra_admin: boolean; upcoming: number;
+  can_manage_mc: boolean; can_manage_admin: boolean;
 };
 
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
 const displayName = (p: Pick<Person, "role" | "name">) => (p.role === "mc" ? `Mc ${p.name}` : p.name);
+/** บทบาทที่ Owner คนนี้จัดการได้ (รายชื่อ Owner = ต้องมีสิทธิ์ทั้ง Mc และ Admin) */
+const rolesOf = (scope: OwnerScope): Role[] =>
+  [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : []), ...(scope.mc && scope.admin ? ["owner" as const] : [])];
+const scopeLabel = (p: Pick<Person, "can_manage_mc" | "can_manage_admin">) =>
+  p.can_manage_mc && p.can_manage_admin ? "จัดการทั้งหมด" : p.can_manage_mc ? "จัดการ Mc" : p.can_manage_admin ? "จัดการ Admin" : "ไม่มีสิทธิ์";
 
-/** จัดการรายชื่อพนักงาน: ดู / ค้นหา / เพิ่ม / แก้ / ลบ */
-export function StaffManager() {
+/** จัดการรายชื่อพนักงาน: ดู / ค้นหา / เพิ่ม / แก้ / ลบ (เฉพาะบทบาทที่มีสิทธิ์) */
+export function StaffManager({ scope }: { scope: OwnerScope }) {
   const toast = useToast();
+  const roles = rolesOf(scope);
   const [data, setData] = useState<{ staff: Person[]; meId: number | null } | null>(null);
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);
-  const [role, setRole] = useState<Role>("mc");
+  const [role, setRole] = useState<Role>(roles[0] ?? "mc");
   const [search, setSearch] = useState("");
   const [onlyNoEmail, setOnlyNoEmail] = useState(false);
   const [editing, setEditing] = useState<Person | "new" | null>(null);
@@ -69,7 +77,7 @@ export function StaffManager() {
     <div className="pb-10">
       <div className="my-2 flex flex-wrap items-center gap-2">
         <div role="group" aria-label="บทบาท" className="flex rounded-full border border-line bg-surface p-0.5">
-          {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
+          {roles.map((r) => (
             <button
               key={r}
               type="button"
@@ -114,6 +122,7 @@ export function StaffManager() {
                 <span className="flex flex-wrap items-center gap-1.5 font-semibold">
                   {displayName(p)}
                   {p.is_extra_admin ? <span className="rounded-full bg-p2/15 px-2 py-0.5 text-[11px] text-p2">Admin เสริม</span> : null}
+                  {p.role === "owner" ? <span className="rounded-full bg-p2/15 px-2 py-0.5 text-[11px] text-p2">{scopeLabel(p)}</span> : null}
                   {p.id === data.meId ? <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[11px] text-brand">คุณ</span> : null}
                 </span>
                 <span className="block truncate text-xs text-muted">
@@ -135,6 +144,7 @@ export function StaffManager() {
       {editing ? (
         <EditDialog
           person={editing === "new" ? null : editing}
+          roles={roles}
           defaultRole={role}
           isMe={editing !== "new" && editing.id === data.meId}
           onClose={(changed) => {
@@ -147,8 +157,9 @@ export function StaffManager() {
   );
 }
 
-function EditDialog({ person, defaultRole, isMe, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   person: Person | null;
+  roles: Role[];
   defaultRole: Role;
   isMe: boolean;
   onClose: (message?: string) => void;
@@ -160,15 +171,22 @@ function EditDialog({ person, defaultRole, isMe, onClose }: {
   const [phone, setPhone] = useState(person?.phone ?? "");
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
+  const [canMc, setCanMc] = useState(person?.can_manage_mc ?? true);
+  const [canAdmin, setCanAdmin] = useState(person?.can_manage_admin ?? true);
   const [saving, setSaving] = useState(false);
 
   const emailChanged = (person?.email ?? "") !== email.trim().toLowerCase();
   const renamed = !!person && person.name !== name.trim().replace(/^mc\s*/i, "");
+  const noScope = role === "owner" && !canMc && !canAdmin;
 
   async function save() {
     setSaving(true);
     try {
-      const fields = { name, email, phone, hourly_rate: rate, is_extra_admin: extra };
+      const fields = {
+        name, email, phone, hourly_rate: rate, is_extra_admin: extra,
+        // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
+        ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin } : {}),
+      };
       const res = person
         ? await api("/api/owner/staff", { id: person.id, ...fields }, "PATCH")
         : await api("/api/owner/staff", { role, ...fields });
@@ -204,7 +222,7 @@ function EditDialog({ person, defaultRole, isMe, onClose }: {
       <div className="-mx-1 flex-1 space-y-3 overflow-y-auto px-1 text-sm">
         {!person ? (
           <div role="group" aria-label="บทบาท" className="flex gap-1.5">
-            {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
+            {roles.map((r) => (
               <button
                 key={r}
                 type="button"
@@ -255,6 +273,35 @@ function EditDialog({ person, defaultRole, isMe, onClose }: {
             Admin เสริม (รับคิวและยกเลิกคิวผ่านเว็บได้เอง)
           </label>
         ) : null}
+
+        {role === "owner" ? (
+          <fieldset className="rounded-lg border border-line px-3 py-2">
+            <legend className="px-1 font-semibold">สิทธิ์จัดการ</legend>
+            {([
+              ["mc", "Mc", "สรุปรายเดือน / slot / รายชื่อ ฝั่ง Mc", canMc, setCanMc],
+              ["admin", "Admin", "สรุปรายเดือน / slot / รายชื่อ ฝั่ง Admin", canAdmin, setCanAdmin],
+            ] as const).map(([key, label, hint, checked, set]) => (
+              <label key={key} className="flex items-start gap-2 py-1">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={isMe}
+                  onChange={(e) => set(e.target.checked)}
+                  className="mt-0.5 size-4 accent-[var(--brand)]"
+                />
+                <span>
+                  จัดการ {label}
+                  <span className="block text-xs text-muted">{hint}</span>
+                </span>
+              </label>
+            ))}
+            <span className="mt-1 block text-xs text-muted">
+              {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้งคู่แก้ให้"
+                : noScope ? <span className="text-err">ติ๊กอย่างน้อย 1 ฝั่ง</span>
+                  : "ติ๊กทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อและสิทธิ์ของ Owner คนอื่น"}
+            </span>
+          </fieldset>
+        ) : null}
       </div>
 
       <div className="mt-4 flex items-center gap-2">
@@ -262,7 +309,7 @@ function EditDialog({ person, defaultRole, isMe, onClose }: {
           <button type="button" onClick={remove} disabled={saving} className="mr-auto text-sm font-semibold text-err hover:underline">ลบคนนี้</button>
         ) : <span className="mr-auto" />}
         <button type="button" className={btn.ghost} disabled={saving} onClick={() => onClose()}>ยกเลิก</button>
-        <button type="button" className={btn.primary} disabled={saving || !name.trim()} onClick={save}>
+        <button type="button" className={btn.primary} disabled={saving || !name.trim() || noScope} onClick={save}>
           {saving ? "กำลังบันทึก..." : "บันทึก"}
         </button>
       </div>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import type { Me, Role } from "@/lib/types";
+import type { Me, OwnerScope, Role } from "@/lib/types";
 import { MySchedule } from "@/components/MySchedule";
 import { OwnerView } from "@/components/OwnerView";
 import { RulesDialog } from "@/components/RulesDialog";
@@ -194,7 +194,7 @@ function Shell({ me }: { me: Me | null }) {
 
       {mode?.rule ? <p className="my-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-info-ink">{mode.rule}</p> : null}
 
-      {me && role === "owner" ? <OwnerTabs /> : null}
+      {me?.owner && role === "owner" ? <OwnerTabs scope={{ mc: me.owner.mc, admin: me.owner.admin }} /> : null}
       {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} /> : null}
       {!me || !registered ? (
         <div className="my-6 rounded-2xl border border-dashed border-line bg-surface px-5 py-8 text-center text-sm text-muted">
@@ -222,11 +222,19 @@ function Shell({ me }: { me: Me | null }) {
 
 const OWNER_TAB_KEY = "glory_owner_tab";
 
-/** หน้าเจ้าของ: สรุปรายเดือน | จัดการ slot (จำแท็บล่าสุดไว้ในเครื่อง) */
-function OwnerTabs() {
+/** หน้าเจ้าของ: สรุปรายเดือน | จัดการ slot | พนักงาน (จำแท็บล่าสุดไว้ในเครื่อง) — เห็นเฉพาะฝั่งที่มีสิทธิ์ */
+function OwnerTabs({ scope }: { scope: OwnerScope }) {
   const saved = useLocal(OWNER_TAB_KEY);
   const tab = saved === "slots" || saved === "staff" ? saved : "summary";
   const tabs = [["summary", "สรุปรายเดือน"], ["slots", "จัดการ slot"], ["staff", "พนักงาน"]] as const;
+  if (!scope.mc && !scope.admin) {
+    return (
+      <div className="my-6 rounded-2xl border border-warn-line bg-warn-bg p-4 text-sm text-warn-ink">
+        <strong className="block text-base">ยังไม่ได้รับสิทธิ์จัดการ</strong>
+        ติดต่อเจ้าของคนอื่นให้ติ๊กสิทธิ์ Mc หรือ Admin ในหน้าพนักงาน
+      </div>
+    );
+  }
   return (
     <>
       <div role="tablist" aria-label="เมนูเจ้าของ" className="my-3 flex gap-1 rounded-full border border-line bg-surface p-1">
@@ -245,7 +253,12 @@ function OwnerTabs() {
           </button>
         ))}
       </div>
-      {tab === "slots" ? <SlotManager /> : tab === "staff" ? <StaffManager /> : <OwnerView />}
+      {!(scope.mc && scope.admin) ? (
+        <p className="my-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-info-ink">
+          บัญชีนี้มีสิทธิ์จัดการเฉพาะฝั่ง <strong>{scope.mc ? "Mc" : "Admin"}</strong>
+        </p>
+      ) : null}
+      {tab === "slots" ? <SlotManager scope={scope} /> : tab === "staff" ? <StaffManager scope={scope} /> : <OwnerView />}
     </>
   );
 }

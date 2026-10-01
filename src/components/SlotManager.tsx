@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fmtDayLong, fmtWeekShort, parseKey, relLabel, todayKey } from "@/lib/format";
 import { Icon, IconBtn, Sheet, SheetHead, StateBox, Tag, api, btn, useToast } from "@/components/ui";
+import type { OwnerScope } from "@/lib/types";
 
 type Side = {
   id: number; personId: number | null; name: string; status: string;
@@ -20,8 +21,8 @@ const WEEKDAYS = ["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"];
 
 const addDays = (k: string, n: number) => new Date(parseKey(k).getTime() + n * 86400_000).toISOString().slice(0, 10);
 
-/** หน้าจัดการ slot สำหรับเจ้าของ: ดูรายวัน / เพิ่ม / กำหนดคน / เปลี่ยนสถานะ / ลบ */
-export function SlotManager() {
+/** หน้าจัดการ slot สำหรับเจ้าของ: ดูรายวัน / เพิ่ม / กำหนดคน / เปลี่ยนสถานะ / ลบ (เฉพาะฝั่งที่มีสิทธิ์) */
+export function SlotManager({ scope }: { scope: OwnerScope }) {
   const toast = useToast();
   const [date, setDate] = useState(() => todayKey());
   const [data, setData] = useState<DayData | null>(null);
@@ -143,7 +144,8 @@ export function SlotManager() {
         {relLabel(date) ? <span className="rounded-full bg-brand px-2 py-0.5 text-xs text-brand-ink">{relLabel(date)}</span> : null}
         {counts ? (
           <span className="ml-auto text-xs font-medium text-muted">
-            {counts.total} slot · Mc ว่าง {counts.mcOpen} · รอ Admin เสริม {counts.adminOpen}
+            {[`${counts.total} slot`, scope.mc ? `Mc ว่าง ${counts.mcOpen}` : "", scope.admin ? `รอ Admin เสริม ${counts.adminOpen}` : ""]
+              .filter(Boolean).join(" · ")}
           </span>
         ) : null}
       </h2>
@@ -164,6 +166,7 @@ export function SlotManager() {
             <SlotRow
               key={s.key}
               slot={s}
+              scope={scope}
               staff={day.staff}
               tagIndex={platformIndex[s.platform] ?? 0}
               busy={busy === s.key}
@@ -176,6 +179,7 @@ export function SlotManager() {
 
       {createOpen ? (
         <CreateDialog
+          scope={scope}
           defaultDate={date}
           platforms={day?.platforms ?? []}
           onClose={(created) => { setCreateOpen(false); if (created) reload(); }}
@@ -187,8 +191,9 @@ export function SlotManager() {
 
 const selectCls = "h-9 min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 text-sm disabled:opacity-60";
 
-function SlotRow({ slot, staff, tagIndex, busy, onPatch, onDelete }: {
+function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
   slot: Slot;
+  scope: OwnerScope;
   staff: DayData["staff"];
   tagIndex: number;
   busy: boolean;
@@ -210,7 +215,7 @@ function SlotRow({ slot, staff, tagIndex, busy, onPatch, onDelete }: {
         ) : null}
       </div>
 
-      {slot.mc ? (
+      {!scope.mc ? null : slot.mc ? (
         <SideRow
           label="Mc"
           side={slot.mc}
@@ -221,7 +226,7 @@ function SlotRow({ slot, staff, tagIndex, busy, onPatch, onDelete }: {
         />
       ) : <p className="text-xs text-muted">ไม่มีแถว Mc ของ slot นี้</p>}
 
-      {slot.admin ? (
+      {!scope.admin ? null : slot.admin ? (
         <>
           <SideRow
             label="Admin"
@@ -288,7 +293,8 @@ function SideRow({ label, side, people, busy, onPerson, onStatus }: {
 
 // ---------- เพิ่ม slot ----------
 
-function CreateDialog({ defaultDate, platforms, onClose }: {
+function CreateDialog({ scope, defaultDate, platforms, onClose }: {
+  scope: OwnerScope;
   defaultDate: string;
   platforms: string[];
   onClose: (created: boolean) => void;
@@ -399,10 +405,15 @@ function CreateDialog({ defaultDate, platforms, onClose }: {
           <p className="mt-1 text-xs text-muted">เวลาจบก่อนเวลาเริ่ม = ข้ามเที่ยงคืน เช่น 23:30–02:30</p>
         </div>
 
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={extraAdmin} onChange={(e) => setExtraAdmin(e.target.checked)} className="size-4 accent-[var(--brand)]" />
-          เปิดให้ Admin เสริมรับคิวผ่านเว็บ (หมายเหตุ &quot;Admin เสริม&quot;)
-        </label>
+        {scope.admin ? (
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={extraAdmin} onChange={(e) => setExtraAdmin(e.target.checked)} className="size-4 accent-[var(--brand)]" />
+            เปิดให้ Admin เสริมรับคิวผ่านเว็บ (หมายเหตุ &quot;Admin เสริม&quot;)
+          </label>
+        ) : null}
+        {!(scope.mc && scope.admin) ? (
+          <p className="text-xs text-muted">สร้างเฉพาะแถวฝั่ง {scope.mc ? "Mc (แท็บ Deal Mc)" : "Admin (แท็บ Admin เสริม)"} ตามสิทธิ์ของบัญชีนี้</p>
+        ) : null}
       </div>
 
       <div className="mt-4 flex items-center justify-end gap-2">

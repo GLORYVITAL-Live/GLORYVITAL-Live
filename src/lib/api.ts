@@ -21,6 +21,23 @@ export async function requireMe(): Promise<{ me: Me } | { res: NextResponse }> {
   return { me };
 }
 
+/**
+ * ตรวจว่าเป็น Owner ที่มีสิทธิ์อย่างน้อยหนึ่งฝั่ง คืน scope ของคนนั้น
+ *   scope.mc / scope.admin = จัดการฝั่งนั้นได้, full = ทั้งคู่ (จัดการรายชื่อ/สิทธิ์ Owner ได้)
+ */
+export async function requireOwner(denied = "บัญชีนี้ไม่มีสิทธิ์ใช้หน้าเจ้าของ") {
+  const r = await requireMe();
+  if ("res" in r) return r;
+  const o = r.me.owner;
+  if (!o) return { res: fail(denied, 403) };
+  if (!o.mc && !o.admin) return { res: fail("บัญชีนี้ยังไม่ได้รับสิทธิ์จัดการฝั่ง Mc หรือ Admin ติดต่อเจ้าของคนอื่น", 403) };
+  return { me: r.me, scope: { mc: o.mc, admin: o.admin, full: o.mc && o.admin } };
+}
+
+/** ตาราง slot นี้อยู่ในสิทธิ์ของ Owner หรือไม่ */
+export const canTable = (scope: { mc: boolean; admin: boolean }, table: "mc_slots" | "admin_slots") =>
+  table === "mc_slots" ? scope.mc : scope.admin;
+
 /** YYYY-MM -> { first, last } เป็นวันที่ (YYYY-MM-DD) ไม่ระบุ = เดือนปัจจุบันตามเวลาไทย */
 export function monthRange(month: string | null) {
   const m = String(month ?? "").match(/^(\d{4})-(\d{1,2})$/);

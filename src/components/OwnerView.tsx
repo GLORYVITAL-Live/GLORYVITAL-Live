@@ -46,7 +46,13 @@ function downloadCsv(filename: string, rows: unknown[][]) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
-const groups = (data: OwnerSummary): [Type, OwnerPerson[]][] => [["Mc", data.mc], ["Admin", data.admin]];
+// เฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (ใช้ทั้งตารางบนหน้าจอและไฟล์ CSV)
+const groups = (data: OwnerSummary): [Type, OwnerPerson[]][] => {
+  const out: [Type, OwnerPerson[]][] = [];
+  if (data.scope?.mc !== false) out.push(["Mc", data.mc]);
+  if (data.scope?.admin !== false) out.push(["Admin", data.admin]);
+  return out;
+};
 
 function downloadSummary(data: OwnerSummary) {
   const rows: unknown[][] = [["ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ชั่วโมงที่ได้เงิน", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
@@ -154,15 +160,18 @@ export function OwnerView() {
 
   const r0 = data.rates;
   const noRates = !r0.defaultMc && !r0.defaultAdmin && !Object.keys(r0.mc).length && !Object.keys(r0.admin).length;
+  const sum = (rows: OwnerPerson[], k: "hours" | "slots") => rows.reduce((a, r) => a + r[k], 0);
+  const onlyAdmin = data.scope?.mc === false;
+  const onlyMc = data.scope?.admin === false;
 
   return (
     <div className="pb-10">
       {nav}
-      <Stats items={[
-        [num(data.mc.reduce((a, r) => a + r.hours, 0)), "ชม. Mc"],
-        [num(data.admin.reduce((a, r) => a + r.hours, 0)), "ชม. Admin"],
-        [String(data.mc.reduce((a, r) => a + r.slots, 0)), "slot Mc"],
-      ]} />
+      <Stats items={onlyAdmin
+        ? [[num(sum(data.admin, "hours")), "ชม. Admin"], [String(sum(data.admin, "slots")), "slot Admin"], [String(data.admin.length), "คน"]]
+        : onlyMc
+          ? [[num(sum(data.mc, "hours")), "ชม. Mc"], [String(sum(data.mc, "slots")), "slot Mc"], [String(data.mc.length), "คน"]]
+          : [[num(sum(data.mc, "hours")), "ชม. Mc"], [num(sum(data.admin, "hours")), "ชม. Admin"], [String(sum(data.mc, "slots")), "slot Mc"]]} />
       {noRates ? (
         <p className="my-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-info-ink">
           ยังไม่ได้ตั้งค่าจ้าง: ใส่ค่าจ้างต่อชั่วโมงเริ่มต้นในตาราง settings (default_mc_rate / default_admin_rate) หรือรายคนที่ staff.hourly_rate

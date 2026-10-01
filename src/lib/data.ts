@@ -163,7 +163,7 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
 }
 
 /** สรุปรายเดือนสำหรับเจ้าของ (ชั่วโมง/slot/วัน/ค่าจ้าง ของ Mc และ Admin) */
-export async function ownerSummary(key: string, first: string, last: string): Promise<OwnerSummary> {
+export async function ownerSummary(key: string, first: string, last: string): Promise<Omit<OwnerSummary, "scope">> {
   const db = createAdminClient();
   const settings = await getSettings(db);
   type Row = SlotRow & { person: { name: string; hourly_rate: number | null } | null };
