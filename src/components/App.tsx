@@ -121,43 +121,47 @@ function Shell({ me }: { me: Me | null }) {
   const registered = roles.length > 0;
   const name = me && role ? displayName(me, role) : "";
 
+  // เมนูเลือกหน้า: จอกว้างอยู่ในแถวบน / มือถืออยู่แถวที่ 2 เต็มความกว้าง (แถวบนจะได้ไม่ล้นจอจนปุ่มทับกัน)
+  const rolePicker = (cls: string) => roles.length > 1 && role ? (
+    <select
+      aria-label="เลือกหน้า"
+      value={role}
+      onChange={(e) => setRole(e.target.value as Role)}
+      className={`h-9 rounded-full border border-line bg-surface px-3 text-sm font-medium ${cls}`}
+    >
+      {roles.map((r) => <option key={r} value={r}>{MODES[r].label}{isPreview(me, r) ? " (ดูอย่างเดียว)" : ""}</option>)}
+    </select>
+  ) : null;
+
   return (
     <div className="mx-auto max-w-[760px] px-4">
-      <header className="flex items-center justify-between gap-3 pt-[calc(14px+env(safe-area-inset-top))] pb-2">
-        <div className="flex items-baseline gap-2 whitespace-nowrap">
-          <span className="text-[17px] font-bold tracking-[.14em]" aria-label="GLORY VITAL">
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-[calc(14px+env(safe-area-inset-top))] pb-2">
+        <div className="flex min-w-0 items-baseline gap-2 whitespace-nowrap">
+          <span className="text-[15px] font-bold tracking-[.12em] sm:text-[17px] sm:tracking-[.14em]" aria-label="GLORY VITAL">
             GL<span className="tracking-normal text-accent">✦</span>RY VITAL
           </span>
-          <span className="text-[13px] font-medium text-muted">{mode?.sub ?? "Live booking"}</span>
+          <span className="hidden text-[13px] font-medium text-muted sm:inline">{mode?.sub ?? "Live booking"}</span>
         </div>
-        <div className="flex min-w-0 items-center gap-2">
-          {roles.length > 1 && role ? (
-            <select
-              aria-label="เลือกหน้า"
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-              className="h-9 rounded-full border border-line bg-surface px-3 text-sm font-medium"
-            >
-              {roles.map((r) => <option key={r} value={r}>{MODES[r].label}{isPreview(me, r) ? " (ดูอย่างเดียว)" : ""}</option>)}
-            </select>
-          ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {rolePicker("hidden sm:block")}
           <button
             type="button"
             onClick={toggleTheme}
             aria-label={dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด"}
             title={dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด"}
-            className="grid size-[38px] shrink-0 place-items-center rounded-full border border-line bg-surface shadow-card hover:border-accent hover:text-brand [&_svg]:size-[18px]"
+            className="grid size-9 shrink-0 place-items-center rounded-full border border-line bg-surface shadow-card hover:border-accent hover:text-brand sm:size-[38px] [&_svg]:size-[18px]"
           >
             {dark ? <Icon.sun /> : <Icon.moon />}
           </button>
           {me ? (
-            <div className="flex min-w-0 items-center gap-1 rounded-full border border-line bg-surface p-1 shadow-card">
+            <div className="flex shrink-0 items-center gap-1 rounded-full border border-line bg-surface p-1 shadow-card">
               <button
                 type="button"
                 disabled={!registered || role === "owner" || preview}
                 onClick={() => setMyOpen(true)}
                 title={role === "owner" || preview ? "" : "ดูตารางของฉัน"}
-                className="flex min-w-0 items-center gap-2 rounded-full py-0.5 pr-2 pl-0.5 text-left enabled:hover:bg-brand-soft"
+                aria-label={role === "owner" || preview ? name : "ดูตารางของฉัน"}
+                className="flex min-w-0 items-center gap-2 rounded-full p-0.5 text-left enabled:hover:bg-brand-soft sm:pr-2"
               >
                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-brand-ink" aria-hidden>
                   {((name || me.email).match(/[ก-ฮA-Za-z0-9]/) ?? ["?"])[0]}
@@ -179,6 +183,7 @@ function Shell({ me }: { me: Me | null }) {
             </div>
           ) : null}
         </div>
+        {rolePicker("w-full sm:hidden")}
       </header>
 
       <section className="pt-4 pb-3">
