@@ -1,6 +1,7 @@
 import "server-only";
 import { google, type calendar_v3 } from "googleapis";
 import { googleAuth } from "@/lib/google";
+import { withSyncLock } from "@/lib/lock";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -76,12 +77,15 @@ function eventFor(table: Table, s: Slot, partner: Slot | undefined): calendar_v3
   const p = s.person!;
   const other = partner && active(partner) ? partner.person! : null;
   const platform = s.platform || "Live";
+  // ป้ายบอกว่า event นี้เว็บสร้าง (ของ slot ไหน) ใช้หา event ซ้ำ/ค้างตอนเก็บกวาด
+  const tag = { private: { [TAG_KEY]: `${table}:${s.id}` } };
   if (table === "mc_slots") {
     return {
       summary: `${platform} - Mc ${p.name}`,
       description: other ? `Admin: ${other.name} (${other.phone || "ไม่พบเบอร์โทร"})` : "Admin: ยังไม่มี Admin สำหรับ slot นี้",
       start: { dateTime: s.starts_at, timeZone: TZ },
       end: { dateTime: s.ends_at, timeZone: TZ },
+      extendedProperties: tag,
     };
   }
   return {
@@ -89,8 +93,11 @@ function eventFor(table: Table, s: Slot, partner: Slot | undefined): calendar_v3
     description: other ? `Mc: Mc ${other.name} (${other.phone || "ไม่พบเบอร์"})` : "Mc: ยังไม่มี Mc จอง slot นี้",
     start: { dateTime: s.starts_at, timeZone: TZ },
     end: { dateTime: s.ends_at, timeZone: TZ },
+    extendedProperties: tag,
   };
 }
+
+const TAG_KEY = "gloryVitalSlot";
 
 /** ทำให้ event ของ slot เดียวตรงกับ DB (สร้าง / แก้ / ย้ายคน / ลบ) */
 async function syncOne(cal: calendar_v3.Calendar, table: Table, s: Slot, partner: Slot | undefined) {
@@ -160,37 +167,123 @@ async function syncPair(cal: calendar_v3.Calendar, table: Table, id: number) {
 
 /**
  * ทำงานในคิวปฏิทินที่ค้างอยู่ (เรียกหลังตอบผู้ใช้แล้ว และจาก cron)
- * คืนจำนวนงานที่ทำสำเร็จ / ไม่สำเร็จ
+ * ทำทีละหนึ่งคำขอ (ล็อก "calendar") ไม่งั้นคำขอที่เข้ามาพร้อมกันจะหยิบงานเดียวกันไปสร้าง event ซ้ำ
+ * คนที่ถือล็อกวนทำจนงานหมด (รวมงานที่เข้ามาระหว่างทำ) คืนจำนวนงานที่ทำสำเร็จ / ไม่สำเร็จ
  */
 export async function processCalendarJobs(limit = 30) {
   const cal = calendarApi();
   if (!cal) return { done: 0, failed: 0, skipped: "ยังไม่ได้เชื่อมบัญชี Google (bun run google:auth)" };
 
-  const db = createAdminClient();
-  const { data: jobs, error } = await db
-    .from("calendar_jobs")
-    .select("id, slot_table, slot_id, attempts")
-    .is("done_at", null)
-    .lt("attempts", MAX_ATTEMPTS)
-    .order("created_at")
-    .limit(limit);
-  if (error) throw error;
+  const result = await withSyncLock("calendar", async () => {
+    const db = createAdminClient();
+    let done = 0, failed = 0;
+    for (let round = 0; round < 5; round++) {
+      const { data: jobs, error } = await db
+        .from("calendar_jobs")
+        .select("id, slot_table, slot_id, attempts")
+        .is("done_at", null)
+        .lt("attempts", MAX_ATTEMPTS)
+        .order("created_at")
+        .limit(limit);
+      if (error) throw error;
+      if (!jobs?.length) break;
 
-  let done = 0, failed = 0;
-  const seen = new Set<string>();
-  for (const job of jobs ?? []) {
-    const k = `${job.slot_table}|${job.slot_id}`;
-    try {
-      if (!seen.has(k)) await syncPair(cal, job.slot_table as Table, job.slot_id);
-      seen.add(k);
-      await db.from("calendar_jobs").update({ done_at: new Date().toISOString(), last_error: null }).eq("id", job.id);
-      done++;
-    } catch (err) {
-      failed++;
-      const msg = String((err as Error)?.message ?? err);
-      console.warn(`ลงปฏิทินไม่สำเร็จ (${k}):`, msg);
-      await db.from("calendar_jobs").update({ attempts: job.attempts + 1, last_error: msg.slice(0, 500) }).eq("id", job.id);
+      const seen = new Set<string>();
+      for (const job of jobs) {
+        const k = `${job.slot_table}|${job.slot_id}`;
+        try {
+          if (!seen.has(k)) await syncPair(cal, job.slot_table as Table, job.slot_id);
+          seen.add(k);
+          await db.from("calendar_jobs").update({ done_at: new Date().toISOString(), last_error: null }).eq("id", job.id);
+          done++;
+        } catch (err) {
+          failed++;
+          const msg = String((err as Error)?.message ?? err);
+          console.warn(`ลงปฏิทินไม่สำเร็จ (${k}):`, msg);
+          await db.from("calendar_jobs").update({ attempts: job.attempts + 1, last_error: msg.slice(0, 500) }).eq("id", job.id);
+        }
+      }
     }
-  }
-  return { done, failed };
+    return { done, failed };
+  }, 20_000);
+  return result ?? { done: 0, failed: 0, skipped: "มีงานลงปฏิทินอื่นกำลังทำอยู่" };
+}
+
+// ---------- เก็บกวาด event ซ้ำ / ค้าง ----------
+
+/**
+ * หา event ในปฏิทินของพนักงาน (ตั้งแต่วันนี้ ไม่เกิน 120 วันข้างหน้า) ที่ไม่ตรงกับคิวจริงในระบบ
+ *   = event ที่เว็บสร้าง (มีป้าย) หรือชื่อรูปแบบเดียวกับที่เว็บสร้าง ("Shopee - Mc มะนาว" / "Admin Shopee - แพรวา")
+ *     แต่ไม่ใช่ event ที่ระบบจดไว้ของคิวที่ยังมีคนนั้นอยู่ -> event ซ้ำ หรือคิวที่เอาคนออกแล้วแต่ event ค้าง
+ * dryRun = แค่นับ/แสดงรายการ ไม่ลบ
+ */
+export async function cleanupCalendarEvents(dryRun: boolean) {
+  const cal = calendarApi();
+  if (!cal) throw new Error("ยังไม่ได้เชื่อมบัญชี Google");
+  const db = createAdminClient();
+
+  // ทำงานลงปฏิทินที่ค้างให้หมดก่อน (event ของคิวที่เพิ่งจองจะได้ถูกจดไว้ ไม่ถูกนับเป็นของค้าง)
+  await processCalendarJobs();
+
+  return withSyncLock("calendar", async () => {
+    const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    const timeMin = new Date(`${today}T00:00:00+07:00`).toISOString();
+    const timeMax = new Date(Date.parse(timeMin) + 120 * 86400_000).toISOString();
+
+    // event ที่ระบบจดไว้ของคิวตั้งแต่วันนี้ (ต่อปฏิทิน)
+    const keep = new Map<string, Set<string>>();
+    for (const table of ["mc_slots", "admin_slots"] as const) {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await db.from(table).select("calendar_email, calendar_event_id")
+          .gte("live_date", today).not("calendar_event_id", "is", null).range(from, from + 999);
+        if (error) throw error;
+        for (const r of data ?? []) {
+          if (!r.calendar_email) continue;
+          if (!keep.has(r.calendar_email)) keep.set(r.calendar_email, new Set());
+          keep.get(r.calendar_email)!.add(r.calendar_event_id);
+        }
+        if (!data || data.length < 1000) break;
+      }
+    }
+
+    const { data: staff, error: staffErr } = await db.from("staff").select("role, name, email")
+      .in("role", ["mc", "admin"]).not("email", "is", null);
+    if (staffErr) throw staffErr;
+
+    const found: { email: string; name: string; summary: string; start: string }[] = [];
+    let deleted = 0;
+    const errors: string[] = [];
+    for (const p of staff ?? []) {
+      const ours = p.role === "mc" ? ` - Mc ${p.name}` : ` - ${p.name}`;
+      const isOurs = (e: calendar_v3.Schema$Event) =>
+        !!e.extendedProperties?.private?.[TAG_KEY]
+        || (p.role === "mc" ? !!e.summary?.endsWith(ours) && !e.summary.startsWith("Admin ") : !!e.summary?.startsWith("Admin ") && !!e.summary.endsWith(ours));
+      try {
+        let pageToken: string | undefined;
+        do {
+          const res = await cal.events.list({
+            calendarId: p.email!, timeMin, timeMax, singleEvents: true, maxResults: 2500, pageToken,
+          });
+          for (const e of res.data.items ?? []) {
+            if (!e.id || e.status === "cancelled" || !isOurs(e) || keep.get(p.email!)?.has(e.id)) continue;
+            found.push({ email: p.email!, name: p.name, summary: e.summary ?? "", start: e.start?.dateTime ?? e.start?.date ?? "" });
+            if (!dryRun) {
+              try {
+                await cal.events.delete({ calendarId: p.email!, eventId: e.id });
+                deleted++;
+              } catch (err) {
+                if (!isNotFound(err)) errors.push(`${p.email}: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+              }
+            }
+          }
+          pageToken = res.data.nextPageToken ?? undefined;
+        } while (pageToken);
+      } catch (err) {
+        // ปฏิทินที่ไม่ได้แชร์ให้ระบบ / ไม่มีสิทธิ์ ข้ามไป
+        if (!isNotFound(err)) errors.push(`${p.email}: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+      }
+    }
+    found.sort((a, b) => a.start.localeCompare(b.start));
+    return { found, deleted, errors };
+  }, 30_000);
 }

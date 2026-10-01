@@ -2,6 +2,7 @@ import "server-only";
 import type { sheets_v4 } from "googleapis";
 import { deleteCalendarEvent } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
+import { withSyncLock } from "@/lib/lock";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   COLS, SHEET_ID, TABLE_OF, TAB_OF, TABS, colLetter, dateSerial, hoursOf, normalizeMcName, parseRow, readTab, sheetIdOf,
@@ -34,30 +35,12 @@ type DbSlot = {
   personId: number | null; personName: string;
 };
 
-const LOCK = "sheet";
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const hm = (t: string) => t.slice(0, 5);
 const minutes = (v: Cell) => (typeof v === "number" ? Math.round((v - Math.floor(v)) * 1440) % 1440 : null);
 
 // ---------- ล็อก ----------
 
-async function withSheetLock<T>(fn: () => Promise<T>, waitMs = 25_000): Promise<T | null> {
-  const db = createAdminClient();
-  const holder = crypto.randomUUID();
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    const { data, error } = await db.rpc("try_sync_lock", { p_name: LOCK, p_seconds: 90, p_holder: holder });
-    if (error) throw error;
-    if (data) break;
-    if (Date.now() > deadline) return null;
-    await sleep(700);
-  }
-  try {
-    return await fn();
-  } finally {
-    await db.rpc("release_sync_lock", { p_name: LOCK, p_holder: holder });
-  }
-}
+const withSheetLock = <T>(fn: () => Promise<T>, waitMs = 25_000) => withSyncLock("sheet", fn, waitMs);
 
 // ---------- อ่าน slot จาก DB ----------
 

@@ -30,6 +30,7 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
   const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState<string | null>(null); // key ของ slot ที่กำลังบันทึก
   const [createOpen, setCreateOpen] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const reload = () => setTick((n) => n + 1);
   const [syncing, setSyncing] = useState(false);
 
@@ -131,7 +132,12 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
         />
         <IconBtn label="วันถัดไป" onClick={() => setDate(addDays(date, 1))}><Icon.right /></IconBtn>
         <button type="button" className={`${btn.ghost} !py-1.5`} onClick={() => setDate(todayKey())}>วันนี้</button>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap justify-end gap-2">
+          {scope.mc && scope.admin ? (
+            <button type="button" className={btn.ghost} onClick={() => setCleanupOpen(true)} title="หา event ซ้ำ / ค้างในปฏิทินของพนักงาน แล้วลบ">
+              ล้าง event ซ้ำ
+            </button>
+          ) : null}
           <button type="button" className={btn.ghost} disabled={syncing} onClick={syncFromSheet} title="อ่านทุกแถวในชีตมาอัปเดตเว็บ (ใช้เมื่อแก้ในชีตแล้วเว็บไม่เปลี่ยน)">
             {syncing ? "กำลังซิงค์..." : "ซิงค์จากชีตทั้งหมด"}
           </button>
@@ -176,6 +182,8 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
           ))}
         </div>
       )}
+
+      {cleanupOpen ? <CalendarCleanup onClose={() => setCleanupOpen(false)} /> : null}
 
       {createOpen ? (
         <CreateDialog
@@ -394,6 +402,100 @@ function PersonPicker({ label, value, options, disabled, onChange }: {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+// ---------- ล้าง event ซ้ำในปฏิทิน ----------
+
+type CleanupResult = {
+  dryRun: boolean; total: number; deleted: number; errors: string[];
+  found: { email: string; name: string; summary: string; start: string }[];
+};
+const fmtEventTime = new Intl.DateTimeFormat("th-TH", {
+  weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok",
+});
+
+/** ตรวจก่อน (แสดงรายการ) แล้วค่อยกดลบจริง */
+function CalendarCleanup({ onClose }: { onClose: () => void }) {
+  const toast = useToast();
+  const [state, setState] = useState<"checking" | "ready" | "deleting" | "done" | "error">("checking");
+  const [res, setRes] = useState<CleanupResult | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    api<CleanupResult>("/api/owner/calendar-cleanup", { dryRun: true })
+      .then((r) => {
+        if (!alive) return;
+        if (!r.ok) throw new Error(r.message);
+        setRes(r);
+        setState("ready");
+      })
+      .catch((err) => { if (alive) { setError((err as Error).message); setState("error"); } });
+    return () => { alive = false; };
+  }, []);
+
+  async function run() {
+    setState("deleting");
+    try {
+      const r = await api<CleanupResult>("/api/owner/calendar-cleanup", { dryRun: false });
+      if (!r.ok) throw new Error(r.message);
+      setRes(r);
+      setState("done");
+      toast(`ลบ event ซ้ำ/ค้างแล้ว ${r.deleted} รายการ`);
+    } catch (err) {
+      toast((err as Error).message, "error");
+      setState("ready");
+    }
+  }
+
+  const busy = state === "checking" || state === "deleting";
+  const note = state === "checking" ? "กำลังตรวจปฏิทินของพนักงานทุกคน (อาจใช้เวลา 10–40 วินาที)..."
+    : state === "deleting" ? "กำลังลบ..."
+      : state === "error" ? error
+        : state === "done" ? `ลบแล้ว ${res?.deleted ?? 0} รายการ`
+          : res?.total
+            ? `เจอ event ที่ไม่ตรงกับคิวจริง ${res.total} รายการ (ตั้งแต่วันนี้) ตรวจรายการด้านล่างก่อนกดลบ`
+            : "ไม่เจอ event ซ้ำหรือค้าง ปฏิทินตรงกับคิวจริงแล้ว";
+
+  return (
+    <Sheet open onClose={onClose} busy={busy} labelledBy="cleanupTitle">
+      <SheetHead id="cleanupTitle" title="ล้าง event ซ้ำในปฏิทิน" note={note} />
+      <div className="-mx-1 flex-1 overflow-y-auto px-1 text-sm">
+        {state === "ready" && res?.total ? (
+          <p className="mb-2 rounded-xl bg-brand-soft px-3 py-2 text-xs text-info-ink">
+            นับเฉพาะ event ที่ชื่อรูปแบบเดียวกับที่ระบบสร้าง (&quot;แพลตฟอร์ม - Mc ชื่อ&quot; / &quot;Admin แพลตฟอร์ม - ชื่อ&quot;)
+            แต่ไม่ใช่ event ของคิวที่ยังมีคนนั้นอยู่ = event ซ้ำ หรือคิวที่เอาคนออกแล้วแต่ event ยังค้าง
+          </p>
+        ) : null}
+        {res?.found.length ? (
+          <ul>
+            {res.found.map((f, i) => (
+              <li key={i} className="flex items-center justify-between gap-3 border-b border-line py-1.5 last:border-b-0">
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold">{f.summary}</span>
+                  <span className="block truncate text-xs text-muted">{f.email}</span>
+                </span>
+                <span className="shrink-0 text-xs text-muted tabular-nums">{f.start ? fmtEventTime.format(new Date(f.start)) : ""}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {res && res.total > res.found.length ? <p className="mt-2 text-xs text-muted">แสดง {res.found.length} จาก {res.total} รายการ</p> : null}
+        {res?.errors.length ? (
+          <details className="mt-3 text-xs text-muted">
+            <summary>ตรวจไม่ได้ {res.errors.length} ปฏิทิน (ยังไม่ได้แชร์ปฏิทินให้ระบบ)</summary>
+            <ul className="mt-1 list-disc pl-5">{res.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+          </details>
+        ) : null}
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className={btn.ghost} disabled={busy} onClick={onClose}>{state === "done" ? "ปิด" : "ยกเลิก"}</button>
+        {state === "ready" && res?.total ? (
+          <button type="button" className={btn.danger} onClick={run}>ลบ {res.total} รายการ</button>
+        ) : null}
+      </div>
+    </Sheet>
   );
 }
 
