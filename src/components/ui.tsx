@@ -9,7 +9,7 @@ import {
 export async function api<T>(
   url: string,
   body?: object,
-  method: "POST" | "PATCH" | "DELETE" = "POST",
+  method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST",
 ): Promise<T & { ok: boolean; message?: string; authError?: boolean }> {
   let res: Response;
   try {
