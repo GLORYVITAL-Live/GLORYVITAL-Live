@@ -15,6 +15,17 @@ export function lateCut(minutes: number | null | undefined) {
   return LATE_TIERS.find((t) => minutes <= t.max)!.cut;
 }
 
+/**
+ * ค่าจ้างต่อชั่วโมงของเดือน (เงื่อนไข Commit รายคน)
+ *   ชั่วโมงที่จองในเดือน (ไม่นับคิวที่ยกเลิก) >= commitHours -> ทุกชั่วโมงของเดือนคิด commitRate
+ *   ไม่มี Commit / ยังไม่ครบ -> baseRate
+ */
+export function monthRate(baseRate: number, commitHours: number | null | undefined, commitRate: number | null | undefined, monthHours: number) {
+  const hasCommit = !!commitHours && commitHours > 0 && commitRate != null && commitRate > 0;
+  const reached = hasCommit && monthHours >= commitHours!;
+  return { rate: reached ? commitRate! : baseRate, hasCommit, reached };
+}
+
 /** ชั่วโมงที่ได้เงิน = ชั่วโมง x (1 - ส่วนที่หัก) */
 export const paidHours = (hours: number, lateMinutes: number | null | undefined) => hours * (1 - lateCut(lateMinutes));
 

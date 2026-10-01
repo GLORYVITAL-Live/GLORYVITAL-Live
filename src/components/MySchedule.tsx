@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
-import { lateCut, paidHours } from "@/lib/pay";
+import { lateCut, monthRate, paidHours } from "@/lib/pay";
 import { Icon, IconBtn, MonthNav, Sheet, SheetHead, Stats, Tag, api, btn, useToast } from "@/components/ui";
 
 /** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + ยกเลิกคิว */
@@ -47,7 +47,9 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
 
   // ค่าจ้าง = ชั่วโมงที่ได้เงิน (หักมาสายแล้ว) x ค่าจ้างต่อชั่วโมง (สูตรเดียวกับหน้าสรุปของเจ้าของ) ไม่นับคิวที่ยกเลิก
   const profile = data?.profile;
-  const rate = profile?.rate ?? 0;
+  // เงื่อนไข Commit: จองครบตามชั่วโมงในเดือนนี้ -> ทุกชั่วโมงของเดือนคิดราคา Commit
+  const commit = monthRate(profile?.rate ?? 0, profile?.commitHours, profile?.commitRate, hours);
+  const rate = commit.rate;
   const paidOf = (list: MyItem[]) => list.reduce((a, i) => a + paidHours(i.hours, i.lateMinutes), 0);
   const total = Math.round(paidOf(active) * rate);
   const earned = Math.round(paidOf(active.filter((i) => i.endMs <= now)) * rate);
@@ -73,6 +75,11 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
           <span className="shrink-0 text-right text-xs leading-tight text-muted">
             ค่าจ้าง
             <span className="block text-sm font-semibold text-ink">{profile ? (rate ? `${money(rate)} บาท/ชม.` : "ยังไม่ได้ตั้ง") : "–"}</span>
+            {commit.hasCommit ? (
+              <span className={`block text-[11px] ${commit.reached ? "text-ok" : ""}`}>
+                {commit.reached ? `ครบ Commit ${profile!.commitHours} ชม. ✓` : `Commit ${profile!.commitHours} ชม. → ${money(profile!.commitRate!)}`}
+              </span>
+            ) : null}
           </span>
         </div>
         <MonthNav label={monthLabel(month)} onPrev={() => setMonth(monthKey(-1, month))} onNext={() => setMonth(monthKey(1, month))} />
@@ -92,6 +99,13 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
               </div>
               {lateCutMoney > 0 ? (
                 <div className="mt-1 text-xs font-semibold text-err tabular-nums">หักมาสายแล้ว {money(lateCutMoney)} บาท (ดูกฎการทำงาน)</div>
+              ) : null}
+              {commit.hasCommit ? (
+                <div className="mt-1 text-xs text-muted tabular-nums">
+                  {commit.reached
+                    ? `จองครบ Commit ${profile.commitHours} ชม. แล้ว ทุกชั่วโมงเดือนนี้คิด ${money(profile.commitRate!)} บาท/ชม. (ปกติ ${money(profile.rate)})`
+                    : `Commit ${profile.commitHours} ชม.: จองแล้ว ${Number.isInteger(hours) ? hours : hours.toFixed(1)} ชม. ถ้าครบ ทุกชั่วโมงจะคิด ${money(profile.commitRate!)} บาท/ชม.`}
+                </div>
               ) : null}
             </div>
           ) : (

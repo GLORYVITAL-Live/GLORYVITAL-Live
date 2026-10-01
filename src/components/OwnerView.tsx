@@ -55,10 +55,13 @@ const groups = (data: OwnerSummary): [Type, OwnerPerson[]][] => {
 };
 
 function downloadSummary(data: OwnerSummary) {
-  const rows: unknown[][] = [["ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ชั่วโมงที่ได้เงิน", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
+  const rows: unknown[][] = [["ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
   for (const [type, people] of groups(data)) for (const r of people) {
     const rate = rateOf(data, type, r.name);
-    rows.push([type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.paidHours, rate || "", rate ? Math.round(r.paidHours * rate) : ""]);
+    const commit = r.commit
+      ? `${r.commit.hours} ชม. -> ${r.commit.rate} (${r.commit.reached ? "ครบ" : `ไม่ครบ ปกติ ${r.commit.baseRate}`})`
+      : "";
+    rows.push([type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : ""]);
   }
   downloadCsv(`glory-summary-${data.month}.csv`, rows);
 }
@@ -236,6 +239,14 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                   <td className={td}>
                     <span className={`inline-block w-4 text-muted transition-transform ${isOpen ? "rotate-90 text-brand" : ""}`}>▸</span>
                     {r.name}
+                    {r.commit ? (
+                      <span
+                        title={`Commit ${num(r.commit.hours)} ชม./เดือน: ครบแล้วทุกชั่วโมงคิด ${money(r.commit.rate)} บาท (ปกติ ${money(r.commit.baseRate)})`}
+                        className={`ml-1.5 rounded-full px-2 py-0.5 text-[11px] whitespace-nowrap ${r.commit.reached ? "bg-ok/15 text-ok" : "bg-bg text-muted"}`}
+                      >
+                        Commit {num(r.commit.hours)} ชม. {r.commit.reached ? `✓ ${money(r.commit.rate)}/ชม.` : `(${num(r.hours)}/${num(r.commit.hours)})`}
+                      </span>
+                    ) : null}
                   </td>
                   <td className={`${td} text-right tabular-nums`}>{r.slots}</td>
                   <td className={`${td} text-right tabular-nums`}>{num(r.hours)}</td>

@@ -9,6 +9,7 @@ type Role = "mc" | "admin" | "owner";
 type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
   hourly_rate: number | null; is_extra_admin: boolean; upcoming: number;
+  commit_hours: number | null; commit_rate: number | null;
   can_manage_mc: boolean; can_manage_admin: boolean;
 };
 
@@ -129,6 +130,7 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
                   {p.email ?? <span className="font-semibold text-err">ไม่มีอีเมล</span>}
                   {p.phone ? ` · ${p.phone}` : ""}
                   {p.hourly_rate ? ` · ${money(p.hourly_rate)} บาท/ชม.` : ""}
+                  {p.commit_hours && p.commit_rate ? ` · Commit ${p.commit_hours} ชม. → ${money(p.commit_rate)}` : ""}
                 </span>
               </span>
               {p.role !== "owner" ? (
@@ -171,6 +173,8 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   const [phone, setPhone] = useState(person?.phone ?? "");
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
+  const [commitHours, setCommitHours] = useState(person?.commit_hours != null ? String(person.commit_hours) : "");
+  const [commitRate, setCommitRate] = useState(person?.commit_rate != null ? String(person.commit_rate) : "");
   const [canMc, setCanMc] = useState(person?.can_manage_mc ?? true);
   const [canAdmin, setCanAdmin] = useState(person?.can_manage_admin ?? true);
   const [saving, setSaving] = useState(false);
@@ -184,6 +188,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
     try {
       const fields = {
         name, email, phone, hourly_rate: rate, is_extra_admin: extra,
+        ...(role !== "owner" ? { commit_hours: commitHours, commit_rate: commitRate } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin } : {}),
       };
@@ -264,6 +269,19 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
               <span className="mb-1 block font-semibold">ค่าจ้างต่อชั่วโมง (บาท)</span>
               <input inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} className={field} placeholder="ว่าง = ใช้ค่าเริ่มต้น" />
             </label>
+            <div>
+              <span className="mb-1 block font-semibold">Commit (ไม่บังคับ)</span>
+              <div className="flex items-center gap-2">
+                <input inputMode="decimal" value={commitHours} onChange={(e) => setCommitHours(e.target.value)} className={field} placeholder="จองครบ กี่ชม./เดือน" aria-label="จำนวนชั่วโมง Commit ต่อเดือน" />
+                <span className="shrink-0 text-muted">ชม. →</span>
+                <input inputMode="decimal" value={commitRate} onChange={(e) => setCommitRate(e.target.value)} className={field} placeholder="ค่าจ้างใหม่ บาท/ชม." aria-label="ค่าจ้างต่อชั่วโมงเมื่อครบ Commit" />
+              </div>
+              <span className="mt-1 block text-xs text-muted">
+                {commitHours.trim() && commitRate.trim()
+                  ? `เดือนไหนจองครบ ${commitHours} ชม. (ไม่นับคิวที่ยกเลิก) ทุกชั่วโมงของเดือนนั้นคิด ${commitRate} บาท/ชม.`
+                  : "เช่น 25 ชม. → 800 = เดือนไหนจองครบ 25 ชม. ทุกชั่วโมงของเดือนนั้นคิด 800 บาท/ชม. ว่างทั้งคู่ = ไม่มี Commit"}
+              </span>
+            </div>
           </>
         ) : null}
 

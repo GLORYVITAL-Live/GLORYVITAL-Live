@@ -54,8 +54,11 @@ export type MyResponse = {
   adminChatUrl: string;
   canCancel: boolean;
   items: MyItem[];
-  /** โปรไฟล์ของตัวเอง rate = ค่าจ้างต่อชั่วโมง (0 = ยังไม่ได้ตั้ง) */
-  profile: { name: string; email: string; phone: string; rate: number };
+  /**
+   * โปรไฟล์ของตัวเอง rate = ค่าจ้างต่อชั่วโมงปกติ (0 = ยังไม่ได้ตั้ง)
+   * commitHours / commitRate = จองครบกี่ชม. ในเดือน ทุกชั่วโมงเปลี่ยนเป็นราคานี้ (null = ไม่มี Commit)
+   */
+  profile: { name: string; email: string; phone: string; rate: number; commitHours: number | null; commitRate: number | null };
 };
 
 export type OwnerDetail = {
@@ -76,6 +79,8 @@ export type OwnerDetail = {
 /** paidHours = ชั่วโมงที่ได้เงินหลังหักมาสาย (ยอดเงิน = paidHours x ค่าจ้าง/ชม.) lateSlots = จำนวนคิวที่โดนหัก */
 export type OwnerPerson = {
   name: string; slots: number; hours: number; paidHours: number; lateSlots: number; days: number; cancelled: number;
+  /** เงื่อนไข Commit (null = ไม่มี) reached = เดือนนี้จองครบแล้ว ใช้ราคา rate แทน baseRate */
+  commit: { hours: number; rate: number; baseRate: number; reached: boolean } | null;
 };
 
 export type OwnerSummary = {

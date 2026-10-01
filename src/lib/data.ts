@@ -1,5 +1,5 @@
 import "server-only";
-import { lateCut, paidHours } from "@/lib/pay";
+import { lateCut, monthRate, paidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary } from "@/lib/types";
 
@@ -166,12 +166,13 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
 export async function ownerSummary(key: string, first: string, last: string): Promise<Omit<OwnerSummary, "scope">> {
   const db = createAdminClient();
   const settings = await getSettings(db);
-  type Row = SlotRow & { person: { name: string; hourly_rate: number | null } | null };
+  type Person = { name: string; hourly_rate: number | null; commit_hours: number | null; commit_rate: number | null };
+  type Row = SlotRow & { person: Person | null };
 
   const load = (table: "mc_slots" | "admin_slots", personCol: string) =>
     fetchAll<Row>((from, to) =>
       db.from(table)
-        .select(`${SLOT_COLS}, person:staff!${personCol}(name, hourly_rate)`)
+        .select(`${SLOT_COLS}, person:staff!${personCol}(name, hourly_rate, commit_hours, commit_rate)`)
         .not(personCol, "is", null)
         .gte("live_date", first).lte("live_date", last)
         .or("confirmed.is.null,confirmed.eq.true")
@@ -183,12 +184,12 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
     mc: {}, admin: {}, defaultMc: Number(settings.default_mc_rate) || 0, defaultAdmin: Number(settings.default_admin_rate) || 0,
   };
   const details: (OwnerDetail & { key: string })[] = [];
+  const persons = new Map<string, Person>(); // "Mc|ชื่อ" -> ข้อมูลค่าจ้างของคนนั้น
   const collect = (rows: Row[], type: "Mc" | "Admin") => {
     for (const r of rows) {
       if (!r.person) continue;
       const name = type === "Mc" ? `Mc ${r.person.name}` : r.person.name;
-      const rate = Number(r.person.hourly_rate) || 0;
-      if (rate) (type === "Mc" ? rates.mc : rates.admin)[name] = rate;
+      persons.set(`${type}|${name}`, r.person);
       details.push({
         type, name, date: r.live_date, start: hm(r.start_time), end: hm(r.end_time), platform: r.platform,
         hours: hoursOf(r), startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
@@ -219,10 +220,19 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
       p.days.add(d.date);
     }
     const r2 = (n: number) => Math.round(n * 100) / 100;
+    const defaultRate = type === "Mc" ? rates.defaultMc : rates.defaultAdmin;
     return [...people.entries()]
-      .map(([name, p]) => ({
-        name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, days: p.days.size, cancelled: p.cancelled,
-      }))
+      .map(([name, p]) => {
+        // ค่าจ้าง/ชม. ของเดือนนี้: รายคน (ไม่ตั้ง = ค่าเริ่มต้น) แล้วดูเงื่อนไข Commit จากชั่วโมงที่จองทั้งเดือน
+        const info = persons.get(`${type}|${name}`);
+        const base = Number(info?.hourly_rate) || defaultRate;
+        const m = monthRate(base, Number(info?.commit_hours) || null, Number(info?.commit_rate) || null, p.hours);
+        if (m.rate) (type === "Mc" ? rates.mc : rates.admin)[name] = m.rate;
+        return {
+          name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, days: p.days.size, cancelled: p.cancelled,
+          commit: m.hasCommit ? { hours: Number(info!.commit_hours), rate: Number(info!.commit_rate), baseRate: base, reached: m.reached } : null,
+        };
+      })
       .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name, "th"));
   };
 

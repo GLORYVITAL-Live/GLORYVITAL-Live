@@ -8,7 +8,7 @@ import type { Me } from "@/lib/types";
 // จัดการรายชื่อพนักงาน (แทนแท็บ Mc Email / Admin Email / Owner Email / เบอร์โทร MC)
 //   GET     รายชื่อทั้งหมด + จำนวนคิวตั้งแต่วันนี้
 //   POST    เพิ่มคน
-//   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Admin เสริม / สิทธิ์ Owner
+//   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Commit / Admin เสริม / สิทธิ์ Owner
 //   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
 // สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
 //         รายชื่อและสิทธิ์ของ Owner จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
@@ -54,6 +54,19 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     if (rate !== null && (!Number.isFinite(rate) || rate < 0)) return { error: "ค่าจ้างต้องเป็นตัวเลข" };
     out.hourly_rate = rate;
   }
+  // Commit: จองครบกี่ชม./เดือน -> ทุกชั่วโมงของเดือนเปลี่ยนเป็นราคานี้ (ต้องกรอกคู่กัน หรือว่างทั้งคู่)
+  if (role !== "owner" && (!partial || "commit_hours" in body || "commit_rate" in body)) {
+    const numOrNull = (v: unknown) => {
+      const raw = String(v ?? "").replace(/[,\s฿]/g, "");
+      return raw === "" ? null : Number(raw);
+    };
+    const hours = numOrNull(body.commit_hours), rate = numOrNull(body.commit_rate);
+    if ((hours === null) !== (rate === null)) return { error: "Commit ต้องกรอกทั้งจำนวนชั่วโมงและค่าจ้างใหม่ (หรือเว้นว่างทั้งคู่)" };
+    if (hours !== null && (!Number.isFinite(hours) || hours <= 0)) return { error: "จำนวนชั่วโมง Commit ต้องเป็นตัวเลขมากกว่า 0" };
+    if (rate !== null && (!Number.isFinite(rate) || rate <= 0)) return { error: "ค่าจ้างเมื่อครบ Commit ต้องเป็นตัวเลขมากกว่า 0" };
+    out.commit_hours = hours;
+    out.commit_rate = rate;
+  }
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
   if (role === "owner") {
     if (!partial || "can_manage_mc" in body) out.can_manage_mc = body.can_manage_mc !== false;
@@ -73,7 +86,7 @@ export async function GET() {
   if ("res" in r) return r.res;
   const db = createAdminClient();
   const { data: rows, error } = await db.from("staff")
-    .select("id, role, name, email, phone, hourly_rate, is_extra_admin, can_manage_mc, can_manage_admin").order("name");
+    .select("id, role, name, email, phone, hourly_rate, commit_hours, commit_rate, is_extra_admin, can_manage_mc, can_manage_admin").order("name");
   if (error) return fail(error.message, 500);
   const staff = (rows ?? []).filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id);
 
