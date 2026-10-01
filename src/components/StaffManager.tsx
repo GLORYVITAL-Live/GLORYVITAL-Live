@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sheet, SheetHead, StateBox, api, btn, useToast } from "@/components/ui";
 import { money } from "@/lib/format";
-import type { OwnerScope } from "@/lib/types";
+import { tiersLabel } from "@/lib/pay";
+import type { CommitTier, OwnerScope } from "@/lib/types";
 
 type Role = "mc" | "admin" | "owner";
 type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
   hourly_rate: number | null; is_extra_admin: boolean; upcoming: number;
-  commit_hours: number | null; commit_rate: number | null;
+  commit_tiers: CommitTier[] | null;
   can_manage_mc: boolean; can_manage_admin: boolean;
 };
 
@@ -130,7 +131,7 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
                   {p.email ?? <span className="font-semibold text-err">ไม่มีอีเมล</span>}
                   {p.phone ? ` · ${p.phone}` : ""}
                   {p.hourly_rate ? ` · ${money(p.hourly_rate)} บาท/ชม.` : ""}
-                  {p.commit_hours && p.commit_rate ? ` · Commit ${p.commit_hours} ชม. → ${money(p.commit_rate)}` : ""}
+                  {p.commit_tiers?.length ? ` · Commit ${p.commit_tiers.map((t) => `${t.hours}+ ชม. ${money(t.rate)}`).join(" / ")}` : ""}
                 </span>
               </span>
               {p.role !== "owner" ? (
@@ -173,8 +174,15 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   const [phone, setPhone] = useState(person?.phone ?? "");
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
-  const [commitHours, setCommitHours] = useState(person?.commit_hours != null ? String(person.commit_hours) : "");
-  const [commitRate, setCommitRate] = useState(person?.commit_rate != null ? String(person.commit_rate) : "");
+  // เทียร์ Commit (กรอกเป็นข้อความ แปลงเป็นตัวเลขตอนบันทึก)
+  const [tiers, setTiers] = useState<{ hours: string; rate: string }[]>(
+    () => (person?.commit_tiers ?? []).map((t) => ({ hours: String(t.hours), rate: String(t.rate) })),
+  );
+  const setTier = (i: number, field: "hours" | "rate", value: string) =>
+    setTiers(tiers.map((t, j) => (j === i ? { ...t, [field]: value } : t)));
+  const filledTiers = tiers
+    .map((t) => ({ hours: Number(t.hours.replace(/[,\s]/g, "")), rate: Number(t.rate.replace(/[,\s]/g, "")) }))
+    .filter((t) => t.hours > 0 && t.rate > 0);
   const [canMc, setCanMc] = useState(person?.can_manage_mc ?? true);
   const [canAdmin, setCanAdmin] = useState(person?.can_manage_admin ?? true);
   const [saving, setSaving] = useState(false);
@@ -188,7 +196,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
     try {
       const fields = {
         name, email, phone, hourly_rate: rate, is_extra_admin: extra,
-        ...(role !== "owner" ? { commit_hours: commitHours, commit_rate: commitRate } : {}),
+        ...(role !== "owner" ? { commit_tiers: tiers } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin } : {}),
       };
@@ -270,16 +278,33 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
               <input inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} className={field} placeholder="ว่าง = ใช้ค่าเริ่มต้น" />
             </label>
             <div>
-              <span className="mb-1 block font-semibold">Commit (ไม่บังคับ)</span>
-              <div className="flex items-center gap-2">
-                <input inputMode="decimal" value={commitHours} onChange={(e) => setCommitHours(e.target.value)} className={field} placeholder="จองครบ กี่ชม./เดือน" aria-label="จำนวนชั่วโมง Commit ต่อเดือน" />
-                <span className="shrink-0 text-muted">ชม. →</span>
-                <input inputMode="decimal" value={commitRate} onChange={(e) => setCommitRate(e.target.value)} className={field} placeholder="ค่าจ้างใหม่ บาท/ชม." aria-label="ค่าจ้างต่อชั่วโมงเมื่อครบ Commit" />
+              <span className="mb-1 block font-semibold">Commit แบบขั้น (ไม่บังคับ)</span>
+              <div className="space-y-2">
+                {tiers.map((t, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input inputMode="decimal" value={t.hours} onChange={(e) => setTier(i, "hours", e.target.value)} className={field} placeholder="ตั้งแต่กี่ ชม." aria-label={`Commit ขั้นที่ ${i + 1}: ชั่วโมงขั้นต่ำ`} />
+                    <span className="shrink-0 text-muted">ชม.+ →</span>
+                    <input inputMode="decimal" value={t.rate} onChange={(e) => setTier(i, "rate", e.target.value)} className={field} placeholder="บาท/ชม." aria-label={`Commit ขั้นที่ ${i + 1}: ค่าจ้างต่อชั่วโมง`} />
+                    <button
+                      type="button"
+                      onClick={() => setTiers(tiers.filter((_, j) => j !== i))}
+                      aria-label={`ลบ Commit ขั้นที่ ${i + 1}`}
+                      className="grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-err/10 hover:text-err"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
+              {tiers.length < 10 ? (
+                <button type="button" onClick={() => setTiers([...tiers, { hours: "", rate: "" }])} className="mt-2 text-sm font-semibold text-brand hover:underline">
+                  + เพิ่มขั้น Commit
+                </button>
+              ) : null}
               <span className="mt-1 block text-xs text-muted">
-                {commitHours.trim() && commitRate.trim()
-                  ? `เดือนไหนจองครบ ${commitHours} ชม. (ไม่นับคิวที่ยกเลิก) ทุกชั่วโมงของเดือนนั้นคิด ${commitRate} บาท/ชม.`
-                  : "เช่น 25 ชม. → 800 = เดือนไหนจองครบ 25 ชม. ทุกชั่วโมงของเดือนนั้นคิด 800 บาท/ชม. ว่างทั้งคู่ = ไม่มี Commit"}
+                {filledTiers.length
+                  ? <>ผลลัพธ์: {tiersLabel(Number(rate.replace(/[,\s]/g, "")) || 0, filledTiers)} บาท/ชม.<br />เดือนไหนจอง (ไม่นับคิวที่ยกเลิก) ถึงขั้นไหน ทุกชั่วโมงของเดือนนั้นคิดราคาขั้นนั้น</>
+                  : "ใส่แค่ชั่วโมงขั้นต่ำของแต่ละขั้น เช่น 10 → 950, 21 → 900, 41 → 850 (ต่ำกว่าขั้นแรกใช้ค่าจ้างต่อชั่วโมงด้านบน)"}
               </span>
             </div>
           </>

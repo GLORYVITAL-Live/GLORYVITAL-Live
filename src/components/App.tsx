@@ -7,6 +7,7 @@ import type { Me, OwnerScope, Role } from "@/lib/types";
 import { MySchedule } from "@/components/MySchedule";
 import { OwnerView } from "@/components/OwnerView";
 import { RulesDialog } from "@/components/RulesDialog";
+import { RulesEditor } from "@/components/RulesEditor";
 import { SlotBoard } from "@/components/SlotBoard";
 import { SlotManager } from "@/components/SlotManager";
 import { StaffManager } from "@/components/StaffManager";
@@ -34,13 +35,22 @@ export const MODES = {
 const ROLE_KEY = "glory_booking_role";
 const THEME_KEY = "glory_booking_theme";
 
+/**
+ * หน้าที่บัญชีนี้เปิดได้: บทบาทจริงก่อน แล้วต่อด้วยหน้าที่ Owner เปิดดูได้ตามสิทธิ์ (ดูอย่างเดียว)
+ * เช่น Owner ที่ติ๊ก Mc + Admin = [owner, mc (ดู), admin (ดู)]
+ */
 export function rolesOf(me: Me | null): Role[] {
   if (!me) return [];
-  return (["mc", "admin", "owner"] as const).filter((r) => me[r]);
+  const real = (["mc", "admin", "owner"] as const).filter((r) => me[r]);
+  const view = (["mc", "admin"] as const).filter((r) => !me[r] && me.owner?.[r]);
+  return [...real, ...view];
 }
 
+/** Owner เปิดหน้า Mc / Admin โดยไม่ได้เป็น Mc / Admin เอง = ดูอย่างเดียว จองไม่ได้ */
+export const isPreview = (me: Me | null, role: Role | null) => !!me && (role === "mc" || role === "admin") && !me[role];
+
 export function displayName(me: Me, role: Role) {
-  if (role === "owner") return me.owner!.name;
+  if (role === "owner" || isPreview(me, role)) return me.owner!.name;
   return role === "admin" ? me.admin!.name : `Mc ${me.mc!.name}`;
 }
 
@@ -59,6 +69,7 @@ function Shell({ me }: { me: Me | null }) {
   // บทบาทที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
   const savedRole = useLocal(ROLE_KEY) as Role | null;
   const role: Role | null = savedRole && roles.includes(savedRole) ? savedRole : roles[0] ?? null;
+  const preview = isPreview(me, role);
   const [myOpen, setMyOpen] = useState(false);
   const [rulesManual, setRulesManual] = useState(false);
   const dark = useIsDark();
@@ -67,7 +78,7 @@ function Shell({ me }: { me: Me | null }) {
   const rulesKey = me && role ? `glory_rules_seen_${me.email}_${role}` : "";
   const rulesSeen = useLocal(rulesKey);
   const hydrated = useIsHydrated();
-  const rulesAuto = hydrated && !!rulesKey && role !== "owner" && rulesSeen !== todayKey();
+  const rulesAuto = hydrated && !!rulesKey && role !== "owner" && !preview && rulesSeen !== todayKey();
   const rulesOpen = rulesManual || rulesAuto;
   function closeRules() {
     setRulesManual(false);
@@ -127,7 +138,7 @@ function Shell({ me }: { me: Me | null }) {
               onChange={(e) => setRole(e.target.value as Role)}
               className="h-9 rounded-full border border-line bg-surface px-3 text-sm font-medium"
             >
-              {roles.map((r) => <option key={r} value={r}>{MODES[r].label}</option>)}
+              {roles.map((r) => <option key={r} value={r}>{MODES[r].label}{isPreview(me, r) ? " (ดูอย่างเดียว)" : ""}</option>)}
             </select>
           ) : null}
           <button
@@ -143,9 +154,9 @@ function Shell({ me }: { me: Me | null }) {
             <div className="flex min-w-0 items-center gap-1 rounded-full border border-line bg-surface p-1 shadow-card">
               <button
                 type="button"
-                disabled={!registered || role === "owner"}
+                disabled={!registered || role === "owner" || preview}
                 onClick={() => setMyOpen(true)}
-                title={role === "owner" ? "" : "ดูตารางของฉัน"}
+                title={role === "owner" || preview ? "" : "ดูตารางของฉัน"}
                 className="flex min-w-0 items-center gap-2 rounded-full py-0.5 pr-2 pl-0.5 text-left enabled:hover:bg-brand-soft"
               >
                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-brand-ink" aria-hidden>
@@ -195,7 +206,7 @@ function Shell({ me }: { me: Me | null }) {
       {mode?.rule ? <p className="my-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-info-ink">{mode.rule}</p> : null}
 
       {me?.owner && role === "owner" ? <OwnerTabs scope={{ mc: me.owner.mc, admin: me.owner.admin }} /> : null}
-      {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} /> : null}
+      {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
       {!me || !registered ? (
         <div className="my-6 rounded-2xl border border-dashed border-line bg-surface px-5 py-8 text-center text-sm text-muted">
           <strong className="mb-1 block text-base text-ink">เข้าสู่ระบบเพื่อดูตาราง</strong>
@@ -203,7 +214,7 @@ function Shell({ me }: { me: Me | null }) {
         </div>
       ) : null}
 
-      {me && (role === "mc" || role === "admin") ? (
+      {me && (role === "mc" || role === "admin") && !preview ? (
         <>
           <MySchedule
             open={myOpen}
@@ -225,8 +236,8 @@ const OWNER_TAB_KEY = "glory_owner_tab";
 /** หน้าเจ้าของ: สรุปรายเดือน | จัดการ slot | พนักงาน (จำแท็บล่าสุดไว้ในเครื่อง) — เห็นเฉพาะฝั่งที่มีสิทธิ์ */
 function OwnerTabs({ scope }: { scope: OwnerScope }) {
   const saved = useLocal(OWNER_TAB_KEY);
-  const tab = saved === "slots" || saved === "staff" ? saved : "summary";
-  const tabs = [["summary", "สรุปรายเดือน"], ["slots", "จัดการ slot"], ["staff", "พนักงาน"]] as const;
+  const tab = saved === "slots" || saved === "staff" || saved === "rules" ? saved : "summary";
+  const tabs = [["summary", "สรุปรายเดือน"], ["slots", "จัดการ slot"], ["staff", "พนักงาน"], ["rules", "กฎการทำงาน"]] as const;
   if (!scope.mc && !scope.admin) {
     return (
       <div className="my-6 rounded-2xl border border-warn-line bg-warn-bg p-4 text-sm text-warn-ink">
@@ -245,7 +256,7 @@ function OwnerTabs({ scope }: { scope: OwnerScope }) {
             role="tab"
             aria-selected={tab === id}
             onClick={() => writeLocal(OWNER_TAB_KEY, id)}
-            className={`flex-1 rounded-full px-3 py-1.5 text-sm font-semibold transition ${
+            className={`flex-1 rounded-full px-1.5 py-1.5 text-[13px] font-semibold whitespace-nowrap transition sm:px-3 sm:text-sm ${
               tab === id ? "bg-brand text-brand-ink" : "text-muted hover:text-ink"
             }`}
           >
@@ -258,7 +269,10 @@ function OwnerTabs({ scope }: { scope: OwnerScope }) {
           บัญชีนี้มีสิทธิ์จัดการเฉพาะฝั่ง <strong>{scope.mc ? "Mc" : "Admin"}</strong>
         </p>
       ) : null}
-      {tab === "slots" ? <SlotManager scope={scope} /> : tab === "staff" ? <StaffManager scope={scope} /> : <OwnerView />}
+      {tab === "slots" ? <SlotManager scope={scope} />
+        : tab === "staff" ? <StaffManager scope={scope} />
+          : tab === "rules" ? <RulesEditor scope={scope} />
+            : <OwnerView />}
     </>
   );
 }

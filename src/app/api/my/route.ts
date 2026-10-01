@@ -1,5 +1,6 @@
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { getSettings, mySlots } from "@/lib/data";
+import { cleanTiers } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // "ตารางของฉัน" รายเดือน (?role=mc|admin&month=YYYY-MM) — แทน action "mySlots" / "adminMySlots"
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
   const [settings, items, staff] = await Promise.all([
     getSettings(),
     mySlots(role as "mc" | "admin", person.id, first, last),
-    createAdminClient().from("staff").select("name, email, phone, hourly_rate, commit_hours, commit_rate").eq("id", person.id).single(),
+    createAdminClient().from("staff").select("name, email, phone, hourly_rate, commit_tiers").eq("id", person.id).single(),
   ]);
   if (staff.error) return fail(staff.error.message, 500);
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
@@ -33,8 +34,7 @@ export async function GET(request: Request) {
       email: staff.data.email ?? r.me.email,
       phone: staff.data.phone ?? "",
       rate: Number(staff.data.hourly_rate) || defaultRate,
-      commitHours: Number(staff.data.commit_hours) || null,
-      commitRate: Number(staff.data.commit_rate) || null,
+      commitTiers: cleanTiers(staff.data.commit_tiers),
     },
   });
 }

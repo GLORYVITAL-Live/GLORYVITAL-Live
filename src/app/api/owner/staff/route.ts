@@ -54,18 +54,25 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     if (rate !== null && (!Number.isFinite(rate) || rate < 0)) return { error: "ค่าจ้างต้องเป็นตัวเลข" };
     out.hourly_rate = rate;
   }
-  // Commit: จองครบกี่ชม./เดือน -> ทุกชั่วโมงของเดือนเปลี่ยนเป็นราคานี้ (ต้องกรอกคู่กัน หรือว่างทั้งคู่)
-  if (role !== "owner" && (!partial || "commit_hours" in body || "commit_rate" in body)) {
-    const numOrNull = (v: unknown) => {
-      const raw = String(v ?? "").replace(/[,\s฿]/g, "");
-      return raw === "" ? null : Number(raw);
+  // Commit แบบเทียร์: [{ hours, rate }] จองถึงเทียร์ไหน ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น (แถวที่ว่างทั้งคู่ถูกข้าม)
+  if (role !== "owner" && (!partial || "commit_tiers" in body)) {
+    const raw: unknown[] = Array.isArray(body.commit_tiers) ? body.commit_tiers : [];
+    const num = (v: unknown) => {
+      const s = String(v ?? "").replace(/[,\s฿]/g, "");
+      return s === "" ? null : Number(s);
     };
-    const hours = numOrNull(body.commit_hours), rate = numOrNull(body.commit_rate);
-    if ((hours === null) !== (rate === null)) return { error: "Commit ต้องกรอกทั้งจำนวนชั่วโมงและค่าจ้างใหม่ (หรือเว้นว่างทั้งคู่)" };
-    if (hours !== null && (!Number.isFinite(hours) || hours <= 0)) return { error: "จำนวนชั่วโมง Commit ต้องเป็นตัวเลขมากกว่า 0" };
-    if (rate !== null && (!Number.isFinite(rate) || rate <= 0)) return { error: "ค่าจ้างเมื่อครบ Commit ต้องเป็นตัวเลขมากกว่า 0" };
-    out.commit_hours = hours;
-    out.commit_rate = rate;
+    const tiers: { hours: number; rate: number }[] = [];
+    for (const t of raw.slice(0, 10) as { hours?: unknown; rate?: unknown }[]) {
+      const hours = num(t?.hours), rate = num(t?.rate);
+      if (hours === null && rate === null) continue;
+      if (hours === null || rate === null) return { error: "Commit แต่ละขั้นต้องกรอกทั้งจำนวนชั่วโมงและค่าจ้าง" };
+      if (!Number.isFinite(hours) || hours <= 0) return { error: "ชั่วโมง Commit ต้องเป็นตัวเลขมากกว่า 0 (ใส่แค่ชั่วโมงขั้นต่ำ เช่น 10 ไม่ใช่ 10-20)" };
+      if (!Number.isFinite(rate) || rate <= 0) return { error: "ค่าจ้าง Commit ต้องเป็นตัวเลขมากกว่า 0" };
+      tiers.push({ hours, rate });
+    }
+    tiers.sort((a, b) => a.hours - b.hours);
+    if (tiers.some((t, i) => i > 0 && t.hours === tiers[i - 1].hours)) return { error: "Commit มีชั่วโมงขั้นต่ำซ้ำกัน" };
+    out.commit_tiers = tiers;
   }
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
   if (role === "owner") {
@@ -86,7 +93,7 @@ export async function GET() {
   if ("res" in r) return r.res;
   const db = createAdminClient();
   const { data: rows, error } = await db.from("staff")
-    .select("id, role, name, email, phone, hourly_rate, commit_hours, commit_rate, is_extra_admin, can_manage_mc, can_manage_admin").order("name");
+    .select("id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, can_manage_mc, can_manage_admin").order("name");
   if (error) return fail(error.message, 500);
   const staff = (rows ?? []).filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id);
 

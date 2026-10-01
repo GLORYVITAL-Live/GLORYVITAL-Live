@@ -1,9 +1,9 @@
 "use client";
 
-import { Sheet, SheetHead, btn } from "@/components/ui";
+import { useEffect, useState } from "react";
+import { Sheet, SheetHead, api, btn } from "@/components/ui";
 import { LATE_TIERS } from "@/lib/pay";
-
-const CANCEL_MIN_HOURS = 6;
+import { defaultRules } from "@/lib/rules";
 
 // กฎมาสายมาจาก src/lib/pay.ts (ตัวเดียวกับที่ใช้คิดเงิน)
 const TIERS = LATE_TIERS.map((t) => [
@@ -19,17 +19,17 @@ export function RulesDialog({ open, onClose, role, who }: {
   role: "mc" | "admin";
   who: string;
 }) {
-  const items: string[] = role === "mc"
-    ? [
-        `ยกเลิกคิวผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${CANCEL_MIN_HOURS} ชั่วโมง และต้องทักแชทแจ้งแอดมินทุกครั้ง`,
-        `ถ้าเหลือน้อยกว่า ${CANCEL_MIN_HOURS} ชั่วโมง ยกเลิกผ่านเว็บไม่ได้ ต้องติดต่อแอดมินโดยตรง`,
-      ]
-    : [
-        "รับได้สูงสุด 4 slot (8 ชม.) ต่อวัน แบ่งได้ไม่เกิน 2 ช่วง (ช่วง = slot ที่ต่อกัน) และเวลาห้ามทับกันแม้คนละแพลตฟอร์ม",
-        `Admin เสริม ยกเลิกคิวผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${CANCEL_MIN_HOURS} ชั่วโมง (ใน "ตารางของฉัน") และต้องทักแชทแจ้งแอดมินทุกครั้ง`,
-        `ถ้าเหลือน้อยกว่า ${CANCEL_MIN_HOURS} ชั่วโมง หรือเป็น Admin ประจำ ต้องติดต่อทีมงานโดยตรง`,
-      ];
-  items.push("ปฏิทิน Google จะแจ้งเตือนก่อนไลฟ์ 1 วัน และก่อนไลฟ์ 10 นาที (ตั้งค่าการแจ้งเตือนในปฏิทินของตัวเองตามที่ทีมงานแนะนำ)");
+  // ส่วน "อื่นๆ" Owner แก้ได้ผ่านเว็บ (ระหว่างโหลดแสดงข้อความเริ่มต้น)
+  const [loaded, setLoaded] = useState<{ role: string; items: string[] } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    api<{ items: string[] }>(`/api/rules?role=${role}`)
+      .then((res) => { if (alive && res.ok) setLoaded({ role, items: res.items }); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [open, role]);
+  const items = loaded?.role === role ? loaded.items : defaultRules(role);
 
   return (
     <Sheet open={open} onClose={onClose} labelledBy="rulesTitle">

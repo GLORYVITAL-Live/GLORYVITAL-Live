@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { fmtDayLong, fmtWeekShort, parseKey, relLabel, todayKey } from "@/lib/format";
 import { Icon, IconBtn, Sheet, SheetHead, StateBox, Tag, api, btn, useToast } from "@/components/ui";
 import type { OwnerScope } from "@/lib/types";
@@ -264,20 +264,16 @@ function SideRow({ label, side, people, busy, onPerson, onStatus }: {
   return (
     <div className="mt-1.5 flex items-center gap-2">
       <span className="w-12 shrink-0 text-xs font-semibold text-muted">{label}</span>
-      <select
-        aria-label={`${label} ของ slot นี้`}
-        value={side.personId ?? ""}
+      <PersonPicker
+        label={label}
+        value={side.personId}
+        options={people.map((p) => ({
+          id: p.id,
+          text: `${label === "Mc" ? `Mc ${p.name}` : p.name}${p.extra ? " (เสริม)" : ""}${p.hasEmail ? "" : " · ไม่มีอีเมล"}`,
+        }))}
         disabled={busy}
-        onChange={(e) => onPerson(e.target.value ? Number(e.target.value) : null)}
-        className={selectCls}
-      >
-        <option value="">— ว่าง —</option>
-        {people.map((p) => (
-          <option key={p.id} value={p.id}>
-            {label === "Mc" ? `Mc ${p.name}` : p.name}{p.extra ? " (เสริม)" : ""}{p.hasEmail ? "" : " · ไม่มีอีเมล"}
-          </option>
-        ))}
-      </select>
+        onChange={onPerson}
+      />
       <select
         aria-label={`สถานะ ${label}`}
         value={side.status}
@@ -287,6 +283,116 @@ function SideRow({ label, side, people, busy, onPerson, onStatus }: {
       >
         {statuses.map((st) => <option key={st} value={st}>{st || "สถานะ —"}</option>)}
       </select>
+    </div>
+  );
+}
+
+/**
+ * เลือกคน: กดเปิดเป็น dropdown หรือพิมพ์ชื่อเพื่อกรองรายการ
+ * คีย์บอร์ด: ↑ ↓ เลื่อน / Enter เลือก / Esc ปิด
+ */
+function PersonPicker({ label, value, options, disabled, onChange }: {
+  label: string;
+  value: number | null;
+  options: { id: number; text: string }[];
+  disabled: boolean;
+  onChange: (personId: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hi, setHi] = useState(0);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const listId = useId();
+
+  const all = [{ id: null as number | null, text: "— ว่าง —" }, ...options];
+  const q = query.trim().toLowerCase();
+  const shown = q ? all.filter((o) => o.id !== null && o.text.toLowerCase().includes(q)) : all;
+  const current = all.find((o) => o.id === value)?.text ?? "— ว่าง —";
+
+  // คลิกนอกกล่อง = ปิด
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) { setOpen(false); setQuery(""); }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // ให้ตัวที่เลือกอยู่มองเห็นในรายการ
+  useEffect(() => {
+    if (open) listRef.current?.children[hi]?.scrollIntoView({ block: "nearest" });
+  }, [open, hi]);
+
+  function openList() {
+    setQuery("");
+    setHi(Math.max(0, all.findIndex((o) => o.id === value)));
+    setOpen(true);
+  }
+  function close() {
+    setOpen(false);
+    setQuery("");
+  }
+  function pick(o: { id: number | null }) {
+    close();
+    if (o.id !== value) onChange(o.id);
+  }
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, shown.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (shown[hi]) pick(shown[hi]); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  }
+
+  return (
+    <div ref={boxRef} className="relative min-w-0 flex-1">
+      {open ? (
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setHi(0); }}
+          onKeyDown={onKey}
+          placeholder={`พิมพ์ชื่อ ${label} เพื่อค้นหา...`}
+          aria-label={`ค้นหา ${label}`}
+          role="combobox"
+          aria-expanded
+          aria-controls={listId}
+          className={`${selectCls} w-full border-brand`}
+        />
+      ) : (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={openList}
+          aria-label={`${label} ของ slot นี้: ${current}`}
+          className={`${selectCls} flex w-full items-center justify-between gap-1 text-left`}
+        >
+          <span className="truncate">{current}</span>
+          <span aria-hidden className="shrink-0 text-xs text-muted">▾</span>
+        </button>
+      )}
+      {open ? (
+        <ul
+          ref={listRef}
+          id={listId}
+          role="listbox"
+          className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-line bg-surface py-1 shadow-card"
+        >
+          {shown.length ? shown.map((o, i) => (
+            <li
+              key={o.id ?? "none"}
+              role="option"
+              aria-selected={o.id === value}
+              onMouseDown={(e) => { e.preventDefault(); pick(o); }}
+              onMouseEnter={() => setHi(i)}
+              className={`cursor-pointer truncate px-3 py-1.5 text-sm ${i === hi ? "bg-brand-soft text-brand" : ""} ${o.id === value ? "font-semibold" : ""} ${o.id === null ? "text-muted" : ""}`}
+            >
+              {o.text}
+            </li>
+          )) : <li className="px-3 py-2 text-sm text-muted">ไม่พบชื่อ &quot;{query}&quot;</li>}
+        </ul>
+      ) : null}
     </div>
   );
 }

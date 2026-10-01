@@ -39,7 +39,8 @@ const TEXT = {
 
 type DialogState = "closed" | "confirm" | "busy" | "done";
 
-export function SlotBoard({ me, role }: { me: Me; role: "mc" | "admin" }) {
+/** preview = Owner เปิดดูหน้านี้ (ไม่ได้เป็น Mc / Admin เอง) เห็นเหมือนกันแต่เลือก/จองไม่ได้ */
+export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | "admin"; preview?: boolean }) {
   const toast = useToast();
   const t = TEXT[role];
   const [data, setData] = useState<SlotsResponse | null>(null);
@@ -175,6 +176,7 @@ export function SlotBoard({ me, role }: { me: Me; role: "mc" | "admin" }) {
   }
 
   function toggle(s: OpenSlot) {
+    if (preview) { toast("โหมดดูอย่างเดียว (เจ้าของ) จองแทนไม่ได้"); return; }
     if (selected.has(s.id)) {
       const next = new Map(selected);
       next.delete(s.id);
@@ -252,6 +254,15 @@ export function SlotBoard({ me, role }: { me: Me; role: "mc" | "admin" }) {
   return (
     <>
       {refreshing && data ? <div className="refresh-bar" /> : null}
+
+      {preview ? (
+        <div role="status" className="my-2 rounded-xl border border-line bg-surface px-3 py-2.5 text-sm">
+          👀 <strong>โหมดดูอย่างเดียว (เจ้าของ)</strong>
+          <span className="text-muted">
+            {" "}— เห็นหน้านี้แบบเดียวกับที่{role === "mc" ? " Mc " : " Admin เสริม "}เห็น แต่เลือกหรือจองแทนไม่ได้
+          </span>
+        </div>
+      ) : null}
 
       {data?.siteNotice ? (
         <div role="status" className="my-2 rounded-xl border border-warn-line bg-warn-bg px-3 py-2.5 text-sm font-medium text-warn-ink">

@@ -56,9 +56,9 @@ export type MyResponse = {
   items: MyItem[];
   /**
    * โปรไฟล์ของตัวเอง rate = ค่าจ้างต่อชั่วโมงปกติ (0 = ยังไม่ได้ตั้ง)
-   * commitHours / commitRate = จองครบกี่ชม. ในเดือน ทุกชั่วโมงเปลี่ยนเป็นราคานี้ (null = ไม่มี Commit)
+   * commitTiers = เทียร์ Commit (ว่าง = ไม่มี) จองถึงเทียร์ไหน ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
    */
-  profile: { name: string; email: string; phone: string; rate: number; commitHours: number | null; commitRate: number | null };
+  profile: { name: string; email: string; phone: string; rate: number; commitTiers: CommitTier[] };
 };
 
 export type OwnerDetail = {
@@ -79,9 +79,11 @@ export type OwnerDetail = {
 /** paidHours = ชั่วโมงที่ได้เงินหลังหักมาสาย (ยอดเงิน = paidHours x ค่าจ้าง/ชม.) lateSlots = จำนวนคิวที่โดนหัก */
 export type OwnerPerson = {
   name: string; slots: number; hours: number; paidHours: number; lateSlots: number; days: number; cancelled: number;
-  /** เงื่อนไข Commit (null = ไม่มี) reached = เดือนนี้จองครบแล้ว ใช้ราคา rate แทน baseRate */
-  commit: { hours: number; rate: number; baseRate: number; reached: boolean } | null;
+  /** Commit แบบเทียร์ (null = ไม่มี) tier = เทียร์ที่เดือนนี้จองถึง (null = ยังไม่ถึงเทียร์แรก ใช้ baseRate) */
+  commit: { tiers: CommitTier[]; baseRate: number; tier: CommitTier | null; next: CommitTier | null } | null;
 };
+
+export type CommitTier = { hours: number; rate: number };
 
 export type OwnerSummary = {
   ok: true;

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
-import { lateCut, monthRate, paidHours } from "@/lib/pay";
+import { lateCut, monthRate, paidHours, tiersLabel } from "@/lib/pay";
 import { Icon, IconBtn, MonthNav, Sheet, SheetHead, Stats, Tag, api, btn, useToast } from "@/components/ui";
 
 /** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + ยกเลิกคิว */
@@ -47,9 +47,10 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
 
   // ค่าจ้าง = ชั่วโมงที่ได้เงิน (หักมาสายแล้ว) x ค่าจ้างต่อชั่วโมง (สูตรเดียวกับหน้าสรุปของเจ้าของ) ไม่นับคิวที่ยกเลิก
   const profile = data?.profile;
-  // เงื่อนไข Commit: จองครบตามชั่วโมงในเดือนนี้ -> ทุกชั่วโมงของเดือนคิดราคา Commit
-  const commit = monthRate(profile?.rate ?? 0, profile?.commitHours, profile?.commitRate, hours);
+  // Commit แบบเทียร์: จองในเดือนนี้ถึงเทียร์ไหน -> ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
+  const commit = monthRate(profile?.rate ?? 0, profile?.commitTiers, hours);
   const rate = commit.rate;
+  const hoursText = (h: number) => (Number.isInteger(h) ? String(h) : h.toFixed(1));
   const paidOf = (list: MyItem[]) => list.reduce((a, i) => a + paidHours(i.hours, i.lateMinutes), 0);
   const total = Math.round(paidOf(active) * rate);
   const earned = Math.round(paidOf(active.filter((i) => i.endMs <= now)) * rate);
@@ -76,8 +77,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
             ค่าจ้าง
             <span className="block text-sm font-semibold text-ink">{profile ? (rate ? `${money(rate)} บาท/ชม.` : "ยังไม่ได้ตั้ง") : "–"}</span>
             {commit.hasCommit ? (
-              <span className={`block text-[11px] ${commit.reached ? "text-ok" : ""}`}>
-                {commit.reached ? `ครบ Commit ${profile!.commitHours} ชม. ✓` : `Commit ${profile!.commitHours} ชม. → ${money(profile!.commitRate!)}`}
+              <span className={`block text-[11px] ${commit.tier ? "text-ok" : ""}`}>
+                {commit.tier ? `Commit ${commit.tier.hours}+ ชม. ✓` : "มี Commit"}
               </span>
             ) : null}
           </span>
@@ -102,9 +103,11 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
               ) : null}
               {commit.hasCommit ? (
                 <div className="mt-1 text-xs text-muted tabular-nums">
-                  {commit.reached
-                    ? `จองครบ Commit ${profile.commitHours} ชม. แล้ว ทุกชั่วโมงเดือนนี้คิด ${money(profile.commitRate!)} บาท/ชม. (ปกติ ${money(profile.rate)})`
-                    : `Commit ${profile.commitHours} ชม.: จองแล้ว ${Number.isInteger(hours) ? hours : hours.toFixed(1)} ชม. ถ้าครบ ทุกชั่วโมงจะคิด ${money(profile.commitRate!)} บาท/ชม.`}
+                  {commit.tier
+                    ? `จองเดือนนี้ ${hoursText(hours)} ชม. ถึงเทียร์ ${commit.tier.hours}+ ชม. ทุกชั่วโมงคิด ${money(commit.tier.rate)} บาท/ชม.`
+                    : `จองเดือนนี้ ${hoursText(hours)} ชม. ยังไม่ถึงเทียร์แรก คิดราคาปกติ ${money(profile.rate)} บาท/ชม.`}
+                  {commit.next ? ` · อีก ${hoursText(commit.next.hours - hours)} ชม. ถึงเทียร์ ${commit.next.hours}+ (${money(commit.next.rate)} บาท/ชม.)` : ""}
+                  <span className="mt-0.5 block text-[11px]">Commit: {tiersLabel(profile.rate, commit.tiers)}</span>
                 </div>
               ) : null}
             </div>

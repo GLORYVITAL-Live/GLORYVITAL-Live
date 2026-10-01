@@ -15,15 +15,46 @@ export function lateCut(minutes: number | null | undefined) {
   return LATE_TIERS.find((t) => minutes <= t.max)!.cut;
 }
 
+/** เทียร์ Commit: จองครบ hours ชม./เดือนขึ้นไป -> ทุกชั่วโมงของเดือนคิด rate บาท/ชม. */
+export type CommitTier = { hours: number; rate: number };
+
+/** เทียร์ที่ใช้ได้ เรียงตามชั่วโมงน้อยไปมาก (ข้อมูลผิดรูปแบบถูกตัดทิ้ง) */
+export function cleanTiers(v: unknown): CommitTier[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((t) => ({ hours: Number(t?.hours), rate: Number(t?.rate) }))
+    .filter((t) => Number.isFinite(t.hours) && t.hours > 0 && Number.isFinite(t.rate) && t.rate > 0)
+    .sort((a, b) => a.hours - b.hours);
+}
+
 /**
- * ค่าจ้างต่อชั่วโมงของเดือน (เงื่อนไข Commit รายคน)
- *   ชั่วโมงที่จองในเดือน (ไม่นับคิวที่ยกเลิก) >= commitHours -> ทุกชั่วโมงของเดือนคิด commitRate
- *   ไม่มี Commit / ยังไม่ครบ -> baseRate
+ * ค่าจ้างต่อชั่วโมงของเดือน (Commit แบบเทียร์รายคน)
+ *   ชั่วโมงที่จองในเดือน (ไม่นับคิวที่ยกเลิก) ถึงเทียร์สูงสุดเท่าไร -> ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
+ *   ยังไม่ถึงเทียร์แรก / ไม่มี Commit -> baseRate
+ *   next = เทียร์ถัดไปที่ยังไม่ถึง (ใช้บอกว่าอีกกี่ชั่วโมง)
  */
-export function monthRate(baseRate: number, commitHours: number | null | undefined, commitRate: number | null | undefined, monthHours: number) {
-  const hasCommit = !!commitHours && commitHours > 0 && commitRate != null && commitRate > 0;
-  const reached = hasCommit && monthHours >= commitHours!;
-  return { rate: reached ? commitRate! : baseRate, hasCommit, reached };
+export function monthRate(baseRate: number, tiers: CommitTier[] | null | undefined, monthHours: number) {
+  const list = cleanTiers(tiers);
+  const reached = list.filter((t) => monthHours >= t.hours);
+  const tier = reached[reached.length - 1] ?? null;
+  return {
+    rate: tier ? tier.rate : baseRate,
+    hasCommit: list.length > 0,
+    tier,
+    next: list.find((t) => monthHours < t.hours) ?? null,
+    tiers: list,
+  };
+}
+
+/** ข้อความอธิบายเทียร์ เช่น "ต่ำกว่า 10 ชม. 1,000 / 10+ ชม. 950 / 21+ ชม. 900" */
+export function tiersLabel(baseRate: number, tiers: CommitTier[]) {
+  const fmt = (n: number) => Math.round(n).toLocaleString("th-TH");
+  const list = cleanTiers(tiers);
+  if (!list.length) return "";
+  return [
+    baseRate ? `ต่ำกว่า ${list[0].hours} ชม. ${fmt(baseRate)}` : "",
+    ...list.map((t) => `${t.hours}+ ชม. ${fmt(t.rate)}`),
+  ].filter(Boolean).join(" / ");
 }
 
 /** ชั่วโมงที่ได้เงิน = ชั่วโมง x (1 - ส่วนที่หัก) */

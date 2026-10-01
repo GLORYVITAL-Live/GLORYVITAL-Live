@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import type { OwnerPerson, OwnerSummary } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
-import { lateCut } from "@/lib/pay";
+import { lateCut, tiersLabel } from "@/lib/pay";
 import { MonthNav, StateBox, Stats, api, btn } from "@/components/ui";
 
 type Type = "Mc" | "Admin";
@@ -59,7 +59,7 @@ function downloadSummary(data: OwnerSummary) {
   for (const [type, people] of groups(data)) for (const r of people) {
     const rate = rateOf(data, type, r.name);
     const commit = r.commit
-      ? `${r.commit.hours} ชม. -> ${r.commit.rate} (${r.commit.reached ? "ครบ" : `ไม่ครบ ปกติ ${r.commit.baseRate}`})`
+      ? `${tiersLabel(r.commit.baseRate, r.commit.tiers)} (${r.commit.tier ? `ถึง ${r.commit.tier.hours}+ ชม.` : "ยังไม่ถึงเทียร์แรก"})`
       : "";
     rows.push([type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : ""]);
   }
@@ -241,10 +241,12 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                     {r.name}
                     {r.commit ? (
                       <span
-                        title={`Commit ${num(r.commit.hours)} ชม./เดือน: ครบแล้วทุกชั่วโมงคิด ${money(r.commit.rate)} บาท (ปกติ ${money(r.commit.baseRate)})`}
-                        className={`ml-1.5 rounded-full px-2 py-0.5 text-[11px] whitespace-nowrap ${r.commit.reached ? "bg-ok/15 text-ok" : "bg-bg text-muted"}`}
+                        title={`Commit: ${tiersLabel(r.commit.baseRate, r.commit.tiers)} (ทุกชั่วโมงของเดือนคิดราคาเทียร์ที่จองถึง)`}
+                        className={`ml-1.5 rounded-full px-2 py-0.5 text-[11px] whitespace-nowrap ${r.commit.tier ? "bg-ok/15 text-ok" : "bg-bg text-muted"}`}
                       >
-                        Commit {num(r.commit.hours)} ชม. {r.commit.reached ? `✓ ${money(r.commit.rate)}/ชม.` : `(${num(r.hours)}/${num(r.commit.hours)})`}
+                        {r.commit.tier
+                          ? `Commit ${num(r.commit.tier.hours)}+ ชม. ✓ ${money(r.commit.tier.rate)}/ชม.`
+                          : `Commit ยังไม่ถึง ${num(r.commit.tiers[0].hours)} ชม. (${num(r.hours)})`}
                       </span>
                     ) : null}
                   </td>
