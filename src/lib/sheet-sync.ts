@@ -605,6 +605,10 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     const db = createAdminClient();
     const table = TABLE_OF[tab];
     const c = COLS[tab];
+    // งานเขียนชีตที่มีอยู่ก่อนเริ่ม (งานที่เกิดหลังจากนี้จากการอัปเดตของเราเอง = เสียงสะท้อน ต้องยกเลิก ดูท้ายฟังก์ชัน)
+    const { data: lastJob } = await db.from("sheet_jobs").select("id").order("id", { ascending: false }).limit(1).maybeSingle();
+    const jobsBefore = Number(lastJob?.id ?? 0);
+    const touched: number[] = []; // slot ที่อัปเดต/สร้างจากชีตรอบนี้
     const all = await readTab(tab);
     const targets = (rowNumbers ?? all.map((_, i) => i + 1))
       .map((r) => ({ r, p: parseRow(tab, all[r - 1] ?? []) }))
@@ -689,6 +693,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         const { error } = await db.from(table).update(row).eq("id", p.id);
         if (error) throw error;
         calendar.push({ slot_table: table, slot_id: p.id });
+        touched.push(p.id);
         updated++;
         if (rowNumbers) await mirrorKeyChange(table, s, row);
       } else {
@@ -712,6 +717,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
           if (rowNumbers) paired += await mirrorNewSlot(table, p);
         }
         present.ids.add(id);
+        touched.push(id);
         idWrites.push({ range: `'${TABS[tab]}'!${colLetter(c.id)}${r}`, values: [[id]] });
         // slot เดิมอาจมีคนอยู่แล้ว (มี event ในปฏิทิน) -> sync ปฏิทินเสมอ
         if (p.person || unplaced) calendar.push({ slot_table: table, slot_id: id });
@@ -725,6 +731,14 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
       });
     }
     if (calendar.length) await db.from("calendar_jobs").insert(calendar);
+
+    // ยกเลิกงาน "เขียนชีตกลับ" ที่เกิดจากการอัปเดตของเราเอง: ค่ามาจากชีตอยู่แล้ว ถ้าปล่อยไว้
+    // แล้วผู้ใช้แก้ช่องเดิมซ้ำภายในไม่กี่วินาที งานนี้จะเขียนค่าเก่าทับค่าที่เพิ่งแก้ (เช่น ลบชื่อแล้วชื่อเด้งกลับ)
+    // งานของฝั่งเว็บที่มีอยู่ก่อนเริ่มรอบนี้ (id <= jobsBefore) ไม่แตะ / slot คู่ในอีกแท็บไม่แตะ (คนละตาราง)
+    for (let i = 0; i < touched.length; i += 200) {
+      await db.from("sheet_jobs").update({ done_at: new Date().toISOString(), last_error: "ค่ามาจากชีต ไม่ต้องเขียนกลับ" })
+        .eq("slot_table", table).in("slot_id", touched.slice(i, i + 200)).gt("id", jobsBefore).is("done_at", null);
+    }
 
     // ซิงค์ทั้งหมด หรือมีแถวถูกล้างข้อมูลทั้งแถว (เลือกแถวแล้วกด Delete ซึ่งรหัสในคอลัมน์ V อาจหายไปด้วย)
     // = ตรวจหา slot ที่ไม่มีแถวในชีตแล้วลบออก

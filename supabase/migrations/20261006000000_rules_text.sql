@@ -5,3 +5,6 @@
 alter table public.settings
   add column if not exists rules_mc text,
   add column if not exists rules_admin text;
+
+-- ให้ API ของ Supabase เห็นคอลัมน์ใหม่ทันที (แก้ error "Could not find the 'rules_mc' column ... in the schema cache")
+notify pgrst, 'reload schema';

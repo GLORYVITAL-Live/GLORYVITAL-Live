@@ -10,3 +10,6 @@ alter table public.staff add column if not exists commit_tiers jsonb not null de
 update public.staff
    set commit_tiers = jsonb_build_array(jsonb_build_object('hours', commit_hours, 'rate', commit_rate))
  where commit_hours is not null and commit_rate is not null and commit_tiers = '[]'::jsonb;
+
+-- ให้ API ของ Supabase เห็นคอลัมน์ใหม่ทันที
+notify pgrst, 'reload schema';
