@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Me, OwnerScope, Role } from "@/lib/types";
+import { BookingWindowEditor } from "@/components/BookingWindow";
 import { MySchedule } from "@/components/MySchedule";
 import { OwnerView } from "@/components/OwnerView";
 import { RulesDialog } from "@/components/RulesDialog";
@@ -274,7 +275,7 @@ function OwnerTabs({ scope }: { scope: OwnerScope }) {
           บัญชีนี้มีสิทธิ์จัดการเฉพาะฝั่ง <strong>{scope.mc ? "Mc" : "Admin"}</strong>
         </p>
       ) : null}
-      {tab === "slots" ? <SlotManager scope={scope} />
+      {tab === "slots" ? <><BookingWindowEditor scope={scope} /><SlotManager scope={scope} /></>
         : tab === "staff" ? <StaffManager scope={scope} />
           : tab === "rules" ? <RulesEditor scope={scope} />
             : <OwnerView />}
