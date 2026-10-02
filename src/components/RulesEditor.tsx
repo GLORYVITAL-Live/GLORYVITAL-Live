@@ -27,7 +27,8 @@ export function RulesEditor({ scope }: { scope: OwnerScope }) {
           {BONUS_TIERS.map((t) => <li key={t.label}>{t.label}: ได้ {t.share}</li>)}
         </ul>
         <p className="mt-2 text-xs text-muted">
-          บันทึกในชีต: Mc = แท็บ Deal Mc คอลัมน์ L / Admin = แท็บ Admin เสริม คอลัมน์ M — สาย ใส่ &quot;15&quot; หรือ &quot;สาย 15&quot; · ชดเชย ใส่ &quot;+10&quot;
+          บันทึกในชีต: Mc = แท็บ Deal Mc คอลัมน์ L / Admin = แท็บ Admin เสริม คอลัมน์ M — สาย ใส่ &quot;15&quot; หรือ &quot;สาย 15&quot; ·
+          ชดเชย ใส่ &quot;ชดเชย 10&quot; (หรือ &quot;+10&quot; ถ้าตั้งคอลัมน์เป็นข้อความธรรมดาแล้ว ไม่งั้น Sheets จะตัด + ทิ้งกลายเป็นสาย)
         </p>
       </section>
     </div>

@@ -84,9 +84,13 @@ export function bonusPaidMinutes(minutes: number | null | undefined) {
 export const slotPaidHours = (hours: number, lateMinutes: number | null | undefined, bonusMinutes?: number | null) =>
   paidHours(hours, lateMinutes) + bonusPaidMinutes(bonusMinutes) / 60;
 
-/** อ่านนาทีที่ไลฟ์ชดเชยจากช่อง Remark: "+10" / "+10 นาที" / "ชดเชย +10" / "+1 ชม." (= 60) ไม่มี + = null */
+/**
+ * อ่านนาทีที่ไลฟ์ชดเชย: "ชดเชย 10" / "ชดเชย10นาที" / "+10" / "+10 นาที" / "+1 ชม." (= 60)
+ * หมายเหตุ: ถ้าช่องในชีตเป็นรูปแบบตัวเลข Google Sheets จะแปลง "+10" เป็นเลข 10 (กลายเป็น "สาย 10")
+ *   จึงรองรับคำว่า "ชดเชย" ด้วย หรือให้ตั้งคอลัมน์เป็น "ข้อความธรรมดา" ก่อนพิมพ์ "+10"
+ */
 export function parseBonusMinutes(v: unknown): number | null {
-  const m = String(v ?? "").match(/\+\s*(\d+(?:[.,]\d+)?)\s*(ชม|ชั่วโมง|hr|h)?/i);
+  const m = String(v ?? "").match(/(?:\+|ชดเชย|บวก)\s*\+?\s*(\d+(?:[.,]\d+)?)\s*(ชม|ชั่วโมง|hr|h)?/i);
   if (!m) return null;
   return Math.round(Number(m[1].replace(",", ".")) * (m[2] ? 60 : 1)) || null;
 }
