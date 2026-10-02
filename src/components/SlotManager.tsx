@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { fmtDayLong, fmtWeekShort, parseKey, relLabel, todayKey } from "@/lib/format";
-import { Icon, IconBtn, Sheet, SheetHead, StateBox, Tag, api, btn, useToast } from "@/components/ui";
+import { Icon, IconBtn, Sheet, SheetHead, StateBox, TAG_COLORS, Tag, api, btn, useLocal, useToast, writeLocal } from "@/components/ui";
 import type { OwnerScope } from "@/lib/types";
 
 type Side = {
@@ -18,6 +18,7 @@ type DayData = { date: string; slots: Slot[]; staff: { mc: Person[]; admin: Pers
 
 const STATUSES = ["", "เรียบร้อย", "แคน"];
 const WEEKDAYS = ["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"];
+const HIDE_PLATFORMS_KEY = "glory_slot_hide_platforms";
 
 const addDays = (k: string, n: number) => new Date(parseKey(k).getTime() + n * 86400_000).toISOString().slice(0, 10);
 
@@ -114,10 +115,20 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
     return idx;
   }, [day]);
 
+  // กรองแพลตฟอร์ม: จำแพลตฟอร์มที่ติ๊กออกไว้ในเครื่อง (ใช้กับทุกวัน)
+  const hiddenRaw = useLocal(HIDE_PLATFORMS_KEY);
+  const hidden = useMemo<string[]>(() => {
+    try { const v = JSON.parse(hiddenRaw ?? "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+  }, [hiddenRaw]);
+  const dayPlatforms = day ? [...new Set(day.slots.map((s) => s.platform))] : [];
+  const shown = day ? day.slots.filter((s) => !hidden.includes(s.platform)) : [];
+  const togglePlatform = (p: string) =>
+    writeLocal(HIDE_PLATFORMS_KEY, JSON.stringify(hidden.includes(p) ? hidden.filter((x) => x !== p) : [...hidden, p]));
+
   const counts = day ? {
-    total: day.slots.length,
-    mcOpen: day.slots.filter((s) => s.mc && !s.mc.personId).length,
-    adminOpen: day.slots.filter((s) => s.admin?.extra && !s.admin.personId).length,
+    total: shown.length,
+    mcOpen: shown.filter((s) => s.mc && !s.mc.personId).length,
+    adminOpen: shown.filter((s) => s.admin?.extra && !s.admin.personId).length,
   } : null;
 
   return (
@@ -154,6 +165,21 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
       <h2 className="mt-3 flex flex-wrap items-center gap-2 font-bold">
         {fmtDayLong.format(parseKey(date))}
         {relLabel(date) ? <span className="rounded-full bg-brand px-2 py-0.5 text-xs text-brand-ink">{relLabel(date)}</span> : null}
+        {dayPlatforms.length > 1 ? (
+          <span role="group" aria-label="กรองแพลตฟอร์ม" className="flex flex-wrap items-center gap-1.5 font-normal">
+            {dayPlatforms.map((p) => (
+              <label
+                key={p}
+                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                  hidden.includes(p) ? "bg-bg text-muted line-through" : TAG_COLORS[platformIndex[p] ?? 0]
+                }`}
+              >
+                <input type="checkbox" checked={!hidden.includes(p)} onChange={() => togglePlatform(p)} className="size-3.5 accent-brand" />
+                {p}
+              </label>
+            ))}
+          </span>
+        ) : null}
         {counts ? (
           <span className="ml-auto text-xs font-medium text-muted">
             {[`${counts.total} slot`, scope.mc ? `Mc ว่าง ${counts.mcOpen}` : "", scope.admin ? `รอ Admin เสริม ${counts.adminOpen}` : ""]
@@ -172,9 +198,11 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
         <div className="my-4 h-40 animate-pulse rounded-2xl bg-line/70" />
       ) : !day.slots.length ? (
         <StateBox title="วันนี้ยังไม่มี slot">กด &quot;+ เพิ่ม slot&quot; เพื่อสร้าง slot ใหม่</StateBox>
+      ) : !shown.length ? (
+        <StateBox title="ไม่มี slot ของแพลตฟอร์มที่ติ๊กไว้">ติ๊กแพลตฟอร์มด้านบนเพื่อแสดง slot</StateBox>
       ) : (
         <div className="mt-2 space-y-2">
-          {day.slots.map((s) => (
+          {shown.map((s) => (
             <SlotRow
               key={s.key}
               slot={s}
