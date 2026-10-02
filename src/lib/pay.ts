@@ -46,14 +46,31 @@ export function monthRate(baseRate: number, tiers: CommitTier[] | null | undefin
   };
 }
 
-/** ข้อความอธิบายเทียร์ เช่น "ต่ำกว่า 10 ชม. 1,000 / 10+ ชม. 950 / 21+ ชม. 900" */
+/**
+ * อ่านชั่วโมงเริ่มของขั้น Commit จากช่องที่พิมพ์: ใช้เลขตัวแรก
+ *   "10" / "10-20" / "10–20" / "10ถึง20" / "10 ถึง 20 ชม." -> 10, "41+" / "41 ขึ้นไป" -> 41
+ * (จุดจบของช่วงไม่ต้องเก็บ เพราะขั้นถัดไปเป็นตัวกำหนด)
+ */
+export function parseTierHours(v: unknown): number | null {
+  const m = String(v ?? "").replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : null;
+}
+
+/** ช่วงชั่วโมงของขั้นที่ i เช่น "10–20 ชม." (ขั้นสุดท้าย "41 ชม. ขึ้นไป") */
+export function tierRangeLabel(list: CommitTier[], i: number) {
+  const t = list[i], next = list[i + 1];
+  if (!next) return `${t.hours} ชม. ขึ้นไป`;
+  return Number.isInteger(next.hours) && next.hours - 1 > t.hours ? `${t.hours}–${next.hours - 1} ชม.` : `${t.hours} ชม.+`;
+}
+
+/** ข้อความอธิบายเทียร์ เช่น "ต่ำกว่า 10 ชม. 1,000 / 10–20 ชม. 950 / 21–40 ชม. 900 / 41 ชม. ขึ้นไป 850" */
 export function tiersLabel(baseRate: number, tiers: CommitTier[]) {
   const fmt = (n: number) => Math.round(n).toLocaleString("th-TH");
   const list = cleanTiers(tiers);
   if (!list.length) return "";
   return [
     baseRate ? `ต่ำกว่า ${list[0].hours} ชม. ${fmt(baseRate)}` : "",
-    ...list.map((t) => `${t.hours}+ ชม. ${fmt(t.rate)}`),
+    ...list.map((t, i) => `${tierRangeLabel(list, i)} ${fmt(t.rate)}`),
   ].filter(Boolean).join(" / ");
 }
 

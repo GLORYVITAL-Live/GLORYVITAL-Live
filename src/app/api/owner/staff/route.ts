@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { fail, ok, requireOwner as requireOwnerScope } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
+import { parseTierHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import { processSyncJobs } from "@/lib/sync";
 import type { Me } from "@/lib/types";
@@ -63,10 +64,13 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     };
     const tiers: { hours: number; rate: number }[] = [];
     for (const t of raw.slice(0, 10) as { hours?: unknown; rate?: unknown }[]) {
-      const hours = num(t?.hours), rate = num(t?.rate);
+      // ชั่วโมงพิมพ์เป็นช่วงได้ เช่น "10-20" / "10ถึง20" ใช้เลขตัวแรกเป็นจุดเริ่มของขั้น
+      const hoursText = String(t?.hours ?? "").trim();
+      const hours = hoursText ? parseTierHours(hoursText) ?? NaN : null;
+      const rate = num(t?.rate);
       if (hours === null && rate === null) continue;
       if (hours === null || rate === null) return { error: "Commit แต่ละขั้นต้องกรอกทั้งจำนวนชั่วโมงและค่าจ้าง" };
-      if (!Number.isFinite(hours) || hours <= 0) return { error: "ชั่วโมง Commit ต้องเป็นตัวเลขมากกว่า 0 (ใส่แค่ชั่วโมงขั้นต่ำ เช่น 10 ไม่ใช่ 10-20)" };
+      if (!Number.isFinite(hours) || hours <= 0) return { error: "ชั่วโมง Commit ต้องมีตัวเลขมากกว่า 0 เช่น 10 หรือ 10-20" };
       if (!Number.isFinite(rate) || rate <= 0) return { error: "ค่าจ้าง Commit ต้องเป็นตัวเลขมากกว่า 0" };
       tiers.push({ hours, rate });
     }
