@@ -47,6 +47,17 @@ const isNotFound = (err: unknown) => {
   return code === 404 || code === 410;
 };
 
+/** ปฏิทินของพนักงานไม่ได้แชร์ให้บัญชีระบบแบบ "ทำการเปลี่ยนแปลงกิจกรรม" (ลองซ้ำก็ไม่สำเร็จ) */
+const isNoAccess = (err: unknown) =>
+  (err as { code?: number })?.code === 403 || /writer access|forbidden/i.test(String((err as Error)?.message ?? ""));
+
+/** ระบบเขียนปฏิทินของอีเมลนี้ไม่ได้ (ให้เจ้าของปฏิทินแชร์สิทธิ์แก้ไขให้บัญชีระบบ) */
+class CalendarAccessError extends Error {
+  constructor(public email: string) {
+    super(`ไม่มีสิทธิ์เขียนปฏิทินของ ${email} (ให้แชร์ปฏิทินแบบ "ทำการเปลี่ยนแปลงกิจกรรม" ให้บัญชีระบบ)`);
+  }
+}
+
 async function loadSlot(table: Table, id: number) {
   const col = table === "mc_slots" ? "mc_id" : "admin_id";
   const { data, error } = await createAdminClient()
@@ -156,16 +167,35 @@ export async function deleteCalendarEvent(email: string, eventId: string) {
   }
 }
 
-/** sync slot นี้และ slot คู่ของอีกฝั่ง คืนรายการ slot ที่ sync แล้ว ("ตาราง|id") */
-async function syncPair(cal: calendar_v3.Calendar, table: Table, id: number) {
+/** ปฏิทินที่ slot นี้เขียน (คนปัจจุบัน หรือปฏิทินเดิมที่มี event ค้าง) */
+const calendarOf = (s: Slot) => (active(s) ? s.person?.email : null) ?? s.calendar_email ?? "";
+
+/**
+ * sync slot นี้และ slot คู่ของอีกฝั่ง คืนรายการ slot ที่ sync แล้ว ("ตาราง|id")
+ * ปฏิทินของ slot นี้ไม่มีสิทธิ์เขียน -> CalendarAccessError
+ * ปฏิทินของ slot คู่ไม่มีสิทธิ์เขียน -> จดอีเมลไว้ใน noAccess แล้วทำต่อ (ไม่ให้ขวางคิวของคนนี้)
+ */
+async function syncPair(cal: calendar_v3.Calendar, table: Table, id: number, noAccess: Set<string>) {
   const s = await loadSlot(table, id);
   if (!s) return [`${table}|${id}`];
   const otherTable: Table = table === "mc_slots" ? "admin_slots" : "mc_slots";
   const partners = await loadPartners(otherTable, s);
   const partner = partners.find(active) ?? partners[0];
 
-  await syncOne(cal, table, s, partner);
-  for (const p of partners) await syncOne(cal, otherTable, p, active(s) ? s : undefined);
+  try {
+    await syncOne(cal, table, s, partner);
+  } catch (err) {
+    if (isNoAccess(err)) throw new CalendarAccessError(calendarOf(s));
+    throw err;
+  }
+  for (const p of partners) {
+    try {
+      await syncOne(cal, otherTable, p, active(s) ? s : undefined);
+    } catch (err) {
+      if (!isNoAccess(err)) throw err;
+      if (calendarOf(p)) noAccess.add(calendarOf(p));
+    }
+  }
   return [`${table}|${id}`, ...partners.map((p) => `${otherTable}|${p.id}`)];
 }
 
@@ -210,13 +240,14 @@ export async function enqueueUpcomingCalendar() {
  */
 export async function processCalendarJobs(limit = 30, budgetMs = 40_000) {
   const cal = calendarApi();
-  if (!cal) return { done: 0, failed: 0, skipped: "ยังไม่ได้เชื่อมบัญชี Google (bun run google:auth)" };
+  if (!cal) return { done: 0, failed: 0, noAccess: [] as string[], skipped: "ยังไม่ได้เชื่อมบัญชี Google (bun run google:auth)" };
 
   const started = Date.now();
   const result = await withSyncLock("calendar", async () => {
     const db = createAdminClient();
     let done = 0, failed = 0;
     const seen = new Set<string>(); // slot ที่ sync แล้วในรอบนี้ (รวม slot คู่) ไม่ต้องทำซ้ำ
+    const noAccess = new Set<string>(); // ปฏิทินที่ไม่ได้แชร์สิทธิ์แก้ไขให้ระบบ
     for (let round = 0; round < 50 && Date.now() - started < budgetMs; round++) {
       const { data: jobs, error } = await db
         .from("calendar_jobs")
@@ -232,7 +263,7 @@ export async function processCalendarJobs(limit = 30, budgetMs = 40_000) {
         if (Date.now() - started > budgetMs) break;
         const k = `${job.slot_table}|${job.slot_id}`;
         try {
-          if (!seen.has(k)) for (const x of await syncPair(cal, job.slot_table as Table, job.slot_id)) seen.add(x);
+          if (!seen.has(k)) for (const x of await syncPair(cal, job.slot_table as Table, job.slot_id, noAccess)) seen.add(x);
           seen.add(k);
           await db.from("calendar_jobs").update({ done_at: new Date().toISOString(), last_error: null }).eq("id", job.id);
           done++;
@@ -240,13 +271,20 @@ export async function processCalendarJobs(limit = 30, budgetMs = 40_000) {
           failed++;
           const msg = String((err as Error)?.message ?? err);
           console.warn(`ลงปฏิทินไม่สำเร็จ (${k}):`, msg);
-          await db.from("calendar_jobs").update({ attempts: job.attempts + 1, last_error: msg.slice(0, 500) }).eq("id", job.id);
+          if (err instanceof CalendarAccessError) {
+            // ไม่มีสิทธิ์ ลองซ้ำก็ไม่สำเร็จ: ปิดงานไว้พร้อมเหตุผล (แชร์ปฏิทินแล้วกด "ซิงค์ปฏิทินใหม่ทั้งหมด" อีกครั้ง)
+            if (err.email) noAccess.add(err.email);
+            seen.add(k);
+            await db.from("calendar_jobs").update({ done_at: new Date().toISOString(), last_error: msg.slice(0, 500) }).eq("id", job.id);
+          } else {
+            await db.from("calendar_jobs").update({ attempts: job.attempts + 1, last_error: msg.slice(0, 500) }).eq("id", job.id);
+          }
         }
       }
     }
-    return { done, failed };
+    return { done, failed, noAccess: [...noAccess].sort() };
   }, 20_000);
-  return result ?? { done: 0, failed: 0, skipped: "มีงานลงปฏิทินอื่นกำลังทำอยู่" };
+  return result ?? { done: 0, failed: 0, noAccess: [] as string[], skipped: "มีงานลงปฏิทินอื่นกำลังทำอยู่" };
 }
 
 // ---------- เก็บกวาด event ซ้ำ / ค้าง ----------

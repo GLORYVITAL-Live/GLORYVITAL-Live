@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     const queued = body?.start === true ? await enqueueUpcomingCalendar() : 0;
     const res = await processCalendarJobs(30, 40_000);
     const remaining = await pendingCalendarJobs();
-    return ok({ queued, done: res.done, failed: res.failed, busy: "skipped" in res, remaining });
+    return ok({ queued, done: res.done, failed: res.failed, noAccess: res.noAccess, busy: "skipped" in res, remaining });
   } catch (err) {
     return fail("ซิงค์ปฏิทินไม่สำเร็จ: " + String((err as Error)?.message ?? err), 500);
   }

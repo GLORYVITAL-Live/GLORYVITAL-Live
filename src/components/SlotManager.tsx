@@ -414,7 +414,8 @@ function PersonPicker({ label, value, options, disabled, onChange }: {
 
 // ---------- ซิงค์ปฏิทินใหม่ทั้งหมด ----------
 
-type ResyncStep = { queued: number; done: number; failed: number; busy: boolean; remaining: number };
+type ResyncStep = { queued: number; done: number; failed: number; noAccess: string[]; busy: boolean; remaining: number };
+const SYSTEM_CALENDAR_ACCOUNT = "kunraroj.d@glorythailand.com"; // บัญชีที่ระบบใช้ลงปฏิทินให้ทุกคน
 
 /** จดงานของทุกคิวตั้งแต่วันนี้ แล้วเรียกทำต่อเรื่อยๆ จนงานหมด (แต่ละครั้ง ~40 วินาที) */
 function CalendarResync({ onClose }: { onClose: () => void }) {
@@ -423,6 +424,7 @@ function CalendarResync({ onClose }: { onClose: () => void }) {
   const [done, setDone] = useState(0);
   const [failed, setFailed] = useState(0);
   const [remaining, setRemaining] = useState<number | null>(null);
+  const [noAccess, setNoAccess] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -439,6 +441,7 @@ function CalendarResync({ onClose }: { onClose: () => void }) {
           setDone((n) => n + r.done);
           setFailed((n) => n + r.failed);
           setRemaining(r.remaining);
+          if (r.noAccess?.length) setNoAccess((prev) => [...new Set([...prev, ...r.noAccess])].sort());
           if (r.remaining === 0) { setState("done"); return; }
           // มีงานปฏิทินอื่นถือล็อกอยู่ รอแล้วลองใหม่ (ไม่เกิน ~1 นาที)
           if (r.busy) {
@@ -474,10 +477,17 @@ function CalendarResync({ onClose }: { onClose: () => void }) {
           <span>ทำแล้ว {done} งาน{failed ? ` · ไม่สำเร็จ ${failed}` : ""}</span>
           <span>{remaining === null ? "กำลังเริ่ม..." : `เหลือ ${remaining} งาน`}</span>
         </div>
-        {failed ? (
-          <p className="mt-2 text-xs text-muted">
-            งานที่ไม่สำเร็จมักเกิดจากพนักงานยังไม่ได้แชร์ปฏิทินให้ระบบ ระบบจะลองใหม่เองอีกไม่เกิน 5 ครั้ง
-          </p>
+        {noAccess.length ? (
+          <div className="mt-3 rounded-xl border border-warn-line bg-warn-bg px-3 py-2 text-xs text-warn-ink">
+            <strong className="block text-sm">ปฏิทินที่ระบบยังเขียนไม่ได้ ({noAccess.length} คน)</strong>
+            ให้เจ้าของปฏิทินแชร์ปฏิทินให้ <b>{SYSTEM_CALENDAR_ACCOUNT}</b> แบบ &quot;ทำการเปลี่ยนแปลงกิจกรรม&quot;
+            แล้วกด &quot;ซิงค์ปฏิทินใหม่ทั้งหมด&quot; อีกครั้ง
+            <ul className="mt-1 max-h-32 list-disc overflow-y-auto pl-5">
+              {noAccess.map((e) => <li key={e}>{e}</li>)}
+            </ul>
+          </div>
+        ) : failed ? (
+          <p className="mt-2 text-xs text-muted">งานที่ไม่สำเร็จด้วยสาเหตุอื่น ระบบจะลองใหม่เองอีกไม่เกิน 5 ครั้ง</p>
         ) : null}
       </div>
       <div className="mt-4 flex justify-end">
