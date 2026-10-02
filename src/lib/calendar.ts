@@ -199,6 +199,20 @@ async function syncPair(cal: calendar_v3.Calendar, table: Table, id: number, noA
   return [`${table}|${id}`, ...partners.map((p) => `${otherTable}|${p.id}`)];
 }
 
+/**
+ * ปิดงานค้างของ slot ที่เพิ่ง sync ไปแล้ว (ยกเว้นงานที่กำลังทำ)
+ * เฉพาะงานที่มีอยู่ก่อนเริ่มชุดนี้ (id <= maxId) งานที่เข้ามาระหว่าง sync (เช่น มีคนจองพอดี) เก็บไว้ทำรอบถัดไป
+ */
+async function closeDuplicateJobs(keys: string[], exceptId: number, maxId: number) {
+  const db = createAdminClient();
+  for (const table of ["mc_slots", "admin_slots"] as const) {
+    const ids = keys.filter((k) => k.startsWith(`${table}|`)).map((k) => Number(k.split("|")[1]));
+    if (!ids.length) continue;
+    await db.from("calendar_jobs").update({ done_at: new Date().toISOString(), last_error: null })
+      .eq("slot_table", table).in("slot_id", ids).is("done_at", null).neq("id", exceptId).lte("id", maxId);
+  }
+}
+
 /** จำนวนงานลงปฏิทินที่ยังค้าง */
 export async function pendingCalendarJobs() {
   const { count, error } = await createAdminClient().from("calendar_jobs")
@@ -214,6 +228,17 @@ export async function pendingCalendarJobs() {
 export async function enqueueUpcomingCalendar() {
   const db = createAdminClient();
   const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+
+  // slot ที่มีงานค้างอยู่แล้ว ไม่ต้องจดซ้ำ (กดซิงค์หลายรอบ)
+  const pending = new Set<string>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from("calendar_jobs").select("slot_table, slot_id")
+      .is("done_at", null).lt("attempts", MAX_ATTEMPTS).order("id").range(from, from + 999);
+    if (error) throw error;
+    for (const j of data ?? []) pending.add(`${j.slot_table}|${j.slot_id}`);
+    if (!data || data.length < 1000) break;
+  }
+
   const jobs: { slot_table: Table; slot_id: number }[] = [];
   for (const table of ["mc_slots", "admin_slots"] as const) {
     const col = table === "mc_slots" ? "mc_id" : "admin_id";
@@ -221,7 +246,7 @@ export async function enqueueUpcomingCalendar() {
       const { data, error } = await db.from(table).select("id").gte("live_date", today)
         .or(`${col}.not.is.null,calendar_event_id.not.is.null`).order("id").range(from, from + 999);
       if (error) throw error;
-      for (const r of data ?? []) jobs.push({ slot_table: table, slot_id: r.id });
+      for (const r of data ?? []) if (!pending.has(`${table}|${r.id}`)) jobs.push({ slot_table: table, slot_id: r.id });
       if (!data || data.length < 1000) break;
     }
   }
@@ -258,12 +283,19 @@ export async function processCalendarJobs(limit = 30, budgetMs = 40_000) {
         .limit(limit);
       if (error) throw error;
       if (!jobs?.length) break;
+      const { data: last } = await db.from("calendar_jobs").select("id").order("id", { ascending: false }).limit(1).maybeSingle();
+      const maxId = Number(last?.id ?? 0);
 
       for (const job of jobs) {
         if (Date.now() - started > budgetMs) break;
         const k = `${job.slot_table}|${job.slot_id}`;
         try {
-          if (!seen.has(k)) for (const x of await syncPair(cal, job.slot_table as Table, job.slot_id, noAccess)) seen.add(x);
+          if (!seen.has(k)) {
+            const synced = await syncPair(cal, job.slot_table as Table, job.slot_id, noAccess);
+            for (const x of synced) seen.add(x);
+            // งานค้างอื่นของ slot เดียวกัน / slot คู่ที่เพิ่ง sync ไป = ซ้ำ ปิดทิ้งเลย (กดซิงค์หลายรอบ หรือคิวคู่ Mc-Admin)
+            await closeDuplicateJobs(synced, job.id, maxId);
+          }
           seen.add(k);
           await db.from("calendar_jobs").update({ done_at: new Date().toISOString(), last_error: null }).eq("id", job.id);
           done++;
