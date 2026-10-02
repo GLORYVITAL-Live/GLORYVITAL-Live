@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { StateBox, api, btn, useToast } from "@/components/ui";
-import { LATE_TIERS } from "@/lib/pay";
+import { BONUS_TIERS, LATE_TIERS } from "@/lib/pay";
 import type { OwnerScope } from "@/lib/types";
 
 type Rules = { items: string[]; custom: boolean; defaults: string[] };
@@ -17,11 +17,18 @@ export function RulesEditor({ scope }: { scope: OwnerScope }) {
       </p>
       {roles.map((r) => <RoleRules key={r} role={r} />)}
       <section className="rounded-xl border border-line bg-surface p-3 text-sm">
-        <h2 className="mb-1 font-bold">การมาสาย (แก้ที่นี่ไม่ได้)</h2>
-        <p className="mb-2 text-xs text-muted">ดึงจากกฎคิดเงินจริง ตัวเลขที่พนักงานเห็นจึงตรงกับเงินที่หักเสมอ ถ้าจะเปลี่ยนกฎหักเงินต้องแก้ในโค้ด (src/lib/pay.ts)</p>
+        <h2 className="mb-1 font-bold">การมาสาย / ไลฟ์ชดเชย (แก้ที่นี่ไม่ได้)</h2>
+        <p className="mb-2 text-xs text-muted">
+          ดึงจากกฎคิดเงินจริง ตัวเลขที่พนักงานเห็นจึงตรงกับเงินเสมอ (พนักงานแต่ละคนเห็นเป็นบาทตามค่าจ้างของตัวเอง)
+          ถ้าจะเปลี่ยนกฎต้องแก้ในโค้ด (src/lib/pay.ts)
+        </p>
         <ul className="list-disc space-y-0.5 pl-5 text-muted">
           {LATE_TIERS.map((t) => <li key={t.label}>{t.label}: {t.cut ? `หัก ${Math.round(t.cut * 100)}%` : "ไม่หัก"}</li>)}
+          {BONUS_TIERS.map((t) => <li key={t.label}>{t.label}: ได้ {t.share}</li>)}
         </ul>
+        <p className="mt-2 text-xs text-muted">
+          บันทึกในชีต: Mc = แท็บ Deal Mc คอลัมน์ L / Admin = แท็บ Admin เสริม คอลัมน์ M — สาย ใส่ &quot;15&quot; หรือ &quot;สาย 15&quot; · ชดเชย ใส่ &quot;+10&quot;
+        </p>
       </section>
     </div>
   );

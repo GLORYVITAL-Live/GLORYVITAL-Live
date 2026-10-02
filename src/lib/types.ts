@@ -43,6 +43,7 @@ export type MyItem = {
   status: string;
   cancelled: boolean;
   lateMinutes: number | null; // นาทีที่มาสาย (จากชีต) ใช้หักเงิน
+  bonusMinutes: number | null; // นาทีที่ไลฟ์ชดเชย ("+10" ในชีต) ได้เงินเพิ่ม
   pairName: string;
   pairPhone: string;
 };
@@ -74,11 +75,15 @@ export type OwnerDetail = {
   cancelled: boolean;
   pair: string;
   lateMinutes: number | null;
+  bonusMinutes: number | null;
 };
 
-/** paidHours = ชั่วโมงที่ได้เงินหลังหักมาสาย (ยอดเงิน = paidHours x ค่าจ้าง/ชม.) lateSlots = จำนวนคิวที่โดนหัก */
+/**
+ * paidHours = ชั่วโมงที่ได้เงิน (หักมาสาย + ไลฟ์ชดเชย) ยอดเงิน = paidHours x ค่าจ้าง/ชม.
+ * lateSlots = จำนวนคิวที่โดนหัก / bonusMinutes = นาทีไลฟ์ชดเชยรวม (ปัดแล้ว)
+ */
 export type OwnerPerson = {
-  name: string; slots: number; hours: number; paidHours: number; lateSlots: number; days: number; cancelled: number;
+  name: string; slots: number; hours: number; paidHours: number; lateSlots: number; bonusMinutes: number; days: number; cancelled: number;
   /** Commit แบบเทียร์ (null = ไม่มี) tier = เทียร์ที่เดือนนี้จองถึง (null = ยังไม่ถึงเทียร์แรก ใช้ baseRate) */
   commit: { tiers: CommitTier[]; baseRate: number; tier: CommitTier | null; next: CommitTier | null } | null;
 };

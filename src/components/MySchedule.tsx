@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
-import { lateCut, monthRate, paidHours, tiersLabel } from "@/lib/pay";
+import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPaidHours, tiersLabel } from "@/lib/pay";
 import { Icon, IconBtn, MonthNav, Sheet, SheetHead, Stats, Tag, api, btn, useToast } from "@/components/ui";
 
 /** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + ยกเลิกคิว */
@@ -51,10 +51,13 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
   const commit = monthRate(profile?.rate ?? 0, profile?.commitTiers, hours);
   const rate = commit.rate;
   const hoursText = (h: number) => (Number.isInteger(h) ? String(h) : h.toFixed(1));
-  const paidOf = (list: MyItem[]) => list.reduce((a, i) => a + paidHours(i.hours, i.lateMinutes), 0);
+  // ชั่วโมงที่ได้เงิน = หลังหักมาสาย + ไลฟ์ชดเชย (ปัดขึ้นทีละ 15 นาที)
+  const paidOf = (list: MyItem[]) => list.reduce((a, i) => a + slotPaidHours(i.hours, i.lateMinutes, i.bonusMinutes), 0);
   const total = Math.round(paidOf(active) * rate);
   const earned = Math.round(paidOf(active.filter((i) => i.endMs <= now)) * rate);
-  const lateCutMoney = Math.round(hours * rate) - total;
+  const lateCutMoney = Math.round(active.reduce((a, i) => a + i.hours - paidHours(i.hours, i.lateMinutes), 0) * rate);
+  const bonusMin = active.reduce((a, i) => a + bonusPaidMinutes(i.bonusMinutes), 0);
+  const bonusMoney = Math.round((bonusMin / 60) * rate);
 
   return (
     <>
@@ -100,6 +103,9 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
               </div>
               {lateCutMoney > 0 ? (
                 <div className="mt-1 text-xs font-semibold text-err tabular-nums">หักมาสายแล้ว {money(lateCutMoney)} บาท (ดูกฎการทำงาน)</div>
+              ) : null}
+              {bonusMoney > 0 ? (
+                <div className="mt-1 text-xs font-semibold text-ok tabular-nums">รวมไลฟ์ชดเชย {bonusMin} นาที +{money(bonusMoney)} บาท</div>
               ) : null}
               {commit.hasCommit ? (
                 <div className="mt-1 text-xs text-muted tabular-nums">
@@ -161,7 +167,12 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
                                   </span>
                                 ) : null}
                                 {fmtHours(i.hours)}
-                                {rate ? <span className="ml-1.5 font-semibold text-ink tabular-nums">{money(paidHours(i.hours, i.lateMinutes) * rate)} บาท</span> : null}
+                                {bonusPaidMinutes(i.bonusMinutes) > 0 ? (
+                                  <span className="mr-1.5 ml-1.5 rounded-full bg-ok/15 px-2 py-0.5 text-xs font-semibold text-ok">
+                                    ชดเชย +{i.bonusMinutes} นาที
+                                  </span>
+                                ) : null}
+                                {rate ? <span className="ml-1.5 font-semibold text-ink tabular-nums">{money(slotPaidHours(i.hours, i.lateMinutes, i.bonusMinutes) * rate)} บาท</span> : null}
                               </>}
                         </span>
                       </div>

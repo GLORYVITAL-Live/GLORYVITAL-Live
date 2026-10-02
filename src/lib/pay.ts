@@ -61,6 +61,37 @@ export function tiersLabel(baseRate: number, tiers: CommitTier[]) {
 export const paidHours = (hours: number, lateMinutes: number | null | undefined) => hours * (1 - lateCut(lateMinutes));
 
 /**
+ * ไลฟ์ชดเชย (ไลฟ์ต่อแทนคนถัดไปที่มาสาย) ใส่ "+นาที" เช่น "+10"
+ *   Mc = แท็บ Deal Mc คอลัมน์ L / Admin = แท็บ Admin เสริม คอลัมน์ M (ช่องเดียวกับเวลาสาย มี + นำหน้า = ชดเชย)
+ * จ่ายตามค่าจ้าง/ชม. ของเดือนนั้นแบบเทียร์ (ไม่โดนหักมาสาย / ไม่นับเป็นชั่วโมง Commit)
+ * เกิน 60 นาที = ชั่วโมงเต็ม + เศษคิดตามเทียร์เดียวกัน (เช่น 75 นาที = 1 ชม. + ¼ ชม.)
+ */
+export const BONUS_TIERS = [
+  { min: 5, max: 15, hours: 0.25, label: "ชดเชย 5 – 15 นาที", share: "¼ ชั่วโมง" },
+  { min: 16, max: 30, hours: 0.5, label: "ชดเชย 16 – 30 นาที", share: "½ ชั่วโมง" },
+  { min: 31, max: 60, hours: 1, label: "ชดเชย 31 นาที – 1 ชั่วโมง", share: "1 ชั่วโมงเต็ม" },
+] as const;
+
+/** นาทีที่ได้เงินจากไลฟ์ชดเชย (หลังคิดเทียร์) เช่น 10 -> 15, 20 -> 30, 45 -> 60, 75 -> 75, 3 -> 0 */
+export function bonusPaidMinutes(minutes: number | null | undefined) {
+  if (!minutes || minutes <= 0) return 0;
+  const full = Math.floor(minutes / 60), rest = minutes % 60;
+  const tier = BONUS_TIERS.find((t) => rest >= t.min && rest <= t.max);
+  return full * 60 + (tier ? tier.hours * 60 : 0);
+}
+
+/** ชั่วโมงที่ได้เงินของ slot = ชั่วโมงหลังหักมาสาย + ไลฟ์ชดเชย (คิดเทียร์แล้ว) */
+export const slotPaidHours = (hours: number, lateMinutes: number | null | undefined, bonusMinutes?: number | null) =>
+  paidHours(hours, lateMinutes) + bonusPaidMinutes(bonusMinutes) / 60;
+
+/** อ่านนาทีที่ไลฟ์ชดเชยจากช่อง Remark: "+10" / "+10 นาที" / "ชดเชย +10" / "+1 ชม." (= 60) ไม่มี + = null */
+export function parseBonusMinutes(v: unknown): number | null {
+  const m = String(v ?? "").match(/\+\s*(\d+(?:[.,]\d+)?)\s*(ชม|ชั่วโมง|hr|h)?/i);
+  if (!m) return null;
+  return Math.round(Number(m[1].replace(",", ".")) * (m[2] ? 60 : 1)) || null;
+}
+
+/**
  * อ่านจำนวนนาทีที่สายจากช่องในชีต
  *   ตัวเลขล้วน "12" / "12 นาที" / "สาย 12" / "สาย 12 นาที" / "มาช้า 12 นาที" / "สาย 1 ชม." (= 60 นาที)
  *   ข้อความอื่น (หมายเหตุทั่วไป) = null ไม่หักเงิน

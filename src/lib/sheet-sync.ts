@@ -31,7 +31,7 @@ import {
 type Table = "mc_slots" | "admin_slots";
 type DbSlot = {
   id: number; platform: string; live_date: string; start_time: string; end_time: string;
-  campaign?: string; confirmed: boolean | null; status: string; remark: string; late: number | null;
+  campaign?: string; confirmed: boolean | null; status: string; remark: string; late: number | null; bonus: number | null;
   personId: number | null; personName: string;
 };
 
@@ -47,8 +47,8 @@ const withSheetLock = <T>(fn: () => Promise<T>, waitMs = 25_000) => withSyncLock
 async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSlot>> {
   const db = createAdminClient();
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
-  const cols = `id, platform, live_date, start_time, end_time, ${table === "mc_slots" ? "campaign, " : ""}confirmed, status, remark, late_minutes, ${personCol}, person:staff!${personCol}(name)`;
-  type Raw = Omit<DbSlot, "personId" | "personName" | "late"> & Record<string, unknown> & { person: { name: string } | null };
+  const cols = `id, platform, live_date, start_time, end_time, ${table === "mc_slots" ? "campaign, " : ""}confirmed, status, remark, late_minutes, bonus_minutes, ${personCol}, person:staff!${personCol}(name)`;
+  type Raw = Omit<DbSlot, "personId" | "personName" | "late" | "bonus"> & Record<string, unknown> & { person: { name: string } | null };
   const out = new Map<number, DbSlot>();
   const add = (rows: Raw[]) => {
     for (const r of rows) {
@@ -56,6 +56,7 @@ async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSl
         id: r.id, platform: r.platform, live_date: r.live_date, start_time: hm(r.start_time), end_time: hm(r.end_time),
         campaign: r.campaign as string | undefined, confirmed: r.confirmed, status: r.status, remark: r.remark,
         late: (r.late_minutes as number | null) ?? null,
+        bonus: (r.bonus_minutes as number | null) ?? null,
         personId: (r[personCol] as number | null) ?? null, personName: r.person?.name ?? "",
       });
     }
@@ -575,8 +576,8 @@ export async function removeSlotsDeletedInSheet(tab: TabKey) {
 
 // ---------- ชีต -> เว็บ ----------
 
-type Field = "platform" | "date" | "start" | "end" | "campaign" | "person" | "confirm" | "status" | "remark" | "late";
-const FIELDS: Field[] = ["platform", "date", "start", "end", "campaign", "person", "confirm", "status", "remark", "late"];
+type Field = "platform" | "date" | "start" | "end" | "campaign" | "person" | "confirm" | "status" | "remark" | "late" | "bonus";
+const FIELDS: Field[] = ["platform", "date", "start", "end", "campaign", "person", "confirm", "status", "remark", "late", "bonus"];
 
 /**
  * อัปเดต DB ตามแถวในชีต
@@ -602,6 +603,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
       platform: c.platform, date: c.date, start: c.start, end: c.end,
       campaign: tab === "mc" ? COLS.mc.campaign : -1, person: c.person, confirm: c.confirm, status: c.status, remark: c.remark,
       late: c.late,
+      bonus: c.late, // ไลฟ์ชดเชย "+10" อยู่ช่องเดียวกับเวลาสาย (Mc = L / Admin = M)
     };
     const fields = FIELDS.filter((f) => colOf[f] >= 0 && (!cols || (colOf[f] + 1 >= cols[0] && colOf[f] + 1 <= cols[1])));
 
@@ -640,6 +642,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
       if (only.includes("status")) row.status = p.status;
       if (only.includes("remark")) row.remark = p.remark;
       if (only.includes("late")) row.late_minutes = p.late;
+      if (only.includes("bonus")) row.bonus_minutes = p.bonus;
       return row;
     };
     const differs = (s: DbSlot, row: Record<string, unknown>) => Object.entries(row).some(([k, v]) => {
@@ -647,6 +650,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         platform: s.platform, live_date: s.live_date, start_time: s.start_time, end_time: s.end_time,
         campaign: s.campaign ?? "", [personCol]: s.personId, confirmed: s.confirmed, status: s.status, remark: s.remark,
         late_minutes: s.late,
+        bonus_minutes: s.bonus,
       }[k];
       return (cur ?? null) !== (v ?? null);
     });

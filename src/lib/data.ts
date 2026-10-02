@@ -1,5 +1,5 @@
 import "server-only";
-import { cleanTiers, lateCut, monthRate, paidHours } from "@/lib/pay";
+import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary } from "@/lib/types";
 
@@ -30,9 +30,10 @@ type SlotRow = {
   status: string;
   is_cancelled: boolean;
   late_minutes: number | null;
+  bonus_minutes: number | null;
 };
 
-const SLOT_COLS = "id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed, status, is_cancelled, late_minutes";
+const SLOT_COLS = "id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed, status, is_cancelled, late_minutes, bonus_minutes";
 
 /** PostgREST คืนได้ครั้งละ 1000 แถว อ่านทีละหน้าจนหมด */
 async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>) {
@@ -158,6 +159,7 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
       status: r.status,
       cancelled: r.is_cancelled,
       lateMinutes: r.late_minutes ?? null,
+      bonusMinutes: r.bonus_minutes ?? null,
       pairName: p ? (role === "admin" ? `Mc ${p.name}` : p.name) : "",
       pairPhone: p?.phone ?? "",
     };
@@ -196,6 +198,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         type, name, date: r.live_date, start: hm(r.start_time), end: hm(r.end_time), platform: r.platform,
         hours: hoursOf(r), startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
         lateMinutes: r.late_minutes ?? null,
+        bonusMinutes: r.bonus_minutes ?? null,
       });
     }
   };
@@ -209,15 +212,17 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   details.sort((a, b) => a.type.localeCompare(b.type) || a.startMs - b.startMs);
 
   const summarize = (type: "Mc" | "Admin"): OwnerPerson[] => {
-    const people = new Map<string, { slots: number; hours: number; paid: number; late: number; days: Set<string>; cancelled: number }>();
+    const people = new Map<string, { slots: number; hours: number; paid: number; late: number; bonus: number; days: Set<string>; cancelled: number }>();
     for (const d of details) {
       if (d.type !== type) continue;
-      const p = people.get(d.name) ?? { slots: 0, hours: 0, paid: 0, late: 0, days: new Set<string>(), cancelled: 0 };
+      const p = people.get(d.name) ?? { slots: 0, hours: 0, paid: 0, late: 0, bonus: 0, days: new Set<string>(), cancelled: 0 };
       people.set(d.name, p);
       if (d.cancelled) { p.cancelled++; continue; }
       p.slots++;
       p.hours += d.hours;
-      p.paid += paidHours(d.hours, d.lateMinutes);
+      // ชั่วโมงที่ได้เงิน = หลังหักมาสาย + ไลฟ์ชดเชย (ปัดขึ้นทีละ 15 นาที)
+      p.paid += slotPaidHours(d.hours, d.lateMinutes, d.bonusMinutes);
+      p.bonus += bonusPaidMinutes(d.bonusMinutes);
       if (lateCut(d.lateMinutes) > 0) p.late++;
       p.days.add(d.date);
     }
@@ -231,7 +236,8 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         const m = monthRate(base, cleanTiers(info?.commit_tiers), p.hours);
         if (m.rate) (type === "Mc" ? rates.mc : rates.admin)[name] = m.rate;
         return {
-          name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, days: p.days.size, cancelled: p.cancelled,
+          name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, bonusMinutes: p.bonus,
+          days: p.days.size, cancelled: p.cancelled,
           commit: m.hasCommit ? { tiers: m.tiers, baseRate: base, tier: m.tier, next: m.next } : null,
         };
       })

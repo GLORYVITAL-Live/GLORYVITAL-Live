@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import type { OwnerPerson, OwnerSummary } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
-import { lateCut, tiersLabel } from "@/lib/pay";
+import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
 import { MonthNav, StateBox, Stats, api, btn } from "@/components/ui";
 
 type Type = "Mc" | "Admin";
@@ -55,20 +55,20 @@ const groups = (data: OwnerSummary): [Type, OwnerPerson[]][] => {
 };
 
 function downloadSummary(data: OwnerSummary) {
-  const rows: unknown[][] = [["ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
+  const rows: unknown[][] = [["ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ไลฟ์ชดเชย (นาที)", "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
   for (const [type, people] of groups(data)) for (const r of people) {
     const rate = rateOf(data, type, r.name);
     const commit = r.commit
       ? `${tiersLabel(r.commit.baseRate, r.commit.tiers)} (${r.commit.tier ? `ถึง ${r.commit.tier.hours}+ ชม.` : "ยังไม่ถึงเทียร์แรก"})`
       : "";
-    rows.push([type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : ""]);
+    rows.push([type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.bonusMinutes || "", r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : ""]);
   }
   downloadCsv(`glory-summary-${data.month}.csv`, rows);
 }
 
-// ใบสรุปค่าจ้างรายคน: ทุกคิวของแต่ละคน + แถวรวมต่อคน (ไม่นับคิวที่ยกเลิก หักมาสายตามกฎ)
+// ใบสรุปค่าจ้างรายคน: ทุกคิวของแต่ละคน + แถวรวมต่อคน (ไม่นับคิวที่ยกเลิก หักมาสายตามกฎ + ไลฟ์ชดเชย)
 function downloadPayroll(data: OwnerSummary) {
-  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
+  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
   for (const [type, people] of groups(data)) {
     let groupHours = 0, groupMoney = 0;
     for (const p of people) {
@@ -79,19 +79,22 @@ function downloadPayroll(data: OwnerSummary) {
       for (const d of items) {
         const hrs = round2(d.hours);
         const cut = lateCut(d.lateMinutes);
+        const bonus = bonusPaidMinutes(d.bonusMinutes);
+        const slotPaid = hrs * (1 - cut) + bonus / 60;
         h += hrs;
-        paid += hrs * (1 - cut);
+        paid += slotPaid;
         rows.push([
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), hrs,
-          d.lateMinutes || "", cut ? `${Math.round(cut * 100)}%` : "", rate || "", rate ? Math.round(hrs * (1 - cut) * rate) : "",
+          d.lateMinutes || "", cut ? `${Math.round(cut * 100)}%` : "",
+          bonus ? `+${d.bonusMinutes} (คิด ${bonus})` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
         ]);
       }
       const m = rate ? Math.round(paid * rate) : 0;
-      rows.push([`รวม ${p.name}`, `${items.length} slot`, "", "", "", round2(h), "", "", "", rate ? m : ""], []);
+      rows.push([`รวม ${p.name}`, `${items.length} slot`, "", "", "", round2(h), "", "", "", "", rate ? m : ""], []);
       groupHours += h;
       groupMoney += m;
     }
-    rows.push([`รวม ${type} ทั้งหมด`, "", "", "", "", round2(groupHours), "", "", "", groupMoney || ""], []);
+    rows.push([`รวม ${type} ทั้งหมด`, "", "", "", "", round2(groupHours), "", "", "", "", groupMoney || ""], []);
   }
   downloadCsv(`glory-payroll-${data.month}.csv`, rows);
 }
@@ -116,9 +119,12 @@ function downloadDaily(data: OwnerSummary) {
 }
 
 function downloadDetail(data: OwnerSummary) {
-  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "ชั่วโมง", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)"]];
+  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "ชั่วโมง", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)"]];
   for (const d of data.details) {
-    rows.push([d.type, d.name, d.date, d.start, d.end, d.platform, d.hours, d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "", d.lateMinutes || ""]);
+    rows.push([
+      d.type, d.name, d.date, d.start, d.end, d.platform, d.hours, d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
+      d.lateMinutes || "", d.bonusMinutes ? `+${d.bonusMinutes}` : "",
+    ]);
   }
   downloadCsv(`glory-detail-${data.month}.csv`, rows);
 }
@@ -190,7 +196,7 @@ export function OwnerView() {
         <section key={type} className="mt-5">
           <h2 className="mb-2 flex flex-wrap items-baseline gap-2 text-lg font-bold">
             {type}
-            <span className="text-xs font-normal text-muted">กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · ยอดเงินหักมาสายแล้ว</span>
+            <span className="text-xs font-normal text-muted">กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · ยอดเงินหักมาสาย + รวมไลฟ์ชดเชยแล้ว</span>
           </h2>
           <SumTable data={data} type={type} rows={rows} />
         </section>
@@ -211,15 +217,16 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
   const th = rows.reduce((a, r) => a + r.hours, 0);
   const tm = rows.reduce((a, r) => a + rateOf(data, type, r.name) * r.paidHours, 0);
   const tl = rows.reduce((a, r) => a + r.lateSlots, 0);
+  const tb = rows.reduce((a, r) => a + r.bonusMinutes, 0);
   const th_ = "px-3 py-2 font-semibold";
   const td = "border-t border-line px-3 py-2";
   return (
     <div className="overflow-x-auto rounded-xl border border-line bg-surface">
-      <table className="w-full min-w-[520px] text-sm">
+      <table className="w-full min-w-[600px] text-sm">
         <thead className="bg-brand-soft text-left text-xs text-muted">
           <tr>
             <th className={th_}>ชื่อ</th>
-            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ยอดเงิน"].map((h) => <th key={h} className={`${th_} text-right`}>{h}</th>)}
+            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "ยอดเงิน"].map((h) => <th key={h} className={`${th_} text-right`}>{h}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -255,11 +262,14 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                   <td className={`${td} text-right tabular-nums`}>{r.days}</td>
                   <td className={`${td} text-right tabular-nums`}>{r.cancelled || "–"}</td>
                   <td className={`${td} text-right tabular-nums ${r.lateSlots ? "font-semibold text-err" : ""}`}>{r.lateSlots || "–"}</td>
+                  <td className={`${td} text-right tabular-nums whitespace-nowrap ${r.bonusMinutes ? "font-semibold text-ok" : ""}`}>
+                    {r.bonusMinutes ? `+${r.bonusMinutes} น.` : "–"}
+                  </td>
                   <td className={`${td} text-right tabular-nums`}>{rate ? money(r.paidHours * rate) : "–"}</td>
                 </tr>
                 {isOpen ? (
                   <tr className="bg-brand-soft">
-                    <td colSpan={7} className="px-3 pt-1 pb-3 pl-8">
+                    <td colSpan={8} className="px-3 pt-1 pb-3 pl-8">
                       <div className="flex flex-wrap gap-1.5">
                         {daily.length ? daily.map((x) => (
                           <span key={x.date} className="rounded-full border border-line bg-surface px-2.5 py-1 text-xs whitespace-nowrap">
@@ -283,6 +293,7 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
             <td className={td} />
             <td className={td} />
             <td className={`${td} text-right tabular-nums`}>{tl || "–"}</td>
+            <td className={`${td} text-right tabular-nums whitespace-nowrap`}>{tb ? `+${tb} น.` : "–"}</td>
             <td className={`${td} text-right tabular-nums`}>{tm ? money(tm) : "–"}</td>
           </tr>
         </tfoot>

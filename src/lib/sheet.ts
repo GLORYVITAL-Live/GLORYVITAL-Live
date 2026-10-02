@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import { googleAuth } from "@/lib/google";
-import { parseLateMinutes } from "@/lib/pay";
+import { parseBonusMinutes, parseLateMinutes } from "@/lib/pay";
 
 /**
  * โครงสร้างชีต "LIVE GLORY 2026" + ตัวแปลงค่า (ใช้ร่วมกันระหว่างซิงค์สองทางและสคริปต์)
@@ -19,6 +19,7 @@ export const TAB_OF = { mc_slots: "mc", admin_slots: "admin" } as const;
 /**
  * คอลัมน์ (เริ่ม 0 = A) — V เก็บรหัส slot ในระบบใหม่ (ระบบเขียนเอง ห้ามแก้)
  * late = ช่องที่ทีมบันทึกเวลามาสาย (Mc ใช้ช่อง Remark (L) / Admin ใช้คอลัมน์ M) ระบบอ่านอย่างเดียว
+ * ช่องเดียวกันใช้บันทึกไลฟ์ชดเชยด้วย ถ้ามี + นำหน้า เช่น "+10" (ดู parseBonusMinutes)
  */
 export const COLS = {
   mc: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, campaign: 7, person: 8, confirm: 9, status: 10, remark: 11, late: 11, id: 21 },
@@ -64,6 +65,7 @@ export type SheetSlot = {
   status: string;
   remark: string;
   late: number | null; // นาทีที่มาสาย
+  bonus: number | null; // นาทีที่ไลฟ์ชดเชย ("+10" ในช่องเวลาสาย: Deal Mc คอลัมน์ L / Admin เสริม คอลัมน์ M)
   id: number | null;
 };
 
@@ -83,6 +85,7 @@ export function parseRow(tab: TabKey, r: Row): SheetSlot | null {
     status: str(r[c.status]),
     remark: str(r[c.remark]),
     late: parseLateMinutes(r[c.late]),
+    bonus: parseBonusMinutes(r[c.late]), // ช่องเดียวกับเวลาสาย: มี + นำหน้า = ไลฟ์ชดเชย
     id: Number.isInteger(idNum) && idNum > 0 ? idNum : null,
   };
 }

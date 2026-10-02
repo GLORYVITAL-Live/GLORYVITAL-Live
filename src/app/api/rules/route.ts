@@ -1,5 +1,6 @@
 import { fail, ok, requireMe, requireOwner } from "@/lib/api";
 import { getSettings } from "@/lib/data";
+import { cleanTiers } from "@/lib/pay";
 import { defaultRules, splitRules } from "@/lib/rules";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -17,11 +18,23 @@ export async function GET(request: Request) {
   if (role !== "mc" && role !== "admin") return fail("ไม่รู้จักบทบาทนี้");
   const s = await getSettings();
   const saved = splitRules(role === "mc" ? s.rules_mc : s.rules_admin);
+
+  // ค่าจ้าง/ชม. ปกติของคนที่เปิดดู (ใช้แสดงตัวเลขบาทในกฎมาสาย/ไลฟ์ชดเชย) ไม่ได้เป็นบทบาทนี้ / ไม่ได้ตั้ง = 0
+  let rate = 0, hasCommit = false;
+  const person = role === "mc" ? r.me.mc : r.me.admin;
+  if (person) {
+    const { data } = await createAdminClient().from("staff").select("hourly_rate, commit_tiers").eq("id", person.id).maybeSingle();
+    rate = Number(data?.hourly_rate) || Number(role === "mc" ? s.default_mc_rate : s.default_admin_rate) || 0;
+    hasCommit = cleanTiers(data?.commit_tiers).length > 0;
+  }
+
   return ok({
     role,
     items: saved.length ? saved : defaultRules(role, Number(s.cancel_min_hours) || 6),
     custom: saved.length > 0,
     defaults: defaultRules(role, Number(s.cancel_min_hours) || 6),
+    rate,
+    hasCommit,
   });
 }
 
