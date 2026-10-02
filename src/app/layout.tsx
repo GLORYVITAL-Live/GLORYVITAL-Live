@@ -11,6 +11,9 @@ const plexThai = IBM_Plex_Sans_Thai({
 export const metadata: Metadata = {
   title: "GLORY VITAL Live",
   description: "จองคิวไลฟ์ Mc และจัดคิว Admin ของ GLORY VITAL",
+  applicationName: "GLORY VITAL",
+  // ชื่อไอคอนตอน "เพิ่มไปยังหน้าจอโฮม" บน iPhone (รูปไอคอน = app/apple-icon.png)
+  appleWebApp: { title: "GLORY VITAL", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
