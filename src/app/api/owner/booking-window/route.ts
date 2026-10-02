@@ -41,7 +41,7 @@ export async function PUT(request: Request) {
     return ok({ message: "บันทึกแล้ว" });
   }
 
-  const role = body?.role;
+  const role = body?.role as "mc" | "admin";
   if (role !== "mc" && role !== "admin") return fail("ไม่รู้จักบทบาทนี้");
   const label = role === "mc" ? "Mc" : "Admin";
   if (!r.scope[role]) return fail(`บัญชีนี้ไม่มีสิทธิ์ตั้งช่วงเปิดจองของฝั่ง ${label}`, 403);
