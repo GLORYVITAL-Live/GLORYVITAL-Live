@@ -25,25 +25,13 @@ export async function GET(request: Request) {
     }
   }
 
-  // รายชื่อจองก่อน: คนที่ไม่อยู่ในรายชื่อไม่เห็น slot เลย (Owner ที่เปิดดูเห็นแบบคนในรายชื่อ)
+  // รายชื่อจองก่อน: คนที่ไม่อยู่ในรายชื่อเห็นเหมือนไม่มี slot ว่าง (ไม่บอกว่ามีการล็อกสิทธิ์)
+  // Owner ที่เปิดดูเห็นแบบคนในรายชื่อ
   const person = role === "mc" ? r.me.mc : r.me.admin?.isExtra ? r.me.admin : null;
-  const w = bookWindow(settings, role);
-  let notice = scheduleNotice(settings, role);
-  if (w && w.only.length) {
-    if (person && !canBook(w, person.id)) {
-      return ok({
-        siteNotice: settings.site_notice,
-        scheduleNotice: `ตอนนี้เปิดให้ ${role === "mc" ? "Mc" : "Admin เสริม"} บางคนจองก่อน รอทีมงานเปิดให้ทุกคน`,
-        slots: [],
-      });
-    }
-    const head = person ? "คุณได้สิทธิ์จองก่อน" : `ตอนนี้เปิดให้จองก่อนเฉพาะ ${w.only.length} คน (คนอื่นยังไม่เห็น slot)`;
-    notice = notice ? `${head} · ${notice}` : head;
-  }
-
+  const locked = !!person && !canBook(bookWindow(settings, role), person.id);
   return ok({
     siteNotice: settings.site_notice,
-    scheduleNotice: notice,
-    slots: role === "mc" ? await openMcSlots(settings) : await openAdminSlots(settings),
+    scheduleNotice: scheduleNotice(settings, role),
+    slots: locked ? [] : role === "mc" ? await openMcSlots(settings) : await openAdminSlots(settings),
   });
 }

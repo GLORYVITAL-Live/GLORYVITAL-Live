@@ -38,7 +38,9 @@ export async function POST(request: Request) {
   const w = bookWindow(settings, role);
   const personId: number = role === "mc" ? r.me.mc!.id : r.me.admin!.id;
   if (w && !canBook(w, personId)) {
-    blocked = ids.map((id) => ({ id, success: false, message: "ตอนนี้เปิดให้จองเฉพาะบางคนก่อน รอทีมงานเปิดให้ทุกคน" }));
+    // ใช้ข้อความเดียวกับ slot ที่มีคนจองไปแล้ว ไม่บอกว่ามีรายชื่อจองก่อน
+    const message = role === "mc" ? "slot นี้ไม่เปิดให้จองแล้ว (อาจมีคนจองไปก่อน)" : "slot นี้ไม่ได้รอ Admin แล้ว (อาจมีคนรับไปก่อน)";
+    blocked = ids.map((id) => ({ id, success: false, message }));
   } else if (w && w.mode !== "off") {
     const range = bookingRange(settings, role);
     const { data, error } = await db.from(table).select("id, live_date").in("id", ids);
