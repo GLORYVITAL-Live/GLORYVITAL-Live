@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "C:\\Users\\Administrator\\.bun\\bin\\bun.exe",
+      "runtimeArgs": [
+        "--bun",
+        "run",
+        "dev"
+      ],
+      "port": 3000
+    }
+  ]
+}

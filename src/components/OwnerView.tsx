@@ -4,7 +4,12 @@ import { Fragment, useEffect, useState } from "react";
 import type { OwnerPerson, OwnerSummary } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
-import { MonthNav, StateBox, Stats, api, btn } from "@/components/ui";
+import { ChevronRightIcon, DownloadIcon } from "lucide-react";
+import { LoadError, LoadingBlock, MonthNav, Notice, Stats, api } from "@/components/shared";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 type Type = "Mc" | "Admin";
 
@@ -157,12 +162,8 @@ export function OwnerView() {
       <div className="pb-10">
         {nav}
         {error ? (
-          <StateBox title="โหลดสรุปไม่สำเร็จ">
-            {error}
-            <br />
-            <button type="button" className={`${btn.ghost} mt-3`} onClick={() => { setFailed(null); setAttempt((n) => n + 1); }}>ลองอีกครั้ง</button>
-          </StateBox>
-        ) : <div className="my-4 h-40 animate-pulse rounded-2xl bg-line/70" />}
+          <LoadError title="โหลดสรุปไม่สำเร็จ" message={error} onRetry={() => { setFailed(null); setAttempt((n) => n + 1); }} />
+        ) : <LoadingBlock />}
       </div>
     );
   }
@@ -182,21 +183,21 @@ export function OwnerView() {
           ? [[num(sum(data.mc, "hours")), "ชม. Mc"], [String(sum(data.mc, "slots")), "slot Mc"], [String(data.mc.length), "คน"]]
           : [[num(sum(data.mc, "hours")), "ชม. Mc"], [num(sum(data.admin, "hours")), "ชม. Admin"], [String(sum(data.mc, "slots")), "slot Mc"]]} />
       {noRates ? (
-        <p className="my-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-info-ink">
+        <Notice>
           ยังไม่ได้ตั้งค่าจ้าง: ใส่ค่าจ้างต่อชั่วโมงเริ่มต้นในตาราง settings (default_mc_rate / default_admin_rate) หรือรายคนที่ staff.hourly_rate
-        </p>
+        </Notice>
       ) : null}
       <div className="my-3 flex flex-wrap gap-2">
-        <button type="button" className={btn.primary} onClick={() => downloadPayroll(data)}>ดาวน์โหลดใบสรุปค่าจ้างรายคน (CSV)</button>
-        <button type="button" className={btn.ghost} onClick={() => downloadDaily(data)}>ดาวน์โหลดรายคน-รายวัน (CSV)</button>
-        <button type="button" className={btn.ghost} onClick={() => downloadSummary(data)}>ดาวน์โหลดสรุป (CSV)</button>
-        <button type="button" className={btn.ghost} onClick={() => downloadDetail(data)}>ดาวน์โหลดรายละเอียด (CSV)</button>
+        <Button size="lg" onClick={() => downloadPayroll(data)}><DownloadIcon />ใบสรุปค่าจ้างรายคน (CSV)</Button>
+        <Button variant="outline" size="lg" onClick={() => downloadDaily(data)}><DownloadIcon />รายคน-รายวัน (CSV)</Button>
+        <Button variant="outline" size="lg" onClick={() => downloadSummary(data)}><DownloadIcon />สรุป (CSV)</Button>
+        <Button variant="outline" size="lg" onClick={() => downloadDetail(data)}><DownloadIcon />รายละเอียด (CSV)</Button>
       </div>
       {groups(data).map(([type, rows]) => (
         <section key={type} className="mt-5">
           <h2 className="mb-2 flex flex-wrap items-baseline gap-2 text-lg font-bold">
             {type}
-            <span className="text-xs font-normal text-muted">กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · ยอดเงินหักมาสาย + รวมไลฟ์ชดเชยแล้ว</span>
+            <span className="text-xs font-normal text-muted-foreground">กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · ยอดเงินหักมาสาย + รวมไลฟ์ชดเชยแล้ว</span>
           </h2>
           <SumTable data={data} type={type} rows={rows} />
         </section>
@@ -207,7 +208,7 @@ export function OwnerView() {
 
 function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: OwnerPerson[] }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
-  if (!rows.length) return <div className="rounded-xl border border-line bg-surface p-4 text-sm text-muted">ไม่มีคิวในเดือนนี้</div>;
+  if (!rows.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
   const toggle = (name: string) => {
     const next = new Set(open);
     if (next.has(name)) next.delete(name); else next.add(name);
@@ -218,86 +219,89 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
   const tm = rows.reduce((a, r) => a + rateOf(data, type, r.name) * r.paidHours, 0);
   const tl = rows.reduce((a, r) => a + r.lateSlots, 0);
   const tb = rows.reduce((a, r) => a + r.bonusMinutes, 0);
-  const th_ = "px-3 py-2 font-semibold";
-  const td = "border-t border-line px-3 py-2";
+  const num_ = "text-right tabular-nums";
   return (
-    <div className="overflow-x-auto rounded-xl border border-line bg-surface">
-      <table className="w-full min-w-[600px] text-sm">
-        <thead className="bg-brand-soft text-left text-xs text-muted">
-          <tr>
-            <th className={th_}>ชื่อ</th>
-            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "ยอดเงิน"].map((h) => <th key={h} className={`${th_} text-right`}>{h}</th>)}
-          </tr>
-        </thead>
-        <tbody>
+    <div className="overflow-hidden rounded-xl border bg-card">
+      <Table className="min-w-[600px]">
+        <TableHeader className="bg-secondary">
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="px-3 text-xs font-semibold text-muted-foreground">ชื่อ</TableHead>
+            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "ยอดเงิน"].map((h) => (
+              <TableHead key={h} className="px-3 text-right text-xs font-semibold text-muted-foreground">{h}</TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map((r) => {
             const rate = rateOf(data, type, r.name);
             const isOpen = open.has(r.name);
             const daily = isOpen ? dailyOf(data, type, r.name) : [];
             return (
               <Fragment key={r.name}>
-                <tr
+                <TableRow
                   tabIndex={0}
                   aria-expanded={isOpen}
+                  data-state={isOpen ? "selected" : undefined}
                   onClick={() => toggle(r.name)}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.name); } }}
-                  className={`cursor-pointer ${isOpen ? "bg-brand-soft" : "hover:bg-bg"}`}
+                  className="cursor-pointer data-[state=selected]:bg-secondary"
                 >
-                  <td className={td}>
-                    <span className={`inline-block w-4 text-muted transition-transform ${isOpen ? "rotate-90 text-brand" : ""}`}>▸</span>
+                  <TableCell className="px-3">
+                    <ChevronRightIcon className={cn("mr-0.5 inline size-4 text-muted-foreground transition-transform", isOpen && "rotate-90 text-primary")} />
                     {r.name}
                     {r.commit ? (
-                      <span
+                      <Badge
                         title={`Commit: ${tiersLabel(r.commit.baseRate, r.commit.tiers)} (ทุกชั่วโมงของเดือนคิดราคาเทียร์ที่จองถึง)`}
-                        className={`ml-1.5 rounded-full px-2 py-0.5 text-[11px] whitespace-nowrap ${r.commit.tier ? "bg-ok/15 text-ok" : "bg-bg text-muted"}`}
+                        variant={r.commit.tier ? "default" : "outline"}
+                        className={cn("ml-1.5 text-[11px]", r.commit.tier ? "bg-success/15 text-success" : "text-muted-foreground")}
                       >
                         {r.commit.tier
                           ? `Commit ${num(r.commit.tier.hours)}+ ชม. ✓ ${money(r.commit.tier.rate)}/ชม.`
                           : `Commit ยังไม่ถึง ${num(r.commit.tiers[0].hours)} ชม. (${num(r.hours)})`}
-                      </span>
+                      </Badge>
                     ) : null}
-                  </td>
-                  <td className={`${td} text-right tabular-nums`}>{r.slots}</td>
-                  <td className={`${td} text-right tabular-nums`}>{num(r.hours)}</td>
-                  <td className={`${td} text-right tabular-nums`}>{r.days}</td>
-                  <td className={`${td} text-right tabular-nums`}>{r.cancelled || "–"}</td>
-                  <td className={`${td} text-right tabular-nums ${r.lateSlots ? "font-semibold text-err" : ""}`}>{r.lateSlots || "–"}</td>
-                  <td className={`${td} text-right tabular-nums whitespace-nowrap ${r.bonusMinutes ? "font-semibold text-ok" : ""}`}>
+                  </TableCell>
+                  <TableCell className={num_}>{r.slots}</TableCell>
+                  <TableCell className={num_}>{num(r.hours)}</TableCell>
+                  <TableCell className={num_}>{r.days}</TableCell>
+                  <TableCell className={num_}>{r.cancelled || "–"}</TableCell>
+                  <TableCell className={cn(num_, r.lateSlots && "font-semibold text-destructive")}>{r.lateSlots || "–"}</TableCell>
+                  <TableCell className={cn(num_, r.bonusMinutes && "font-semibold text-success")}>
                     {r.bonusMinutes ? `+${r.bonusMinutes} น.` : "–"}
-                  </td>
-                  <td className={`${td} text-right tabular-nums`}>{rate ? money(r.paidHours * rate) : "–"}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell className={cn(num_, "px-3")}>{rate ? money(r.paidHours * rate) : "–"}</TableCell>
+                </TableRow>
                 {isOpen ? (
-                  <tr className="bg-brand-soft">
-                    <td colSpan={8} className="px-3 pt-1 pb-3 pl-8">
+                  <TableRow className="bg-secondary hover:bg-secondary">
+                    <TableCell colSpan={8} className="px-3 pt-1 pb-3 pl-8 whitespace-normal">
                       <div className="flex flex-wrap gap-1.5">
                         {daily.length ? daily.map((x) => (
-                          <span key={x.date} className="rounded-full border border-line bg-surface px-2.5 py-1 text-xs whitespace-nowrap">
-                            <b className="font-semibold text-brand">{fmtDayShort.format(parseKey(x.date))}</b>
+                          <Badge key={x.date} variant="outline" className="h-auto bg-card px-2.5 py-1 font-normal">
+                            <b className="font-semibold text-primary">{fmtDayShort.format(parseKey(x.date))}</b>
                             {` ${num(x.hours)} ชม.`}{x.slots > 1 ? ` (${x.slots} slot)` : ""}
-                          </span>
-                        )) : <span className="text-xs text-muted">ไม่มีคิวที่ไม่ถูกยกเลิก</span>}
+                          </Badge>
+                        )) : <span className="text-xs text-muted-foreground">ไม่มีคิวที่ไม่ถูกยกเลิก</span>}
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ) : null}
               </Fragment>
             );
           })}
-        </tbody>
-        <tfoot className="font-bold">
-          <tr>
-            <td className={td}>รวม {rows.length} คน</td>
-            <td className={`${td} text-right tabular-nums`}>{ts}</td>
-            <td className={`${td} text-right tabular-nums`}>{num(th)}</td>
-            <td className={td} />
-            <td className={td} />
-            <td className={`${td} text-right tabular-nums`}>{tl || "–"}</td>
-            <td className={`${td} text-right tabular-nums whitespace-nowrap`}>{tb ? `+${tb} น.` : "–"}</td>
-            <td className={`${td} text-right tabular-nums`}>{tm ? money(tm) : "–"}</td>
-          </tr>
-        </tfoot>
-      </table>
+        </TableBody>
+        <TableFooter className="bg-transparent font-bold">
+          <TableRow className="hover:bg-transparent">
+            <TableCell className="px-3">รวม {rows.length} คน</TableCell>
+            <TableCell className={num_}>{ts}</TableCell>
+            <TableCell className={num_}>{num(th)}</TableCell>
+            <TableCell />
+            <TableCell />
+            <TableCell className={num_}>{tl || "–"}</TableCell>
+            <TableCell className={num_}>{tb ? `+${tb} น.` : "–"}</TableCell>
+            <TableCell className={cn(num_, "px-3")}>{tm ? money(tm) : "–"}</TableCell>
+          </TableRow>
+        </TableFooter>
+      </Table>
     </div>
   );
 }

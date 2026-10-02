@@ -1,7 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Sheet, SheetHead, StateBox, api, btn, useToast } from "@/components/ui";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import {
+  AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, StateBox, api, useConfirm, useToast,
+} from "@/components/shared";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 import { money } from "@/lib/format";
 import { parseTierHours, tiersLabel } from "@/lib/pay";
 import type { CommitTier, OwnerScope } from "@/lib/types";
@@ -66,76 +77,74 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
   }, [data, role, search, onlyNoEmail]);
 
   if (!data) {
-    return error ? (
-      <StateBox title="โหลดรายชื่อไม่สำเร็จ">
-        {error}
-        <br />
-        <button type="button" className={`${btn.ghost} mt-3`} onClick={reload}>ลองอีกครั้ง</button>
-      </StateBox>
-    ) : <div className="my-4 h-40 animate-pulse rounded-2xl bg-line/70" />;
+    return error ? <LoadError title="โหลดรายชื่อไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock />;
   }
 
   return (
     <div className="pb-10">
       <div className="my-2 flex flex-wrap items-center gap-2">
-        <div role="group" aria-label="บทบาท" className="flex rounded-full border border-line bg-surface p-0.5">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          spacing={0}
+          value={role}
+          onValueChange={(v) => { if (v) { setRole(v as Role); setOnlyNoEmail(false); } }}
+          aria-label="บทบาท"
+          className="bg-card"
+        >
           {roles.map((r) => (
-            <button
-              key={r}
-              type="button"
-              aria-pressed={role === r}
-              onClick={() => { setRole(r); setOnlyNoEmail(false); }}
-              className={`rounded-full px-3 py-1 text-sm font-semibold ${role === r ? "bg-brand-soft text-brand" : "text-muted"}`}
-            >
+            <ToggleGroupItem key={r} value={r} className="font-semibold">
               {ROLE_LABEL[r]} <span className="text-xs font-normal">({counts[r]})</span>
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="ค้นหาชื่อ อีเมล เบอร์"
-          aria-label="ค้นหา"
-          className="h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-sm"
-        />
-        <button type="button" className={btn.primary} onClick={() => setEditing("new")}>+ เพิ่มคน</button>
+        </ToggleGroup>
+        <InputGroup className="h-8 min-w-40 flex-1 bg-card">
+          <InputGroupAddon><SearchIcon /></InputGroupAddon>
+          <InputGroupInput
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ค้นหาชื่อ อีเมล เบอร์"
+            aria-label="ค้นหา"
+          />
+        </InputGroup>
+        <Button onClick={() => setEditing("new")}><PlusIcon />เพิ่มคน</Button>
       </div>
 
       {counts.noEmail > 0 ? (
-        <label className="my-2 flex items-center gap-2 rounded-xl border border-warn-line bg-warn-bg px-3 py-2 text-sm text-warn-ink">
-          <input type="checkbox" checked={onlyNoEmail} onChange={(e) => setOnlyNoEmail(e.target.checked)} className="size-4" />
+        <Label className="my-2 flex items-center gap-2 rounded-xl border border-warning-border bg-warning px-3 py-2 leading-snug font-normal text-warning-foreground">
+          <Checkbox checked={onlyNoEmail} onCheckedChange={(v) => setOnlyNoEmail(v === true)} className="bg-card" />
           {ROLE_LABEL[role]} ที่ยังไม่มีอีเมล {counts.noEmail} คน — login ไม่ได้ และคิวไม่ลงปฏิทิน (แสดงเฉพาะคนกลุ่มนี้)
-        </label>
+        </Label>
       ) : null}
 
       {!list.length ? (
-        <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : "กด \"+ เพิ่มคน\" เพื่อเพิ่มรายชื่อ"}</StateBox>
+        <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : "กด \"เพิ่มคน\" เพื่อเพิ่มรายชื่อ"}</StateBox>
       ) : (
-        <div className="mt-2 overflow-hidden rounded-xl border border-line bg-surface">
+        <div className="mt-2 overflow-hidden rounded-xl border bg-card">
           {list.map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => setEditing(p)}
-              className="flex w-full items-center gap-3 border-b border-line px-3 py-2.5 text-left last:border-b-0 hover:bg-bg"
+              className="flex w-full items-center gap-3 border-b px-3 py-2.5 text-left outline-none last:border-b-0 hover:bg-muted focus-visible:bg-muted"
             >
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-1.5 font-semibold">
                   {displayName(p)}
-                  {p.is_extra_admin ? <span className="rounded-full bg-p2/15 px-2 py-0.5 text-[11px] text-p2">Admin เสริม</span> : null}
-                  {p.role === "owner" ? <span className="rounded-full bg-p2/15 px-2 py-0.5 text-[11px] text-p2">{scopeLabel(p)}</span> : null}
-                  {p.id === data.meId ? <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[11px] text-brand">คุณ</span> : null}
+                  {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
+                  {p.role === "owner" ? <Badge className="bg-p2/15 text-[11px] text-p2">{scopeLabel(p)}</Badge> : null}
+                  {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
                 </span>
-                <span className="block truncate text-xs text-muted">
-                  {p.email ?? <span className="font-semibold text-err">ไม่มีอีเมล</span>}
+                <span className="block truncate text-xs text-muted-foreground">
+                  {p.email ?? <span className="font-semibold text-destructive">ไม่มีอีเมล</span>}
                   {p.phone ? ` · ${p.phone}` : ""}
                   {p.hourly_rate ? ` · ${money(p.hourly_rate)} บาท/ชม.` : ""}
                   {p.commit_tiers?.length ? ` · Commit ${tiersLabel(0, p.commit_tiers)}` : ""}
                 </span>
               </span>
               {p.role !== "owner" ? (
-                <span className={`shrink-0 text-right text-xs ${p.upcoming && !p.email ? "font-semibold text-err" : "text-muted"}`}>
+                <span className={cn("shrink-0 text-right text-xs", p.upcoming && !p.email ? "font-semibold text-destructive" : "text-muted-foreground")}>
                   {p.upcoming ? `คิวข้างหน้า ${p.upcoming}` : "–"}
                 </span>
               ) : null}
@@ -168,6 +177,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   onClose: (message?: string) => void;
 }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [role, setRole] = useState<Role>(person?.role ?? defaultRole);
   const [name, setName] = useState(person?.name ?? "");
   const [email, setEmail] = useState(person?.email ?? "");
@@ -218,7 +228,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   }
 
   async function remove() {
-    if (!person || !confirm(`ลบ ${displayName(person)} ออกจากระบบ?`)) return;
+    if (!person || !(await confirm({ title: `ลบ ${displayName(person)} ออกจากระบบ?`, confirmText: "ลบ", destructive: true }))) return;
     setSaving(true);
     try {
       const res = await api("/api/owner/staff", { id: person.id }, "DELETE");
@@ -230,86 +240,81 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
     }
   }
 
-  const field = "h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm disabled:opacity-60";
   return (
-    <Sheet open onClose={() => onClose()} busy={saving} labelledBy="staffTitle">
-      <SheetHead
-        id="staffTitle"
-        title={person ? `แก้ไข ${displayName(person)}` : "เพิ่มคน"}
-        note={person?.upcoming ? `มีคิวตั้งแต่วันนี้ ${person.upcoming} คิว` : undefined}
-      />
-      <div className="-mx-1 flex-1 space-y-3 overflow-y-auto px-1 text-sm">
+    <AppDialog
+      open
+      onClose={() => onClose()}
+      busy={saving}
+      title={person ? `แก้ไข ${displayName(person)}` : "เพิ่มคน"}
+      description={person?.upcoming ? `มีคิวตั้งแต่วันนี้ ${person.upcoming} คิว` : undefined}
+    >
+      <DialogBody className="space-y-4 text-sm">
         {!person ? (
-          <div role="group" aria-label="บทบาท" className="flex gap-1.5">
-            {roles.map((r) => (
-              <button
-                key={r}
-                type="button"
-                aria-pressed={role === r}
-                onClick={() => setRole(r)}
-                className={`flex-1 rounded-full border px-3 py-1.5 font-semibold ${role === r ? "border-brand bg-brand-soft text-brand" : "border-line text-muted"}`}
-              >
-                {ROLE_LABEL[r]}
-              </button>
-            ))}
-          </div>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            value={role}
+            onValueChange={(v) => { if (v) setRole(v as Role); }}
+            aria-label="บทบาท"
+            className="w-full"
+          >
+            {roles.map((r) => <ToggleGroupItem key={r} value={r} className="flex-1 font-semibold">{ROLE_LABEL[r]}</ToggleGroupItem>)}
+          </ToggleGroup>
         ) : null}
 
-        <label className="block">
-          <span className="mb-1 block font-semibold">ชื่อ{role === "mc" ? " (ไม่ต้องใส่คำว่า Mc)" : ""}</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} className={field} placeholder={role === "mc" ? "เช่น มะนาว" : "เช่น แพรวา"} />
-          {renamed ? <span className="mt-1 block text-xs text-muted">ชื่อในชีตทุกแถวของคนนี้จะเปลี่ยนตามอัตโนมัติ</span> : null}
-        </label>
+        <Field
+          label={`ชื่อ${role === "mc" ? " (ไม่ต้องใส่คำว่า Mc)" : ""}`}
+          hint={renamed ? "ชื่อในชีตทุกแถวของคนนี้จะเปลี่ยนตามอัตโนมัติ" : null}
+        >
+          {(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} placeholder={role === "mc" ? "เช่น มะนาว" : "เช่น แพรวา"} />}
+        </Field>
 
-        <label className="block">
-          <span className="mb-1 block font-semibold">อีเมล Google (ใช้ login และลงปฏิทิน)</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={isMe} className={field} placeholder="name@gmail.com" autoComplete="off" />
-          {isMe ? <span className="mt-1 block text-xs text-muted">เปลี่ยนอีเมลของตัวเองไม่ได้ ให้ Owner คนอื่นเปลี่ยนให้</span> : null}
-          {!isMe && role !== "owner" && emailChanged && email.trim() ? (
-            <span className="mt-1 block text-xs text-warn-ink">
-              {email.trim().toLowerCase().endsWith("@glorythailand.com")
-                ? "อีเมลในองค์กร: ระบบไม่ลงนัดในปฏิทินให้ (ดูคิวจากเว็บ/ชีต)"
-                : <>ระบบจะลงคิวข้างหน้าของคนนี้ในปฏิทินของอีเมลนี้ — เจ้าของอีเมลต้องแชร์ปฏิทินให้ kunraroj.d@glorythailand.com (สิทธิ์ &quot;ทำการเปลี่ยนแปลงกิจกรรม&quot;) ก่อน</>}
-            </span>
-          ) : null}
-        </label>
+        <Field
+          label="อีเมล Google (ใช้ login และลงปฏิทิน)"
+          hint={isMe ? "เปลี่ยนอีเมลของตัวเองไม่ได้ ให้ Owner คนอื่นเปลี่ยนให้" : null}
+          warning={!isMe && role !== "owner" && emailChanged && email.trim()
+            ? email.trim().toLowerCase().endsWith("@glorythailand.com")
+              ? "อีเมลในองค์กร: ระบบไม่ลงนัดในปฏิทินให้ (ดูคิวจากเว็บ/ชีต)"
+              : <>ระบบจะลงคิวข้างหน้าของคนนี้ในปฏิทินของอีเมลนี้ — เจ้าของอีเมลต้องแชร์ปฏิทินให้ kunraroj.d@glorythailand.com (สิทธิ์ &quot;ทำการเปลี่ยนแปลงกิจกรรม&quot;) ก่อน</>
+            : null}
+        >
+          {(id) => <Input id={id} type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={isMe} placeholder="name@gmail.com" autoComplete="off" />}
+        </Field>
 
         {role !== "owner" ? (
           <>
-            <label className="block">
-              <span className="mb-1 block font-semibold">เบอร์โทร</span>
-              <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} className={field} placeholder="08x-xxx-xxxx" />
-              <span className="mt-1 block text-xs text-muted">แสดงในปฏิทินของคู่ไลฟ์ (Mc เห็นเบอร์ Admin / Admin เห็นเบอร์ Mc)</span>
-            </label>
-            <label className="block">
-              <span className="mb-1 block font-semibold">ค่าจ้างต่อชั่วโมง (บาท)</span>
-              <input inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} className={field} placeholder="ว่าง = ใช้ค่าเริ่มต้น" />
-            </label>
+            <Field label="เบอร์โทร" hint="แสดงในปฏิทินของคู่ไลฟ์ (Mc เห็นเบอร์ Admin / Admin เห็นเบอร์ Mc)">
+              {(id) => <Input id={id} type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />}
+            </Field>
+            <Field label="ค่าจ้างต่อชั่วโมง (บาท)">
+              {(id) => <Input id={id} inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="ว่าง = ใช้ค่าเริ่มต้น" />}
+            </Field>
             <div>
-              <span className="mb-1 block font-semibold">Commit แบบขั้น (ไม่บังคับ)</span>
+              <span className="mb-1.5 block font-semibold">Commit แบบขั้น (ไม่บังคับ)</span>
               <div className="space-y-2">
                 {tiers.map((t, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <input value={t.hours} onChange={(e) => setTier(i, "hours", e.target.value)} className={field} placeholder={i === 0 ? "เช่น 10-20" : "เช่น 21-40 หรือ 41"} aria-label={`Commit ขั้นที่ ${i + 1}: ช่วงชั่วโมง`} />
-                    <span className="shrink-0 text-muted">ชม. →</span>
-                    <input inputMode="decimal" value={t.rate} onChange={(e) => setTier(i, "rate", e.target.value)} className={field} placeholder="บาท/ชม." aria-label={`Commit ขั้นที่ ${i + 1}: ค่าจ้างต่อชั่วโมง`} />
-                    <button
-                      type="button"
+                    <Input value={t.hours} onChange={(e) => setTier(i, "hours", e.target.value)} placeholder={i === 0 ? "เช่น 10-20" : "เช่น 21-40 หรือ 41"} aria-label={`Commit ขั้นที่ ${i + 1}: ช่วงชั่วโมง`} />
+                    <span className="shrink-0 text-muted-foreground">ชม. →</span>
+                    <Input inputMode="decimal" value={t.rate} onChange={(e) => setTier(i, "rate", e.target.value)} placeholder="บาท/ชม." aria-label={`Commit ขั้นที่ ${i + 1}: ค่าจ้างต่อชั่วโมง`} />
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setTiers(tiers.filter((_, j) => j !== i))}
                       aria-label={`ลบ Commit ขั้นที่ ${i + 1}`}
-                      className="grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-err/10 hover:text-err"
+                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     >
-                      ✕
-                    </button>
+                      <XIcon />
+                    </Button>
                   </div>
                 ))}
               </div>
               {tiers.length < 10 ? (
-                <button type="button" onClick={() => setTiers([...tiers, { hours: "", rate: "" }])} className="mt-2 text-sm font-semibold text-brand hover:underline">
-                  + เพิ่มขั้น Commit
-                </button>
+                <Button variant="link" className="mt-1 h-auto px-0 font-semibold" onClick={() => setTiers([...tiers, { hours: "", rate: "" }])}>
+                  <PlusIcon />เพิ่มขั้น Commit
+                </Button>
               ) : null}
-              <span className="mt-1 block text-xs text-muted">
+              <span className="mt-1 block text-xs text-muted-foreground">
                 {filledTiers.length
                   ? <>ผลลัพธ์: {tiersLabel(Number(rate.replace(/[,\s]/g, "")) || 0, filledTiers)} บาท/ชม.<br />เดือนไหนจอง (ไม่นับคิวที่ยกเลิก) ถึงขั้นไหน ทุกชั่วโมงของเดือนนั้นคิดราคาขั้นนั้น</>
                   : "ใส่ช่วงชั่วโมงของแต่ละขั้น เช่น 10-20 → 950, 21-40 → 900, 41 → 850 (ต่ำกว่าขั้นแรกใช้ค่าจ้างต่อชั่วโมงด้านบน)"}
@@ -319,51 +324,63 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
         ) : null}
 
         {role === "admin" ? (
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={extra} onChange={(e) => setExtra(e.target.checked)} className="size-4 accent-[var(--brand)]" />
+          <Label className="leading-snug font-normal">
+            <Checkbox checked={extra} onCheckedChange={(v) => setExtra(v === true)} />
             Admin เสริม (รับคิวและยกเลิกคิวผ่านเว็บได้เอง)
-          </label>
+          </Label>
         ) : null}
 
         {role === "owner" ? (
-          <fieldset className="rounded-lg border border-line px-3 py-2">
+          <fieldset className="rounded-lg border px-3 py-2">
             <legend className="px-1 font-semibold">สิทธิ์จัดการ</legend>
             {([
               ["mc", "Mc", "สรุปรายเดือน / slot / รายชื่อ ฝั่ง Mc", canMc, setCanMc],
               ["admin", "Admin", "สรุปรายเดือน / slot / รายชื่อ ฝั่ง Admin", canAdmin, setCanAdmin],
             ] as const).map(([key, label, hint, checked, set]) => (
-              <label key={key} className="flex items-start gap-2 py-1">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={isMe}
-                  onChange={(e) => set(e.target.checked)}
-                  className="mt-0.5 size-4 accent-[var(--brand)]"
-                />
+              <Label key={key} className="items-start py-1 leading-snug font-normal">
+                <Checkbox checked={checked} disabled={isMe} onCheckedChange={(v) => set(v === true)} className="mt-0.5" />
                 <span>
                   จัดการ {label}
-                  <span className="block text-xs text-muted">{hint}</span>
+                  <span className="block text-xs text-muted-foreground">{hint}</span>
                 </span>
-              </label>
+              </Label>
             ))}
-            <span className="mt-1 block text-xs text-muted">
+            <span className="mt-1 block text-xs text-muted-foreground">
               {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้งคู่แก้ให้"
-                : noScope ? <span className="text-err">ติ๊กอย่างน้อย 1 ฝั่ง</span>
+                : noScope ? <span className="text-destructive">ติ๊กอย่างน้อย 1 ฝั่ง</span>
                   : "ติ๊กทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อและสิทธิ์ของ Owner คนอื่น"}
             </span>
           </fieldset>
         ) : null}
-      </div>
+      </DialogBody>
 
-      <div className="mt-4 flex items-center gap-2">
+      <DialogActions>
         {person && !isMe ? (
-          <button type="button" onClick={remove} disabled={saving} className="mr-auto text-sm font-semibold text-err hover:underline">ลบคนนี้</button>
-        ) : <span className="mr-auto" />}
-        <button type="button" className={btn.ghost} disabled={saving} onClick={() => onClose()}>ยกเลิก</button>
-        <button type="button" className={btn.primary} disabled={saving || !name.trim() || noScope} onClick={save}>
+          <Button variant="destructive" size="lg" onClick={remove} disabled={saving} className="mr-auto">ลบคนนี้</Button>
+        ) : null}
+        <Button variant="outline" size="lg" disabled={saving} onClick={() => onClose()}>ยกเลิก</Button>
+        <Button size="lg" disabled={saving || !name.trim() || noScope} onClick={save}>
           {saving ? "กำลังบันทึก..." : "บันทึก"}
-        </button>
-      </div>
-    </Sheet>
+        </Button>
+      </DialogActions>
+    </AppDialog>
+  );
+}
+
+/** ช่องกรอก + ป้ายชื่อ + คำอธิบายใต้ช่อง (children รับ id ไปใส่ในช่องกรอก) */
+function Field({ label, hint, warning, children }: {
+  label: ReactNode;
+  hint?: ReactNode;
+  warning?: ReactNode;
+  children: (id: string) => ReactNode;
+}) {
+  const id = useId();
+  return (
+    <div>
+      <Label htmlFor={id} className="mb-1.5 font-semibold">{label}</Label>
+      {children(id)}
+      {hint ? <span className="mt-1 block text-xs text-muted-foreground">{hint}</span> : null}
+      {warning ? <span className="mt-1 block text-xs text-warning-foreground">{warning}</span> : null}
+    </div>
   );
 }
