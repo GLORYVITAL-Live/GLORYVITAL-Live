@@ -261,7 +261,9 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
           {isMe ? <span className="mt-1 block text-xs text-muted">เปลี่ยนอีเมลของตัวเองไม่ได้ ให้ Owner คนอื่นเปลี่ยนให้</span> : null}
           {!isMe && role !== "owner" && emailChanged && email.trim() ? (
             <span className="mt-1 block text-xs text-warn-ink">
-              ระบบจะลงคิวข้างหน้าของคนนี้ในปฏิทินของอีเมลนี้ — เจ้าของอีเมลต้องแชร์ปฏิทินให้ kunraroj.d@glorythailand.com (สิทธิ์ &quot;ทำการเปลี่ยนแปลงกิจกรรม&quot;) ก่อน
+              {email.trim().toLowerCase().endsWith("@glorythailand.com")
+                ? "อีเมลในองค์กร: ระบบไม่ลงนัดในปฏิทินให้ (ดูคิวจากเว็บ/ชีต)"
+                : <>ระบบจะลงคิวข้างหน้าของคนนี้ในปฏิทินของอีเมลนี้ — เจ้าของอีเมลต้องแชร์ปฏิทินให้ kunraroj.d@glorythailand.com (สิทธิ์ &quot;ทำการเปลี่ยนแปลงกิจกรรม&quot;) ก่อน</>}
             </span>
           ) : null}
         </label>

@@ -47,6 +47,15 @@ const isNotFound = (err: unknown) => {
   return code === 404 || code === 410;
 };
 
+/**
+ * อีเมลในองค์กรเดียวกับบัญชีระบบ (@glorythailand.com) ไม่ลงปฏิทินให้: คนในองค์กรดูคิวจากเว็บ/ชีต
+ * (ค่าเริ่มต้นของ Workspace แชร์กันแบบดูได้อย่างเดียว ระบบเขียนนัดให้ไม่ได้)
+ * ลงปฏิทินเฉพาะ Mc / Admin เสริมที่ใช้อีเมลภายนอก (ต้องแชร์ปฏิทินแบบ "ทำการเปลี่ยนแปลงกิจกรรม" ให้บัญชีระบบ)
+ */
+const NO_CALENDAR_DOMAINS = ["@glorythailand.com"];
+const usesCalendar = (email: string | null | undefined) =>
+  !!email && !NO_CALENDAR_DOMAINS.some((d) => email.toLowerCase().endsWith(d));
+
 /** ปฏิทินของพนักงานไม่ได้แชร์ให้บัญชีระบบแบบ "ทำการเปลี่ยนแปลงกิจกรรม" (ลองซ้ำก็ไม่สำเร็จ) */
 const isNoAccess = (err: unknown) =>
   (err as { code?: number })?.code === 403 || /writer access|forbidden/i.test(String((err as Error)?.message ?? ""));
@@ -116,15 +125,18 @@ const TAG_KEY = "gloryVitalSlot";
 /** ทำให้ event ของ slot เดียวตรงกับ DB (สร้าง / แก้ / ย้ายคน / ลบ) */
 async function syncOne(cal: calendar_v3.Calendar, table: Table, s: Slot, partner: Slot | undefined) {
   const db = createAdminClient();
-  const email = active(s) ? s.person!.email : null;
+  const email = active(s) && usesCalendar(s.person!.email) ? s.person!.email : null;
 
-  // ไม่มีคนแล้ว / ยกเลิก / คนนั้นไม่มีอีเมล -> ลบ event เดิม (ถ้ามี)
+  // ไม่มีคนแล้ว / ยกเลิก / คนนั้นไม่มีอีเมล / อีเมลในองค์กร -> ลบ event เดิม (ถ้ามี)
   if (!email) {
     if (s.calendar_email && s.calendar_event_id) {
-      try {
-        await cal.events.delete({ calendarId: s.calendar_email, eventId: s.calendar_event_id });
-      } catch (err) {
-        if (!isNotFound(err)) throw err;
+      // ปฏิทินในองค์กรระบบเขียนไม่ได้อยู่แล้ว ล้างแค่ข้อมูลในระบบ
+      if (usesCalendar(s.calendar_email)) {
+        try {
+          await cal.events.delete({ calendarId: s.calendar_email, eventId: s.calendar_event_id });
+        } catch (err) {
+          if (!isNotFound(err)) throw err;
+        }
       }
       await db.from(table).update({ calendar_email: null, calendar_event_id: null }).eq("id", s.id);
     }
@@ -143,7 +155,7 @@ async function syncOne(cal: calendar_v3.Calendar, table: Table, s: Slot, partner
 
   const created = await cal.events.insert({ calendarId: email, requestBody: body });
   // เปลี่ยนคน -> ลบ event ในปฏิทินของคนเดิม
-  if (s.calendar_email && s.calendar_event_id && s.calendar_email !== email) {
+  if (s.calendar_email && s.calendar_event_id && s.calendar_email !== email && usesCalendar(s.calendar_email)) {
     try {
       await cal.events.delete({ calendarId: s.calendar_email, eventId: s.calendar_event_id });
     } catch (err) {
@@ -158,6 +170,7 @@ async function syncOne(cal: calendar_v3.Calendar, table: Table, s: Slot, partner
 
 /** ลบ event ของ slot ที่กำลังจะถูกลบออกจาก DB (event หายไปแล้วถือว่าสำเร็จ) */
 export async function deleteCalendarEvent(email: string, eventId: string) {
+  if (!usesCalendar(email)) return; // ปฏิทินในองค์กร ระบบไม่ได้ลงนัดให้
   const cal = calendarApi();
   if (!cal) throw new Error("ยังไม่ได้เชื่อมบัญชี Google (bun run google:auth)");
   try {
@@ -367,6 +380,7 @@ export async function cleanupCalendarEvents(dryRun: boolean) {
     let deleted = 0;
     const errors: string[] = [];
     for (const p of staff ?? []) {
+      if (!usesCalendar(p.email)) continue; // ปฏิทินในองค์กร ระบบไม่ได้ลงนัดให้
       const ours = p.role === "mc" ? ` - Mc ${p.name}` : ` - ${p.name}`;
       const isOurs = (e: calendar_v3.Schema$Event) =>
         !!e.extendedProperties?.private?.[TAG_KEY]
