@@ -1,7 +1,7 @@
 import "server-only";
 import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
-import { bookRange, cleanWindow, windowNotice } from "@/lib/window";
+import { bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
 import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary } from "@/lib/types";
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -76,13 +76,18 @@ export function cutoffDate(s: Settings) {
 export const bookWindow = (s: Settings, role: "mc" | "admin") =>
   cleanWindow(role === "mc" ? s.book_window_mc : s.book_window_admin);
 
-/** ช่วงวันที่ฝั่งนี้จองได้ตอนนี้ (ช่วงเปิดจอง + วันนี้ + เดือนสุดท้ายที่เปิดจอง) */
-export const bookingRange = (s: Settings, role: "mc" | "admin") => bookRange(bookWindow(s, role), bkkToday(), cutoffDate(s));
+/** ช่วงเปิดจองที่ใช้กับคนนี้ (คนในรายชื่อจองก่อนได้ช่วงของตัวเอง / ไม่ระบุคน = ช่วงทั่วไป) */
+export const personPeriod = (s: Settings, role: "mc" | "admin", personId?: number | null) =>
+  periodFor(bookWindow(s, role), personId);
+
+/** ช่วงวันที่คนนี้จองได้ตอนนี้ (ช่วงเปิดจอง + วันนี้ + เดือนสุดท้ายที่เปิดจอง) */
+export const bookingRange = (s: Settings, role: "mc" | "admin", personId?: number | null) =>
+  bookRange(personPeriod(s, role, personId), bkkToday(), cutoffDate(s));
 
 /** ข้อความแจ้งบนหน้าจอง: ตั้งช่วงเปิดจองไว้ = บอกช่วงนั้น / ไม่ได้ตั้ง = "เปิดจองถึงสิ้นเดือน ..." */
-export function scheduleNotice(s: Settings, role: "mc" | "admin") {
-  const w = bookWindow(s, role);
-  if (w && w.mode !== "off") return windowNotice(w, bookingRange(s, role));
+export function scheduleNotice(s: Settings, role: "mc" | "admin", personId?: number | null) {
+  const p = personPeriod(s, role, personId);
+  if (p.mode !== "off") return windowNotice(p, bookingRange(s, role, personId));
   if (!s.schedule_cutoff_month) return "";
   if (s.schedule_notice) return s.schedule_notice;
   const [y, m] = s.schedule_cutoff_month.split("-").map(Number);
@@ -98,10 +103,10 @@ function toOpenSlot(r: SlotRow): OpenSlot {
   };
 }
 
-/** slot ของ Mc ที่ยังว่าง เฉพาะในช่วงที่เปิดจอง */
-export async function openMcSlots(settings: Settings) {
+/** slot ของ Mc ที่ยังว่าง เฉพาะในช่วงที่คนนี้จองได้ */
+export async function openMcSlots(settings: Settings, personId?: number | null) {
   const db = createAdminClient();
-  const r = bookingRange(settings, "mc");
+  const r = bookingRange(settings, "mc", personId);
   if (r.empty) return [];
   const rows = await fetchAll<SlotRow>((from, to) => {
     let q = db.from("mc_slots").select(SLOT_COLS).is("mc_id", null).gte("live_date", r.from);
@@ -112,9 +117,9 @@ export async function openMcSlots(settings: Settings) {
 }
 
 /** slot ที่รอ Admin เสริม (เฉพาะในช่วงที่เปิดจอง) + ชื่อ Mc ที่ไลฟ์ใน slot นั้น */
-export async function openAdminSlots(settings: Settings) {
+export async function openAdminSlots(settings: Settings, personId?: number | null) {
   const db = createAdminClient();
-  const r = bookingRange(settings, "admin");
+  const r = bookingRange(settings, "admin", personId);
   if (r.empty) return [];
   const rows = await fetchAll<SlotRow>((from, to) => {
     let q = db.from("admin_slots").select(SLOT_COLS).is("admin_id", null).eq("needs_extra_admin", true).gte("live_date", r.from);

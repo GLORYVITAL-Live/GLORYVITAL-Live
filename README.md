@@ -34,7 +34,7 @@
 | --- | --- |
 | การตั้งค่าเว็บ B1 (ปิดรับจอง) | `settings.site_notice` |
 | B2 (เดือนสุดท้ายที่เปิดจอง) | `settings.schedule_cutoff_month` เช่น `2026-10` (แก้ในเว็บได้: หน้าเจ้าของ > จัดการ slot > ช่วงเปิดจอง) |
-| (ใหม่) ช่วงเปิดจองแยก Mc / Admin | `settings.book_window_mc` / `book_window_admin` — ไม่จำกัด / สัปดาห์นี้ (อัตโนมัติ) / ช่วงวันที่ (src/lib/window.ts) |
+| (ใหม่) ช่วงเปิดจองแยก Mc / Admin | `settings.book_window_mc` / `book_window_admin` — ไม่จำกัด / สัปดาห์นี้ (อัตโนมัติ) / ช่วงวันที่ / ปิดจอง + รายชื่อจองก่อนที่มีช่วงของตัวเอง (src/lib/window.ts) |
 | B3 / B4 / B5 / B6 | `schedule_notice` / `admin_chat_url` / `default_mc_rate` / `default_admin_rate` |
 | แท็บ Mc Email / Admin Email / Owner Email / เบอร์โทร MC | ตาราง `staff` (role, name, email, phone, hourly_rate, is_extra_admin) |
 

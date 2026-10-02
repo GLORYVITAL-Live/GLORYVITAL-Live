@@ -1,7 +1,7 @@
 import { fail, ok, requireOwner } from "@/lib/api";
 import { bkkToday, bookWindow, cutoffDate, getSettings } from "@/lib/data";
 import { createAdminClient } from "@/lib/supabase/server";
-import { cleanWindow, isDate, rangeText } from "@/lib/window";
+import { cleanWindow, isDate, rangeText, type Period } from "@/lib/window";
 
 // ช่วงเปิดจอง (หน้าเจ้าของ > จัดการ slot)
 //   GET  ช่วงเปิดจองของฝั่งที่มีสิทธิ์ + รายชื่อคนที่เลือกให้จองก่อนได้ + เดือนสุดท้ายที่เปิดจอง
@@ -62,13 +62,18 @@ export async function PUT(request: Request) {
   const label = role === "mc" ? "Mc" : "Admin";
   if (!r.scope[role]) return fail(`บัญชีนี้ไม่มีสิทธิ์ตั้งช่วงเปิดจองของฝั่ง ${label}`, 403);
   const raw = body.window;
-  if (raw?.mode === "range" && !isDate(raw.from) && !isDate(raw.to)) return fail("กรุณาใส่วันที่อย่างน้อยหนึ่งช่อง");
+  const hasOnly = Array.isArray(raw?.only) && raw.only.length > 0;
+  for (const [p, who] of [[raw, "คนทั่วไป"], [hasOnly ? raw?.early : null, "คนที่จองก่อน"]] as const) {
+    if (p?.mode === "range" && !isDate(p.from) && !isDate(p.to)) return fail(`ช่วงของ${who}: กรุณาใส่วันที่อย่างน้อยหนึ่งช่อง`);
+  }
   const w = cleanWindow(raw);
-  if (w && w.mode === "range" && w.from && w.to && w.from > w.to) return fail("วันเริ่มต้องไม่เกินวันสุดท้าย");
+  for (const [p, who] of [[w, "คนทั่วไป"], [w?.early, "คนที่จองก่อน"]] as const) {
+    if (p && p.mode === "range" && p.from && p.to && p.from > p.to) return fail(`ช่วงของ${who}: วันเริ่มต้องไม่เกินวันสุดท้าย`);
+  }
 
   // รายชื่อจองก่อน: เก็บเฉพาะคนที่มีอยู่จริงในฝั่งนั้น
   let names: string[] = [];
-  if (w?.only.length) {
+  if (w && w.only.length) {
     const list = await people(role);
     const valid = w.only.filter((id) => list.some((p) => p.id === id));
     if (!valid.length) return fail("ไม่พบรายชื่อที่เลือก ลองรีเฟรชหน้าแล้วเลือกใหม่");
@@ -78,8 +83,10 @@ export async function PUT(request: Request) {
 
   const { error } = await db.from("settings").update({ [`book_window_${role}`]: w }).eq("id", 1);
   if (error) return fail(error.message, 500);
-  const when = !w || w.mode === "off" ? "ไม่จำกัดวัน" : w.mode === "week" ? "สัปดาห์นี้ (อัตโนมัติ)"
-    : w.from ? rangeText({ from: w.from, to: w.to }) : `ถึง ${rangeText({ from: w.to!, to: w.to })}`;
-  await writeLog(`ตั้งช่วงเปิดจอง ${label}: ${when}${names.length ? ` · จองก่อน: ${names.join(", ")}` : ""}`);
+  const when = (p: Period | null | undefined) =>
+    !p || p.mode === "off" ? "ไม่จำกัดวัน" : p.mode === "closed" ? "ปิดจอง" : p.mode === "week" ? "สัปดาห์นี้ (อัตโนมัติ)"
+      : p.from ? rangeText({ from: p.from, to: p.to }) : `ถึง ${rangeText({ from: p.to!, to: p.to })}`;
+  const early = names.length ? ` · จองก่อน (${names.join(", ")}): ${when(w?.early)}` : "";
+  await writeLog(`ตั้งช่วงเปิดจอง ${label}: ${when(w)}${early}`);
   return ok({ message: "บันทึกแล้ว" });
 }

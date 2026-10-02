@@ -1,9 +1,9 @@
 import { after } from "next/server";
 import { fail, ok, requireMe } from "@/lib/api";
 import { processSyncJobs } from "@/lib/sync";
-import { bookWindow, bookingRange, getSettings, writeLogs } from "@/lib/data";
+import { bookingRange, getSettings, personPeriod, writeLogs } from "@/lib/data";
 import { createAdminClient } from "@/lib/supabase/server";
-import { canBook, rangeText } from "@/lib/window";
+import { rangeText } from "@/lib/window";
 import type { ActionResult } from "@/lib/types";
 
 // Mc จองคิว / Admin เสริมรับคิว — แทน action "book" / "adminAssign"
@@ -32,17 +32,12 @@ export async function POST(request: Request) {
   const db = createAdminClient();
   const table = role === "mc" ? "mc_slots" : "admin_slots";
 
-  // ช่วงเปิดจอง (เจ้าของตั้งไว้) slot นอกช่วง / คนที่ไม่อยู่ในรายชื่อจองก่อน ไม่ส่งไปจอง (กันหน้าเว็บที่ยังไม่รีเฟรช)
+  // ช่วงเปิดจองของคนนี้ (เจ้าของตั้งไว้) slot นอกช่วงไม่ส่งไปจอง (กันหน้าเว็บที่ยังไม่รีเฟรช)
   // ส่วนวันที่ผ่านไปแล้ว / เดือนที่เปิดจอง ฐานข้อมูลตรวจอีกชั้นอยู่แล้ว
   let blocked: ActionResult[] = [];
-  const w = bookWindow(settings, role);
   const personId: number = role === "mc" ? r.me.mc!.id : r.me.admin!.id;
-  if (w && !canBook(w, personId)) {
-    // ใช้ข้อความเดียวกับ slot ที่มีคนจองไปแล้ว ไม่บอกว่ามีรายชื่อจองก่อน
-    const message = role === "mc" ? "slot นี้ไม่เปิดให้จองแล้ว (อาจมีคนจองไปก่อน)" : "slot นี้ไม่ได้รอ Admin แล้ว (อาจมีคนรับไปก่อน)";
-    blocked = ids.map((id) => ({ id, success: false, message }));
-  } else if (w && w.mode !== "off") {
-    const range = bookingRange(settings, role);
+  if (personPeriod(settings, role, personId).mode !== "off") {
+    const range = bookingRange(settings, role, personId);
     const { data, error } = await db.from(table).select("id, live_date").in("id", ids);
     if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
     const message = range.empty ? "ตอนนี้ยังไม่เปิดจอง" : `ตอนนี้เปิดจองเฉพาะ ${rangeText(range)}`;

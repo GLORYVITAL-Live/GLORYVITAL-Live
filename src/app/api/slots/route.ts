@@ -1,6 +1,5 @@
 import { fail, ok, requireMe } from "@/lib/api";
-import { bookWindow, getSettings, openAdminSlots, openMcSlots, scheduleNotice } from "@/lib/data";
-import { canBook } from "@/lib/window";
+import { getSettings, openAdminSlots, openMcSlots, scheduleNotice } from "@/lib/data";
 
 // หน้าแรก: ประกาศ + slot ที่ว่าง (?role=mc | admin) — แทน action "init" / "adminInit"
 // Owner ที่มีสิทธิ์ฝั่งนั้นเปิดดูได้ (ดูอย่างเดียว เห็นแบบเดียวกับ Mc / Admin เสริม)
@@ -25,13 +24,12 @@ export async function GET(request: Request) {
     }
   }
 
-  // รายชื่อจองก่อน: คนที่ไม่อยู่ในรายชื่อเห็นเหมือนไม่มี slot ว่าง (ไม่บอกว่ามีการล็อกสิทธิ์)
-  // Owner ที่เปิดดูเห็นแบบคนในรายชื่อ
-  const person = role === "mc" ? r.me.mc : r.me.admin?.isExtra ? r.me.admin : null;
-  const locked = !!person && !canBook(bookWindow(settings, role), person.id);
+  // ช่วงเปิดจองตามคน: คนในรายชื่อจองก่อนได้ช่วงของตัวเอง คนอื่นใช้ช่วงทั่วไป
+  // (ข้อความแจ้งบอกแค่ช่วงวันของคนนั้น ไม่บอกว่ามีรายชื่อจองก่อน) Owner ที่เปิดดูเห็นแบบคนทั่วไป
+  const personId = (role === "mc" ? r.me.mc : r.me.admin?.isExtra ? r.me.admin : null)?.id ?? null;
   return ok({
     siteNotice: settings.site_notice,
-    scheduleNotice: scheduleNotice(settings, role),
-    slots: locked ? [] : role === "mc" ? await openMcSlots(settings) : await openAdminSlots(settings),
+    scheduleNotice: scheduleNotice(settings, role, personId),
+    slots: role === "mc" ? await openMcSlots(settings, personId) : await openAdminSlots(settings, personId),
   });
 }
