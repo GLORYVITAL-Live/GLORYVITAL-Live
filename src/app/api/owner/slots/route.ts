@@ -100,7 +100,8 @@ export async function GET(request: Request) {
   const platforms = [...new Set((recent.data ?? []).map((p) => p.platform).filter(Boolean))].sort();
   return ok({
     date,
-    slots: visible.sort((a, b) => a.startMs - b.startMs || a.platform.localeCompare(b.platform)),
+    // เรียงแพลตฟอร์มก่อน แล้วค่อยเวลา (เหมือนในชีต)
+    slots: visible.sort((a, b) => a.platform.localeCompare(b.platform) || a.startMs - b.startMs),
     staff: {
       mc: canMc ? (staff.data ?? []).filter((s) => s.role === "mc").map((s) => ({ id: s.id, name: s.name, hasEmail: !!s.email })) : [],
       admin: canAdmin

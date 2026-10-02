@@ -82,7 +82,7 @@ export const bookingRange = (s: Settings, role: "mc" | "admin") => bookRange(boo
 /** ข้อความแจ้งบนหน้าจอง: ตั้งช่วงเปิดจองไว้ = บอกช่วงนั้น / ไม่ได้ตั้ง = "เปิดจองถึงสิ้นเดือน ..." */
 export function scheduleNotice(s: Settings, role: "mc" | "admin") {
   const w = bookWindow(s, role);
-  if (w) return windowNotice(w, bookingRange(s, role));
+  if (w && w.mode !== "off") return windowNotice(w, bookingRange(s, role));
   if (!s.schedule_cutoff_month) return "";
   if (s.schedule_notice) return s.schedule_notice;
   const [y, m] = s.schedule_cutoff_month.split("-").map(Number);

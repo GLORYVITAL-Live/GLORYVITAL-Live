@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { api, btn, useToast } from "@/components/ui";
 import type { OwnerScope } from "@/lib/types";
-import { bookRange, cleanWindow, rangeText, windowPresets, type BookWindow } from "@/lib/window";
+import { bookRange, cleanWindow, rangeText, windowPresets, type BookWindow, type WindowMode as Mode } from "@/lib/window";
 
+type Person = { id: number; name: string };
 type Data = {
   today: string;
   cutoffMonth: string;
@@ -12,8 +13,8 @@ type Data = {
   canCutoff: boolean;
   mc?: BookWindow | null;
   admin?: BookWindow | null;
+  people: { mc: Person[]; admin: Person[] };
 };
-type Mode = "off" | "week" | "range";
 
 const LABEL = { mc: "Mc", admin: "Admin เสริม" } as const;
 const field = "h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm";
@@ -24,10 +25,11 @@ const monthLabel = (m: string) => {
     .format(new Date(Date.UTC(y, mon - 1, 1)));
 };
 
-/** "จองได้ 2 – 15 ต.ค. 2026" / "ปิดจอง" */
-function effectText(w: BookWindow | null, d: Data) {
+/** "จองได้ 2 – 15 ต.ค. 2026" / "ปิดจอง" (+ "เฉพาะ 3 คน") */
+function effectText(w: BookWindow | null, d: Data, withCount = true) {
   const r = bookRange(w, d.today, d.cutoffDate);
-  return r.empty ? "ปิดจอง" : `จองได้ ${rangeText(r)}`;
+  if (r.empty) return "ปิดจอง";
+  return `จองได้ ${rangeText(r)}${withCount && w?.only.length ? ` (เฉพาะ ${w.only.length} คน)` : ""}`;
 }
 
 /** หน้าเจ้าของ > จัดการ slot: ตั้งช่วงที่ Mc / Admin เสริม จองได้ (เฉพาะฝั่งที่มีสิทธิ์) */
@@ -72,16 +74,30 @@ export function BookingWindowEditor({ scope }: { scope: OwnerScope }) {
 function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data; onSaved: () => void }) {
   const toast = useToast();
   const saved = data[role] ?? null;
-  const [mode, setMode] = useState<Mode>(saved ? saved.mode : "off");
-  const [from, setFrom] = useState(saved?.mode === "range" ? saved.from ?? "" : "");
-  const [to, setTo] = useState(saved?.mode === "range" ? saved.to ?? "" : "");
+  const people = data.people[role];
+  const [mode, setMode] = useState<Mode>(saved?.mode ?? "off");
+  const [from, setFrom] = useState(saved?.from ?? "");
+  const [to, setTo] = useState(saved?.to ?? "");
+  const [only, setOnly] = useState<number[]>(saved?.only ?? []);
   const [saving, setSaving] = useState(false);
 
-  const w: BookWindow | null = mode === "off" ? null : mode === "week" ? { mode: "week" } : cleanWindow({ mode: "range", from, to });
-  const invalid = mode === "range" && (!w ? "ใส่วันที่อย่างน้อยหนึ่งช่อง" : from && to && from > to ? "วันเริ่มต้องไม่เกินวันสุดท้าย" : "");
+  const w = cleanWindow({ mode, from, to, only });
+  const invalid = mode !== "range" ? ""
+    : !from && !to ? "ใส่วันที่อย่างน้อยหนึ่งช่อง"
+      : from && to && from > to ? "วันเริ่มต้องไม่เกินวันสุดท้าย" : "";
   const r = bookRange(w, data.today, data.cutoffDate);
-  const overCutoff = !!data.cutoffDate && w?.mode === "range" && !!w.to && w.to > data.cutoffDate;
+  const overCutoff = !!data.cutoffDate && !!w && w.mode === "range" && !!w.to && w.to > data.cutoffDate;
   const changed = JSON.stringify(w) !== JSON.stringify(saved);
+  const nameOf = (id: number) => {
+    const p = people.find((x) => x.id === id);
+    return p ? (role === "mc" ? `Mc ${p.name}` : p.name) : "(ถูกลบแล้ว)";
+  };
+  const reset = () => {
+    setMode(saved?.mode ?? "off");
+    setFrom(saved?.from ?? "");
+    setTo(saved?.to ?? "");
+    setOnly(saved?.only ?? []);
+  };
 
   async function save() {
     setSaving(true);
@@ -150,10 +166,50 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
         </>
       ) : null}
 
+      <div className="mt-3">
+        <div className="text-sm font-semibold">ให้บางคนจองก่อน</div>
+        <p className="text-xs text-muted">
+          ไม่เลือกใคร = ทุกคนจองได้ · เลือกแล้ว = เฉพาะคนในรายชื่อเห็นและจอง slot ได้ คนอื่นจะไม่เห็น slot จนกว่าจะกด &quot;เปิดให้ทุกคน&quot;
+        </p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {only.map((id) => (
+            <span key={id} className="inline-flex items-center gap-1 rounded-full bg-brand-soft py-1 pr-1 pl-2.5 text-xs font-semibold text-brand">
+              {nameOf(id)}
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setOnly(only.filter((x) => x !== id))}
+                aria-label={`เอา ${nameOf(id)} ออก`}
+                className="grid size-5 place-items-center rounded-full hover:bg-brand/15"
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+          <select
+            value=""
+            disabled={saving}
+            onChange={(e) => { const id = Number(e.target.value); if (id) setOnly([...only, id]); }}
+            aria-label={`เพิ่ม ${LABEL[role]} ที่จองก่อนได้`}
+            className="h-8 rounded-full border border-dashed border-line bg-surface px-3 text-xs font-semibold text-muted"
+          >
+            <option value="">+ เพิ่ม {LABEL[role]}</option>
+            {people.filter((p) => !only.includes(p.id)).map((p) => (
+              <option key={p.id} value={p.id}>{role === "mc" ? `Mc ${p.name}` : p.name}</option>
+            ))}
+          </select>
+          {only.length ? (
+            <button type="button" disabled={saving} onClick={() => setOnly([])} className="text-xs font-semibold text-muted hover:underline">
+              เปิดให้ทุกคน
+            </button>
+          ) : null}
+        </div>
+      </div>
+
       <div className={`mt-2 rounded-lg px-3 py-2 text-sm ${invalid || r.empty ? "border border-warn-line bg-warn-bg text-warn-ink" : "bg-brand-soft text-info-ink"}`}>
         {invalid ? invalid
           : r.empty ? `ผลลัพธ์: ตอนนี้ ${LABEL[role]} จะไม่เห็น slot ให้จองเลย`
-            : <>ผลลัพธ์: {LABEL[role]} <strong>{effectText(w, data)}</strong></>}
+            : <>ผลลัพธ์: {only.length ? `เฉพาะ ${only.map(nameOf).join(", ")}` : `${LABEL[role]} ทุกคน`} <strong>{effectText(w, data, false)}</strong></>}
         {overCutoff && !invalid ? (
           <span className="mt-1 block text-xs">
             วันสุดท้ายเกินเดือนที่เปิดจอง ระบบจะตัดที่สิ้นเดือน {monthLabel(data.cutoffMonth)} — ถ้าจะเปิดเกินนั้นให้แก้ &quot;เดือนสุดท้ายที่เปิดจอง&quot; ด้านล่าง
@@ -166,7 +222,7 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
           type="button"
           className={btn.ghost}
           disabled={saving || !changed}
-          onClick={() => { setMode(saved ? saved.mode : "off"); setFrom(saved?.mode === "range" ? saved.from ?? "" : ""); setTo(saved?.mode === "range" ? saved.to ?? "" : ""); }}
+          onClick={reset}
         >
           ยกเลิกที่แก้
         </button>

@@ -3,7 +3,7 @@ import { fail, ok, requireMe } from "@/lib/api";
 import { processSyncJobs } from "@/lib/sync";
 import { bookWindow, bookingRange, getSettings, writeLogs } from "@/lib/data";
 import { createAdminClient } from "@/lib/supabase/server";
-import { rangeText } from "@/lib/window";
+import { canBook, rangeText } from "@/lib/window";
 import type { ActionResult } from "@/lib/types";
 
 // Mc จองคิว / Admin เสริมรับคิว — แทน action "book" / "adminAssign"
@@ -32,10 +32,14 @@ export async function POST(request: Request) {
   const db = createAdminClient();
   const table = role === "mc" ? "mc_slots" : "admin_slots";
 
-  // ช่วงเปิดจอง (เจ้าของตั้งไว้) slot นอกช่วงไม่ส่งไปจอง (กันหน้าเว็บที่ยังไม่รีเฟรช)
+  // ช่วงเปิดจอง (เจ้าของตั้งไว้) slot นอกช่วง / คนที่ไม่อยู่ในรายชื่อจองก่อน ไม่ส่งไปจอง (กันหน้าเว็บที่ยังไม่รีเฟรช)
   // ส่วนวันที่ผ่านไปแล้ว / เดือนที่เปิดจอง ฐานข้อมูลตรวจอีกชั้นอยู่แล้ว
   let blocked: ActionResult[] = [];
-  if (bookWindow(settings, role)) {
+  const w = bookWindow(settings, role);
+  const personId: number = role === "mc" ? r.me.mc!.id : r.me.admin!.id;
+  if (w && !canBook(w, personId)) {
+    blocked = ids.map((id) => ({ id, success: false, message: "ตอนนี้เปิดให้จองเฉพาะบางคนก่อน รอทีมงานเปิดให้ทุกคน" }));
+  } else if (w && w.mode !== "off") {
     const range = bookingRange(settings, role);
     const { data, error } = await db.from(table).select("id, live_date").in("id", ids);
     if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
