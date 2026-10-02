@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PersonPicker } from "@/components/SlotManager";
 import { api, btn, useToast } from "@/components/ui";
 import type { OwnerScope } from "@/lib/types";
 import { bookRange, cleanWindow, rangeText, windowPresets, type BookWindow, type WindowMode as Mode } from "@/lib/window";
@@ -78,9 +79,11 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
   const [mode, setMode] = useState<Mode>(saved?.mode ?? "off");
   const [from, setFrom] = useState(saved?.from ?? "");
   const [to, setTo] = useState(saved?.to ?? "");
-  const [only, setOnly] = useState<number[]>(saved?.only ?? []);
+  // รายชื่อจองก่อน: หนึ่งแถว = หนึ่งคน (null = แถวที่กด + แล้วยังไม่ได้เลือกชื่อ)
+  const [rows, setRows] = useState<(number | null)[]>(saved?.only ?? []);
   const [saving, setSaving] = useState(false);
 
+  const only = rows.filter((id): id is number => id !== null);
   const w = cleanWindow({ mode, from, to, only });
   const invalid = mode !== "range" ? ""
     : !from && !to ? "ใส่วันที่อย่างน้อยหนึ่งช่อง"
@@ -96,8 +99,9 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
     setMode(saved?.mode ?? "off");
     setFrom(saved?.from ?? "");
     setTo(saved?.to ?? "");
-    setOnly(saved?.only ?? []);
+    setRows(saved?.only ?? []);
   };
+  const label = (p: Person) => (role === "mc" ? `Mc ${p.name}` : p.name);
 
   async function save() {
     setSaving(true);
@@ -171,38 +175,46 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
         <p className="text-xs text-muted">
           ไม่เลือกใคร = ทุกคนจองได้ · เลือกแล้ว = เฉพาะคนในรายชื่อเห็นและจอง slot ได้ คนอื่นจะไม่เห็น slot จนกว่าจะกด &quot;เปิดให้ทุกคน&quot;
         </p>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          {only.map((id) => (
-            <span key={id} className="inline-flex items-center gap-1 rounded-full bg-brand-soft py-1 pr-1 pl-2.5 text-xs font-semibold text-brand">
-              {nameOf(id)}
+        <div className="mt-1.5 space-y-1.5">
+          {rows.map((id, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="w-5 shrink-0 text-right text-xs text-muted">{i + 1}.</span>
+              <PersonPicker
+                label={`${LABEL[role]} ที่จองก่อน`}
+                value={id}
+                // ตัดคนที่อยู่แถวอื่นแล้วออก กันเลือกซ้ำ
+                options={people.filter((p) => p.id === id || !rows.includes(p.id)).map((p) => ({ id: p.id, text: label(p) }))}
+                disabled={saving}
+                emptyText={`— พิมพ์หรือเลือกชื่อ ${LABEL[role]} —`}
+                hideEmpty
+                onChange={(next) => setRows(rows.map((x, j) => (j === i ? next : x)))}
+              />
               <button
                 type="button"
                 disabled={saving}
-                onClick={() => setOnly(only.filter((x) => x !== id))}
-                aria-label={`เอา ${nameOf(id)} ออก`}
-                className="grid size-5 place-items-center rounded-full hover:bg-brand/15"
+                onClick={() => setRows(rows.filter((_, j) => j !== i))}
+                aria-label={`ลบแถวที่ ${i + 1}`}
+                className="grid size-9 shrink-0 place-items-center rounded-lg border border-line text-muted hover:text-ink"
               >
                 ✕
               </button>
-            </span>
+            </div>
           ))}
-          <select
-            value=""
-            disabled={saving}
-            onChange={(e) => { const id = Number(e.target.value); if (id) setOnly([...only, id]); }}
-            aria-label={`เพิ่ม ${LABEL[role]} ที่จองก่อนได้`}
-            className="h-8 rounded-full border border-dashed border-line bg-surface px-3 text-xs font-semibold text-muted"
-          >
-            <option value="">+ เพิ่ม {LABEL[role]}</option>
-            {people.filter((p) => !only.includes(p.id)).map((p) => (
-              <option key={p.id} value={p.id}>{role === "mc" ? `Mc ${p.name}` : p.name}</option>
-            ))}
-          </select>
-          {only.length ? (
-            <button type="button" disabled={saving} onClick={() => setOnly([])} className="text-xs font-semibold text-muted hover:underline">
-              เปิดให้ทุกคน
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={saving || rows.includes(null) || only.length >= people.length}
+              onClick={() => setRows([...rows, null])}
+              className="h-9 rounded-lg border border-dashed border-line px-3 text-sm font-semibold text-muted hover:text-ink disabled:opacity-50"
+            >
+              + เพิ่ม {LABEL[role]}{rows.length ? "อีกคน" : ""}
             </button>
-          ) : null}
+            {rows.length ? (
+              <button type="button" disabled={saving} onClick={() => setRows([])} className="text-xs font-semibold text-muted hover:underline">
+                เปิดให้ทุกคน (ล้างรายชื่อ)
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 

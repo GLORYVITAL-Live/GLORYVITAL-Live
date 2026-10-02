@@ -306,12 +306,14 @@ function SideRow({ label, side, people, busy, onPerson, onStatus }: {
  * เลือกคน: กดเปิดเป็น dropdown หรือพิมพ์ชื่อเพื่อกรองรายการ
  * คีย์บอร์ด: ↑ ↓ เลื่อน / Enter เลือก / Esc ปิด
  */
-function PersonPicker({ label, value, options, disabled, onChange }: {
+export function PersonPicker({ label, value, options, disabled, onChange, emptyText = "— ว่าง —", hideEmpty = false }: {
   label: string;
   value: number | null;
   options: { id: number; text: string }[];
   disabled: boolean;
   onChange: (personId: number | null) => void;
+  emptyText?: string; // ข้อความตอนยังไม่เลือก
+  hideEmpty?: boolean; // ไม่มีตัวเลือก "ว่าง" ในรายการ
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -320,10 +322,10 @@ function PersonPicker({ label, value, options, disabled, onChange }: {
   const listRef = useRef<HTMLUListElement>(null);
   const listId = useId();
 
-  const all = [{ id: null as number | null, text: "— ว่าง —" }, ...options];
+  const all = [...(hideEmpty ? [] : [{ id: null as number | null, text: emptyText }]), ...options];
   const q = query.trim().toLowerCase();
   const shown = q ? all.filter((o) => o.id !== null && o.text.toLowerCase().includes(q)) : all;
-  const current = all.find((o) => o.id === value)?.text ?? "— ว่าง —";
+  const current = all.find((o) => o.id === value)?.text ?? emptyText;
 
   // คลิกนอกกล่อง = ปิด
   useEffect(() => {
@@ -380,7 +382,7 @@ function PersonPicker({ label, value, options, disabled, onChange }: {
           type="button"
           disabled={disabled}
           onClick={openList}
-          aria-label={`${label} ของ slot นี้: ${current}`}
+          aria-label={`${label}: ${current}`}
           className={`${selectCls} flex w-full items-center justify-between gap-1 text-left`}
         >
           <span className="truncate">{current}</span>
