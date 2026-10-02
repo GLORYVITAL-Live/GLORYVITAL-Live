@@ -31,6 +31,7 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
   const [busy, setBusy] = useState<string | null>(null); // key ของ slot ที่กำลังบันทึก
   const [createOpen, setCreateOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [resyncOpen, setResyncOpen] = useState(false);
   const reload = () => setTick((n) => n + 1);
   const [syncing, setSyncing] = useState(false);
 
@@ -134,9 +135,14 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
         <button type="button" className={`${btn.ghost} !py-1.5`} onClick={() => setDate(todayKey())}>วันนี้</button>
         <div className="ml-auto flex flex-wrap justify-end gap-2">
           {scope.mc && scope.admin ? (
-            <button type="button" className={btn.ghost} onClick={() => setCleanupOpen(true)} title="หา event ซ้ำ / ค้างในปฏิทินของพนักงาน แล้วลบ">
-              ล้าง event ซ้ำ
-            </button>
+            <>
+              <button type="button" className={btn.ghost} onClick={() => setResyncOpen(true)} title="เช็กทุกคิวตั้งแต่วันนี้กับปฏิทินจริง สร้าง event ที่หาย / แก้ที่ไม่ตรง">
+                ซิงค์ปฏิทินใหม่ทั้งหมด
+              </button>
+              <button type="button" className={btn.ghost} onClick={() => setCleanupOpen(true)} title="หา event ซ้ำ / ค้างในปฏิทินของพนักงาน แล้วลบ">
+                ล้าง event ซ้ำ
+              </button>
+            </>
           ) : null}
           <button type="button" className={btn.ghost} disabled={syncing} onClick={syncFromSheet} title="อ่านทุกแถวในชีตมาอัปเดตเว็บ (ใช้เมื่อแก้ในชีตแล้วเว็บไม่เปลี่ยน)">
             {syncing ? "กำลังซิงค์..." : "ซิงค์จากชีตทั้งหมด"}
@@ -184,6 +190,7 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
       )}
 
       {cleanupOpen ? <CalendarCleanup onClose={() => setCleanupOpen(false)} /> : null}
+      {resyncOpen ? <CalendarResync onClose={() => setResyncOpen(false)} /> : null}
 
       {createOpen ? (
         <CreateDialog
@@ -402,6 +409,83 @@ function PersonPicker({ label, value, options, disabled, onChange }: {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+// ---------- ซิงค์ปฏิทินใหม่ทั้งหมด ----------
+
+type ResyncStep = { queued: number; done: number; failed: number; busy: boolean; remaining: number };
+
+/** จดงานของทุกคิวตั้งแต่วันนี้ แล้วเรียกทำต่อเรื่อยๆ จนงานหมด (แต่ละครั้ง ~40 วินาที) */
+function CalendarResync({ onClose }: { onClose: () => void }) {
+  const [state, setState] = useState<"running" | "done" | "error">("running");
+  const [total, setTotal] = useState(0);
+  const [done, setDone] = useState(0);
+  const [failed, setFailed] = useState(0);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let first = true, busyTries = 0;
+      while (alive) {
+        try {
+          const r = await api<ResyncStep>("/api/owner/calendar-resync", { start: first });
+          if (!r.ok) throw new Error(r.message);
+          if (!alive) return;
+          if (first) setTotal(r.queued);
+          first = false;
+          setDone((n) => n + r.done);
+          setFailed((n) => n + r.failed);
+          setRemaining(r.remaining);
+          if (r.remaining === 0) { setState("done"); return; }
+          // มีงานปฏิทินอื่นถือล็อกอยู่ รอแล้วลองใหม่ (ไม่เกิน ~1 นาที)
+          if (r.busy) {
+            if (++busyTries > 20) throw new Error("มีงานลงปฏิทินอื่นทำอยู่นานเกินไป ลองใหม่อีกครั้งภายหลัง");
+            await new Promise((ok) => setTimeout(ok, 3000));
+          } else busyTries = 0;
+        } catch (err) {
+          if (alive) { setError((err as Error).message); setState("error"); }
+          return;
+        }
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const running = state === "running";
+  const pct = total ? Math.max(0, Math.min(100, Math.round(((total - (remaining ?? total)) / total) * 100))) : 0;
+  return (
+    <Sheet open onClose={onClose} busy={false} labelledBy="resyncTitle">
+      <SheetHead
+        id="resyncTitle"
+        title="ซิงค์ปฏิทินใหม่ทั้งหมด"
+        note={running
+          ? "กำลังเช็กทุกคิวตั้งแต่วันนี้กับปฏิทินของพนักงาน: สร้าง event ที่หาย แก้ที่ไม่ตรง ลบของคิวที่ไม่มีคนแล้ว (เปิดหน้านี้ค้างไว้จนเสร็จ)"
+          : state === "done" ? "เสร็จแล้ว ปฏิทินตรงกับคิวในระบบ ถ้ายังมี event ซ้ำ ให้กด \"ล้าง event ซ้ำ\" ต่อ"
+            : error}
+      />
+      <div className="text-sm">
+        <div className="h-2 overflow-hidden rounded-full bg-line">
+          <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${state === "done" ? 100 : pct}%` }} />
+        </div>
+        <div className="mt-2 flex justify-between text-xs text-muted tabular-nums">
+          <span>ทำแล้ว {done} งาน{failed ? ` · ไม่สำเร็จ ${failed}` : ""}</span>
+          <span>{remaining === null ? "กำลังเริ่ม..." : `เหลือ ${remaining} งาน`}</span>
+        </div>
+        {failed ? (
+          <p className="mt-2 text-xs text-muted">
+            งานที่ไม่สำเร็จมักเกิดจากพนักงานยังไม่ได้แชร์ปฏิทินให้ระบบ ระบบจะลองใหม่เองอีกไม่เกิน 5 ครั้ง
+          </p>
+        ) : null}
+      </div>
+      <div className="mt-4 flex justify-end">
+        <button type="button" className={running ? btn.ghost : btn.primary} onClick={onClose}>
+          {running ? "ปิด (งานที่เหลือจะค่อยๆ ทำต่อเองช้าๆ)" : "ปิด"}
+        </button>
+      </div>
+    </Sheet>
   );
 }
 

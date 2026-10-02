@@ -79,8 +79,10 @@ function eventFor(table: Table, s: Slot, partner: Slot | undefined): calendar_v3
   const platform = s.platform || "Live";
   // ป้ายบอกว่า event นี้เว็บสร้าง (ของ slot ไหน) ใช้หา event ซ้ำ/ค้างตอนเก็บกวาด
   const tag = { private: { [TAG_KEY]: `${table}:${s.id}` } };
+  // status confirmed: ถ้า event เดิมถูกลบไปจากปฏิทิน (ยังอยู่ในถังขยะของ Google) การ patch จะกู้กลับมาให้เห็นอีกครั้ง
   if (table === "mc_slots") {
     return {
+      status: "confirmed",
       summary: `${platform} - Mc ${p.name}`,
       description: other ? `Admin: ${other.name} (${other.phone || "ไม่พบเบอร์โทร"})` : "Admin: ยังไม่มี Admin สำหรับ slot นี้",
       start: { dateTime: s.starts_at, timeZone: TZ },
@@ -89,6 +91,7 @@ function eventFor(table: Table, s: Slot, partner: Slot | undefined): calendar_v3
     };
   }
   return {
+    status: "confirmed",
     summary: `Admin ${platform} - ${p.name}`,
     description: other ? `Mc: Mc ${other.name} (${other.phone || "ไม่พบเบอร์"})` : "Mc: ยังไม่มี Mc จอง slot นี้",
     start: { dateTime: s.starts_at, timeZone: TZ },
@@ -153,31 +156,68 @@ export async function deleteCalendarEvent(email: string, eventId: string) {
   }
 }
 
-/** sync slot นี้และ slot คู่ของอีกฝั่ง */
+/** sync slot นี้และ slot คู่ของอีกฝั่ง คืนรายการ slot ที่ sync แล้ว ("ตาราง|id") */
 async function syncPair(cal: calendar_v3.Calendar, table: Table, id: number) {
   const s = await loadSlot(table, id);
-  if (!s) return;
+  if (!s) return [`${table}|${id}`];
   const otherTable: Table = table === "mc_slots" ? "admin_slots" : "mc_slots";
   const partners = await loadPartners(otherTable, s);
   const partner = partners.find(active) ?? partners[0];
 
   await syncOne(cal, table, s, partner);
   for (const p of partners) await syncOne(cal, otherTable, p, active(s) ? s : undefined);
+  return [`${table}|${id}`, ...partners.map((p) => `${otherTable}|${p.id}`)];
+}
+
+/** จำนวนงานลงปฏิทินที่ยังค้าง */
+export async function pendingCalendarJobs() {
+  const { count, error } = await createAdminClient().from("calendar_jobs")
+    .select("id", { count: "exact", head: true }).is("done_at", null).lt("attempts", MAX_ATTEMPTS);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/**
+ * ซิงค์ปฏิทินใหม่ทั้งหมด: จดงานลงปฏิทินของทุกคิวตั้งแต่วันนี้ (มีคน หรือยังมี event ค้าง)
+ * แต่ละงานจะสร้าง event ที่หาย / แก้ที่ไม่ตรง / กู้ที่ถูกลบ / ลบของคิวที่ไม่มีคนแล้ว
+ */
+export async function enqueueUpcomingCalendar() {
+  const db = createAdminClient();
+  const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const jobs: { slot_table: Table; slot_id: number }[] = [];
+  for (const table of ["mc_slots", "admin_slots"] as const) {
+    const col = table === "mc_slots" ? "mc_id" : "admin_id";
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await db.from(table).select("id").gte("live_date", today)
+        .or(`${col}.not.is.null,calendar_event_id.not.is.null`).order("id").range(from, from + 999);
+      if (error) throw error;
+      for (const r of data ?? []) jobs.push({ slot_table: table, slot_id: r.id });
+      if (!data || data.length < 1000) break;
+    }
+  }
+  for (let i = 0; i < jobs.length; i += 500) {
+    const { error } = await db.from("calendar_jobs").insert(jobs.slice(i, i + 500));
+    if (error) throw error;
+  }
+  return jobs.length;
 }
 
 /**
  * ทำงานในคิวปฏิทินที่ค้างอยู่ (เรียกหลังตอบผู้ใช้แล้ว และจาก cron)
  * ทำทีละหนึ่งคำขอ (ล็อก "calendar") ไม่งั้นคำขอที่เข้ามาพร้อมกันจะหยิบงานเดียวกันไปสร้าง event ซ้ำ
- * คนที่ถือล็อกวนทำจนงานหมด (รวมงานที่เข้ามาระหว่างทำ) คืนจำนวนงานที่ทำสำเร็จ / ไม่สำเร็จ
+ * คนที่ถือล็อกวนทำจนงานหมด (รวมงานที่เข้ามาระหว่างทำ) หรือจนหมดเวลา budgetMs (งานที่เหลือทำรอบหน้า)
+ * คืนจำนวนงานที่ทำสำเร็จ / ไม่สำเร็จ
  */
-export async function processCalendarJobs(limit = 30) {
+export async function processCalendarJobs(limit = 30, budgetMs = 40_000) {
   const cal = calendarApi();
   if (!cal) return { done: 0, failed: 0, skipped: "ยังไม่ได้เชื่อมบัญชี Google (bun run google:auth)" };
 
+  const started = Date.now();
   const result = await withSyncLock("calendar", async () => {
     const db = createAdminClient();
     let done = 0, failed = 0;
-    for (let round = 0; round < 5; round++) {
+    const seen = new Set<string>(); // slot ที่ sync แล้วในรอบนี้ (รวม slot คู่) ไม่ต้องทำซ้ำ
+    for (let round = 0; round < 50 && Date.now() - started < budgetMs; round++) {
       const { data: jobs, error } = await db
         .from("calendar_jobs")
         .select("id, slot_table, slot_id, attempts")
@@ -188,11 +228,11 @@ export async function processCalendarJobs(limit = 30) {
       if (error) throw error;
       if (!jobs?.length) break;
 
-      const seen = new Set<string>();
       for (const job of jobs) {
+        if (Date.now() - started > budgetMs) break;
         const k = `${job.slot_table}|${job.slot_id}`;
         try {
-          if (!seen.has(k)) await syncPair(cal, job.slot_table as Table, job.slot_id);
+          if (!seen.has(k)) for (const x of await syncPair(cal, job.slot_table as Table, job.slot_id)) seen.add(x);
           seen.add(k);
           await db.from("calendar_jobs").update({ done_at: new Date().toISOString(), last_error: null }).eq("id", job.id);
           done++;
@@ -222,8 +262,11 @@ export async function cleanupCalendarEvents(dryRun: boolean) {
   if (!cal) throw new Error("ยังไม่ได้เชื่อมบัญชี Google");
   const db = createAdminClient();
 
-  // ทำงานลงปฏิทินที่ค้างให้หมดก่อน (event ของคิวที่เพิ่งจองจะได้ถูกจดไว้ ไม่ถูกนับเป็นของค้าง)
-  await processCalendarJobs();
+  // ทำงานลงปฏิทินที่ค้างก่อน (event ของคิวที่เพิ่งจองจะได้ถูกจดไว้ ไม่ถูกนับเป็นของค้าง) จำกัดเวลาไม่ให้เกินเวลาของคำขอ
+  await processCalendarJobs(30, 10_000);
+  if ((await pendingCalendarJobs()) > 0) {
+    throw new Error("ยังมีงานลงปฏิทินค้างอยู่ กด \"ซิงค์ปฏิทินใหม่ทั้งหมด\" ให้เสร็จก่อน แล้วค่อยล้าง event ซ้ำ");
+  }
 
   return withSyncLock("calendar", async () => {
     const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
