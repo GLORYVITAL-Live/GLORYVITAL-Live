@@ -7,6 +7,7 @@ import type { Me, OwnerScope, Role } from "@/lib/types";
 import { BookingWindowEditor } from "@/components/BookingWindow";
 import { MySchedule } from "@/components/MySchedule";
 import { OwnerView } from "@/components/OwnerView";
+import { ProofPage } from "@/components/ProofPage";
 import { RulesDialog } from "@/components/RulesDialog";
 import { RulesEditor } from "@/components/RulesEditor";
 import { SlotBoard } from "@/components/SlotBoard";
@@ -31,7 +32,15 @@ export const MODES = {
     hint: "ดูสรุปชั่วโมงและค่าจ้างรายเดือน และเพิ่ม/แก้ไข slot ไลฟ์ของ Mc และ Admin",
     rule: "",
   },
+  proof: {
+    sub: "Live proof", title: "หลักฐานไลฟ์", label: "หลักฐานไลฟ์",
+    hint: "แนบรูปแดชบอร์ด TikTok LIVE พร้อมเวลาเริ่ม–จบไลฟ์จริงของแต่ละ slot ใช้เป็นหลักฐานทำเบิก",
+    rule: "",
+  },
 } as const;
+
+/** หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) */
+type Page = Role | "proof";
 
 const ROLE_KEY = "glory_booking_role";
 const THEME_KEY = "glory_booking_theme";
@@ -67,9 +76,11 @@ function Shell({ me }: { me: Me | null }) {
   const router = useRouter();
   const toast = useToast();
   const roles = rolesOf(me);
-  // บทบาทที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
-  const savedRole = useLocal(ROLE_KEY) as Role | null;
-  const role: Role | null = savedRole && roles.includes(savedRole) ? savedRole : roles[0] ?? null;
+  const pages: Page[] = me && (me.admin || me.owner?.mc) ? [...roles, "proof"] : roles;
+  // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
+  const savedPage = useLocal(ROLE_KEY) as Page | null;
+  const page: Page | null = savedPage && pages.includes(savedPage) ? savedPage : pages[0] ?? null;
+  const role: Role | null = page === "proof" ? null : page;
   const preview = isPreview(me, role);
   const [myOpen, setMyOpen] = useState(false);
   const [rulesManual, setRulesManual] = useState(false);
@@ -90,12 +101,12 @@ function Shell({ me }: { me: Me | null }) {
     if (new URLSearchParams(location.search).has("authError")) toast("เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่", "error");
   }, [toast]);
 
-  const mode = role ? MODES[role] : null;
+  const mode = page ? MODES[page] : null;
   useEffect(() => {
     document.title = mode ? `${mode.title} | GLORY VITAL` : "GLORY VITAL Live";
   }, [mode]);
 
-  function setRole(next: Role) {
+  function setRole(next: Page) {
     writeLocal(ROLE_KEY, next);
     toast("ไปที่" + MODES[next].label + "แล้ว");
   }
@@ -120,17 +131,19 @@ function Shell({ me }: { me: Me | null }) {
   }
 
   const registered = roles.length > 0;
-  const name = me && role ? displayName(me, role) : "";
+  const name = me && role ? displayName(me, role) : me && page === "proof" ? me.owner?.name || me.admin?.name || "" : "";
 
   // เมนูเลือกหน้า: จอกว้างอยู่ในแถวบน / มือถืออยู่แถวที่ 2 เต็มความกว้าง (แถวบนจะได้ไม่ล้นจอจนปุ่มทับกัน)
-  const rolePicker = (cls: string) => roles.length > 1 && role ? (
+  const rolePicker = (cls: string) => pages.length > 1 && page ? (
     <select
       aria-label="เลือกหน้า"
-      value={role}
-      onChange={(e) => setRole(e.target.value as Role)}
+      value={page}
+      onChange={(e) => setRole(e.target.value as Page)}
       className={`h-9 rounded-full border border-line bg-surface px-3 text-sm font-medium ${cls}`}
     >
-      {roles.map((r) => <option key={r} value={r}>{MODES[r].label}{isPreview(me, r) ? " (ดูอย่างเดียว)" : ""}</option>)}
+      {pages.map((p) => (
+        <option key={p} value={p}>{MODES[p].label}{p !== "proof" && isPreview(me, p) ? " (ดูอย่างเดียว)" : ""}</option>
+      ))}
     </select>
   ) : null;
 
@@ -158,10 +171,10 @@ function Shell({ me }: { me: Me | null }) {
             <div className="flex shrink-0 items-center gap-1 rounded-full border border-line bg-surface p-1 shadow-card">
               <button
                 type="button"
-                disabled={!registered || role === "owner" || preview}
+                disabled={!registered || !role || role === "owner" || preview}
                 onClick={() => setMyOpen(true)}
-                title={role === "owner" || preview ? "" : "ดูตารางของฉัน"}
-                aria-label={role === "owner" || preview ? name : "ดูตารางของฉัน"}
+                title={!role || role === "owner" || preview ? "" : "ดูตารางของฉัน"}
+                aria-label={!role || role === "owner" || preview ? name : "ดูตารางของฉัน"}
                 className="flex min-w-0 items-center gap-2 rounded-full p-0.5 text-left enabled:hover:bg-brand-soft sm:pr-2"
               >
                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-brand-ink" aria-hidden>
@@ -213,6 +226,7 @@ function Shell({ me }: { me: Me | null }) {
 
       {me?.owner && role === "owner" ? <OwnerTabs scope={{ mc: me.owner.mc, admin: me.owner.admin }} /> : null}
       {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
+      {me && registered && page === "proof" ? <ProofPage /> : null}
       {!me || !registered ? (
         <div className="my-6 rounded-2xl border border-dashed border-line bg-surface px-5 py-8 text-center text-sm text-muted">
           <strong className="mb-1 block text-base text-ink">เข้าสู่ระบบเพื่อดูตาราง</strong>

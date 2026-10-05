@@ -1,8 +1,8 @@
 import "server-only";
 import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
-import { bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
-import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary } from "@/lib/types";
+import { addDays, bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
+import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -39,7 +39,7 @@ type SlotRow = {
 const SLOT_COLS = "id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed, status, is_cancelled, late_minutes, bonus_minutes";
 
 /** PostgREST คืนได้ครั้งละ 1000 แถว อ่านทีละหน้าจนหมด */
-async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>) {
+export async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>) {
   const out: T[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await build(from, from + 999);
@@ -47,6 +47,32 @@ async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ da
     out.push(...(data ?? []));
     if (!data || data.length < 1000) return out;
   }
+}
+
+type ProofRow = {
+  id: number; started_at: string; ended_at: string; uploaded_by_name: string; uploaded_by_email: string;
+  slots: { mc_slot_id: number }[] | null;
+};
+
+/** หลักฐานไลฟ์ที่ผูกกับ slot ของ Mc ในช่วงวันที่: Map<mc_slot_id, หลักฐาน> (ยังไม่ได้รัน SQL = ว่าง) */
+export async function proofsBySlot(db: Db, first: string, last: string) {
+  const map = new Map<number, ProofInfo & { email: string }>();
+  const { data, error } = await db.from("live_proofs")
+    .select("id, started_at, ended_at, uploaded_by_name, uploaded_by_email, slots:live_proof_slots(mc_slot_id)")
+    // หลักฐานลงวันที่ของ slot แรก เผื่อ slot ที่ผูกไว้เป็นของวันถัดไป
+    .gte("live_date", addDays(first, -1)).lte("live_date", last);
+  if (error) {
+    console.warn("โหลดหลักฐานไลฟ์ไม่สำเร็จ (รัน SQL live_proofs แล้วหรือยัง?):", error.message);
+    return map;
+  }
+  for (const p of (data ?? []) as unknown as ProofRow[]) {
+    for (const s of p.slots ?? []) {
+      map.set(Number(s.mc_slot_id), {
+        id: Number(p.id), startedAt: p.started_at, endedAt: p.ended_at, by: p.uploaded_by_name, email: p.uploaded_by_email,
+      });
+    }
+  }
+  return map;
 }
 
 const hm = (t: string) => t.slice(0, 5);
@@ -199,7 +225,15 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         .or("confirmed.is.null,confirmed.eq.true")
         .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
     );
-  const [mcRows, adminRows] = await Promise.all([load("mc_slots", "mc_id"), load("admin_slots", "admin_id")]);
+  const [mcRows, adminRows, proofs] = await Promise.all([
+    load("mc_slots", "mc_id"), load("admin_slots", "admin_id"), proofsBySlot(db, first, last),
+  ]);
+  // หลักฐานไลฟ์ผูกกับ slot ของ Mc -> ฝั่ง Admin ของ slot เดียวกันใช้หลักฐานเดียวกัน
+  const proofOf = new Map<string, ProofInfo>();
+  for (const r of mcRows) {
+    const p = proofs.get(Number(r.id));
+    if (p) proofOf.set(slotKey(r), { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by });
+  }
 
   const rates: OwnerSummary["rates"] = {
     mc: {}, admin: {}, defaultMc: Number(settings.default_mc_rate) || 0, defaultAdmin: Number(settings.default_admin_rate) || 0,
@@ -216,6 +250,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         hours: hoursOf(r), startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
         lateMinutes: r.late_minutes ?? null,
         bonusMinutes: r.bonus_minutes ?? null,
+        proof: proofOf.get(slotKey(r)) ?? null,
       });
     }
   };

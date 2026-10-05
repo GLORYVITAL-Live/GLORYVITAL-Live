@@ -76,6 +76,24 @@ export type OwnerDetail = {
   pair: string;
   lateMinutes: number | null;
   bonusMinutes: number | null;
+  proof: ProofInfo | null; // หลักฐานไลฟ์ (รูปแดชบอร์ด + เวลาจริง) ของ slot นี้
+};
+
+/** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */
+export type ProofInfo = { id: number; startedAt: string; endedAt: string; by: string };
+
+/** slot ในหน้าหลักฐานไลฟ์ (slot ของ Mc ที่มีคนไลฟ์และไม่ถูกยกเลิก) */
+export type ProofSlot = {
+  mcSlotId: number;
+  platform: string;
+  date: string;
+  start: string;
+  end: string;
+  startMs: number;
+  endMs: number;
+  mcName: string;
+  adminName: string;
+  proof: (ProofInfo & { canDelete: boolean }) | null;
 };
 
 /**

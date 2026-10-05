@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import type { OwnerPerson, OwnerSummary } from "@/lib/types";
+import type { OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
 import { MonthNav, StateBox, Stats, api, btn } from "@/components/ui";
@@ -29,6 +29,15 @@ function dailyOf(data: OwnerSummary, type: Type, name: string) {
 
 const shortTime = (t: string) => String(t || "").replace(/^0(\d):/, "$1:");
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// หลักฐานไลฟ์: เวลาเริ่ม–จบจริง (เวลาไทย) + ลิงก์เปิดรูป
+const hms = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+const proofTime = (p: ProofInfo) => `${hms.format(new Date(p.startedAt))}–${hms.format(new Date(p.endedAt))}`;
+const proofUrl = (p: ProofInfo) => `/api/proofs/image?id=${p.id}`;
+
+/** คิวที่ไม่ถูกยกเลิกของคนหนึ่ง เรียงตามเวลา */
+const slotsOf = (data: OwnerSummary, type: Type, name: string) =>
+  data.details.filter((d) => d.type === type && d.name === name && !d.cancelled).sort((a, b) => a.startMs - b.startMs);
 
 // ---------- CSV (+ BOM ให้ Excel อ่านภาษาไทยได้ถูก) ----------
 
@@ -68,12 +77,12 @@ function downloadSummary(data: OwnerSummary) {
 
 // ใบสรุปค่าจ้างรายคน: ทุกคิวของแต่ละคน + แถวรวมต่อคน (ไม่นับคิวที่ยกเลิก หักมาสายตามกฎ + ไลฟ์ชดเชย)
 function downloadPayroll(data: OwnerSummary) {
-  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
+  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน", "ไลฟ์จริง (หลักฐาน)"]];
   for (const [type, people] of groups(data)) {
     let groupHours = 0, groupMoney = 0;
     for (const p of people) {
       const rate = rateOf(data, type, p.name);
-      const items = data.details.filter((d) => d.type === type && d.name === p.name && !d.cancelled).sort((a, b) => a.startMs - b.startMs);
+      const items = slotsOf(data, type, p.name);
       if (!items.length) continue;
       let h = 0, paid = 0;
       for (const d of items) {
@@ -87,6 +96,7 @@ function downloadPayroll(data: OwnerSummary) {
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), hrs,
           d.lateMinutes || "", cut ? `${Math.round(cut * 100)}%` : "",
           bonus ? `+${d.bonusMinutes} (คิด ${bonus})` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
+          d.proof ? proofTime(d.proof) : "ยังไม่มีหลักฐาน",
         ]);
       }
       const m = rate ? Math.round(paid * rate) : 0;
@@ -119,11 +129,11 @@ function downloadDaily(data: OwnerSummary) {
 }
 
 function downloadDetail(data: OwnerSummary) {
-  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "ชั่วโมง", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)"]];
+  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "ชั่วโมง", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)", "ไลฟ์จริง (หลักฐาน)", "แนบโดย"]];
   for (const d of data.details) {
     rows.push([
       d.type, d.name, d.date, d.start, d.end, d.platform, d.hours, d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
-      d.lateMinutes || "", d.bonusMinutes ? `+${d.bonusMinutes}` : "",
+      d.lateMinutes || "", d.bonusMinutes ? `+${d.bonusMinutes}` : "", d.proof ? proofTime(d.proof) : "", d.proof?.by ?? "",
     ]);
   }
   downloadCsv(`glory-detail-${data.month}.csv`, rows);
@@ -226,7 +236,7 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
         <thead className="bg-brand-soft text-left text-xs text-muted">
           <tr>
             <th className={th_}>ชื่อ</th>
-            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "ยอดเงิน"].map((h) => <th key={h} className={`${th_} text-right`}>{h}</th>)}
+            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "หลักฐาน", "ยอดเงิน"].map((h) => <th key={h} className={`${th_} text-right`}>{h}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -234,6 +244,8 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
             const rate = rateOf(data, type, r.name);
             const isOpen = open.has(r.name);
             const daily = isOpen ? dailyOf(data, type, r.name) : [];
+            const items = slotsOf(data, type, r.name);
+            const proved = items.filter((d) => d.proof).length;
             return (
               <Fragment key={r.name}>
                 <tr
@@ -265,11 +277,17 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                   <td className={`${td} text-right tabular-nums whitespace-nowrap ${r.bonusMinutes ? "font-semibold text-ok" : ""}`}>
                     {r.bonusMinutes ? `+${r.bonusMinutes} น.` : "–"}
                   </td>
+                  <td
+                    title="slot ที่มีหลักฐานไลฟ์ / slot ทั้งหมด"
+                    className={`${td} text-right tabular-nums whitespace-nowrap ${proved === items.length ? "text-ok" : "font-semibold text-err"}`}
+                  >
+                    {proved}/{items.length}
+                  </td>
                   <td className={`${td} text-right tabular-nums`}>{rate ? money(r.paidHours * rate) : "–"}</td>
                 </tr>
                 {isOpen ? (
                   <tr className="bg-brand-soft">
-                    <td colSpan={8} className="px-3 pt-1 pb-3 pl-8">
+                    <td colSpan={9} className="px-3 pt-1 pb-3 pl-8">
                       <div className="flex flex-wrap gap-1.5">
                         {daily.length ? daily.map((x) => (
                           <span key={x.date} className="rounded-full border border-line bg-surface px-2.5 py-1 text-xs whitespace-nowrap">
@@ -278,6 +296,23 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                           </span>
                         )) : <span className="text-xs text-muted">ไม่มีคิวที่ไม่ถูกยกเลิก</span>}
                       </div>
+                      {items.length ? (
+                        <ul className="mt-2 space-y-1 text-xs">
+                          {items.map((d) => (
+                            <li key={`${d.startMs}|${d.platform}`} className="flex flex-wrap items-baseline gap-x-2">
+                              <span className="font-semibold tabular-nums">
+                                {fmtDayShort.format(parseKey(d.date))} {shortTime(d.start)}–{shortTime(d.end)}
+                              </span>
+                              <span className="text-muted">{d.platform}</span>
+                              {d.proof ? (
+                                <a href={proofUrl(d.proof)} target="_blank" rel="noopener noreferrer" className="font-semibold text-brand underline">
+                                  หลักฐาน: ไลฟ์จริง {proofTime(d.proof)}
+                                </a>
+                              ) : <span className="font-semibold text-err">ยังไม่มีหลักฐาน</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </td>
                   </tr>
                 ) : null}
@@ -294,6 +329,9 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
             <td className={td} />
             <td className={`${td} text-right tabular-nums`}>{tl || "–"}</td>
             <td className={`${td} text-right tabular-nums whitespace-nowrap`}>{tb ? `+${tb} น.` : "–"}</td>
+            <td className={`${td} text-right tabular-nums whitespace-nowrap`}>
+              {rows.reduce((a, r) => a + slotsOf(data, type, r.name).filter((d) => d.proof).length, 0)}/{ts}
+            </td>
             <td className={`${td} text-right tabular-nums`}>{tm ? money(tm) : "–"}</td>
           </tr>
         </tfoot>
