@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import type { OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
+import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
 import { ChevronRightIcon, DownloadIcon } from "lucide-react";
@@ -39,6 +39,9 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const hms = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
 const proofTime = (p: ProofInfo) => `${hms.format(new Date(p.startedAt))}–${hms.format(new Date(p.endedAt))}`;
 const proofUrl = (p: ProofInfo) => `/api/proofs/image?id=${p.id}`;
+
+/** นาทีสายสำหรับ CSV เช่น "12" / "10 (จากหลักฐาน)" */
+const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${d.lateFromProof ? " (จากหลักฐาน)" : ""}` : "");
 
 /** คิวที่ไม่ถูกยกเลิกของคนหนึ่ง เรียงตามเวลา */
 const slotsOf = (data: OwnerSummary, type: Type, name: string) =>
@@ -99,8 +102,8 @@ function downloadPayroll(data: OwnerSummary) {
         paid += slotPaid;
         rows.push([
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), hrs,
-          d.lateMinutes || "", cut ? `${Math.round(cut * 100)}%` : "",
-          bonus ? `+${d.bonusMinutes} (คิด ${bonus})` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
+          lateText(d), cut ? `${Math.round(cut * 100)}%` : "",
+          bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
           d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "ยังไม่มีหลักฐาน",
         ]);
       }
@@ -138,7 +141,7 @@ function downloadDetail(data: OwnerSummary) {
   for (const d of data.details) {
     rows.push([
       d.type, d.name, d.date, d.start, d.end, d.platform, d.hours, d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
-      d.lateMinutes || "", d.bonusMinutes ? `+${d.bonusMinutes}` : "", d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "", d.proof?.by ?? "",
+      lateText(d), d.bonusMinutes ? `+${d.bonusMinutes}${d.bonusFromProof ? " (จากหลักฐาน)" : ""}` : "", d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "", d.proof?.by ?? "",
     ]);
   }
   downloadCsv(`glory-detail-${data.month}.csv`, rows);
@@ -315,6 +318,16 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                                 {fmtDayShort.format(parseKey(d.date))} {shortTime(d.start)}–{shortTime(d.end)}
                               </span>
                               <span className="text-muted-foreground">{d.platform}</span>
+                              {lateCut(d.lateMinutes) > 0 ? (
+                                <span className="font-semibold text-destructive">
+                                  สาย {d.lateMinutes} น. −{Math.round(lateCut(d.lateMinutes) * 100)}%{d.lateFromProof ? " (จากหลักฐาน)" : ""}
+                                </span>
+                              ) : null}
+                              {bonusPaidMinutes(d.bonusMinutes) > 0 ? (
+                                <span className="font-semibold text-success">
+                                  ชดเชย +{d.bonusMinutes} น.{d.bonusFromProof ? " (จากหลักฐาน)" : ""}
+                                </span>
+                              ) : null}
                               {d.proof ? (
                                 <a href={proofUrl(d.proof)} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline">
                                   หลักฐาน: ไลฟ์จริง {proofTime(d.proof)}

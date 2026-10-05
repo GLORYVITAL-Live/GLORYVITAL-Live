@@ -109,23 +109,59 @@ export const slotPaidHours = (hours: number, lateMinutes: number | null | undefi
 export function parseBonusMinutes(v: unknown): number | null {
   const m = String(v ?? "").match(/(?:\+|ชดเชย|บวก)\s*\+?\s*(\d+(?:[.,]\d+)?)\s*(ชม|ชั่วโมง|hr|h)?/i);
   if (!m) return null;
-  return Math.round(Number(m[1].replace(",", ".")) * (m[2] ? 60 : 1)) || null;
+  // "ชดเชย 0" = 0 (ไม่นับ ใช้แทนค่าที่ระบบคิดจากหลักฐานไลฟ์)
+  return Math.round(Number(m[1].replace(",", ".")) * (m[2] ? 60 : 1));
 }
 
 /**
  * อ่านจำนวนนาทีที่สายจากช่องในชีต
  *   ตัวเลขล้วน "12" / "12 นาที" / "สาย 12" / "สาย 12 นาที" / "มาช้า 12 นาที" / "สาย 1 ชม." (= 60 นาที)
+ *   "0" / "สาย 0" = 0 (ไม่หัก ใช้แทนค่าที่ระบบคิดจากหลักฐานไลฟ์)
  *   ข้อความอื่น (หมายเหตุทั่วไป) = null ไม่หักเงิน
  */
 export function parseLateMinutes(v: unknown): number | null {
-  if (typeof v === "number") return Number.isFinite(v) && v > 0 ? Math.round(v) : null;
+  if (typeof v === "number") return Number.isFinite(v) && v >= 0 ? Math.round(v) : null;
   const s = String(v ?? "").trim();
   if (!s) return null;
   const num = (x: string) => Number(x.replace(",", "."));
   let m = s.match(/^(\d+(?:[.,]\d+)?)\s*(?:นาที|น\.?|min|m)?$/i);
-  if (m) return Math.round(num(m[1])) || null;
+  if (m) return Math.round(num(m[1]));
   // ต้องมีคำว่า "สาย" หรือ "ช้า" นำหน้า กันหมายเหตุอื่นที่มีตัวเลข (เช่น "เลื่อนเวลา 30 นาที") ถูกนับเป็นสาย
   m = s.match(/(?:สาย|ช้า)\s*(\d+(?:[.,]\d+)?)\s*(ชม|ชั่วโมง|hr|h)?/i);
-  if (m) return Math.round(num(m[1]) * (m[2] ? 60 : 1)) || null;
+  if (m) return Math.round(num(m[1]) * (m[2] ? 60 : 1));
   return null;
+}
+
+/**
+ * นาทีสาย / ชดเชย จากหลักฐานไลฟ์ (ปัดวินาทีทิ้ง ไม่ถึง 1 นาที = 0)
+ *   slot แรกของไลฟ์ (เวลาเริ่มตรงกับ slot แรกที่ผูกรูปนี้) เริ่มจริงช้ากว่า slot = สาย
+ *   slot สุดท้ายของไลฟ์ จบจริงเกินเวลา slot = ชดเชย (ไลฟ์ต่อแทนคนถัดไป)
+ *   slot ตรงกลางของไลฟ์ต่อเนื่องหลาย slot ดูจากแดชบอร์ดไม่ได้ = ไม่คิด
+ */
+export function proofMinutes(
+  p: { startedAt: string; endedAt: string; firstStart: number; lastEnd: number },
+  startMs: number,
+  endMs: number,
+) {
+  const late = startMs === p.firstStart ? Math.floor((Date.parse(p.startedAt) - startMs) / 60_000) : 0;
+  const bonus = endMs === p.lastEnd ? Math.floor((Date.parse(p.endedAt) - endMs) / 60_000) : 0;
+  return { late: late > 0 ? late : null, bonus: bonus > 0 ? bonus : null };
+}
+
+/**
+ * นาทีสาย / ชดเชยที่ใช้คิดเงิน: ค่าในชีตก่อน (ใส่ "0" = ไม่นับ) ช่องว่าง = ใช้ค่าจากหลักฐานไลฟ์
+ *   fromProof = ค่านั้นมาจากหลักฐาน (แสดงหมายเหตุ "จากหลักฐาน")
+ */
+export function resolveLateBonus(
+  sheet: { late: number | null; bonus: number | null },
+  proof: { late: number | null; bonus: number | null } | null,
+) {
+  const lateFromProof = sheet.late == null && proof?.late != null;
+  const bonusFromProof = sheet.bonus == null && proof?.bonus != null;
+  return {
+    lateMinutes: lateFromProof ? proof!.late : sheet.late,
+    bonusMinutes: bonusFromProof ? proof!.bonus : sheet.bonus,
+    lateFromProof,
+    bonusFromProof,
+  };
 }

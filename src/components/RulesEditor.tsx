@@ -35,6 +35,10 @@ export function RulesEditor({ scope }: { scope: OwnerScope }) {
             บันทึกในชีต: Mc = แท็บ Deal Mc คอลัมน์ L / Admin = แท็บ Admin เสริม คอลัมน์ M — สาย ใส่ &quot;15&quot; หรือ &quot;สาย 15&quot; ·
             ชดเชย ใส่ &quot;ชดเชย 10&quot; (หรือ &quot;+10&quot; ถ้าตั้งคอลัมน์เป็นข้อความธรรมดาแล้ว ไม่งั้น Sheets จะตัด + ทิ้งกลายเป็นสาย)
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Mc: ถ้าช่องในชีตว่าง ระบบคิดจากหลักฐานไลฟ์ให้เอง (เริ่มจริงช้ากว่า slot = สาย / จบจริงเกิน slot = ชดเชย ไม่นับเศษวินาที) ·
+            ถ้าไม่ต้องการให้นับ ใส่ &quot;0&quot; (ไม่หักสาย) หรือ &quot;ชดเชย 0&quot; (ไม่นับชดเชย) ในชีต
+          </p>
         </CardContent>
       </Card>
     </div>

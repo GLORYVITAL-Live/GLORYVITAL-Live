@@ -171,13 +171,13 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
                             : <>
                                 {lateCut(i.lateMinutes) > 0 ? (
                                   <Badge variant="destructive" className="mr-1.5 font-semibold">
-                                    สาย {i.lateMinutes} นาที −{Math.round(lateCut(i.lateMinutes) * 100)}%
+                                    สาย {i.lateMinutes} นาที −{Math.round(lateCut(i.lateMinutes) * 100)}%{i.lateFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                                   </Badge>
                                 ) : null}
                                 {fmtHours(i.hours)}
                                 {bonusPaidMinutes(i.bonusMinutes) > 0 ? (
                                   <Badge className="mx-1.5 bg-success/15 font-semibold text-success">
-                                    ชดเชย +{i.bonusMinutes} นาที
+                                    ชดเชย +{i.bonusMinutes} นาที{i.bonusFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                                   </Badge>
                                 ) : null}
                                 {rate ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(slotPaidHours(i.hours, i.lateMinutes, i.bonusMinutes) * rate)} บาท</span> : null}

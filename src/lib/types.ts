@@ -44,6 +44,8 @@ export type MyItem = {
   cancelled: boolean;
   lateMinutes: number | null; // นาทีที่มาสาย (จากชีต) ใช้หักเงิน
   bonusMinutes: number | null; // นาทีที่ไลฟ์ชดเชย ("+10" ในชีต) ได้เงินเพิ่ม
+  lateFromProof: boolean; // ช่องในชีตว่าง ค่าสาย / ชดเชยคิดจากหลักฐานไลฟ์ (เฉพาะ Mc)
+  bonusFromProof: boolean;
   pairName: string;
   pairPhone: string;
 };
@@ -76,6 +78,8 @@ export type OwnerDetail = {
   pair: string;
   lateMinutes: number | null;
   bonusMinutes: number | null;
+  lateFromProof: boolean; // ช่องสายในชีตว่าง ค่านี้คิดจากหลักฐานไลฟ์
+  bonusFromProof: boolean;
   proof: ProofInfo | null; // หลักฐานไลฟ์ (รูปแดชบอร์ด + เวลาจริง) ของ slot นี้
   noProof: boolean; // Mc ของ slot นี้เป็น Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน
 };

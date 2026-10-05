@@ -1,5 +1,5 @@
 import "server-only";
-import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, slotPaidHours } from "@/lib/pay";
+import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays, bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
 import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
@@ -51,14 +51,17 @@ export async function fetchAll<T>(build: (from: number, to: number) => PromiseLi
 
 type ProofRow = {
   id: number; started_at: string; ended_at: string; uploaded_by_name: string; uploaded_by_email: string;
-  slots: { mc_slot_id: number }[] | null;
+  slots: { mc_slot_id: number; slot: { starts_at: string; ends_at: string } | null }[] | null;
 };
 
-/** หลักฐานไลฟ์ที่ผูกกับ slot ของ Mc ในช่วงวันที่: Map<mc_slot_id, หลักฐาน> (ยังไม่ได้รัน SQL = ว่าง) */
+/**
+ * หลักฐานไลฟ์ที่ผูกกับ slot ของ Mc ในช่วงวันที่: Map<mc_slot_id, หลักฐาน> (ยังไม่ได้รัน SQL = ว่าง)
+ *   firstStart / lastEnd = เวลาเริ่มของ slot แรก / เวลาจบของ slot สุดท้ายที่ผูกรูปนี้ (ใช้คิดสาย / ชดเชย)
+ */
 export async function proofsBySlot(db: Db, first: string, last: string) {
-  const map = new Map<number, ProofInfo & { email: string }>();
+  const map = new Map<number, ProofInfo & { email: string; firstStart: number; lastEnd: number }>();
   const { data, error } = await db.from("live_proofs")
-    .select("id, started_at, ended_at, uploaded_by_name, uploaded_by_email, slots:live_proof_slots(mc_slot_id)")
+    .select("id, started_at, ended_at, uploaded_by_name, uploaded_by_email, slots:live_proof_slots(mc_slot_id, slot:mc_slots(starts_at, ends_at))")
     // หลักฐานลงวันที่ของ slot แรก เผื่อ slot ที่ผูกไว้เป็นของวันถัดไป
     .gte("live_date", addDays(first, -1)).lte("live_date", last);
   if (error) {
@@ -66,13 +69,25 @@ export async function proofsBySlot(db: Db, first: string, last: string) {
     return map;
   }
   for (const p of (data ?? []) as unknown as ProofRow[]) {
-    for (const s of p.slots ?? []) {
+    const slots = p.slots ?? [];
+    const starts = slots.map((s) => (s.slot ? ms(s.slot.starts_at) : NaN)).filter(Number.isFinite);
+    const ends = slots.map((s) => (s.slot ? ms(s.slot.ends_at) : NaN)).filter(Number.isFinite);
+    for (const s of slots) {
       map.set(Number(s.mc_slot_id), {
         id: Number(p.id), startedAt: p.started_at, endedAt: p.ended_at, by: p.uploaded_by_name, email: p.uploaded_by_email,
+        firstStart: starts.length ? Math.min(...starts) : NaN, lastEnd: ends.length ? Math.max(...ends) : NaN,
       });
     }
   }
   return map;
+}
+
+/** นาทีสาย / ชดเชยของ slot ของ Mc: ค่าในชีตก่อน ช่องว่าง = คิดจากหลักฐานไลฟ์ */
+function mcLateBonus(r: SlotRow, proof: { startedAt: string; endedAt: string; firstStart: number; lastEnd: number } | undefined) {
+  return resolveLateBonus(
+    { late: r.late_minutes ?? null, bonus: r.bonus_minutes ?? null },
+    proof ? proofMinutes(proof, ms(r.starts_at), ms(r.ends_at)) : null,
+  );
 }
 
 const hm = (t: string) => t.slice(0, 5);
@@ -193,16 +208,22 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
       .or("confirmed.is.null,confirmed.eq.true")
       .order("starts_at").range(from, to),
   );
-  const pairs = await pairMap(role === "mc" ? "admin_slots" : "mc_slots", first, last);
+  const [pairs, proofs] = await Promise.all([
+    pairMap(role === "mc" ? "admin_slots" : "mc_slots", first, last),
+    // Mc: สาย / ชดเชยที่ไม่ได้ใส่ในชีต คิดจากหลักฐานไลฟ์ (ตรงกับสรุปรายเดือนของเจ้าของ)
+    role === "mc" ? proofsBySlot(db, first, last) : null,
+  ]);
   return rows.map((r) => {
     const p = pairs.get(slotKey(r));
+    const lb = role === "mc"
+      ? mcLateBonus(r, proofs?.get(Number(r.id)))
+      : { lateMinutes: r.late_minutes ?? null, bonusMinutes: r.bonus_minutes ?? null, lateFromProof: false, bonusFromProof: false };
     return {
       ...toOpenSlot(r),
       hours: hoursOf(r),
       status: r.status,
       cancelled: r.is_cancelled,
-      lateMinutes: r.late_minutes ?? null,
-      bonusMinutes: r.bonus_minutes ?? null,
+      ...lb,
       pairName: p ? (role === "admin" ? `Mc ${p.name}` : p.name) : "",
       pairPhone: p?.phone ?? "",
     };
@@ -248,11 +269,14 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
       if (!r.person) continue;
       const name = type === "Mc" ? `Mc ${r.person.name}` : r.person.name;
       persons.set(`${type}|${name}`, r.person);
+      // Mc: สาย / ชดเชยในชีตก่อน ช่องว่าง = คิดจากหลักฐานไลฟ์ / Admin: จากชีตอย่างเดียว
+      const lb = type === "Mc"
+        ? mcLateBonus(r, proofs.get(Number(r.id)))
+        : { lateMinutes: r.late_minutes ?? null, bonusMinutes: r.bonus_minutes ?? null, lateFromProof: false, bonusFromProof: false };
       details.push({
         type, name, date: r.live_date, start: hm(r.start_time), end: hm(r.end_time), platform: r.platform,
         hours: hoursOf(r), startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
-        lateMinutes: r.late_minutes ?? null,
-        bonusMinutes: r.bonus_minutes ?? null,
+        ...lb,
         proof: proofOf.get(slotKey(r)) ?? null,
         noProof: salaried.has(slotKey(r)),
       });
