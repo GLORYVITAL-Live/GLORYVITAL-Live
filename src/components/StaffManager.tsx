@@ -20,7 +20,7 @@ import type { CommitTier, OwnerScope } from "@/lib/types";
 type Role = "mc" | "admin" | "owner";
 type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
-  hourly_rate: number | null; is_extra_admin: boolean; upcoming: number;
+  hourly_rate: number | null; is_extra_admin: boolean; is_salaried: boolean; upcoming: number;
   commit_tiers: CommitTier[] | null;
   can_manage_mc: boolean; can_manage_admin: boolean;
 };
@@ -133,6 +133,7 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
                 <span className="flex flex-wrap items-center gap-1.5 font-semibold">
                   {displayName(p)}
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
+                  {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">Mc ประจำ</Badge> : null}
                   {p.role === "owner" ? <Badge className="bg-p2/15 text-[11px] text-p2">{scopeLabel(p)}</Badge> : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
                 </span>
@@ -184,6 +185,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   const [phone, setPhone] = useState(person?.phone ?? "");
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
+  const [salaried, setSalaried] = useState(person?.is_salaried ?? false);
   // เทียร์ Commit (กรอกเป็นข้อความ ชั่วโมงพิมพ์เป็นช่วงได้ เช่น "10-20" ระบบใช้เลขตัวแรก)
   // ตอนเปิดแก้ แสดงเป็นช่วงให้อ่านง่าย: 10-20 / 21-40 / 41
   const [tiers, setTiers] = useState<{ hours: string; rate: string }[]>(() => {
@@ -211,7 +213,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
     setSaving(true);
     try {
       const fields = {
-        name, email, phone, hourly_rate: rate, is_extra_admin: extra,
+        name, email, phone, hourly_rate: rate, is_extra_admin: extra, is_salaried: salaried,
         ...(role !== "owner" ? { commit_tiers: tiers } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin } : {}),
@@ -327,6 +329,18 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
           <Label className="leading-snug font-normal">
             <Checkbox checked={extra} onCheckedChange={(v) => setExtra(v === true)} />
             Admin เสริม (รับคิวและยกเลิกคิวผ่านเว็บได้เอง)
+          </Label>
+        ) : null}
+
+        {role === "mc" ? (
+          <Label className="items-start leading-snug font-normal">
+            <Checkbox checked={salaried} onCheckedChange={(v) => setSalaried(v === true)} className="mt-0.5" />
+            <span>
+              Mc ประจำ (พนักงานประจำ ได้เงินเดือน)
+              <span className="block text-xs text-muted-foreground">
+                ไม่ต้องแนบหลักฐานไลฟ์ — slot ของคนนี้จะไม่ขึ้นในหน้าหลักฐานไลฟ์ และสรุปรายเดือนแสดง &quot;ไม่ต้องแนบ&quot;
+              </span>
+            </span>
           </Label>
         ) : null}
 

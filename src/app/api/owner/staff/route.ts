@@ -9,7 +9,7 @@ import type { Me } from "@/lib/types";
 // จัดการรายชื่อพนักงาน (แทนแท็บ Mc Email / Admin Email / Owner Email / เบอร์โทร MC)
 //   GET     รายชื่อทั้งหมด + จำนวนคิวตั้งแต่วันนี้
 //   POST    เพิ่มคน
-//   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Commit / Admin เสริม / สิทธิ์ Owner
+//   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Commit / Admin เสริม / Mc ประจำ / สิทธิ์ Owner
 //   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
 // สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
 //         รายชื่อและสิทธิ์ของ Owner จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
@@ -79,6 +79,8 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     out.commit_tiers = tiers;
   }
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
+  // Mc ประจำ (เงินเดือน) = ไม่ต้องแนบหลักฐานไลฟ์
+  if (role === "mc" && (!partial || "is_salaried" in body)) out.is_salaried = !!body.is_salaried;
   if (role === "owner") {
     if (!partial || "can_manage_mc" in body) out.can_manage_mc = body.can_manage_mc !== false;
     if (!partial || "can_manage_admin" in body) out.can_manage_admin = body.can_manage_admin !== false;
@@ -97,7 +99,7 @@ export async function GET() {
   if ("res" in r) return r.res;
   const db = createAdminClient();
   const { data: rows, error } = await db.from("staff")
-    .select("id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, can_manage_mc, can_manage_admin").order("name");
+    .select("id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, is_salaried, can_manage_mc, can_manage_admin").order("name");
   if (error) return fail(error.message, 500);
   const staff = (rows ?? []).filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id);
 

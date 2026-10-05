@@ -213,13 +213,13 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
 export async function ownerSummary(key: string, first: string, last: string): Promise<Omit<OwnerSummary, "scope">> {
   const db = createAdminClient();
   const settings = await getSettings(db);
-  type Person = { name: string; hourly_rate: number | null; commit_tiers: unknown };
+  type Person = { name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
   type Row = SlotRow & { person: Person | null };
 
   const load = (table: "mc_slots" | "admin_slots", personCol: string) =>
     fetchAll<Row>((from, to) =>
       db.from(table)
-        .select(`${SLOT_COLS}, person:staff!${personCol}(name, hourly_rate, commit_tiers)`)
+        .select(`${SLOT_COLS}, person:staff!${personCol}(name, hourly_rate, commit_tiers, is_salaried)`)
         .not(personCol, "is", null)
         .gte("live_date", first).lte("live_date", last)
         .or("confirmed.is.null,confirmed.eq.true")
@@ -230,9 +230,12 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   ]);
   // หลักฐานไลฟ์ผูกกับ slot ของ Mc -> ฝั่ง Admin ของ slot เดียวกันใช้หลักฐานเดียวกัน
   const proofOf = new Map<string, ProofInfo>();
+  // slot ที่ Mc เป็น Mc ประจำ (เงินเดือน) = ไม่ต้องแนบหลักฐาน (ฝั่ง Admin ของ slot เดียวกันก็ไม่ต้อง)
+  const salaried = new Set<string>();
   for (const r of mcRows) {
     const p = proofs.get(Number(r.id));
     if (p) proofOf.set(slotKey(r), { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by });
+    if (r.person?.is_salaried && !r.is_cancelled) salaried.add(slotKey(r));
   }
 
   const rates: OwnerSummary["rates"] = {
@@ -251,6 +254,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         lateMinutes: r.late_minutes ?? null,
         bonusMinutes: r.bonus_minutes ?? null,
         proof: proofOf.get(slotKey(r)) ?? null,
+        noProof: salaried.has(slotKey(r)),
       });
     }
   };

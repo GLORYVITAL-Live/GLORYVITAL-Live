@@ -6,6 +6,7 @@ import type { Me, ProofSlot } from "@/lib/types";
 /**
  * หลักฐานไลฟ์ (รูปแดชบอร์ด TikTok + เวลาเริ่ม/จบจริง) ผูกกับ slot ของ Mc
  *   เห็น/แนบได้: Owner ที่มีสิทธิ์ฝั่ง Mc = ทุก slot / Admin = เฉพาะ slot ที่ตัวเองเป็น Admin
+ *   ยกเว้น slot ของ Mc ประจำ (staff.is_salaried = ได้เงินเดือน) ไม่ต้องแนบ จึงไม่แสดง
  *   ลบได้: Owner ฝั่ง Mc หรือคนที่อัปโหลด
  */
 export const PROOF_BUCKET = "live-proofs";
@@ -25,13 +26,13 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
   const db = createAdminClient();
   type McRow = {
     id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
-    person: { name: string } | null;
+    person: { name: string; is_salaried: boolean | null } | null;
   };
   type AdminRow = { platform: string; starts_at: string; ends_at: string; admin_id: number | null; person: { name: string } | null };
   const [mcRows, adminRows, proofs] = await Promise.all([
     fetchAll<McRow>((from, to) =>
       db.from("mc_slots")
-        .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, person:staff!mc_id(name)")
+        .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, person:staff!mc_id(name, is_salaried)")
         .not("mc_id", "is", null).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true")
         .gte("live_date", first).lte("live_date", last)
         .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: McRow[] | null; error: unknown }>),
@@ -50,6 +51,7 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
   const all = canSeeAll(me);
   const out: ProofSlot[] = [];
   for (const r of mcRows) {
+    if (r.person?.is_salaried) continue; // Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน
     const admin = admins.get(keyOf(r));
     if (!all && (!me.admin || admin?.id !== me.admin.id)) continue;
     const p = proofs.get(Number(r.id));

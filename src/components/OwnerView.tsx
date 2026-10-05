@@ -101,7 +101,7 @@ function downloadPayroll(data: OwnerSummary) {
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), hrs,
           d.lateMinutes || "", cut ? `${Math.round(cut * 100)}%` : "",
           bonus ? `+${d.bonusMinutes} (คิด ${bonus})` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
-          d.proof ? proofTime(d.proof) : "ยังไม่มีหลักฐาน",
+          d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "ยังไม่มีหลักฐาน",
         ]);
       }
       const m = rate ? Math.round(paid * rate) : 0;
@@ -138,7 +138,7 @@ function downloadDetail(data: OwnerSummary) {
   for (const d of data.details) {
     rows.push([
       d.type, d.name, d.date, d.start, d.end, d.platform, d.hours, d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
-      d.lateMinutes || "", d.bonusMinutes ? `+${d.bonusMinutes}` : "", d.proof ? proofTime(d.proof) : "", d.proof?.by ?? "",
+      d.lateMinutes || "", d.bonusMinutes ? `+${d.bonusMinutes}` : "", d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "", d.proof?.by ?? "",
     ]);
   }
   downloadCsv(`glory-detail-${data.month}.csv`, rows);
@@ -247,7 +247,8 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
             const isOpen = open.has(r.name);
             const daily = isOpen ? dailyOf(data, type, r.name) : [];
             const items = slotsOf(data, type, r.name);
-            const proved = items.filter((d) => d.proof).length;
+            const need = items.filter((d) => !d.noProof); // ไม่นับคิวของ Mc ประจำ (ไม่ต้องแนบ)
+            const proved = need.filter((d) => d.proof).length;
             return (
               <Fragment key={r.name}>
                 <TableRow
@@ -281,12 +282,18 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                   <TableCell className={cn(num_, r.bonusMinutes && "font-semibold text-success")}>
                     {r.bonusMinutes ? `+${r.bonusMinutes} น.` : "–"}
                   </TableCell>
-                  <TableCell
-                    title="slot ที่มีหลักฐานไลฟ์ / slot ทั้งหมด"
-                    className={cn(num_, proved === items.length ? "text-success" : "font-semibold text-destructive")}
-                  >
-                    {proved}/{items.length}
-                  </TableCell>
+                  {need.length ? (
+                    <TableCell
+                      title="slot ที่มีหลักฐานไลฟ์ / slot ที่ต้องแนบ"
+                      className={cn(num_, proved === need.length ? "text-success" : "font-semibold text-destructive")}
+                    >
+                      {proved}/{need.length}
+                    </TableCell>
+                  ) : (
+                    <TableCell title="Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน" className={cn(num_, "text-xs text-muted-foreground")}>
+                      {items.length ? "ไม่ต้องแนบ" : "–"}
+                    </TableCell>
+                  )}
                   <TableCell className={cn(num_, "px-3")}>{rate ? money(r.paidHours * rate) : "–"}</TableCell>
                 </TableRow>
                 {isOpen ? (
@@ -312,7 +319,8 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                                 <a href={proofUrl(d.proof)} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline">
                                   หลักฐาน: ไลฟ์จริง {proofTime(d.proof)}
                                 </a>
-                              ) : <span className="font-semibold text-destructive">ยังไม่มีหลักฐาน</span>}
+                              ) : d.noProof ? <span className="text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</span>
+                                : <span className="font-semibold text-destructive">ยังไม่มีหลักฐาน</span>}
                             </li>
                           ))}
                         </ul>
@@ -334,7 +342,10 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
             <TableCell className={num_}>{tl || "–"}</TableCell>
             <TableCell className={num_}>{tb ? `+${tb} น.` : "–"}</TableCell>
             <TableCell className={num_}>
-              {rows.reduce((a, r) => a + slotsOf(data, type, r.name).filter((d) => d.proof).length, 0)}/{ts}
+              {(() => {
+                const need = rows.flatMap((r) => slotsOf(data, type, r.name)).filter((d) => !d.noProof);
+                return need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "–";
+              })()}
             </TableCell>
             <TableCell className={cn(num_, "px-3")}>{tm ? money(tm) : "–"}</TableCell>
           </TableRow>
