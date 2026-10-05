@@ -48,7 +48,8 @@ const monthFolderOf = (items: OwnerDetail[]) => items.find((d) => d.proof?.drive
 const monthFolderText = (items: OwnerDetail[]) =>
   monthFolderOf(items)
     ?? (items.length && items.every((d) => d.noProof) ? "ไม่ต้องแนบ (Mc ประจำ)"
-      : items.some((d) => d.proof) ? "ยังไม่ได้อัปขึ้น Drive" : "ยังไม่มีหลักฐาน");
+      : items.some((d) => d.proof?.driveUrl) ? "อยู่ใน Drive แล้ว (ดูลิงก์รายคิว)"
+        : items.some((d) => d.proof) ? "ยังไม่ได้อัปขึ้น Drive" : "ยังไม่มีหลักฐาน");
 
 /** คิวที่ไม่ถูกยกเลิกของคนหนึ่ง เรียงตามเวลา */
 const slotsOf = (data: OwnerSummary, type: Type, name: string) =>
