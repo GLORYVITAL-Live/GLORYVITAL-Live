@@ -43,6 +43,13 @@ const proofUrl = (p: ProofInfo) => `/api/proofs/image?id=${p.id}`;
 /** นาทีสายสำหรับ CSV เช่น "12" / "10 (จากหลักฐาน)" */
 const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${d.lateFromProof ? " (จากหลักฐาน)" : ""}` : "");
 
+/** ลิงก์โฟลเดอร์ Drive ที่รวมหลักฐานทั้งเดือนของ Mc (จากคิวไหนก็ได้ที่อัปขึ้น Drive แล้ว) */
+const monthFolderOf = (items: OwnerDetail[]) => items.find((d) => d.proof?.driveFolderUrl)?.proof?.driveFolderUrl ?? null;
+const monthFolderText = (items: OwnerDetail[]) =>
+  monthFolderOf(items)
+    ?? (items.length && items.every((d) => d.noProof) ? "ไม่ต้องแนบ (Mc ประจำ)"
+      : items.some((d) => d.proof) ? "ยังไม่ได้อัปขึ้น Drive" : "ยังไม่มีหลักฐาน");
+
 /** คิวที่ไม่ถูกยกเลิกของคนหนึ่ง เรียงตามเวลา */
 const slotsOf = (data: OwnerSummary, type: Type, name: string) =>
   data.details.filter((d) => d.type === type && d.name === name && !d.cancelled).sort((a, b) => a.startMs - b.startMs);
@@ -110,7 +117,11 @@ function downloadPayroll(data: OwnerSummary) {
         ]);
       }
       const m = rate ? Math.round(paid * rate) : 0;
-      rows.push([`รวม ${p.name}`, `${items.length} slot`, "", "", "", round2(h), "", "", "", "", rate ? m : ""], []);
+      rows.push([
+        `รวม ${p.name}`, `${items.length} slot`, "", "", "", round2(h), "", "", "", "", rate ? m : "", "", "",
+        // คอลัมน์ N: โฟลเดอร์รวมหลักฐานทั้งเดือนของ Mc คนนี้ใน Google Drive
+        type === "Mc" ? monthFolderText(items) : "",
+      ], []);
       groupHours += h;
       groupMoney += m;
     }
@@ -312,6 +323,16 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                           </Badge>
                         )) : <span className="text-xs text-muted-foreground">ไม่มีคิวที่ไม่ถูกยกเลิก</span>}
                       </div>
+                      {type === "Mc" && monthFolderOf(items) ? (
+                        <a
+                          href={monthFolderOf(items)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-2 inline-block text-xs font-semibold text-primary underline"
+                        >
+                          เปิดโฟลเดอร์หลักฐานทั้งเดือนใน Google Drive
+                        </a>
+                      ) : null}
                       {items.length ? (
                         <ul className="mt-2 space-y-1 text-xs">
                           {items.map((d) => (

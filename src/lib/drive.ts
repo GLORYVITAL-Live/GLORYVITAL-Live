@@ -9,6 +9,7 @@ import { createAdminClient } from "@/lib/supabase/server";
  * สำเนารูปหลักฐานไลฟ์ไว้ใน Google Drive ของบัญชีระบบ (ใช้ทำเบิก)
  *   GLORY VITAL หลักฐานไลฟ์ > 2026 > 10 ตุลาคม > Mc กานต์ > 2026-10-01_GLORY MALL_19.30-21.30.jpg
  * รูปเดียวที่คลุมหลาย Mc = อัปไว้ในโฟลเดอร์ของแต่ละคน (คนละไฟล์) ลิงก์เก็บราย slot ใน live_proof_slots.drive_url
+ * โฟลเดอร์ของ Mc เดือนนั้นเก็บใน drive_folder_id (ใช้ลิงก์ในแถวรวมของใบสรุปค่าจ้าง)
  * สิทธิ์ drive.file: ระบบเห็นเฉพาะไฟล์/โฟลเดอร์ที่ตัวเองสร้าง
  */
 
@@ -96,9 +97,20 @@ export async function syncProofsToDrive(opts: { proofIds?: number[]; limit?: num
     }
     const todo = [...groups.values()].slice(0, opts.limit ?? 20);
     let done = 0, failed = 0;
-    if (!todo.length) return { done, failed, remaining: 0, folderId: null as string | null };
+
+    // ไฟล์ที่อัปไว้ก่อนมีช่อง drive_folder_id: ถาม Drive ว่าอยู่โฟลเดอร์ไหน แล้วจดไว้
+    const { data: noFolder } = await db.from("live_proof_slots")
+      .select("drive_file_id").not("drive_file_id", "is", null).is("drive_folder_id", null).limit(200);
+    const fileIds = [...new Set((noFolder ?? []).map((x) => String(x.drive_file_id)))];
+    if (!todo.length && !fileIds.length) return { done, failed, remaining: 0, folderId: null as string | null };
 
     const drive = driveClient();
+    for (const fileId of fileIds) {
+      const parent = await drive.files.get({ fileId, fields: "parents" }).then((r) => r.data.parents?.[0]).catch(() => undefined);
+      if (parent) await db.from("live_proof_slots").update({ drive_folder_id: parent }).eq("drive_file_id", fileId);
+    }
+    if (!todo.length) return { done, failed, remaining: 0, folderId: null as string | null };
+
     const root = await rootFolder(drive, db);
     const cache = new Map<string, string>();
     const images = new Map<number, Buffer>();
@@ -131,7 +143,7 @@ export async function syncProofsToDrive(opts: { proofIds?: number[]; limit?: num
           fields: "id, webViewLink",
         });
         await db.from("live_proof_slots")
-          .update({ drive_file_id: res.data.id, drive_url: res.data.webViewLink, drive_error: null })
+          .update({ drive_file_id: res.data.id, drive_url: res.data.webViewLink, drive_folder_id: person, drive_error: null })
           .in("mc_slot_id", ids).eq("proof_id", p.id);
         done++;
       } catch (err) {

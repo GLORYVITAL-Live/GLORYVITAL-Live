@@ -88,6 +88,7 @@ export type OwnerDetail = {
 export type ProofInfo = {
   id: number; startedAt: string; endedAt: string; by: string;
   driveUrl: string | null; // สำเนาใน Google Drive (โฟลเดอร์ปี > เดือน > Mc) ว่าง = ยังไม่ได้อัป
+  driveFolderUrl: string | null; // โฟลเดอร์ของ Mc เดือนนั้นใน Drive (รวมหลักฐานทั้งเดือนของคนนั้น)
 };
 
 /** slot ในหน้าหลักฐานไลฟ์ (slot ของ Mc ที่มีคนไลฟ์และไม่ถูกยกเลิก) */

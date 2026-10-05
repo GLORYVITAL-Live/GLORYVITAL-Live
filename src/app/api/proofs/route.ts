@@ -105,7 +105,7 @@ export async function POST(request: Request) {
   const { data: oldLinks } = await db.from("live_proof_slots").select("drive_file_id").in("mc_slot_id", ids);
   const { error: linkErr } = await db.from("live_proof_slots")
     .upsert(
-      ids.map((id) => ({ mc_slot_id: id, proof_id: proofId, drive_file_id: null, drive_url: null, drive_error: null })),
+      ids.map((id) => ({ mc_slot_id: id, proof_id: proofId, drive_file_id: null, drive_url: null, drive_folder_id: null, drive_error: null })),
       { onConflict: "mc_slot_id" },
     );
   if (linkErr) {

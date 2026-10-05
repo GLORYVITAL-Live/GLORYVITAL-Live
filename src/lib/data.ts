@@ -51,7 +51,7 @@ export async function fetchAll<T>(build: (from: number, to: number) => PromiseLi
 
 type ProofRow = {
   id: number; started_at: string; ended_at: string; uploaded_by_name: string; uploaded_by_email: string;
-  slots: { mc_slot_id: number; drive_url: string | null; slot: { starts_at: string; ends_at: string } | null }[] | null;
+  slots: { mc_slot_id: number; drive_url: string | null; drive_folder_id: string | null; slot: { starts_at: string; ends_at: string } | null }[] | null;
 };
 
 /**
@@ -61,7 +61,7 @@ type ProofRow = {
 export async function proofsBySlot(db: Db, first: string, last: string) {
   const map = new Map<number, ProofInfo & { email: string; firstStart: number; lastEnd: number }>();
   const { data, error } = await db.from("live_proofs")
-    .select("id, started_at, ended_at, uploaded_by_name, uploaded_by_email, slots:live_proof_slots(mc_slot_id, drive_url, slot:mc_slots(starts_at, ends_at))")
+    .select("id, started_at, ended_at, uploaded_by_name, uploaded_by_email, slots:live_proof_slots(mc_slot_id, drive_url, drive_folder_id, slot:mc_slots(starts_at, ends_at))")
     // หลักฐานลงวันที่ของ slot แรก เผื่อ slot ที่ผูกไว้เป็นของวันถัดไป
     .gte("live_date", addDays(first, -1)).lte("live_date", last);
   if (error) {
@@ -76,6 +76,7 @@ export async function proofsBySlot(db: Db, first: string, last: string) {
       map.set(Number(s.mc_slot_id), {
         id: Number(p.id), startedAt: p.started_at, endedAt: p.ended_at, by: p.uploaded_by_name, email: p.uploaded_by_email,
         driveUrl: s.drive_url ?? null,
+        driveFolderUrl: s.drive_folder_id ? `https://drive.google.com/drive/folders/${s.drive_folder_id}` : null,
         firstStart: starts.length ? Math.min(...starts) : NaN, lastEnd: ends.length ? Math.max(...ends) : NaN,
       });
     }
@@ -256,7 +257,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   const salaried = new Set<string>();
   for (const r of mcRows) {
     const p = proofs.get(Number(r.id));
-    if (p) proofOf.set(slotKey(r), { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl });
+    if (p) proofOf.set(slotKey(r), { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, driveFolderUrl: p.driveFolderUrl });
     if (r.person?.is_salaried && !r.is_cancelled) salaried.add(slotKey(r));
   }
 

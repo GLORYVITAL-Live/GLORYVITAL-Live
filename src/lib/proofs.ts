@@ -60,7 +60,7 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
       startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at),
       mcName: r.person?.name ? `Mc ${r.person.name}` : "", adminName: admin?.name ?? "",
       proof: p
-        ? { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, canDelete: all || p.email === me.email }
+        ? { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, driveFolderUrl: p.driveFolderUrl, canDelete: all || p.email === me.email }
         : null,
     });
   }
