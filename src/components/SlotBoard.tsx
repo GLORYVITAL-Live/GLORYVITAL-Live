@@ -1,11 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CheckIcon, EyeIcon, LayoutGridIcon, Rows3Icon } from "lucide-react";
 import type { ActionResult, Me, OpenSlot, SlotsResponse } from "@/lib/types";
 import {
   fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, parseKey, platformOf, relLabel,
 } from "@/lib/format";
-import { Icon, Sheet, SheetHead, StateBox, Tag, api, btn, useLocal, useToast, writeLocal } from "@/components/ui";
+import {
+  AppDialog, DayBadge, DialogActions, DialogBody, LoadError, Notice, PlatformBadge, StateBox, api, useToast,
+} from "@/components/shared";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Toggle } from "@/components/ui/toggle";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useLocal, writeLocal } from "@/lib/hooks";
+import { cn } from "@/lib/utils";
 
 // ให้ตรงกับ settings ใน DB (ฝั่ง server เช็คซ้ำอีกชั้นเสมอ)
 const MAX_SLOTS_PER_DAY = 2;
@@ -256,51 +266,39 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       {refreshing && data ? <div className="refresh-bar" /> : null}
 
       {preview ? (
-        <div role="status" className="my-2 rounded-xl border border-line bg-surface px-3 py-2.5 text-sm">
-          👀 <strong>โหมดดูอย่างเดียว (เจ้าของ)</strong>
-          <span className="text-muted">
-            {" "}— เห็นหน้านี้แบบเดียวกับที่{role === "mc" ? " Mc " : " Admin เสริม "}เห็น แต่เลือกหรือจองแทนไม่ได้
-          </span>
-        </div>
+        <Alert role="status" className="my-2 px-3 py-2.5">
+          <EyeIcon />
+          <AlertDescription className="text-foreground">
+            <span>
+              <strong>โหมดดูอย่างเดียว (เจ้าของ)</strong>
+              <span className="text-muted-foreground">
+                {" "}— เห็นหน้านี้แบบเดียวกับที่{role === "mc" ? " Mc " : " Admin เสริม "}เห็น แต่เลือกหรือจองแทนไม่ได้
+              </span>
+            </span>
+          </AlertDescription>
+        </Alert>
       ) : null}
 
-      {data?.siteNotice ? (
-        <div role="status" className="my-2 rounded-xl border border-warn-line bg-warn-bg px-3 py-2.5 text-sm font-medium text-warn-ink">
-          ⚠️ {data.siteNotice}
-        </div>
-      ) : null}
-      {data?.scheduleNotice ? (
-        <div className="my-2 rounded-xl bg-info-bg px-3 py-2.5 text-sm text-info-ink">{data.scheduleNotice}</div>
-      ) : null}
+      {data?.siteNotice ? <Notice variant="warning" icon className="font-medium">{data.siteNotice}</Notice> : null}
+      {data?.scheduleNotice ? <Notice>{data.scheduleNotice}</Notice> : null}
       {data && updatedAt ? (
-        <div className="my-1 flex items-center justify-end gap-2 text-xs text-muted">
+        <div className="my-1 flex items-center justify-end gap-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
-            <span aria-hidden className={`size-1.5 rounded-full ${loadError ? "bg-err" : "animate-pulse bg-ok"}`} />
+            <span aria-hidden className={cn("size-1.5 rounded-full", loadError ? "bg-destructive" : "animate-pulse bg-success")} />
             {loadError ? "เชื่อมต่อไม่สำเร็จ แสดงข้อมูลล่าสุดเมื่อ" : "อัปเดตอัตโนมัติ ล่าสุด"} {fmtClock.format(updatedAt)}
           </span>
-          <button
-            type="button"
-            onClick={reload}
-            disabled={refreshing}
-            className="rounded-full border border-line bg-surface px-2.5 py-0.5 font-medium text-ink hover:border-accent disabled:opacity-50"
-          >
+          <Button variant="outline" size="xs" className="rounded-full" onClick={reload} disabled={refreshing}>
             {refreshing ? "กำลังโหลด..." : "รีเฟรช"}
-          </button>
+          </Button>
         </div>
       ) : null}
 
-      {!data && !loadError ? <Skeleton /> : null}
-      {loadError && !data ? (
-        <StateBox title="โหลดข้อมูลไม่สำเร็จ">
-          {loadError}
-          <br />
-          <button type="button" className={`${btn.ghost} mt-3`} onClick={reload}>ลองอีกครั้ง</button>
-        </StateBox>
-      ) : null}
+      {!data && !loadError ? <SlotSkeleton /> : null}
+      {loadError && !data ? <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={loadError} onRetry={reload} /> : null}
       {data && !slots.length ? <StateBox title={t.empty[0]}>{t.empty[1]}</StateBox> : null}
 
       {slots.length ? (
-        <div className="sticky top-0 z-20 -mx-4 border-b border-line bg-bg/95 px-4 pt-2 pb-2 backdrop-blur">
+        <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 pt-2 pb-2 backdrop-blur">
           <nav
             ref={stripRef}
             aria-label="เลือกวันที่"
@@ -311,62 +309,57 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
               const d = parseKey(k);
               const active = k === activeDate;
               return (
-                <button
+                <Button
                   key={k}
                   id={`chip-${k}`}
-                  type="button"
+                  variant={active ? "default" : "outline"}
+                  aria-current={active ? "date" : undefined}
                   onClick={() => { document.getElementById(`day-${k}`)?.scrollIntoView({ behavior: "smooth", block: "start" }); setActiveDate(k); }}
-                  className={`relative flex min-w-[64px] shrink-0 flex-col items-center rounded-xl border px-2 py-1.5 leading-tight transition ${
-                    active ? "border-brand bg-brand text-brand-ink" : "border-line bg-surface hover:border-accent"
-                  }`}
+                  className={cn("relative h-auto min-w-[64px] flex-col gap-0 rounded-xl px-2 py-1.5 leading-tight font-normal", !active && "bg-card")}
                 >
-                  {selectedDates.has(k) ? <span className="absolute top-1 right-1 size-2 rounded-full bg-accent ring-2 ring-surface" /> : null}
+                  {selectedDates.has(k) ? <span className="absolute top-1 right-1 size-2 rounded-full bg-brand-glow ring-2 ring-card" /> : null}
                   <span className="text-[11px]">{relLabel(k) || fmtWeekShort.format(d)}</span>
                   <span className="text-lg font-bold">{d.getUTCDate()}</span>
                   <span className="text-[11px]">{fmtMonthShort.format(d)}</span>
-                  <span className={`text-[10px] ${active ? "" : "text-muted"}`}>{list.length} slot</span>
-                </button>
+                  <span className={cn("text-[10px]", !active && "text-muted-foreground")}>{list.length} slot</span>
+                </Button>
               );
             })}
           </nav>
           <div className="mt-2 flex items-center justify-between gap-2">
             {platforms.length > 1 ? (
               <div role="group" aria-label="กรองตามแพลตฟอร์ม" className="no-scrollbar flex gap-1.5 overflow-x-auto">
-                {[null, ...platforms].map((p) => {
-                  const pressed = p === null ? filters.size === 0 : filters.has(p);
-                  return (
-                    <button
-                      key={p ?? "all"}
-                      type="button"
-                      aria-pressed={pressed}
-                      onClick={() => toggleFilter(p)}
-                      className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                        pressed ? "border-brand bg-brand-soft text-brand" : "border-line bg-surface text-muted hover:border-accent"
-                      }`}
-                    >
-                      {p ?? "ทั้งหมด"}
-                    </button>
-                  );
-                })}
+                {[null, ...platforms].map((p) => (
+                  <Toggle
+                    key={p ?? "all"}
+                    variant="outline"
+                    size="sm"
+                    pressed={p === null ? filters.size === 0 : filters.has(p)}
+                    onPressedChange={() => toggleFilter(p)}
+                    className="rounded-full bg-card text-xs font-semibold"
+                  >
+                    {p ?? "ทั้งหมด"}
+                  </Toggle>
+                ))}
               </div>
             ) : <span />}
-            <div role="group" aria-label="รูปแบบการแสดงผล" className="flex shrink-0 rounded-full border border-line bg-surface p-0.5">
-              {(["card", "table"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  aria-pressed={view === v}
-                  aria-label={v === "card" ? "แสดงแบบการ์ด" : "แสดงแบบตาราง"}
-                  onClick={() => changeView(v)}
-                  className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium [&_svg]:size-3.5 ${
-                    view === v ? "bg-brand-soft text-brand" : "text-muted"
-                  }`}
-                >
-                  {v === "card" ? <Icon.grid /> : <Icon.rows />}
-                  <span className="hidden sm:inline">{v === "card" ? "การ์ด" : "ตาราง"}</span>
-                </button>
-              ))}
-            </div>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={0}
+              value={view}
+              onValueChange={(v) => { if (v) changeView(v as "card" | "table"); }}
+              aria-label="รูปแบบการแสดงผล"
+              className="shrink-0 bg-card"
+            >
+              <ToggleGroupItem value="card" aria-label="แสดงแบบการ์ด" className="text-xs">
+                <LayoutGridIcon /><span className="hidden sm:inline">การ์ด</span>
+              </ToggleGroupItem>
+              <ToggleGroupItem value="table" aria-label="แสดงแบบตาราง" className="text-xs">
+                <Rows3Icon /><span className="hidden sm:inline">ตาราง</span>
+              </ToggleGroupItem>
+            </ToggleGroup>
           </div>
         </div>
       ) : null}
@@ -380,10 +373,10 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
           <section key={k} id={`day-${k}`} data-date={k} className="scroll-mt-40 pt-5">
             <h2 className="mb-2 flex flex-wrap items-center gap-2 font-bold">
               {fmtDayLong.format(parseKey(k))}
-              {relLabel(k) ? <span className="rounded-full bg-brand px-2 py-0.5 text-xs text-brand-ink">{relLabel(k)}</span> : null}
-              <span className="ml-auto text-xs font-medium text-muted">{t.countLbl} {list.length} slot</span>
+              <DayBadge label={relLabel(k)} />
+              <span className="ml-auto text-xs font-medium text-muted-foreground">{t.countLbl} {list.length} slot</span>
             </h2>
-            <div className={view === "card" ? "grid grid-cols-1 gap-2 sm:grid-cols-2" : "overflow-hidden rounded-xl border border-line bg-surface"}>
+            <div className={view === "card" ? "grid grid-cols-1 gap-2 sm:grid-cols-2" : "overflow-hidden rounded-xl border bg-card"}>
               {list.map((s) => {
                 const isSel = selected.has(s.id);
                 const blocked = !isSel && !!blockReason(s);
@@ -394,27 +387,30 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                     aria-pressed={isSel}
                     aria-label={`${platformOf(s)} ${s.start} ถึง ${s.end}`}
                     onClick={() => toggle(s)}
-                    className={`flex w-full items-center gap-3 text-left transition ${
+                    className={cn(
+                      "flex w-full items-center gap-3 text-left transition outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                       view === "card"
-                        ? `rounded-xl border bg-surface px-4 py-3 shadow-card ${isSel ? "border-brand ring-2 ring-brand/30" : "border-line hover:border-accent"}`
-                        : `border-b border-line px-3 py-2.5 last:border-b-0 ${isSel ? "bg-brand-soft" : "hover:bg-bg"}`
-                    } ${blocked ? "opacity-45" : ""}`}
+                        ? cn("rounded-xl border bg-card px-4 py-3 shadow-card", isSel ? "border-primary ring-2 ring-primary/30" : "hover:border-primary/50")
+                        : cn("border-b px-3 py-2.5 last:border-b-0", isSel ? "bg-secondary" : "hover:bg-muted"),
+                      blocked && "opacity-45",
+                    )}
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block font-semibold tabular-nums">{s.start} – {s.end}</span>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-                        <Tag name={platformOf(s)} index={platformIndex[platformOf(s)]} />
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                        <PlatformBadge name={platformOf(s)} index={platformIndex[platformOf(s)]} />
                         <span>{fmtHours(hoursOf(s))}</span>
-                        {role === "admin" && s.pairName ? <span className="font-medium text-ink">{s.pairName}</span> : null}
+                        {role === "admin" && s.pairName ? <span className="font-medium text-foreground">{s.pairName}</span> : null}
                       </span>
                     </span>
                     <span
                       aria-hidden
-                      className={`grid size-6 shrink-0 place-items-center rounded-full border-2 [&_svg]:size-3.5 ${
-                        isSel ? "border-brand bg-brand text-brand-ink" : "border-line text-transparent"
-                      }`}
+                      className={cn(
+                        "grid size-6 shrink-0 place-items-center rounded-full border-2 [&_svg]:size-3.5",
+                        isSel ? "border-primary bg-primary text-primary-foreground" : "border-border text-transparent",
+                      )}
                     >
-                      <Icon.check />
+                      <CheckIcon strokeWidth={3} />
                     </span>
                   </button>
                 );
@@ -427,56 +423,60 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       <div
         aria-hidden={!barOpen}
         inert={!barOpen}
-        className={`${barOpen ? "slot-bar-open translate-y-0" : "translate-y-full"} fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur transition-transform duration-200`}
+        className={cn(
+          "fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur transition-transform duration-200",
+          barOpen ? "slot-bar-open translate-y-0" : "translate-y-full",
+        )}
       >
         <div className="mx-auto flex max-w-[760px] items-center gap-2 px-4 py-3">
           <div className="min-w-0 flex-1 leading-tight">
             <div className="font-bold">เลือกแล้ว {selected.size} slot</div>
-            <div className="text-sm text-muted">รวม {fmtHours(totalHours)}</div>
+            <div className="text-sm text-muted-foreground">รวม {fmtHours(totalHours)}</div>
           </div>
-          <button type="button" className={btn.ghost} onClick={() => setSelected(new Map())}>ล้าง</button>
-          <button type="button" className={btn.primary} onClick={() => setDialog("confirm")}>{t.verb} {selected.size} slot</button>
+          <Button variant="outline" size="lg" className="rounded-full px-4" onClick={() => setSelected(new Map())}>ล้าง</Button>
+          <Button size="lg" className="rounded-full px-4" onClick={() => setDialog("confirm")}>{t.verb} {selected.size} slot</Button>
         </div>
       </div>
 
-      <Sheet open={dialog !== "closed"} onClose={closeDialog} busy={dialog === "busy"} labelledBy="dlgTitle">
-        <SheetHead id="dlgTitle" title={dlgTitle} note={dlgNote} />
-        <ul className="-mx-1 flex-1 overflow-y-auto px-1">
-          {(results && !lostResponse ? results.map((r) => ({ r, s: slots.find((x) => x.id === r.id) })) : sorted.map((s) => ({ s, r: resultById.get(s.id) })))
-            .map(({ s, r }, i) => (
-              <li key={s?.id ?? i} className="flex items-center justify-between gap-3 border-b border-line py-2.5 last:border-b-0">
-                <div>
-                  <div className="font-semibold tabular-nums">{s ? `${s.start} – ${s.end}` : "slot"}</div>
-                  {s ? <div className="text-xs text-muted">{fmtDayShort.format(parseKey(s.date))} | {platformOf(s)}</div> : null}
-                </div>
-                <div className={`text-right text-sm ${r ? (r.success ? "font-semibold text-ok" : "text-err") : "text-muted"}`}>
-                  {r ? (r.success ? t.done : r.message) : s ? fmtHours(hoursOf(s)) : ""}
-                </div>
-              </li>
-            ))}
-        </ul>
-        <div className="mt-4 flex justify-end gap-2">
+      <AppDialog open={dialog !== "closed"} onClose={closeDialog} busy={dialog === "busy"} title={dlgTitle} description={dlgNote}>
+        <DialogBody>
+          <ul>
+            {(results && !lostResponse ? results.map((r) => ({ r, s: slots.find((x) => x.id === r.id) })) : sorted.map((s) => ({ s, r: resultById.get(s.id) })))
+              .map(({ s, r }, i) => (
+                <li key={s?.id ?? i} className="flex items-center justify-between gap-3 border-b py-2.5 last:border-b-0">
+                  <div>
+                    <div className="font-semibold tabular-nums">{s ? `${s.start} – ${s.end}` : "slot"}</div>
+                    {s ? <div className="text-xs text-muted-foreground">{fmtDayShort.format(parseKey(s.date))} | {platformOf(s)}</div> : null}
+                  </div>
+                  <div className={cn("text-right text-sm", r ? (r.success ? "font-semibold text-success" : "text-destructive") : "text-muted-foreground")}>
+                    {r ? (r.success ? t.done : r.message) : s ? fmtHours(hoursOf(s)) : ""}
+                  </div>
+                </li>
+              ))}
+          </ul>
+        </DialogBody>
+        <DialogActions>
           {dialog === "done" ? (
-            <button type="button" className={btn.primary} onClick={closeDialog}>เสร็จสิ้น</button>
+            <Button size="lg" onClick={closeDialog}>เสร็จสิ้น</Button>
           ) : (
             <>
-              <button type="button" className={btn.ghost} disabled={dialog === "busy"} onClick={closeDialog}>ยกเลิก</button>
-              <button type="button" className={btn.primary} disabled={dialog === "busy"} onClick={submit}>
+              <Button variant="outline" size="lg" disabled={dialog === "busy"} onClick={closeDialog}>ยกเลิก</Button>
+              <Button size="lg" disabled={dialog === "busy"} onClick={submit}>
                 {dialog === "busy" ? `กำลัง${t.verb}...` : `ยืนยันการ${t.verb}`}
-              </button>
+              </Button>
             </>
           )}
-        </div>
-      </Sheet>
+        </DialogActions>
+      </AppDialog>
     </>
   );
 }
 
-function Skeleton() {
+function SlotSkeleton() {
   return (
-    <div aria-label="กำลังโหลด slot ที่ว่าง" className="animate-pulse py-4">
-      <div className="mb-3 h-5 w-40 rounded bg-line" />
-      {Array.from({ length: 4 }, (_, i) => <div key={i} className="mb-2 h-16 rounded-xl bg-line/70" />)}
+    <div aria-label="กำลังโหลด slot ที่ว่าง" className="py-4">
+      <Skeleton className="mb-3 h-5 w-40" />
+      {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="mb-2 h-16 rounded-xl" />)}
     </div>
   );
 }

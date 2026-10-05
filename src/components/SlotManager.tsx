@@ -1,9 +1,29 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import {
+  CalendarSyncIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsUpDownIcon, PlusIcon, RefreshCwIcon, Trash2Icon, XIcon,
+} from "lucide-react";
 import { fmtDayLong, fmtWeekShort, parseKey, relLabel, todayKey } from "@/lib/format";
-import { Icon, IconBtn, Sheet, SheetHead, StateBox, TAG_COLORS, Tag, api, btn, useLocal, useToast, writeLocal } from "@/components/ui";
+import {
+  AppDialog, DayBadge, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, PlatformBadge, StateBox,
+  TAG_COLORS, api, useConfirm, useToast,
+} from "@/components/shared";
+import { DatePicker, TimePicker } from "@/components/date-picker";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useLocal, writeLocal } from "@/lib/hooks";
 import type { OwnerScope } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type Side = {
   id: number; personId: number | null; name: string; status: string;
@@ -25,6 +45,7 @@ const addDays = (k: string, n: number) => new Date(parseKey(k).getTime() + n * 8
 /** หน้าจัดการ slot สำหรับเจ้าของ: ดูรายวัน / เพิ่ม / กำหนดคน / เปลี่ยนสถานะ / ลบ (เฉพาะฝั่งที่มีสิทธิ์) */
 export function SlotManager({ scope }: { scope: OwnerScope }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [date, setDate] = useState(() => todayKey());
   const [data, setData] = useState<DayData | null>(null);
   const [failed, setFailed] = useState<{ date: string; message: string } | null>(null);
@@ -95,7 +116,13 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
   }
 
   async function remove(slot: Slot) {
-    if (!confirm(`ลบ slot ${slot.platform} ${slot.start}–${slot.end} ?`)) return;
+    const ok = await confirm({
+      title: `ลบ slot ${slot.platform} ${slot.start}–${slot.end} ?`,
+      description: "ลบทั้งในเว็บและแถวในชีต",
+      confirmText: "ลบ slot",
+      destructive: true,
+    });
+    if (!ok) return;
     setBusy(slot.key);
     try {
       const res = await api("/api/owner/slots", { mcId: slot.mc?.id, adminId: slot.admin?.id }, "DELETE");
@@ -134,54 +161,49 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
   return (
     <div className="pb-10">
       <div className="my-2 flex flex-wrap items-center gap-2">
-        <IconBtn label="วันก่อนหน้า" onClick={() => setDate(addDays(date, -1))}><Icon.left /></IconBtn>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => e.target.value && setDate(e.target.value)}
-          aria-label="เลือกวันที่"
-          className="h-9 rounded-full border border-line bg-surface px-3 text-sm"
-        />
-        <IconBtn label="วันถัดไป" onClick={() => setDate(addDays(date, 1))}><Icon.right /></IconBtn>
-        <button type="button" className={`${btn.ghost} !py-1.5`} onClick={() => setDate(todayKey())}>วันนี้</button>
+        <IconButton label="วันก่อนหน้า" onClick={() => setDate(addDays(date, -1))}><ChevronLeftIcon /></IconButton>
+        <DatePicker value={date} onChange={(v) => v && setDate(v)} aria-label="เลือกวันที่" className="w-auto rounded-full" />
+        <IconButton label="วันถัดไป" onClick={() => setDate(addDays(date, 1))}><ChevronRightIcon /></IconButton>
+        <Button variant="outline" size="lg" className="rounded-full bg-card" onClick={() => setDate(todayKey())}>วันนี้</Button>
         <div className="ml-auto flex flex-wrap justify-end gap-2">
           {scope.mc && scope.admin ? (
             <>
-              <button type="button" className={btn.ghost} onClick={() => setResyncOpen(true)} title="เช็กทุกคิวตั้งแต่วันนี้กับปฏิทินจริง สร้าง event ที่หาย / แก้ที่ไม่ตรง">
-                ซิงค์ปฏิทินใหม่ทั้งหมด
-              </button>
-              <button type="button" className={btn.ghost} onClick={() => setCleanupOpen(true)} title="หา event ซ้ำ / ค้างในปฏิทินของพนักงาน แล้วลบ">
-                ล้าง event ซ้ำ
-              </button>
+              <Button variant="outline" size="lg" className="bg-card" onClick={() => setResyncOpen(true)} title="เช็กทุกคิวตั้งแต่วันนี้กับปฏิทินจริง สร้าง event ที่หาย / แก้ที่ไม่ตรง">
+                <CalendarSyncIcon />ซิงค์ปฏิทินใหม่ทั้งหมด
+              </Button>
+              <Button variant="outline" size="lg" className="bg-card" onClick={() => setCleanupOpen(true)} title="หา event ซ้ำ / ค้างในปฏิทินของพนักงาน แล้วลบ">
+                <Trash2Icon />ล้าง event ซ้ำ
+              </Button>
             </>
           ) : null}
-          <button type="button" className={btn.ghost} disabled={syncing} onClick={syncFromSheet} title="อ่านทุกแถวในชีตมาอัปเดตเว็บ (ใช้เมื่อแก้ในชีตแล้วเว็บไม่เปลี่ยน)">
-            {syncing ? "กำลังซิงค์..." : "ซิงค์จากชีตทั้งหมด"}
-          </button>
-          <button type="button" className={btn.primary} onClick={() => setCreateOpen(true)}>+ เพิ่ม slot</button>
+          <Button variant="outline" size="lg" className="bg-card" disabled={syncing} onClick={syncFromSheet} title="อ่านทุกแถวในชีตมาอัปเดตเว็บ (ใช้เมื่อแก้ในชีตแล้วเว็บไม่เปลี่ยน)">
+            {syncing ? <Spinner /> : <RefreshCwIcon />}{syncing ? "กำลังซิงค์..." : "ซิงค์จากชีตทั้งหมด"}
+          </Button>
+          <Button size="lg" onClick={() => setCreateOpen(true)}><PlusIcon />เพิ่ม slot</Button>
         </div>
       </div>
 
       <h2 className="mt-3 flex flex-wrap items-center gap-2 font-bold">
         {fmtDayLong.format(parseKey(date))}
-        {relLabel(date) ? <span className="rounded-full bg-brand px-2 py-0.5 text-xs text-brand-ink">{relLabel(date)}</span> : null}
+        <DayBadge label={relLabel(date)} />
         {dayPlatforms.length > 1 ? (
           <span role="group" aria-label="กรองแพลตฟอร์ม" className="flex flex-wrap items-center gap-1.5 font-normal">
             {dayPlatforms.map((p) => (
-              <label
+              <Label
                 key={p}
-                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold ${
-                  hidden.includes(p) ? "bg-bg text-muted line-through" : TAG_COLORS[platformIndex[p] ?? 0]
-                }`}
+                className={cn(
+                  "cursor-pointer gap-1.5 rounded-full px-2 py-1 text-xs font-semibold",
+                  hidden.includes(p) ? "bg-muted text-muted-foreground line-through" : TAG_COLORS[platformIndex[p] ?? 0],
+                )}
               >
-                <input type="checkbox" checked={!hidden.includes(p)} onChange={() => togglePlatform(p)} className="size-3.5 accent-brand" />
+                <Checkbox checked={!hidden.includes(p)} onCheckedChange={() => togglePlatform(p)} className="size-3.5 bg-card" />
                 {p}
-              </label>
+              </Label>
             ))}
           </span>
         ) : null}
         {counts ? (
-          <span className="ml-auto text-xs font-medium text-muted">
+          <span className="ml-auto text-xs font-medium text-muted-foreground">
             {[`${counts.total} slot`, scope.mc ? `Mc ว่าง ${counts.mcOpen}` : "", scope.admin ? `รอ Admin เสริม ${counts.adminOpen}` : ""]
               .filter(Boolean).join(" · ")}
           </span>
@@ -189,15 +211,11 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
       </h2>
 
       {error && !day ? (
-        <StateBox title="โหลดข้อมูลไม่สำเร็จ">
-          {error}
-          <br />
-          <button type="button" className={`${btn.ghost} mt-3`} onClick={reload}>ลองอีกครั้ง</button>
-        </StateBox>
+        <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={error} onRetry={reload} />
       ) : !day ? (
-        <div className="my-4 h-40 animate-pulse rounded-2xl bg-line/70" />
+        <LoadingBlock />
       ) : !day.slots.length ? (
-        <StateBox title="วันนี้ยังไม่มี slot">กด &quot;+ เพิ่ม slot&quot; เพื่อสร้าง slot ใหม่</StateBox>
+        <StateBox title="วันนี้ยังไม่มี slot">กด &quot;เพิ่ม slot&quot; เพื่อสร้าง slot ใหม่</StateBox>
       ) : !shown.length ? (
         <StateBox title="ไม่มี slot ของแพลตฟอร์มที่ติ๊กไว้">ติ๊กแพลตฟอร์มด้านบนเพื่อแสดง slot</StateBox>
       ) : (
@@ -232,7 +250,8 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
   );
 }
 
-const selectCls = "h-9 min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 text-sm disabled:opacity-60";
+// Radix Select ใช้ค่าว่างเป็น value ไม่ได้ จึงแทน "ไม่มีสถานะ" ด้วยค่านี้
+const NO_STATUS = "__none";
 
 function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
   slot: Slot;
@@ -247,14 +266,15 @@ function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
   const cancelled = slot.mc?.cancelled || slot.admin?.cancelled;
 
   return (
-    <div className={`rounded-xl border border-line bg-surface p-3 shadow-card ${busy ? "opacity-60" : ""} ${cancelled ? "border-err/40" : ""}`}>
+    <div className={cn("rounded-xl border bg-card p-3 shadow-card", busy && "opacity-60", cancelled && "border-destructive/40")}>
       <div className="mb-2 flex items-center gap-2">
         <span className="font-semibold tabular-nums">{slot.start} – {slot.end}</span>
-        <Tag name={slot.platform || "Live"} index={tagIndex} />
+        <PlatformBadge name={slot.platform || "Live"} index={tagIndex} />
+        {busy ? <Spinner className="text-muted-foreground" /> : null}
         {empty ? (
-          <button type="button" disabled={busy} onClick={onDelete} className="ml-auto text-xs font-semibold text-err hover:underline">
-            ลบ slot
-          </button>
+          <Button variant="destructive" size="xs" disabled={busy} onClick={onDelete} className="ml-auto">
+            <Trash2Icon />ลบ slot
+          </Button>
         ) : null}
       </div>
 
@@ -267,7 +287,7 @@ function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
           onPerson={(pid) => onPatch("mc_slots", slot.mc!.id, { personId: pid })}
           onStatus={(st) => onPatch("mc_slots", slot.mc!.id, { status: st })}
         />
-      ) : <p className="text-xs text-muted">ไม่มีแถว Mc ของ slot นี้</p>}
+      ) : <p className="text-xs text-muted-foreground">ไม่มีแถว Mc ของ slot นี้</p>}
 
       {!scope.admin ? null : slot.admin ? (
         <>
@@ -279,18 +299,16 @@ function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
             onPerson={(pid) => onPatch("admin_slots", slot.admin!.id, { personId: pid })}
             onStatus={(st) => onPatch("admin_slots", slot.admin!.id, { status: st })}
           />
-          <label className="mt-1.5 flex items-center gap-2 pl-14 text-xs text-muted">
-            <input
-              type="checkbox"
+          <Label className="mt-2 pl-14 text-xs font-normal text-muted-foreground">
+            <Checkbox
               checked={slot.admin.extra}
               disabled={busy}
-              onChange={(e) => onPatch("admin_slots", slot.admin!.id, { extraAdmin: e.target.checked })}
-              className="size-4 accent-[var(--brand)]"
+              onCheckedChange={(v) => onPatch("admin_slots", slot.admin!.id, { extraAdmin: v === true })}
             />
             เปิดให้ Admin เสริมรับคิวผ่านเว็บ
-          </label>
+          </Label>
         </>
-      ) : <p className="mt-1 text-xs text-muted">ไม่มีแถว Admin ของ slot นี้</p>}
+      ) : <p className="mt-1 text-xs text-muted-foreground">ไม่มีแถว Admin ของ slot นี้</p>}
     </div>
   );
 }
@@ -306,7 +324,7 @@ function SideRow({ label, side, people, busy, onPerson, onStatus }: {
   const statuses = STATUSES.includes(side.status) ? STATUSES : [...STATUSES, side.status];
   return (
     <div className="mt-1.5 flex items-center gap-2">
-      <span className="w-12 shrink-0 text-xs font-semibold text-muted">{label}</span>
+      <span className="w-12 shrink-0 text-xs font-semibold text-muted-foreground">{label}</span>
       <PersonPicker
         label={label}
         value={side.personId}
@@ -317,23 +335,19 @@ function SideRow({ label, side, people, busy, onPerson, onStatus }: {
         disabled={busy}
         onChange={onPerson}
       />
-      <select
-        aria-label={`สถานะ ${label}`}
-        value={side.status}
-        disabled={busy}
-        onChange={(e) => onStatus(e.target.value)}
-        className={`${selectCls} max-w-28 flex-none ${side.cancelled ? "text-err" : ""}`}
-      >
-        {statuses.map((st) => <option key={st} value={st}>{st || "สถานะ —"}</option>)}
-      </select>
+      <Select value={side.status || NO_STATUS} disabled={busy} onValueChange={(v) => onStatus(v === NO_STATUS ? "" : v)}>
+        <SelectTrigger aria-label={`สถานะ ${label}`} className={cn("h-9! w-28 shrink-0 bg-card", side.cancelled && "text-destructive")}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper" align="end">
+          {statuses.map((st) => <SelectItem key={st || NO_STATUS} value={st || NO_STATUS}>{st || "สถานะ —"}</SelectItem>)}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
 
-/**
- * เลือกคน: กดเปิดเป็น dropdown หรือพิมพ์ชื่อเพื่อกรองรายการ
- * คีย์บอร์ด: ↑ ↓ เลื่อน / Enter เลือก / Esc ปิด
- */
+/** เลือกคน: กดเปิดรายการ แล้วพิมพ์ชื่อเพื่อกรอง (คีย์บอร์ด: ↑ ↓ เลื่อน / Enter เลือก / Esc ปิด) */
 export function PersonPicker({ label, value, options, disabled, onChange, emptyText = "— ว่าง —", hideEmpty = false }: {
   label: string;
   value: number | null;
@@ -344,101 +358,47 @@ export function PersonPicker({ label, value, options, disabled, onChange, emptyT
   hideEmpty?: boolean; // ไม่มีตัวเลือก "ว่าง" ในรายการ
 }) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [hi, setHi] = useState(0);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-  const listId = useId();
-
   const all = [...(hideEmpty ? [] : [{ id: null as number | null, text: emptyText }]), ...options];
-  const q = query.trim().toLowerCase();
-  const shown = q ? all.filter((o) => o.id !== null && o.text.toLowerCase().includes(q)) : all;
   const current = all.find((o) => o.id === value)?.text ?? emptyText;
 
-  // คลิกนอกกล่อง = ปิด
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!boxRef.current?.contains(e.target as Node)) { setOpen(false); setQuery(""); }
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
-
-  // ให้ตัวที่เลือกอยู่มองเห็นในรายการ
-  useEffect(() => {
-    if (open) listRef.current?.children[hi]?.scrollIntoView({ block: "nearest" });
-  }, [open, hi]);
-
-  function openList() {
-    setQuery("");
-    setHi(Math.max(0, all.findIndex((o) => o.id === value)));
-    setOpen(true);
-  }
-  function close() {
-    setOpen(false);
-    setQuery("");
-  }
-  function pick(o: { id: number | null }) {
-    close();
-    if (o.id !== value) onChange(o.id);
-  }
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, shown.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); if (shown[hi]) pick(shown[hi]); }
-    else if (e.key === "Escape") { e.preventDefault(); close(); }
-  }
-
   return (
-    <div ref={boxRef} className="relative min-w-0 flex-1">
-      {open ? (
-        <input
-          autoFocus
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setHi(0); }}
-          onKeyDown={onKey}
-          placeholder={`พิมพ์ชื่อ ${label} เพื่อค้นหา...`}
-          aria-label={`ค้นหา ${label}`}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
           role="combobox"
-          aria-expanded
-          aria-controls={listId}
-          className={`${selectCls} w-full border-brand`}
-        />
-      ) : (
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={openList}
+          aria-expanded={open}
           aria-label={`${label}: ${current}`}
-          className={`${selectCls} flex w-full items-center justify-between gap-1 text-left`}
+          disabled={disabled}
+          className="h-9 min-w-0 flex-1 justify-between bg-card font-normal"
         >
-          <span className="truncate">{current}</span>
-          <span aria-hidden className="shrink-0 text-xs text-muted">▾</span>
-        </button>
-      )}
-      {open ? (
-        <ul
-          ref={listRef}
-          id={listId}
-          role="listbox"
-          className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-line bg-surface py-1 shadow-card"
-        >
-          {shown.length ? shown.map((o, i) => (
-            <li
-              key={o.id ?? "none"}
-              role="option"
-              aria-selected={o.id === value}
-              onMouseDown={(e) => { e.preventDefault(); pick(o); }}
-              onMouseEnter={() => setHi(i)}
-              className={`cursor-pointer truncate px-3 py-1.5 text-sm ${i === hi ? "bg-brand-soft text-brand" : ""} ${o.id === value ? "font-semibold" : ""} ${o.id === null ? "text-muted" : ""}`}
-            >
-              {o.text}
-            </li>
-          )) : <li className="px-3 py-2 text-sm text-muted">ไม่พบชื่อ &quot;{query}&quot;</li>}
-        </ul>
-      ) : null}
-    </div>
+          <span className={cn("truncate", value === null && "text-muted-foreground")}>{current}</span>
+          <ChevronsUpDownIcon className="text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-60 p-0">
+        <Command>
+          <CommandInput placeholder={`พิมพ์ชื่อ ${label} เพื่อค้นหา...`} aria-label={`ค้นหา ${label}`} />
+          <CommandList>
+            <CommandEmpty>ไม่พบชื่อนี้</CommandEmpty>
+            <CommandGroup>
+              {all.map((o) => (
+                <CommandItem
+                  key={o.id ?? "none"}
+                  value={String(o.id ?? "none")}
+                  keywords={[o.text]}
+                  data-checked={o.id === value}
+                  onSelect={() => { setOpen(false); if (o.id !== value) onChange(o.id); }}
+                  className={cn(o.id === null && "text-muted-foreground", o.id === value && "font-semibold")}
+                >
+                  <span className="truncate">{o.text}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -490,42 +450,39 @@ function CalendarResync({ onClose }: { onClose: () => void }) {
   const running = state === "running";
   const pct = total ? Math.max(0, Math.min(100, Math.round(((total - (remaining ?? total)) / total) * 100))) : 0;
   return (
-    <Sheet open onClose={onClose} busy={false} labelledBy="resyncTitle">
-      <SheetHead
-        id="resyncTitle"
-        title="ซิงค์ปฏิทินใหม่ทั้งหมด"
-        note={running
-          ? "กำลังเช็กทุกคิวตั้งแต่วันนี้กับปฏิทินของพนักงาน: สร้าง event ที่หาย แก้ที่ไม่ตรง ลบของคิวที่ไม่มีคนแล้ว (เปิดหน้านี้ค้างไว้จนเสร็จ)"
-          : state === "done" ? "เสร็จแล้ว ปฏิทินตรงกับคิวในระบบ ถ้ายังมี event ซ้ำ ให้กด \"ล้าง event ซ้ำ\" ต่อ"
-            : error}
-      />
+    <AppDialog
+      open
+      onClose={onClose}
+      title="ซิงค์ปฏิทินใหม่ทั้งหมด"
+      description={running
+        ? "กำลังเช็กทุกคิวตั้งแต่วันนี้กับปฏิทินของพนักงาน: สร้าง event ที่หาย แก้ที่ไม่ตรง ลบของคิวที่ไม่มีคนแล้ว (เปิดหน้านี้ค้างไว้จนเสร็จ)"
+        : state === "done" ? "เสร็จแล้ว ปฏิทินตรงกับคิวในระบบ ถ้ายังมี event ซ้ำ ให้กด \"ล้าง event ซ้ำ\" ต่อ"
+          : error}
+    >
       <div className="text-sm">
-        <div className="h-2 overflow-hidden rounded-full bg-line">
-          <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${state === "done" ? 100 : pct}%` }} />
-        </div>
-        <div className="mt-2 flex justify-between text-xs text-muted tabular-nums">
-          <span>ทำแล้ว {done} งาน{failed ? ` · ไม่สำเร็จ ${failed}` : ""}</span>
+        <Progress value={state === "done" ? 100 : pct} aria-label="ความคืบหน้า" />
+        <div className="mt-2 flex justify-between text-xs text-muted-foreground tabular-nums">
+          <span className="flex items-center gap-1.5">{running ? <Spinner className="size-3" /> : null}ทำแล้ว {done} งาน{failed ? ` · ไม่สำเร็จ ${failed}` : ""}</span>
           <span>{remaining === null ? "กำลังเริ่ม..." : `เหลือ ${remaining} งาน`}</span>
         </div>
         {noAccess.length ? (
-          <div className="mt-3 rounded-xl border border-warn-line bg-warn-bg px-3 py-2 text-xs text-warn-ink">
-            <strong className="block text-sm">ปฏิทินที่ระบบยังเขียนไม่ได้ ({noAccess.length} คน)</strong>
+          <Notice variant="warning" title={`ปฏิทินที่ระบบยังเขียนไม่ได้ (${noAccess.length} คน)`} className="mt-3 text-xs">
             ให้เจ้าของปฏิทินแชร์ปฏิทินให้ <b>{SYSTEM_CALENDAR_ACCOUNT}</b> แบบ &quot;ทำการเปลี่ยนแปลงกิจกรรม&quot;
             แล้วกด &quot;ซิงค์ปฏิทินใหม่ทั้งหมด&quot; อีกครั้ง
             <ul className="mt-1 max-h-32 list-disc overflow-y-auto pl-5">
               {noAccess.map((e) => <li key={e}>{e}</li>)}
             </ul>
-          </div>
+          </Notice>
         ) : failed ? (
-          <p className="mt-2 text-xs text-muted">งานที่ไม่สำเร็จด้วยสาเหตุอื่น ระบบจะลองใหม่เองอีกไม่เกิน 5 ครั้ง</p>
+          <p className="mt-2 text-xs text-muted-foreground">งานที่ไม่สำเร็จด้วยสาเหตุอื่น ระบบจะลองใหม่เองอีกไม่เกิน 5 ครั้ง</p>
         ) : null}
       </div>
-      <div className="mt-4 flex justify-end">
-        <button type="button" className={running ? btn.ghost : btn.primary} onClick={onClose}>
+      <DialogActions>
+        <Button variant={running ? "outline" : "default"} size="lg" onClick={onClose}>
           {running ? "ปิด (งานที่เหลือจะค่อยๆ ทำต่อเองช้าๆ)" : "ปิด"}
-        </button>
-      </div>
-    </Sheet>
+        </Button>
+      </DialogActions>
+    </AppDialog>
   );
 }
 
@@ -583,43 +540,48 @@ function CalendarCleanup({ onClose }: { onClose: () => void }) {
             : "ไม่เจอ event ซ้ำหรือค้าง ปฏิทินตรงกับคิวจริงแล้ว";
 
   return (
-    <Sheet open onClose={onClose} busy={busy} labelledBy="cleanupTitle">
-      <SheetHead id="cleanupTitle" title="ล้าง event ซ้ำในปฏิทิน" note={note} />
-      <div className="-mx-1 flex-1 overflow-y-auto px-1 text-sm">
+    <AppDialog open onClose={onClose} busy={busy} title="ล้าง event ซ้ำในปฏิทิน" description={note}>
+      <DialogBody className="text-sm">
+        {busy ? <div className="flex justify-center py-4"><Spinner className="size-6 text-primary" /></div> : null}
         {state === "ready" && res?.total ? (
-          <p className="mb-2 rounded-xl bg-brand-soft px-3 py-2 text-xs text-info-ink">
+          <Notice className="mt-0 mb-2 text-xs">
             นับเฉพาะ event ที่ชื่อรูปแบบเดียวกับที่ระบบสร้าง (&quot;แพลตฟอร์ม - Mc ชื่อ&quot; / &quot;Admin แพลตฟอร์ม - ชื่อ&quot;)
             แต่ไม่ใช่ event ของคิวที่ยังมีคนนั้นอยู่ = event ซ้ำ หรือคิวที่เอาคนออกแล้วแต่ event ยังค้าง
-          </p>
+          </Notice>
         ) : null}
         {res?.found.length ? (
           <ul>
             {res.found.map((f, i) => (
-              <li key={i} className="flex items-center justify-between gap-3 border-b border-line py-1.5 last:border-b-0">
+              <li key={i} className="flex items-center justify-between gap-3 border-b py-1.5 last:border-b-0">
                 <span className="min-w-0">
                   <span className="block truncate font-semibold">{f.summary}</span>
-                  <span className="block truncate text-xs text-muted">{f.email}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{f.email}</span>
                 </span>
-                <span className="shrink-0 text-xs text-muted tabular-nums">{f.start ? fmtEventTime.format(new Date(f.start)) : ""}</span>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{f.start ? fmtEventTime.format(new Date(f.start)) : ""}</span>
               </li>
             ))}
           </ul>
         ) : null}
-        {res && res.total > res.found.length ? <p className="mt-2 text-xs text-muted">แสดง {res.found.length} จาก {res.total} รายการ</p> : null}
+        {res && res.total > res.found.length ? <p className="mt-2 text-xs text-muted-foreground">แสดง {res.found.length} จาก {res.total} รายการ</p> : null}
         {res?.errors.length ? (
-          <details className="mt-3 text-xs text-muted">
-            <summary>ตรวจไม่ได้ {res.errors.length} ปฏิทิน (ยังไม่ได้แชร์ปฏิทินให้ระบบ)</summary>
-            <ul className="mt-1 list-disc pl-5">{res.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
-          </details>
+          <Collapsible className="mt-3 text-xs text-muted-foreground">
+            <CollapsibleTrigger className="group flex items-center gap-1 font-medium hover:text-foreground">
+              <ChevronDownIcon className="size-3.5 transition-transform group-data-[state=open]:rotate-180" />
+              ตรวจไม่ได้ {res.errors.length} ปฏิทิน (ยังไม่ได้แชร์ปฏิทินให้ระบบ)
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <ul className="mt-1 list-disc pl-5">{res.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+            </CollapsibleContent>
+          </Collapsible>
         ) : null}
-      </div>
-      <div className="mt-4 flex justify-end gap-2">
-        <button type="button" className={btn.ghost} disabled={busy} onClick={onClose}>{state === "done" ? "ปิด" : "ยกเลิก"}</button>
+      </DialogBody>
+      <DialogActions>
+        <Button variant="outline" size="lg" disabled={busy} onClick={onClose}>{state === "done" ? "ปิด" : "ยกเลิก"}</Button>
         {state === "ready" && res?.total ? (
-          <button type="button" className={btn.danger} onClick={run}>ลบ {res.total} รายการ</button>
+          <Button variant="danger" size="lg" onClick={run}><Trash2Icon />ลบ {res.total} รายการ</Button>
         ) : null}
-      </div>
-    </Sheet>
+      </DialogActions>
+    </AppDialog>
   );
 }
 
@@ -639,6 +601,7 @@ function CreateDialog({ scope, defaultDate, platforms, onClose }: {
   const [times, setTimes] = useState([{ start: "09:30", end: "11:30" }]);
   const [extraAdmin, setExtraAdmin] = useState(false);
   const [saving, setSaving] = useState(false);
+  const platformId = useId();
 
   const dates = useMemo(() => {
     const out: string[] = [];
@@ -680,41 +643,42 @@ function CreateDialog({ scope, defaultDate, platforms, onClose }: {
     }
   }
 
-  const field = "h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm";
   return (
-    <Sheet open onClose={() => onClose(false)} busy={saving} labelledBy="createTitle">
-      <SheetHead id="createTitle" title="เพิ่ม slot" note="สร้างได้ทีละหลายวันและหลายช่วงเวลา slot ที่มีอยู่แล้ว (แพลตฟอร์ม + วัน + เวลาเดียวกัน) จะถูกข้าม" />
-      <div className="-mx-1 flex-1 space-y-4 overflow-y-auto px-1 text-sm">
-        <label className="block">
-          <span className="mb-1 block font-semibold">แพลตฟอร์ม</span>
-          <input list="platform-list" value={platform} onChange={(e) => setPlatform(e.target.value)} className={field} placeholder="เช่น Shopee, TikTok" />
+    <AppDialog
+      open
+      onClose={() => onClose(false)}
+      busy={saving}
+      title="เพิ่ม slot"
+      description="สร้างได้ทีละหลายวันและหลายช่วงเวลา slot ที่มีอยู่แล้ว (แพลตฟอร์ม + วัน + เวลาเดียวกัน) จะถูกข้าม"
+    >
+      <DialogBody className="space-y-4 text-sm">
+        <div>
+          <Label htmlFor={platformId} className="mb-1.5 font-semibold">แพลตฟอร์ม</Label>
+          <Input id={platformId} list="platform-list" value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="เช่น Shopee, TikTok" />
           <datalist id="platform-list">{platforms.map((p) => <option key={p} value={p} />)}</datalist>
-        </label>
+        </div>
 
         <div>
-          <span className="mb-1 block font-semibold">วันที่</span>
+          <span className="mb-1.5 block font-semibold">วันที่</span>
           <div className="flex items-center gap-2">
-            <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); if (e.target.value > to) setTo(e.target.value); }} className={field} aria-label="ตั้งแต่วันที่" />
-            <span className="text-muted">ถึง</span>
-            <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} className={field} aria-label="ถึงวันที่" />
+            <DatePicker value={from} onChange={(v) => { setFrom(v); if (v > to) setTo(v); }} aria-label="ตั้งแต่วันที่" className="flex-1" />
+            <span className="text-muted-foreground">ถึง</span>
+            <DatePicker value={to} min={from} onChange={setTo} aria-label="ถึงวันที่" className="flex-1" />
           </div>
-          <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="เฉพาะวัน">
-            {WEEKDAYS.map((w, i) => {
-              const on = weekdays.has(i);
-              return (
-                <button
-                  key={w}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => { const n = new Set(weekdays); if (on) n.delete(i); else n.add(i); setWeekdays(n); }}
-                  className={`rounded-full border px-3 py-1 text-xs font-semibold ${on ? "border-brand bg-brand-soft text-brand" : "border-line text-muted"}`}
-                >
-                  {w}
-                </button>
-              );
-            })}
-          </div>
-          <p className="mt-1 text-xs text-muted">
+          <ToggleGroup
+            type="multiple"
+            variant="outline"
+            size="sm"
+            value={[...weekdays].map(String)}
+            onValueChange={(v) => setWeekdays(new Set(v.map(Number)))}
+            aria-label="เฉพาะวัน"
+            className="mt-2 flex-wrap"
+          >
+            {WEEKDAYS.map((w, i) => (
+              <ToggleGroupItem key={w} value={String(i)} className="min-w-10 rounded-full! text-xs font-semibold">{w}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <p className="mt-1 text-xs text-muted-foreground">
             {tooMany ? "เลือกได้ไม่เกิน 62 วันต่อครั้ง" : dates.length
               ? `${dates.length} วัน: ${dates.slice(0, 4).map((d) => `${fmtWeekShort.format(parseKey(d))} ${parseKey(d).getUTCDate()}`).join(", ")}${dates.length > 4 ? " ..." : ""}`
               : "ไม่มีวันที่ตรงกับที่เลือก"}
@@ -722,39 +686,41 @@ function CreateDialog({ scope, defaultDate, platforms, onClose }: {
         </div>
 
         <div>
-          <span className="mb-1 block font-semibold">ช่วงเวลา</span>
+          <span className="mb-1.5 block font-semibold">ช่วงเวลา</span>
           <div className="space-y-2">
             {times.map((t, i) => (
               <div key={i} className="flex items-center gap-2">
-                <input type="time" value={t.start} onChange={(e) => setTime(i, "start", e.target.value)} className={field} aria-label={`เวลาเริ่ม ช่วงที่ ${i + 1}`} />
-                <span className="text-muted">–</span>
-                <input type="time" value={t.end} onChange={(e) => setTime(i, "end", e.target.value)} className={field} aria-label={`เวลาจบ ช่วงที่ ${i + 1}`} />
-                <IconBtn label="ลบช่วงเวลานี้" onClick={() => setTimes(times.filter((_, j) => j !== i))}><Icon.close /></IconBtn>
+                <TimePicker value={t.start} onChange={(v) => setTime(i, "start", v)} aria-label={`เวลาเริ่ม ช่วงที่ ${i + 1}`} className="flex-1" />
+                <span className="text-muted-foreground">–</span>
+                <TimePicker value={t.end} onChange={(v) => setTime(i, "end", v)} aria-label={`เวลาจบ ช่วงที่ ${i + 1}`} className="flex-1" />
+                <IconButton label="ลบช่วงเวลานี้" variant="ghost" className="text-muted-foreground" onClick={() => setTimes(times.filter((_, j) => j !== i))}>
+                  <XIcon />
+                </IconButton>
               </div>
             ))}
           </div>
-          <button type="button" onClick={addTime} className="mt-2 text-sm font-semibold text-brand hover:underline">+ เพิ่มช่วงเวลา (ต่อจากช่วงสุดท้าย)</button>
-          <p className="mt-1 text-xs text-muted">เวลาจบก่อนเวลาเริ่ม = ข้ามเที่ยงคืน เช่น 23:30–02:30</p>
+          <Button variant="link" onClick={addTime} className="mt-1 h-auto px-0 font-semibold"><PlusIcon />เพิ่มช่วงเวลา (ต่อจากช่วงสุดท้าย)</Button>
+          <p className="mt-1 text-xs text-muted-foreground">เวลาจบก่อนเวลาเริ่ม = ข้ามเที่ยงคืน เช่น 23:30–02:30</p>
         </div>
 
         {scope.admin ? (
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={extraAdmin} onChange={(e) => setExtraAdmin(e.target.checked)} className="size-4 accent-[var(--brand)]" />
+          <Label className="leading-snug font-normal">
+            <Checkbox checked={extraAdmin} onCheckedChange={(v) => setExtraAdmin(v === true)} />
             เปิดให้ Admin เสริมรับคิวผ่านเว็บ (หมายเหตุ &quot;Admin เสริม&quot;)
-          </label>
+          </Label>
         ) : null}
         {!(scope.mc && scope.admin) ? (
-          <p className="text-xs text-muted">สร้างเฉพาะแถวฝั่ง {scope.mc ? "Mc (แท็บ Deal Mc)" : "Admin (แท็บ Admin เสริม)"} ตามสิทธิ์ของบัญชีนี้</p>
+          <p className="text-xs text-muted-foreground">สร้างเฉพาะแถวฝั่ง {scope.mc ? "Mc (แท็บ Deal Mc)" : "Admin (แท็บ Admin เสริม)"} ตามสิทธิ์ของบัญชีนี้</p>
         ) : null}
-      </div>
+      </DialogBody>
 
-      <div className="mt-4 flex items-center justify-end gap-2">
-        <span className="mr-auto text-sm text-muted">จะสร้าง {tooMany ? 0 : total} slot</span>
-        <button type="button" className={btn.ghost} disabled={saving} onClick={() => onClose(false)}>ยกเลิก</button>
-        <button type="button" className={btn.primary} disabled={saving || !platform.trim() || !total || tooMany} onClick={submit}>
-          {saving ? "กำลังสร้าง..." : "สร้าง slot"}
-        </button>
-      </div>
-    </Sheet>
+      <DialogActions>
+        <span className="mr-auto text-sm text-muted-foreground">จะสร้าง {tooMany ? 0 : total} slot</span>
+        <Button variant="outline" size="lg" disabled={saving} onClick={() => onClose(false)}>ยกเลิก</Button>
+        <Button size="lg" disabled={saving || !platform.trim() || !total || tooMany} onClick={submit}>
+          {saving ? <><Spinner />กำลังสร้าง...</> : "สร้าง slot"}
+        </Button>
+      </DialogActions>
+    </AppDialog>
   );
 }
