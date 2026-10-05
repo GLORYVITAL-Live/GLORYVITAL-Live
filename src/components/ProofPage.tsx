@@ -120,6 +120,8 @@ export function ProofPage() {
         {day && !day.all ? " · เห็นเฉพาะ slot ที่คุณเป็น Admin" : ""}
       </Notice>
 
+      {day?.all ? <DriveBox tick={tick} /> : null}
+
       <div className="my-2 flex flex-wrap items-center gap-2">
         <IconButton label="วันก่อนหน้า" onClick={() => goTo(addDays(date, -1))}><ChevronLeftIcon /></IconButton>
         <DatePicker value={date} onChange={(v) => v && goTo(v)} aria-label="เลือกวันที่" className="w-auto rounded-full" />
@@ -209,6 +211,11 @@ export function ProofPage() {
                             >
                               <CheckIcon className="size-3.5" />ไลฟ์จริง {proofTime(s.proof)} (ดูรูป)
                             </a>
+                            {s.proof.driveUrl ? (
+                              <a href={s.proof.driveUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline">
+                                Google Drive
+                              </a>
+                            ) : null}
                             <span className="text-muted-foreground">แนบโดย {s.proof.by}</span>
                             {s.proof.canDelete ? (
                               <Button variant="link" size="xs" disabled={busy} onClick={() => remove(s)} className="h-auto p-0 text-destructive">
@@ -251,6 +258,65 @@ export function ProofPage() {
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+type DriveInfo = { pending: number; error: string | null; folderUrl: string | null };
+
+/** Owner: สถานะสำเนารูปใน Google Drive + ปุ่มอัปที่ค้าง + ลิงก์โฟลเดอร์ (ปี > เดือน > Mc) */
+function DriveBox({ tick }: { tick: number }) {
+  const toast = useToast();
+  const [info, setInfo] = useState<DriveInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api<DriveInfo>("/api/proofs/drive")
+      .then((res) => { if (alive && res.ok) setInfo(res); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [tick]);
+
+  async function run() {
+    setBusy(true);
+    try {
+      // ทำทีละ 20 รูป จนหมด (สูงสุด 15 รอบ)
+      for (let i = 0; i < 15; i++) {
+        const res = await api<DriveInfo & { done: number; failed: number; remaining: number; busy?: boolean }>("/api/proofs/drive", {});
+        if (!res.ok) throw new Error(res.message);
+        setInfo(res);
+        if (res.busy) { toast("ระบบกำลังอัปอยู่แล้ว รอสักครู่แล้วลองใหม่"); break; }
+        if (res.failed && !res.done) throw new Error(res.error ?? "อัปไม่สำเร็จ");
+        if (!res.pending || !res.done) break;
+      }
+      toast("ส่งรูปขึ้น Google Drive แล้ว");
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!info) return null;
+  return (
+    <div className="my-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card px-3 py-2 text-sm">
+      <span className="font-semibold">Google Drive</span>
+      {info.pending ? (
+        <span className={info.error ? "text-destructive" : "text-muted-foreground"}>
+          ยังไม่ได้อัป {info.pending} slot{info.error ? ` · ${info.error}` : ""}
+        </span>
+      ) : <span className="text-success">อัปครบแล้ว ✓</span>}
+      <span className="ml-auto flex gap-2">
+        {info.folderUrl ? (
+          <Button variant="outline" size="sm" asChild>
+            <a href={info.folderUrl} target="_blank" rel="noopener noreferrer">เปิดโฟลเดอร์</a>
+          </Button>
+        ) : null}
+        {info.pending ? (
+          <Button size="sm" disabled={busy} onClick={run}>{busy ? "กำลังอัป..." : "ส่งรูปขึ้น Google Drive"}</Button>
+        ) : null}
+      </span>
     </div>
   );
 }

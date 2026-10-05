@@ -13,6 +13,8 @@ import { google } from "googleapis";
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/spreadsheets", // อ่าน + เขียนชีต (ซิงค์สองทาง)
+  // Google Drive: เฉพาะไฟล์/โฟลเดอร์ที่ระบบสร้างเอง (สำเนารูปหลักฐานไลฟ์) มองไม่เห็นไฟล์อื่นในไดรฟ์
+  "https://www.googleapis.com/auth/drive.file",
 ];
 
 // Client ID ของ "GLORY VITAL Web Client" (ไม่ใช่ความลับ)

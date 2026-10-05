@@ -59,7 +59,9 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
       mcSlotId: Number(r.id), platform: r.platform, date: r.live_date, start: hm(r.start_time), end: hm(r.end_time),
       startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at),
       mcName: r.person?.name ? `Mc ${r.person.name}` : "", adminName: admin?.name ?? "",
-      proof: p ? { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, canDelete: all || p.email === me.email } : null,
+      proof: p
+        ? { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, canDelete: all || p.email === me.email }
+        : null,
     });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.platform.localeCompare(b.platform) || a.startMs - b.startMs);

@@ -1,5 +1,7 @@
+import { after } from "next/server";
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
+import { syncProofsToDrive, trashUnusedDriveFiles } from "@/lib/drive";
 import { PROOF_BUCKET, canSeeAll, canUseProofs, proofSlots, removeOrphanProofs } from "@/lib/proofs";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -99,8 +101,13 @@ export async function POST(request: Request) {
     return fail("บันทึกหลักฐานไม่สำเร็จ: " + (insErr?.message ?? ""), 500);
   }
   const proofId = Number(proof.id);
+  // ไฟล์ใน Drive ของหลักฐานเดิม (ถ้าแทนที่) เอาไว้ทิ้งถังขยะหลังผูกใหม่
+  const { data: oldLinks } = await db.from("live_proof_slots").select("drive_file_id").in("mc_slot_id", ids);
   const { error: linkErr } = await db.from("live_proof_slots")
-    .upsert(ids.map((id) => ({ mc_slot_id: id, proof_id: proofId })), { onConflict: "mc_slot_id" });
+    .upsert(
+      ids.map((id) => ({ mc_slot_id: id, proof_id: proofId, drive_file_id: null, drive_url: null, drive_error: null })),
+      { onConflict: "mc_slot_id" },
+    );
   if (linkErr) {
     await db.from("live_proofs").delete().eq("id", proofId);
     await db.storage.from(PROOF_BUCKET).remove([path]);
@@ -110,6 +117,13 @@ export async function POST(request: Request) {
   // หลักฐานเก่าที่ถูกแทนที่จนไม่เหลือ slot ไหนแล้ว -> ลบทิ้ง (รวมไฟล์รูป)
   const replaced = [...new Set(picked.map((s) => s.proof?.id).filter((x): x is number => !!x))];
   await removeOrphanProofs(db, replaced);
+
+  // หลังตอบผู้ใช้: สำเนารูปขึ้น Google Drive (ปี > เดือน > Mc) + ทิ้งไฟล์ Drive ของหลักฐานเดิม
+  // พลาด (เช่น ยังไม่ได้ให้สิทธิ์ Drive) ไม่กระทบการแนบหลักฐาน กด "ส่งรูปขึ้น Google Drive" ทีหลังได้
+  after(async () => {
+    await trashUnusedDriveFiles((oldLinks ?? []).map((x) => x.drive_file_id as string | null)).catch(() => undefined);
+    await syncProofsToDrive({ proofIds: [proofId] }).catch((err) => console.warn("อัปหลักฐานขึ้น Drive ไม่สำเร็จ:", err));
+  });
 
   await db.from("booking_logs").insert(picked.map((s) => ({
     email: r.me.email, role: r.me.owner?.mc ? "Owner" : "Admin", name, action: replaced.length ? "แนบหลักฐานไลฟ์ (แทนที่)" : "แนบหลักฐานไลฟ์",
@@ -131,8 +145,10 @@ export async function DELETE(request: Request) {
   if (!p) return fail("ไม่พบหลักฐานนี้ (อาจถูกลบไปแล้ว)", 404);
   if (!canSeeAll(r.me) && p.uploaded_by_email !== r.me.email) return fail("ลบได้เฉพาะคนที่อัปโหลด หรือเจ้าของ", 403);
 
+  const { data: links } = await db.from("live_proof_slots").select("drive_file_id").eq("proof_id", id);
   const { error } = await db.from("live_proofs").delete().eq("id", id);
   if (error) return fail(error.message, 500);
+  after(() => trashUnusedDriveFiles((links ?? []).map((x) => x.drive_file_id as string | null)).catch(() => undefined));
   await db.storage.from(PROOF_BUCKET).remove([String(p.image_path)]);
   await db.from("booking_logs").insert({
     email: r.me.email, role: r.me.owner?.mc ? "Owner" : "Admin", name: r.me.owner?.name || r.me.admin?.name || "",

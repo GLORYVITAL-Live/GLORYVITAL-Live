@@ -85,7 +85,10 @@ export type OwnerDetail = {
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */
-export type ProofInfo = { id: number; startedAt: string; endedAt: string; by: string };
+export type ProofInfo = {
+  id: number; startedAt: string; endedAt: string; by: string;
+  driveUrl: string | null; // สำเนาใน Google Drive (โฟลเดอร์ปี > เดือน > Mc) ว่าง = ยังไม่ได้อัป
+};
 
 /** slot ในหน้าหลักฐานไลฟ์ (slot ของ Mc ที่มีคนไลฟ์และไม่ถูกยกเลิก) */
 export type ProofSlot = {
