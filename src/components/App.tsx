@@ -27,17 +27,17 @@ import { cn } from "@/lib/utils";
 
 export const MODES = {
   mc: {
-    sub: "Live booking", title: "จองคิวไลฟ์", label: "หน้า Mc",
+    sub: "Live booking", title: "จองคิวไลฟ์", label: "Booking Mc",
     hint: "แตะเลือก slot ที่ต้องการ แล้วกดจองที่แถบด้านล่าง ระบบจะลงปฏิทินให้อัตโนมัติ",
     rule: "",
   },
   admin: {
-    sub: "Admin", title: "จัดคิว Admin", label: "หน้า Admin",
+    sub: "Admin", title: "จัดคิว Admin", label: "Booking Admin",
     hint: "แตะเลือก slot ที่ต้องการรับ ระบบจะใส่ชื่อและเบอร์โทรของคุณในปฏิทินของ Mc ให้อัตโนมัติ",
     rule: "รับได้สูงสุด 4 slot (8 ชม.) ต่อวัน แบ่งได้ไม่เกิน 2 ช่วง และเวลาห้ามทับกันแม้คนละแพลตฟอร์ม เช่น 09:30–13:30 กับ 17:30–21:30",
   },
   owner: {
-    sub: "Owner", title: "หน้าเจ้าของ", label: "หน้าเจ้าของ",
+    sub: "Owner", title: "หน้าเจ้าของ", label: "Owner",
     hint: "ดูสรุปชั่วโมงและค่าจ้างรายเดือน และเพิ่ม/แก้ไข slot ไลฟ์ของ Mc และ Admin",
     rule: "",
   },
@@ -47,7 +47,7 @@ export const MODES = {
     rule: "",
   },
   stats: {
-    sub: "Live stats", title: "สถิติไลฟ์", label: "สถิติไลฟ์",
+    sub: "Live stats", title: "สถิติไลฟ์", label: "Data analytics",
     hint: "ยอดไลฟ์ TikTok / Shopee จากไฟล์ Export เทียบเดือนก่อน (MoM) ปีก่อน (YoY) และเทียบแคมเปญกับช่วงเดียวกันของเดือนก่อน",
     rule: "",
   },
@@ -126,7 +126,7 @@ function Shell({ me }: { me: Me | null }) {
 
   function setRole(next: Page) {
     writeLocal(ROLE_KEY, next);
-    toast("ไปที่" + MODES[next].label + "แล้ว");
+    toast(`ไปที่ ${MODES[next].label} แล้ว`);
   }
 
   function toggleTheme() {
