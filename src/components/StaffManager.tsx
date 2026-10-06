@@ -22,7 +22,7 @@ type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
   hourly_rate: number | null; is_extra_admin: boolean; is_salaried: boolean; upcoming: number;
   commit_tiers: CommitTier[] | null;
-  can_manage_mc: boolean; can_manage_admin: boolean;
+  can_manage_mc: boolean; can_manage_admin: boolean; can_manage_proofs: boolean;
 };
 
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
@@ -135,6 +135,9 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
                   {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">Mc ประจำ</Badge> : null}
                   {p.role === "owner" ? <Badge className="bg-p2/15 text-[11px] text-p2">{scopeLabel(p)}</Badge> : null}
+                  {p.role === "owner" && p.can_manage_proofs && !p.can_manage_mc
+                    ? <Badge className="bg-p2/15 text-[11px] text-p2">หลักฐานไลฟ์</Badge>
+                    : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
@@ -203,6 +206,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
     .filter((t) => t.hours > 0 && t.rate > 0);
   const [canMc, setCanMc] = useState(person?.can_manage_mc ?? true);
   const [canAdmin, setCanAdmin] = useState(person?.can_manage_admin ?? true);
+  const [canProofs, setCanProofs] = useState(person?.can_manage_proofs ?? false);
   const [saving, setSaving] = useState(false);
 
   const emailChanged = (person?.email ?? "") !== email.trim().toLowerCase();
@@ -216,7 +220,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
         name, email, phone, hourly_rate: rate, is_extra_admin: extra, is_salaried: salaried,
         ...(role !== "owner" ? { commit_tiers: tiers } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
-        ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin } : {}),
+        ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin, can_manage_proofs: canProofs } : {}),
       };
       const res = person
         ? await api("/api/owner/staff", { id: person.id, ...fields }, "PATCH")
@@ -359,6 +363,22 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
                 </span>
               </Label>
             ))}
+            <Label className="items-start border-t pt-2 pb-1 leading-snug font-normal">
+              <Checkbox
+                checked={canMc || canProofs}
+                disabled={isMe || canMc}
+                onCheckedChange={(v) => setCanProofs(v === true)}
+                className="mt-0.5"
+              />
+              <span>
+                จัดการหลักฐานไลฟ์ (ทุก slot)
+                <span className="block text-xs text-muted-foreground">
+                  {canMc
+                    ? "ติ๊กจัดการ Mc แล้ว มีสิทธิ์นี้อยู่แล้ว"
+                    : "แนบ / แทนที่ / ลบ รูปหลักฐานไลฟ์ของทุก slot ได้ ไม่ใช่แค่ slot ที่ตัวเองเป็น Admin"}
+                </span>
+              </span>
+            </Label>
             <span className="mt-1 block text-xs text-muted-foreground">
               {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้งคู่แก้ให้"
                 : noScope ? <span className="text-destructive">ติ๊กอย่างน้อย 1 ฝั่ง</span>

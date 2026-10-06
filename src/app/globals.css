@@ -39,6 +39,9 @@
   --p1: #e8894f;
   --p2: #9a5bd8;
   --p3: #2e9c94;
+  /* กราฟสถิติไลฟ์: ช่วงนี้ (ชมพู) vs ช่วงก่อน (ฟ้า) ผ่านการตรวจตาบอดสีแล้ว */
+  --viz-cur: #c62f6a;
+  --viz-prev: #5a8fd0;
   color-scheme: light;
 }
 :root.dark {
@@ -69,6 +72,8 @@
   --p1: #f3a574;
   --p2: #c39bf2;
   --p3: #5cc9c0;
+  --viz-cur: #e04a86;
+  --viz-prev: #6f8fe0;
   color-scheme: dark;
 }
 
@@ -102,6 +107,8 @@
   --color-p1: var(--p1);
   --color-p2: var(--p2);
   --color-p3: var(--p3);
+  --color-viz-cur: var(--viz-cur);
+  --color-viz-prev: var(--viz-prev);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);

@@ -17,7 +17,8 @@ const hm = (t: string) => t.slice(0, 5);
 const keyOf = (r: { platform: string; starts_at: string; ends_at: string }) =>
   `${r.platform}|${Date.parse(r.starts_at)}|${Date.parse(r.ends_at)}`;
 
-export const canSeeAll = (me: Me) => !!me.owner?.mc;
+/** แนบ / ลบหลักฐานได้ทุก slot: Owner ที่ติ๊กจัดการ Mc หรือติ๊ก "จัดการหลักฐานไลฟ์" */
+export const canSeeAll = (me: Me) => !!(me.owner?.mc || me.owner?.proofs);
 export const canUseProofs = (me: Me) => canSeeAll(me) || !!me.admin;
 
 /** slot ที่คนนี้เห็นในหน้าหลักฐาน (slot ของ Mc ที่มีคนไลฟ์ ไม่ถูกยกเลิก) ในช่วงวันที่ */

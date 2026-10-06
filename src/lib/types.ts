@@ -5,7 +5,8 @@ export type Me = {
   mc: { id: number; name: string } | null;
   admin: { id: number; name: string; isExtra: boolean } | null;
   /** mc / admin = สิทธิ์จัดการฝั่งนั้น (ติ๊กทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อ Owner) */
-  owner: { id: number; name: string; mc: boolean; admin: boolean } | null;
+  /** proofs = จัดการหลักฐานไลฟ์ทุก slot (Owner ที่ติ๊ก Mc มีสิทธิ์นี้อยู่แล้ว) */
+  owner: { id: number; name: string; mc: boolean; admin: boolean; proofs: boolean } | null;
 };
 
 export type OwnerScope = { mc: boolean; admin: boolean };

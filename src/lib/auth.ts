@@ -15,7 +15,7 @@ export async function getMe(): Promise<Me | null> {
 
   const { data: rows, error } = await createAdminClient()
     .from("staff")
-    .select("id, role, name, is_extra_admin, can_manage_mc, can_manage_admin")
+    .select("id, role, name, is_extra_admin, can_manage_mc, can_manage_admin, can_manage_proofs")
     .eq("email", email);
   if (error) throw error;
 
@@ -23,7 +23,12 @@ export async function getMe(): Promise<Me | null> {
   for (const r of rows ?? []) {
     if (r.role === "mc") me.mc = { id: r.id, name: r.name };
     if (r.role === "admin") me.admin = { id: r.id, name: r.name, isExtra: r.is_extra_admin };
-    if (r.role === "owner") me.owner = { id: r.id, name: r.name, mc: r.can_manage_mc !== false, admin: r.can_manage_admin !== false };
+    if (r.role === "owner") {
+      me.owner = {
+        id: r.id, name: r.name, mc: r.can_manage_mc !== false, admin: r.can_manage_admin !== false,
+        proofs: r.can_manage_proofs === true,
+      };
+    }
   }
   return me;
 }

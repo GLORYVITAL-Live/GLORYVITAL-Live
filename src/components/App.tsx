@@ -6,6 +6,7 @@ import { ArrowUpIcon, LogOutIcon, MoonIcon, SunIcon } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { Me, OwnerScope, Role } from "@/lib/types";
 import { BookingWindowEditor } from "@/components/BookingWindow";
+import { LiveStats } from "@/components/LiveStats";
 import { MySchedule } from "@/components/MySchedule";
 import { OwnerView } from "@/components/OwnerView";
 import { ProofPage } from "@/components/ProofPage";
@@ -45,10 +46,15 @@ export const MODES = {
     hint: "แนบรูปแดชบอร์ด TikTok LIVE พร้อมเวลาเริ่ม–จบไลฟ์จริงของแต่ละ slot ใช้เป็นหลักฐานทำเบิก",
     rule: "",
   },
+  stats: {
+    sub: "Live stats", title: "สถิติไลฟ์", label: "สถิติไลฟ์",
+    hint: "ยอดไลฟ์ TikTok / Shopee จากไฟล์ Export เทียบเดือนก่อน (MoM) ปีก่อน (YoY) และเทียบแคมเปญกับช่วงเดียวกันของเดือนก่อน",
+    rule: "",
+  },
 } as const;
 
-/** หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) */
-type Page = Role | "proof";
+/** หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ (Owner) */
+type Page = Role | "proof" | "stats";
 
 const ROLE_KEY = "glory_booking_role";
 const THEME_KEY = "glory_booking_theme";
@@ -84,11 +90,15 @@ function Shell({ me }: { me: Me | null }) {
   const router = useRouter();
   const toast = useToast();
   const roles = rolesOf(me);
-  const pages: Page[] = me && (me.admin || me.owner?.mc) ? [...roles, "proof"] : roles;
+  const pages: Page[] = [
+    ...roles,
+    ...(me && (me.admin || me.owner?.mc || me.owner?.proofs) ? ["proof" as const] : []),
+    ...(me?.owner && (me.owner.mc || me.owner.admin) ? ["stats" as const] : []),
+  ];
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
   const savedPage = useLocal(ROLE_KEY) as Page | null;
   const page: Page | null = savedPage && pages.includes(savedPage) ? savedPage : pages[0] ?? null;
-  const role: Role | null = page === "proof" ? null : page;
+  const role: Role | null = page === "proof" || page === "stats" ? null : page;
   const preview = isPreview(me, role);
   const [myOpen, setMyOpen] = useState(false);
   const [rulesManual, setRulesManual] = useState(false);
@@ -139,7 +149,9 @@ function Shell({ me }: { me: Me | null }) {
   }
 
   const registered = roles.length > 0;
-  const name = me && role ? displayName(me, role) : me && page === "proof" ? me.owner?.name || me.admin?.name || "" : "";
+  const name = me && role ? displayName(me, role)
+    : me && page === "proof" ? me.owner?.name || me.admin?.name || ""
+      : me && page === "stats" ? me.owner?.name || "" : "";
 
   // เมนูเลือกหน้า: จอกว้างอยู่ในแถวบน / มือถืออยู่แถวที่ 2 เต็มความกว้าง (แถวบนจะได้ไม่ล้นจอจนปุ่มทับกัน)
   const rolePicker = (cls: string) => pages.length > 1 && page ? (
@@ -149,7 +161,7 @@ function Shell({ me }: { me: Me | null }) {
       </SelectTrigger>
       <SelectContent position="popper">
         {pages.map((p) => (
-          <SelectItem key={p} value={p}>{MODES[p].label}{p !== "proof" && isPreview(me, p) ? " (ดูอย่างเดียว)" : ""}</SelectItem>
+          <SelectItem key={p} value={p}>{MODES[p].label}{(p === "mc" || p === "admin") && isPreview(me, p) ? " (ดูอย่างเดียว)" : ""}</SelectItem>
         ))}
       </SelectContent>
     </Select>
@@ -228,6 +240,7 @@ function Shell({ me }: { me: Me | null }) {
       {me?.owner && role === "owner" ? <OwnerTabs scope={{ mc: me.owner.mc, admin: me.owner.admin }} /> : null}
       {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
+      {me && registered && page === "stats" ? <LiveStats /> : null}
       {!me || !registered ? (
         <StateBox title="เข้าสู่ระบบเพื่อดูตาราง">Mc จะเห็น slot ที่เปิดให้จอง ส่วน Admin จะเห็น slot ที่รอ Admin</StateBox>
       ) : null}
