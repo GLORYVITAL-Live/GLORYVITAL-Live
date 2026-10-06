@@ -9,6 +9,8 @@ import {
 import { fmtMonthShort, monthKey, monthLabel } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
+import { compareBook, monthBook, yearBook } from "@/lib/live-export";
+import { ExportMenu } from "@/components/ExportMenu";
 import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, MonthNav, Notice, StateBox, api, useConfirm, useToast,
@@ -142,10 +144,12 @@ function useFilter() {
   return { platform, account, setPlatform: (p: Platform | "") => { setPlatform(p); setAccount(""); }, setAccount };
 }
 
-function FilterBar({ filter, sessions }: { filter: ReturnType<typeof useFilter>; sessions: LiveSession[] }) {
+/** ตัวกรองแพลตฟอร์ม / บัญชี + ปุ่มด้านขวา (เช่น ส่งออก) */
+function FilterBar({ filter, sessions, children }: { filter: ReturnType<typeof useFilter>; sessions: LiveSession[]; children?: ReactNode }) {
   const accounts = accountsOf(sessions).filter((a) => !filter.platform || a.platform === filter.platform);
   return (
     <div className="my-2 flex flex-wrap items-center gap-2">
+      {children ? <div className="order-last ml-auto">{children}</div> : null}
       <ToggleGroup
         type="single"
         spacing={1}
@@ -261,7 +265,11 @@ function MonthOverview({ latest, version }: { latest: string; version: number })
   return (
     <>
       {nav}
-      <FilterBar filter={filter} sessions={data} />
+      <FilterBar filter={filter} sessions={data}>
+        <ExportMenu size="sm" label="ส่งออก" build={() => monthBook({
+          month, monthLabel, months13, byMonth, filter: { platform: filter.platform, account: filter.account, sessions: data },
+        })} />
+      </FilterBar>
       {!cur.lives ? (
         <StateBox title={`ไม่มีข้อมูลไลฟ์ ${monthLabel(month)}`}>ลองเปลี่ยนเดือน / แพลตฟอร์ม หรืออัปโหลดไฟล์ของเดือนนี้</StateBox>
       ) : (
@@ -363,7 +371,12 @@ function YearOverview({ latest, version }: { latest: string; version: number }) 
   return (
     <>
       {nav}
-      <FilterBar filter={filter} sessions={data} />
+      <FilterBar filter={filter} sessions={data}>
+        <ExportMenu size="sm" label="ส่งออก" build={() => yearBook({
+          year, rangeText, monthLabel, curKeys, prevKeys, byMonth, curList, prevList,
+          filter: { platform: filter.platform, account: filter.account, sessions: data },
+        })} />
+      </FilterBar>
       {!cur.lives ? (
         <StateBox title={`ไม่มีข้อมูลไลฟ์ปี ${year}`}>ลองเปลี่ยนปี / แพลตฟอร์ม หรืออัปโหลดไฟล์ของปีนี้</StateBox>
       ) : (
@@ -598,7 +611,9 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
         <Notice>{k.period(now).name} ยังไม่จบ{k.pick} ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice>
       ) : null}
       {a === b ? <StateBox title={`เลือก${k.pick}ที่ต่างกัน`}>เลือก{k.pick}ในช่อง &ldquo;เทียบกับ&rdquo; หรือกดปุ่มลัดด้านบน</StateBox> : (
-        <PeriodCompare cur={k.period(a)} prev={k.period(b)} unit={k.unit} dataMonths={dataMonths} version={version} fixHint={`หรือเลือก${k.pick}อื่น`} />
+        <PeriodCompare
+          report={`เทียบ${k.pick} (${b === k.shift(a, -1) ? (kind === "month" ? "MoM" : "QoQ") : b === k.shift(a, -k.yoy) ? "YoY" : "เลือกเอง"})`}
+          cur={k.period(a)} prev={k.period(b)} unit={k.unit} dataMonths={dataMonths} version={version} fixHint={`หรือเลือก${k.pick}อื่น`} />
       )}
     </>
   );
@@ -713,6 +728,7 @@ function CampaignCompare({ c, all, dataMonths, version }: { c: Campaign; all: Ca
         </div>
       </div>
       <PeriodCompare
+        report="Campaign on Campaign"
         cur={{ from: c.startsAt, to: c.endsAt, name: c.name }}
         prev={{ from: cmp.from, to: cmp.to, name: cmp.name }}
         unit="day"
@@ -734,7 +750,9 @@ const lastMonthOf = (p: Period) => monthOf(new Date(Date.parse(p.to) - 1).toISOS
  * เทียบสองช่วงเวลา (แคมเปญ / ไตรมาส): แท่งเทียบทุกตัวชี้วัด + กราฟแยกบัญชี หรือตามเวลา + รายการไลฟ์
  *   unit = กราฟตามเวลาแบ่งเป็นรายวัน หรือรายเดือน (นับจากวันเริ่ม/เดือนแรกของแต่ละช่วง)
  */
-function PeriodCompare({ cur: pc, prev: pp, unit, dataMonths, version, fixHint }: {
+function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, fixHint }: {
+  /** ชื่อรายงานในไฟล์ที่ส่งออก เช่น "เทียบเดือน (MoM)" / "Campaign on Campaign" */
+  report: string;
   cur: Period;
   prev: Period;
   unit: "day" | "month";
@@ -765,20 +783,26 @@ function PeriodCompare({ cur: pc, prev: pp, unit, dataMonths, version, fixHint }
     ? Math.ceil((Date.parse(pc.to) - Date.parse(pc.from)) / 86400_000)
     : monthDiff(monthOf(pc.from), lastMonthOf(pc)) + 1;
   const byTime = groupBy === "time" && steps > 1;
+  const stepOf = (s: LiveSession, start: string) => unit === "day"
+    ? Math.floor((Date.parse(s.startedAt) - Date.parse(start)) / 86400_000)
+    : monthDiff(monthOf(start), monthOf(s.startedAt));
+  const stepLabel = (start: string, i: number) => unit === "day"
+    ? bkkDate.format(new Date(Date.parse(start) + i * 86400_000))
+    : shortMonth(monthKey(i, monthOf(start)));
+  // วัน/เดือนที่ 1, 2, ... ของทั้งสองช่วง (ใช้ทั้งกราฟและไฟล์ที่ส่งออก)
+  const timeGroups = Array.from({ length: steps > 1 ? steps : 0 }, (_, i) => ({
+    short: stepLabel(pc.from, i),
+    label: `${unit === "day" ? "วันที่" : "เดือนที่"} ${i + 1}: ${stepLabel(pc.from, i)} vs ${stepLabel(pp.from, i)}`,
+    a: cur.filter((s) => stepOf(s, pc.from) === i),
+    b: prev.filter((s) => stepOf(s, pp.from) === i),
+  }));
   let categories: string[], titles: string[], curVals: (number | null)[], prevVals: (number | null)[];
   const val = (list: LiveSession[]) => (list.length ? def.value(totalsOf(list)) : null);
   if (byTime) {
-    const stepOf = (s: LiveSession, start: string) => unit === "day"
-      ? Math.floor((Date.parse(s.startedAt) - Date.parse(start)) / 86400_000)
-      : monthDiff(monthOf(start), monthOf(s.startedAt));
-    const label = (start: string, i: number) => unit === "day"
-      ? bkkDate.format(new Date(Date.parse(start) + i * 86400_000))
-      : shortMonth(monthKey(i, monthOf(start)));
-    const idx = Array.from({ length: steps }, (_, i) => i);
-    categories = idx.map((i) => label(pc.from, i));
-    titles = idx.map((i) => `${unit === "day" ? "วันที่" : "เดือนที่"} ${i + 1}: ${label(pc.from, i)} vs ${label(pp.from, i)}`);
-    curVals = idx.map((i) => val(cur.filter((s) => stepOf(s, pc.from) === i)));
-    prevVals = idx.map((i) => val(prev.filter((s) => stepOf(s, pp.from) === i)));
+    categories = timeGroups.map((g) => g.short);
+    titles = timeGroups.map((g) => g.label);
+    curVals = timeGroups.map((g) => val(g.a));
+    prevVals = timeGroups.map((g) => val(g.b));
   } else {
     const accounts = accountsOf([...cur, ...prev]);
     categories = accounts.map((a) => a.name);
@@ -790,9 +814,18 @@ function PeriodCompare({ cur: pc, prev: pp, unit, dataMonths, version, fixHint }
   const chartSeries = [{ name: curName, color: CUR, values: curVals }, { name: prevName, color: PREV, values: prevVals }];
   const missing = [...new Set([...missingMonths(pc.from, pc.to, dataMonths), ...missingMonths(pp.from, pp.to, dataMonths)])];
 
+  const exportBook = () => compareBook({
+    title: `GLORY ${report} ${curName} vs ${prevName}`, report, aName: curName, bName: prevName,
+    aRange: windowText(pc.from, pc.to), bRange: windowText(pp.from, pp.to), a: cur, b: prev,
+    timeName: timeText, time: timeGroups,
+    filter: { platform: filter.platform, account: filter.account, sessions: [...curQ.data!, ...prevQ.data!] },
+  });
+
   return (
     <>
-      <FilterBar filter={filter} sessions={[...curQ.data, ...prevQ.data]} />
+      <FilterBar filter={filter} sessions={[...curQ.data, ...prevQ.data]}>
+        <ExportMenu size="sm" label="ส่งออก" build={exportBook} />
+      </FilterBar>
       {missing.length ? (
         <Notice variant="warning" icon title={`ยังไม่ได้อัปโหลดข้อมูลเดือน ${missing.join(", ")}`}>
           {haveText(dataMonths)} · อัปโหลดไฟล์ของเดือนนั้นที่แท็บ &ldquo;อัปโหลด&rdquo; {fixHint}

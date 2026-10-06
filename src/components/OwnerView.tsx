@@ -4,10 +4,11 @@ import { Fragment, useEffect, useState } from "react";
 import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
-import { ChevronRightIcon, DownloadIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
+import type { Cell, ExportBook } from "@/lib/export";
+import { ExportMenu } from "@/components/ExportMenu";
 import { LoadError, LoadingBlock, MonthNav, Notice, Stats, api } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
@@ -40,7 +41,7 @@ const hms = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit
 const proofTime = (p: ProofInfo) => `${hms.format(new Date(p.startedAt))}–${hms.format(new Date(p.endedAt))}`;
 const proofUrl = (p: ProofInfo) => `/api/proofs/image?id=${p.id}`;
 
-/** นาทีสายสำหรับ CSV เช่น "12" / "10 (จากหลักฐาน)" */
+/** นาทีสายสำหรับไฟล์ที่ส่งออก เช่น "12" / "10 (จากหลักฐาน)" */
 const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${d.lateFromProof ? " (จากหลักฐาน)" : ""}` : "");
 
 /** ลิงก์โฟลเดอร์ Drive ที่รวมหลักฐานทั้งเดือนของ Mc (จากคิวไหนก็ได้ที่อัปขึ้น Drive แล้ว) */
@@ -55,23 +56,13 @@ const monthFolderText = (items: OwnerDetail[]) =>
 const slotsOf = (data: OwnerSummary, type: Type, name: string) =>
   data.details.filter((d) => d.type === type && d.name === name && !d.cancelled).sort((a, b) => a.startMs - b.startMs);
 
-// ---------- CSV (+ BOM ให้ Excel อ่านภาษาไทยได้ถูก) ----------
+// ---------- ส่งออก (Microsoft Excel / Google Sheet ผ่าน ExportMenu) ----------
 
-function csvCell(v: unknown) {
-  const s = String(v ?? "");
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-function downloadCsv(filename: string, rows: unknown[][]) {
-  const text = "﻿" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-}
+/** ตารางเดียว -> ไฟล์ (แผ่นงานเดียว แถวแรกเป็นหัวตาราง) */
+const book = (title: string, sheet: string, rows: unknown[][]): ExportBook =>
+  ({ title, sheets: [{ name: sheet, rows: rows as Cell[][] }] });
 
-// เฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (ใช้ทั้งตารางบนหน้าจอและไฟล์ CSV)
+// เฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (ใช้ทั้งตารางบนหน้าจอและไฟล์ที่ส่งออก)
 const groups = (data: OwnerSummary): [Type, OwnerPerson[]][] => {
   const out: [Type, OwnerPerson[]][] = [];
   if (data.scope?.mc !== false) out.push(["Mc", data.mc]);
@@ -79,7 +70,7 @@ const groups = (data: OwnerSummary): [Type, OwnerPerson[]][] => {
   return out;
 };
 
-function downloadSummary(data: OwnerSummary) {
+function summaryBook(data: OwnerSummary) {
   const rows: unknown[][] = [["ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ไลฟ์ชดเชย (นาที)", "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
   for (const [type, people] of groups(data)) for (const r of people) {
     const rate = rateOf(data, type, r.name);
@@ -88,11 +79,11 @@ function downloadSummary(data: OwnerSummary) {
       : "";
     rows.push([type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.bonusMinutes || "", r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : ""]);
   }
-  downloadCsv(`glory-summary-${data.month}.csv`, rows);
+  return book(`GLORY สรุป ${data.month}`, "สรุป", rows);
 }
 
 // ใบสรุปค่าจ้างรายคน: ทุกคิวของแต่ละคน + แถวรวมต่อคน (ไม่นับคิวที่ยกเลิก หักมาสายตามกฎ + ไลฟ์ชดเชย)
-function downloadPayroll(data: OwnerSummary) {
+function payrollBook(data: OwnerSummary) {
   const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
   for (const [type, people] of groups(data)) {
     let groupHours = 0, groupMoney = 0;
@@ -128,11 +119,11 @@ function downloadPayroll(data: OwnerSummary) {
     }
     rows.push([`รวม ${type} ทั้งหมด`, "", "", "", "", round2(groupHours), "", "", "", "", groupMoney || ""], []);
   }
-  downloadCsv(`glory-payroll-${data.month}.csv`, rows);
+  return book(`GLORY ใบสรุปค่าจ้างรายคน ${data.month}`, "ค่าจ้างรายคน", rows);
 }
 
 // ตาราง คน x วันที่: แต่ละช่อง = ชั่วโมงของวันนั้น, ท้ายแถว = รวมชั่วโมงและจำนวนวัน
-function downloadDaily(data: OwnerSummary) {
+function dailyBook(data: OwnerSummary) {
   const [y, m] = data.month.split("-").map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
   const header: unknown[] = ["ประเภท", "ชื่อ"];
@@ -147,10 +138,10 @@ function downloadDaily(data: OwnerSummary) {
     line.push(p.hours, p.days, p.slots);
     rows.push(line);
   }
-  downloadCsv(`glory-daily-${data.month}.csv`, rows);
+  return book(`GLORY รายคน-รายวัน ${data.month}`, "รายคน-รายวัน", rows);
 }
 
-function downloadDetail(data: OwnerSummary) {
+function detailBook(data: OwnerSummary) {
   const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "ชั่วโมง", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
   for (const d of data.details) {
     rows.push([
@@ -158,7 +149,7 @@ function downloadDetail(data: OwnerSummary) {
       lateText(d), d.bonusMinutes ? `+${d.bonusMinutes}${d.bonusFromProof ? " (จากหลักฐาน)" : ""}` : "", d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "", d.proof?.by ?? "", d.proof?.driveUrl ?? "",
     ]);
   }
-  downloadCsv(`glory-detail-${data.month}.csv`, rows);
+  return book(`GLORY รายละเอียด ${data.month}`, "รายละเอียด", rows);
 }
 
 // ---------- หน้าจอ ----------
@@ -215,10 +206,10 @@ export function OwnerView() {
         </Notice>
       ) : null}
       <div className="my-3 flex flex-wrap gap-2">
-        <Button size="lg" onClick={() => downloadPayroll(data)}><DownloadIcon />ใบสรุปค่าจ้างรายคน (CSV)</Button>
-        <Button variant="outline" size="lg" onClick={() => downloadDaily(data)}><DownloadIcon />รายคน-รายวัน (CSV)</Button>
-        <Button variant="outline" size="lg" onClick={() => downloadSummary(data)}><DownloadIcon />สรุป (CSV)</Button>
-        <Button variant="outline" size="lg" onClick={() => downloadDetail(data)}><DownloadIcon />รายละเอียด (CSV)</Button>
+        <ExportMenu variant="default" label="ใบสรุปค่าจ้างรายคน" build={() => payrollBook(data)} />
+        <ExportMenu label="รายคน-รายวัน" build={() => dailyBook(data)} />
+        <ExportMenu label="สรุป" build={() => summaryBook(data)} />
+        <ExportMenu label="รายละเอียด" build={() => detailBook(data)} />
       </div>
       {groups(data).map(([type, rows]) => (
         <section key={type} className="mt-5">
