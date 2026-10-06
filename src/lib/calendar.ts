@@ -153,7 +153,15 @@ async function syncOne(cal: calendar_v3.Calendar, table: Table, s: Slot, partner
     }
   }
 
-  const created = await cal.events.insert({ calendarId: email, requestBody: body });
+  let created;
+  try {
+    created = await cal.events.insert({ calendarId: email, requestBody: body });
+  } catch (err) {
+    // ปฏิทินที่ไม่ได้แชร์ให้บัญชีระบบเลย Google ตอบ 404 (มองไม่เห็นปฏิทิน) ไม่ใช่ 403 -> นับเป็นไม่มีสิทธิ์
+    // (ไม่งั้นงานจะลองซ้ำจนครบแล้วเงียบไป และชื่อไม่ขึ้นในรายชื่อที่ต้องแชร์ปฏิทิน)
+    if (isNotFound(err)) throw Object.assign(new Error(`writer access: ${email} ยังไม่ได้แชร์ปฏิทินให้บัญชีระบบ`), { code: 403 });
+    throw err;
+  }
   // เปลี่ยนคน -> ลบ event ในปฏิทินของคนเดิม
   if (s.calendar_email && s.calendar_event_id && s.calendar_email !== email && usesCalendar(s.calendar_email)) {
     try {
