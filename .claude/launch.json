@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "C:\\Users\\Glory official\\.bun\\bin\\bun.exe",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-Command", "& (Join-Path $env:USERPROFILE '.bun\\bin\\bun.exe') run dev"],
       "port": 3000
     }
   ]
