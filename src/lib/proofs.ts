@@ -1,7 +1,7 @@
 import "server-only";
 import { fetchAll, gmvBySlot, proofsBySlot } from "@/lib/data";
 import { addDays } from "@/lib/window";
-import { computeGmv, gmvBeforeMap, type GmvSlot } from "@/lib/gmv";
+import { computeGmv, gmvBeforeMap, gmvCoverage, type GmvSlot } from "@/lib/gmv";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me, ProofSlot } from "@/lib/types";
 
@@ -29,17 +29,17 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
   const db = createAdminClient();
   type McRow = {
     id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
-    person: { name: string; is_salaried: boolean | null } | null;
+    mc_id: number; person: { name: string; is_salaried: boolean | null } | null;
   };
   type AdminRow = { platform: string; starts_at: string; ends_at: string; admin_id: number | null; person: { name: string } | null };
-  // โหลดย้อนไป 1 วัน: ใช้หายอด GMV สะสมของไลฟ์ที่ต่อกันข้ามเที่ยงคืน (แสดงเฉพาะตั้งแต่ first)
-  const since = addDays(first, -1);
+  // โหลดเผื่อหน้า-หลัง 1 วัน: ไลฟ์ที่ต่อกันข้ามเที่ยงคืน (ยอด GMV สะสม / slot ที่รวมยอดไว้) แสดงเฉพาะ first–last
+  const since = addDays(first, -1), until = addDays(last, 1);
   const [mcRows, adminRows, proofs] = await Promise.all([
     fetchAll<McRow>((from, to) =>
       db.from("mc_slots")
-        .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, person:staff!mc_id(name, is_salaried)")
+        .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, mc_id, person:staff!mc_id(name, is_salaried)")
         .not("mc_id", "is", null).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true")
-        .gte("live_date", since).lte("live_date", last)
+        .gte("live_date", since).lte("live_date", until)
         .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: McRow[] | null; error: unknown }>),
     fetchAll<AdminRow>((from, to) =>
       db.from("admin_slots")
@@ -49,21 +49,24 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
         .range(from, to) as unknown as PromiseLike<{ data: AdminRow[] | null; error: unknown }>),
     proofsBySlot(db, since, last),
   ]);
-  const gmvs = await gmvBySlot(db, since, last);
+  const gmvs = await gmvBySlot(db, since, until);
 
   const admins = new Map<string, { id: number; name: string }>();
   for (const a of adminRows) admins.set(keyOf(a), { id: Number(a.admin_id), name: a.person?.name ?? "" });
 
-  // ยอดสะสมก่อนหน้าคิดจากทุก slot (รวม slot ที่ Admin คนนี้มองไม่เห็น เช่น Admin คนละคน / Mc ประจำ)
-  const before = gmvBeforeMap(mcRows.map((r) => ({
+  // ยอดสะสมก่อนหน้า / slot ที่รวมยอดไว้ คิดจากทุก slot (รวม slot ที่ Admin คนนี้มองไม่เห็น เช่น Admin คนละคน / Mc ประจำ)
+  const chain = mcRows.map((r) => ({
     id: Number(r.id), platform: r.platform, startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at),
-    gmv: gmvs.get(Number(r.id))?.value ?? null,
-  })));
+    gmv: gmvs.get(Number(r.id))?.value ?? null, who: Number(r.mc_id),
+  }));
+  const before = gmvBeforeMap(chain);
+  const covered = gmvCoverage(chain);
+  const hmOf = new Map(mcRows.map((r) => [Number(r.id), `${hm(r.start_time)}–${hm(r.end_time)}`]));
 
   const all = canSeeAll(me);
   const out: ProofSlot[] = [];
   for (const r of mcRows) {
-    if (r.live_date < first) continue; // วันก่อนหน้า โหลดมาใช้คิด GMV สะสมเท่านั้น
+    if (r.live_date < first || r.live_date > last) continue; // วันก่อน/หลัง โหลดมาใช้คิด GMV เท่านั้น
     // Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน แต่ยังแสดงให้กรอก GMV ได้ (salaried = true)
     const admin = admins.get(keyOf(r));
     if (!all && (!me.admin || admin?.id !== me.admin.id)) continue;
@@ -78,6 +81,7 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
       salaried: !!r.person?.is_salaried,
       gmv: gmvs.get(Number(r.id)) ?? null,
       gmvBefore: before.get(Number(r.id)) ?? null,
+      gmvCoveredBy: covered.has(Number(r.id)) ? hmOf.get(covered.get(Number(r.id))!.id) ?? null : null,
     });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.platform.localeCompare(b.platform) || a.startMs - b.startMs);
@@ -99,17 +103,20 @@ export function parseGmvEntries(raw: unknown): GmvEntry[] {
  */
 export async function resolveGmv(db: Db, entries: GmvEntry[]) {
   if (!entries.length) return [];
-  type Row = { id: number; platform: string; live_date: string; starts_at: string; ends_at: string };
-  const toSlot = (r: Row): GmvSlot => ({ id: Number(r.id), platform: r.platform, startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at), gmv: null });
+  type Row = { id: number; platform: string; live_date: string; starts_at: string; ends_at: string; mc_id: number | null };
+  const toSlot = (r: Row): GmvSlot => ({
+    id: Number(r.id), platform: r.platform, startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at), gmv: null,
+    who: r.mc_id === null ? null : Number(r.mc_id), // คนเดียวกันไลฟ์ต่อกัน = ข้าม slot ว่างของคนนั้นตอนหายอดสะสม
+  });
   const { data: targets, error } = await db.from("mc_slots")
-    .select("id, platform, live_date, starts_at, ends_at").in("id", entries.map((e) => e.id));
+    .select("id, platform, live_date, starts_at, ends_at, mc_id").in("id", entries.map((e) => e.id));
   if (error) throw error;
   const rows = (targets ?? []) as Row[];
   if (!rows.length) return [];
   const dates = rows.map((r) => r.live_date).sort();
   const [ctx, gmvs] = await Promise.all([
     fetchAll<Row>((from, to) =>
-      db.from("mc_slots").select("id, platform, live_date, starts_at, ends_at")
+      db.from("mc_slots").select("id, platform, live_date, starts_at, ends_at, mc_id")
         .in("platform", [...new Set(rows.map((r) => r.platform))])
         .not("mc_id", "is", null).eq("is_cancelled", false)
         .gte("live_date", addDays(dates[0], -1)).lte("live_date", dates[dates.length - 1])

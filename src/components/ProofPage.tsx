@@ -30,7 +30,22 @@ const hm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit"
 // ---------- ยอด GMV ----------
 
 type GmvDraft = { input: string; auto: boolean };
-const gmvSlot = (s: ProofSlot): GmvSlot => ({ id: s.mcSlotId, platform: s.platform, startMs: s.startMs, endMs: s.endMs, gmv: null });
+const gmvSlot = (s: ProofSlot): GmvSlot => ({
+  id: s.mcSlotId, platform: s.platform, startMs: s.startMs, endMs: s.endMs, gmv: null, who: s.mcName || null,
+});
+/** slot b ต่อจาก a เลย (แพลตฟอร์มเดียวกัน) และเป็น Mc คนเดียวกัน = ไลฟ์ต่อเนื่องไม่สลับคน */
+const sameLive = (a: ProofSlot, b: ProofSlot) => a.platform === b.platform && a.endMs === b.startMs && !!a.mcName && a.mcName === b.mcName;
+
+/** แบ่ง slot (เรียงตามเวลา) เป็นช่วงที่ Mc คนเดียวไลฟ์ต่อกัน */
+function liveBlocks(slots: ProofSlot[]) {
+  const out: ProofSlot[][] = [];
+  for (const s of slots) {
+    const last = out[out.length - 1];
+    if (last && sameLive(last[last.length - 1], s)) last.push(s);
+    else out.push([s]);
+  }
+  return out;
+}
 
 /**
  * คิด GMV ของ slot ที่กำลังกรอก (ตัวอย่างบนหน้าจอ ฝั่ง server คิดซ้ำตอนบันทึก)
@@ -57,8 +72,10 @@ const draftOf = (s: ProofSlot): GmvDraft => (s.gmv
   : { input: "", auto: true });
 
 /** ช่องกรอก GMV ของ slot หนึ่ง: บวก/ลบกันได้ + ติ๊กหักยอดสะสมของ slot ก่อนหน้า + แสดงผลลัพธ์ */
-function GmvField({ slot, draft, result, before, disabled, onChange, showSlot }: {
+function GmvField({ slot, draft, result, before, disabled, onChange, showSlot, block }: {
   slot: ProofSlot;
+  /** ช่วงที่ Mc คนเดียวไลฟ์ต่อกัน (กรอกยอดเดียวที่ slot สุดท้ายของช่วง) */
+  block?: ProofSlot[];
   draft: GmvDraft;
   result: ReturnType<typeof computeGmv>[number] | undefined;
   /** ยอดสะสมก่อนหน้าที่จะหัก (คิดรวม slot ก่อนหน้าในชุดเดียวกันแล้ว) */
@@ -71,8 +88,11 @@ function GmvField({ slot, draft, result, before, disabled, onChange, showSlot }:
   const value = draft.input.trim() ? result : undefined;
   return (
     <div className="rounded-lg border p-2.5">
-      <Label htmlFor={id} className="mb-1.5">
-        GMV{showSlot ? <span className="font-normal text-muted-foreground"> · {slot.start}–{slot.end} {slot.mcName}</span> : null}
+      <Label htmlFor={id} className="mb-1.5 leading-snug">
+        GMV
+        {block && block.length > 1
+          ? <span className="font-normal text-muted-foreground"> · {block[0].start}–{slot.end} {slot.mcName} (ไลฟ์ต่อเนื่อง {block.length} slot กรอกยอดรวมทั้งช่วง)</span>
+          : showSlot ? <span className="font-normal text-muted-foreground"> · {slot.start}–{slot.end} {slot.mcName}</span> : null}
       </Label>
       <Input
         id={id}
@@ -96,7 +116,7 @@ function GmvField({ slot, draft, result, before, disabled, onChange, showSlot }:
       <p className={cn("mt-1.5 text-xs", value?.error ? "font-semibold text-destructive" : "text-muted-foreground")}>
         {!value ? "ไม่บังคับ · พิมพ์บวก/ลบกันได้ เช่น 123506 - 60540"
           : value.error ? value.error
-            : <>GMV ของ slot นี้ <strong className="text-foreground tabular-nums">{fmtGmv(value.gmv ?? 0)}</strong>
+            : <>GMV {block && block.length > 1 ? `${block[0].start}–${slot.end}` : "ของ slot นี้"} <strong className="text-foreground tabular-nums">{fmtGmv(value.gmv ?? 0)}</strong>
                 {value.minus !== null ? <span className="tabular-nums"> ({fmtGmv((value.gmv ?? 0) + value.minus)} − {fmtGmv(value.minus)})</span> : null}</>}
       </p>
     </div>
@@ -110,7 +130,8 @@ function beforeOf(
   const s = slots[i], prev = slots[i - 1];
   if (prev && prev.platform === s.platform && prev.endMs === s.startMs) {
     const g = preview.get(prev.mcSlotId)?.gmv;
-    if (g === null || g === undefined) return null;
+    // slot ก่อนหน้าว่าง: คนเดียวกัน = ยอดรวมอยู่ใน slot นี้ ดูต่อไปข้างหน้า / คนละคน = ไม่มียอดให้หัก
+    if (g === null || g === undefined) return sameLive(prev, s) ? beforeOf(slots, i - 1, preview) : null;
     const chain = beforeOf(slots, i - 1, preview);
     return { amount: (chain?.amount ?? 0) + g, fromMs: chain?.fromMs ?? prev.startMs, toMs: prev.endMs };
   }
@@ -326,9 +347,11 @@ export function ProofPage() {
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                           {s.gmv ? (
                             <span className="font-semibold tabular-nums">GMV {gmvText(s.gmv)}</span>
+                          ) : s.gmvCoveredBy ? (
+                            <span className="font-semibold text-success">✓ GMV รวมอยู่ในช่วง {s.gmvCoveredBy} (ไลฟ์ต่อเนื่อง {s.mcName})</span>
                           ) : <span className="font-semibold text-warning-foreground">ยังไม่ได้กรอก GMV</span>}
                           <Button variant="link" size="xs" disabled={busy} onClick={() => setGmvSlot(s)} className="h-auto p-0">
-                            {s.gmv ? "แก้ GMV" : "กรอก GMV"}
+                            {s.gmv ? "แก้ GMV" : s.gmvCoveredBy ? "กรอกแยก" : "กรอก GMV"}
                           </Button>
                         </div>
                       </div>
@@ -470,7 +493,15 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
   const replacing = slots.filter((s) => s.proof).length;
   // GMV ต่อ slot: กรอกไว้แล้ว = เริ่มจากค่าเดิม
   const [gmv, setGmv] = useState<Record<number, GmvDraft>>(() => Object.fromEntries(slots.map((s) => [s.mcSlotId, draftOf(s)])));
-  const preview = previewGmv(slots, gmv);
+  // Mc คนเดียวไลฟ์ต่อกันหลาย slot: กรอกยอดเดียวที่ slot สุดท้ายของช่วง (เคยกรอกแยกไว้ = เปิดแบบแยกให้)
+  const blocks = liveBlocks(slots);
+  const hasBlock = blocks.some((b) => b.length > 1);
+  const [split, setSplit] = useState(() => blocks.some((b) => b.slice(0, -1).some((s) => s.gmv)));
+  const lastOf = new Map(blocks.flatMap((b) => b.map((s) => [s.mcSlotId, b] as const)));
+  const isHidden = (s: ProofSlot) => !split && lastOf.get(s.mcSlotId)!.at(-1) !== s;
+  // slot ที่ซ่อนไว้ (ยอดรวมอยู่ใน slot สุดท้ายของช่วง) = ไม่มี GMV ของตัวเอง
+  const drafts = Object.fromEntries(slots.map((s) => [s.mcSlotId, isHidden(s) ? { input: "", auto: true } : gmv[s.mcSlotId]]));
+  const preview = previewGmv(slots, drafts);
   const gmvError = [...preview.values()].find((g) => g.error);
 
   async function takeFile(file: File | null | undefined) {
@@ -515,7 +546,7 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
       fd.append("slotIds", JSON.stringify(slots.map((s) => s.mcSlotId)));
       fd.append("startedAt", start);
       fd.append("endedAt", end);
-      fd.append("gmv", JSON.stringify(slots.map((s) => ({ id: s.mcSlotId, ...gmv[s.mcSlotId] }))));
+      fd.append("gmv", JSON.stringify(slots.map((s) => ({ id: s.mcSlotId, ...drafts[s.mcSlotId] }))));
       const res = await fetch("/api/proofs", { method: "POST", body: fd });
       const json = await res.json().catch(() => null) as { ok?: boolean; message?: string } | null;
       if (!json?.ok) throw new Error(json?.message ?? `อัปโหลดไม่สำเร็จ (HTTP ${res.status})`);
@@ -561,10 +592,11 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
           {invalid || <>ไลฟ์จริง <strong>{spanText}</strong> · แก้ให้ตรงกับในรูป (ระบบใส่เวลาตาม slot ไว้ให้ก่อน)</>}
         </Notice>
         <div className="space-y-2">
-          {slots.map((s, i) => (
+          {slots.map((s, i) => isHidden(s) ? null : (
             <GmvField
               key={s.mcSlotId}
               slot={s}
+              block={split ? undefined : lastOf.get(s.mcSlotId)}
               draft={gmv[s.mcSlotId]}
               result={preview.get(s.mcSlotId)}
               before={beforeOf(slots, i, preview)}
@@ -573,6 +605,11 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
               onChange={(d) => setGmv({ ...gmv, [s.mcSlotId]: d })}
             />
           ))}
+          {hasBlock ? (
+            <Button variant="link" size="sm" disabled={busy} onClick={() => setSplit(!split)} className="h-auto px-0">
+              {split ? "กรอกยอดเดียวต่อช่วงที่ Mc คนเดียวไลฟ์ต่อกัน" : "กรอกแยกทีละ slot"}
+            </Button>
+          ) : null}
         </div>
         {replacing ? (
           <Notice variant="warning">มี {replacing} slot ที่แนบหลักฐานไว้แล้ว จะถูกแทนที่ด้วยรูปนี้</Notice>
@@ -618,6 +655,12 @@ function GmvDialog({ slot, onClose }: { slot: ProofSlot; onClose: (saved: boolea
       title={slot.gmv ? "แก้ยอด GMV" : "กรอกยอด GMV"}
       description={`${slot.platform} · ${slot.start}–${slot.end} ${slot.mcName}`}
     >
+      {slot.gmvCoveredBy && !slot.gmv ? (
+        <Notice variant="warning" className="my-0 text-xs">
+          ยอด GMV ของช่วง {slot.gmvCoveredBy} รวม slot นี้ไว้แล้ว (ไลฟ์ต่อเนื่อง {slot.mcName}) ไม่ต้องกรอกก็ได้
+          · ถ้ากรอกแยก ให้แก้ GMV ของ {slot.gmvCoveredBy} เป็นยอดสะสมจากแดชบอร์ดแล้วติ๊ก &quot;หักยอดสะสม&quot; ด้วย ไม่งั้นยอดจะนับซ้ำ
+        </Notice>
+      ) : null}
       <GmvField slot={slot} draft={draft} result={result} before={slot.gmvBefore} disabled={busy} showSlot={false} onChange={setDraft} />
       <DialogActions>
         <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>

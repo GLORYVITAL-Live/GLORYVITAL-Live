@@ -17,11 +17,18 @@ export function evalGmv(text: string): number | null {
 
 export const fmtGmv = (n: number) => n.toLocaleString("th-TH", { maximumFractionDigits: 2 });
 
-export type GmvSlot = { id: number; platform: string; startMs: number; endMs: number; gmv: number | null };
+/** who = คนที่ไลฟ์ slot นี้ (Mc) ใช้รู้ว่าไลฟ์ต่อกันโดยไม่สลับคน */
+export type GmvSlot = { id: number; platform: string; startMs: number; endMs: number; gmv: number | null; who?: string | number | null };
 /** ยอดสะสมของ slot ก่อนหน้าที่ต่อกันมา (amount) ช่วงเวลา fromMs–toMs และจำนวน slot */
 export type GmvBefore = { amount: number; fromMs: number; toMs: number; slots: number };
 
-/** ยอดสะสมก่อน slot นี้ของทุก slot (ไม่มี slot ก่อนหน้าที่ต่อกัน หรือ slot ก่อนหน้ายังไม่มี GMV = ไม่มีในผลลัพธ์) */
+const sameWho = (a: GmvSlot, b: GmvSlot) => a.who != null && a.who === b.who;
+
+/**
+ * ยอดสะสมก่อน slot นี้ของทุก slot (ไม่มี slot ก่อนหน้าที่ต่อกัน หรือ slot ก่อนหน้ายังไม่มี GMV = ไม่มีในผลลัพธ์)
+ *   Mc คนเดียวไลฟ์ต่อกันหลาย slot แล้วกรอก GMV แค่ slot สุดท้าย: slot ก่อนหน้าที่ว่าง (คนเดียวกัน) ข้ามไป
+ *   ไปหายอดของคนก่อนหน้าแทน เพราะยอดที่กรอกรวมช่วงนั้นไว้แล้ว
+ */
 export function gmvBeforeMap(slots: GmvSlot[]): Map<number, GmvBefore> {
   const byEnd = new Map<string, GmvSlot>();
   for (const s of slots) byEnd.set(`${s.platform}|${s.endMs}`, s);
@@ -30,11 +37,15 @@ export function gmvBeforeMap(slots: GmvSlot[]): Map<number, GmvBefore> {
     if (memo.has(s.id)) return memo.get(s.id)!;
     const prev = byEnd.get(`${s.platform}|${s.startMs}`);
     let out: GmvBefore | null = null;
-    if (prev && prev.gmv !== null && depth < 24) {
-      const chain = before(prev, depth + 1);
-      out = chain
-        ? { amount: chain.amount + prev.gmv, fromMs: chain.fromMs, toMs: prev.endMs, slots: chain.slots + 1 }
-        : { amount: prev.gmv, fromMs: prev.startMs, toMs: prev.endMs, slots: 1 };
+    if (prev && depth < 24) {
+      if (prev.gmv !== null) {
+        const chain = before(prev, depth + 1);
+        out = chain
+          ? { amount: chain.amount + prev.gmv, fromMs: chain.fromMs, toMs: prev.endMs, slots: chain.slots + 1 }
+          : { amount: prev.gmv, fromMs: prev.startMs, toMs: prev.endMs, slots: 1 };
+      } else if (sameWho(prev, s)) {
+        out = before(prev, depth + 1); // slot ว่างของคนเดียวกัน = ยอดรวมอยู่ใน slot นี้ ดูต่อไปข้างหน้า
+      }
     }
     memo.set(s.id, out);
     return out;
@@ -45,6 +56,28 @@ export function gmvBeforeMap(slots: GmvSlot[]): Map<number, GmvBefore> {
     if (b) map.set(s.id, b);
   }
   return map;
+}
+
+/**
+ * slot ที่ยังไม่มี GMV แต่ยอดรวมอยู่ใน slot ถัดไปของ Mc คนเดียวกัน (ไลฟ์ต่อกันโดยไม่สลับคน)
+ *   เช่น Mc เมจิ 19:30–21:30 + 21:30–23:30 กรอก GMV แค่ 21:30–23:30 -> 19:30–21:30 ถือว่ากรอกแล้ว
+ *   คืน Map<id ของ slot ที่ว่าง, slot ที่มียอด>
+ */
+export function gmvCoverage(slots: GmvSlot[]): Map<number, GmvSlot> {
+  const byStart = new Map<string, GmvSlot>();
+  for (const s of slots) byStart.set(`${s.platform}|${s.startMs}`, s);
+  const out = new Map<number, GmvSlot>();
+  for (const s of slots) {
+    if (s.gmv !== null || s.who == null) continue;
+    let cur = s;
+    for (let i = 0; i < 24; i++) {
+      const next = byStart.get(`${cur.platform}|${cur.endMs}`);
+      if (!next || !sameWho(next, s)) break;
+      if (next.gmv !== null) { out.set(s.id, next); break; }
+      cur = next;
+    }
+  }
+  return out;
 }
 
 /**

@@ -1,4 +1,5 @@
 import "server-only";
+import { gmvCoverage } from "@/lib/gmv";
 import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays, bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
@@ -285,6 +286,16 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
     const g = gmvs.get(Number(r.id));
     if (g && !r.is_cancelled) gmvOf.set(slotKey(r), g.value);
   }
+  // Mc คนเดียวไลฟ์ต่อกันหลาย slot แล้วกรอก GMV แค่ slot สุดท้าย -> slot ก่อนหน้าที่ว่าง = "รวมใน GMV ของ slot นั้น"
+  const live = mcRows.filter((r) => !r.is_cancelled && r.person);
+  const coveredBy = new Map<string, string>(); // slotKey ของ slot ที่ว่าง -> "21:30–23:30"
+  for (const [id, by] of gmvCoverage(live.map((r) => ({
+    id: Number(r.id), platform: r.platform, startMs: ms(r.starts_at), endMs: ms(r.ends_at),
+    gmv: gmvs.get(Number(r.id))?.value ?? null, who: r.person!.name,
+  })))) {
+    const r = live.find((x) => Number(x.id) === id)!, t = live.find((x) => Number(x.id) === by.id)!;
+    coveredBy.set(slotKey(r), `${hm(t.start_time)}–${hm(t.end_time)}`);
+  }
 
   const rates: OwnerSummary["rates"] = {
     mc: {}, admin: {}, defaultMc: Number(settings.default_mc_rate) || 0, defaultAdmin: Number(settings.default_admin_rate) || 0,
@@ -307,6 +318,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         proof: proofOf.get(slotKey(r)) ?? null,
         noProof: salaried.has(slotKey(r)),
         gmv: gmvOf.get(slotKey(r)) ?? null,
+        gmvCoveredBy: coveredBy.get(slotKey(r)) ?? null,
       });
     }
   };

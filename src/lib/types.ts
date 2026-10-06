@@ -87,6 +87,7 @@ export type OwnerDetail = {
   proof: ProofInfo | null; // หลักฐานไลฟ์ (รูปแดชบอร์ด + เวลาจริง) ของ slot นี้
   noProof: boolean; // Mc ของ slot นี้เป็น Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน
   gmv: number | null; // ยอด GMV ของ slot นี้ (ฝั่ง Admin ใช้ยอดเดียวกับ slot ของ Mc) ว่าง = ยังไม่ได้กรอก
+  gmvCoveredBy: string | null; // ยังไม่มี GMV แต่ยอดรวมอยู่ใน slot ถัดไปของ Mc คนเดียวกัน เช่น "21:30–23:30"
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */
@@ -120,6 +121,8 @@ export type ProofSlot = {
   gmv: SlotGmv | null;
   /** ยอด GMV สะสมของ slot ก่อนหน้าที่ไลฟ์ต่อกันมา (แพลตฟอร์มเดียวกัน เวลาต่อกัน) ใช้หักให้อัตโนมัติ */
   gmvBefore: GmvBefore | null;
+  /** ยังไม่มี GMV แต่ยอดรวมอยู่ใน slot ถัดไปของ Mc คนเดียวกัน (ไลฟ์ต่อกันไม่สลับคน) เช่น "21:30–23:30" */
+  gmvCoveredBy: string | null;
 };
 
 /**

@@ -56,10 +56,10 @@ const monthFolderText = (items: OwnerDetail[]) =>
 /** คิวที่ไม่ถูกยกเลิกของคนหนึ่ง เรียงตามเวลา */
 const slotsOf = (data: OwnerSummary, type: Type, name: string) =>
   data.details.filter((d) => d.type === type && d.name === name && !d.cancelled).sort((a, b) => a.startMs - b.startMs);
-/** ยอด GMV รวมของคิว (เฉพาะ slot ที่กรอก GMV แล้ว) count = จำนวน slot ที่กรอก */
+/** ยอด GMV รวมของคิว (เฉพาะ slot ที่กรอกแล้ว) count = จำนวน slot ที่กรอก หรือรวมอยู่ในยอดของ slot ถัดไป (ไลฟ์ต่อเนื่องคนเดียว) */
 const gmvOf = (items: OwnerDetail[]) => {
   const filled = items.filter((d) => d.gmv !== null);
-  return { total: filled.reduce((a, d) => a + d.gmv!, 0), count: filled.length };
+  return { total: filled.reduce((a, d) => a + d.gmv!, 0), count: filled.length + items.filter((d) => d.gmv === null && d.gmvCoveredBy).length };
 };
 
 // ---------- ส่งออก (Microsoft Excel / Google Sheet ผ่าน ExportMenu) ----------
@@ -110,7 +110,7 @@ function payrollBook(data: OwnerSummary) {
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), hrs,
           lateText(d), cut ? `${Math.round(cut * 100)}%` : "",
           bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
-          d.gmv ?? "",
+          d.gmv ?? (d.gmvCoveredBy ? `รวมในคิว ${d.gmvCoveredBy}` : ""),
           d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "ยังไม่มีหลักฐาน",
           d.proof?.by ?? "",
           d.proof ? d.proof.driveUrl ?? "ยังไม่ได้อัปขึ้น Drive" : "",
@@ -370,7 +370,8 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                               ) : d.noProof ? <span className="text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</span>
                                 : <span className="font-semibold text-destructive">ยังไม่มีหลักฐาน</span>}
                               {d.gmv !== null ? <span className="font-semibold tabular-nums">GMV {fmtGmv(d.gmv)}</span>
-                                : <span className="text-muted-foreground">ยังไม่ได้กรอก GMV</span>}
+                                : d.gmvCoveredBy ? <span className="text-success">GMV รวมในคิว {d.gmvCoveredBy}</span>
+                                  : <span className="text-muted-foreground">ยังไม่ได้กรอก GMV</span>}
                             </li>
                           ))}
                         </ul>
