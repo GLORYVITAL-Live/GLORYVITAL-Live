@@ -1,4 +1,4 @@
-import { fail, ok, requireOwner } from "@/lib/api";
+import { fail, ok, requireAnalytics } from "@/lib/api";
 import { cleanSession, monthWindow, PLATFORMS, type LiveSession } from "@/lib/live-stats";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -67,7 +67,7 @@ const toRow = (s: LiveSession, fileName: string, by: string) => ({
 });
 
 export async function GET(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูสถิติไลฟ์");
+  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ดูสถิติไลฟ์");
   if ("res" in r) return r.res;
   const sp = new URL(request.url).searchParams;
   const db = createAdminClient();
@@ -97,7 +97,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์อัปโหลดสถิติไลฟ์");
+  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์อัปโหลดสถิติไลฟ์");
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
   const fileName = String(body?.fileName ?? "").slice(0, 200);
@@ -140,7 +140,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ลบสถิติไลฟ์");
+  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ลบสถิติไลฟ์");
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
   const platform = PLATFORMS.find((p) => p === body?.platform);

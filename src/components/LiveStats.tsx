@@ -3,17 +3,19 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FileSpreadsheetIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import {
-  accountsOf, bkkIso, bkkLocal, bkkParts, filterSessions, fmtMetric, fromBkkLocal, METRICS, metricOf, monthOf, monthWindow, parseRows,
+  accountLabel, accountsOf, bkkIso, bkkLocal, bkkParts, filterSessions, fmtMetric, fromBkkLocal, METRICS, metricOf, monthOf, monthWindow, parseRows,
   previousWindow, readXlsx, totalsOf, type Campaign, type LiveSession, type MetricKey, type ParsedFile, type Platform, type Totals,
 } from "@/lib/live-stats";
 import { fmtMonthShort, monthKey, monthLabel } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
-import { compareBook, monthBook, yearBook } from "@/lib/live-export";
-import { ExportMenu } from "@/components/ExportMenu";
+import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, yearBook } from "@/lib/live-export";
+import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
+import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
+import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
 import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
 import {
-  AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, MonthNav, Notice, StateBox, api, useConfirm, useToast,
+  AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast,
 } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -110,7 +112,7 @@ export function LiveStats() {
         ))}
       </TabsList>
       <TabsContent value="overview">
-        {months.length ? <Overview latest={months[0].month} version={version} /> : <NoData />}
+        {months.length ? <Overview latest={months[0].month} dataMonths={dataMonths} version={version} /> : <NoData />}
       </TabsContent>
       <TabsContent value="compare">
         {months.length ? <CompareView dataMonths={dataMonths} version={version} /> : <NoData />}
@@ -173,7 +175,7 @@ function FilterBar({ filter, sessions, children }: { filter: ReturnType<typeof u
           <SelectTrigger aria-label="บัญชี" className="h-9 min-w-44 rounded-full bg-card"><SelectValue /></SelectTrigger>
           <SelectContent position="popper">
             <SelectItem value="all">ทุกบัญชี</SelectItem>
-            {accounts.map((a) => <SelectItem key={a.key} value={a.key}>{filter.platform ? "" : `${a.platform} · `}{a.name}</SelectItem>)}
+            {accounts.map((a) => <SelectItem key={a.key} value={a.key}>{filter.platform ? a.name : accountLabel(a)}</SelectItem>)}
           </SelectContent>
         </Select>
       ) : null}
@@ -225,7 +227,7 @@ function KpiGrid({ cur, compare }: { cur: Totals; compare: { totals: Totals; lab
 
 const OVERVIEW_KEY = "glory_live_overview_mode";
 
-function Overview({ latest, version }: { latest: string; version: number }) {
+function Overview({ latest, dataMonths, version }: { latest: string; dataMonths: string[]; version: number }) {
   const mode = useLocal(OVERVIEW_KEY) === "year" ? "year" : "month";
   return (
     <>
@@ -237,19 +239,25 @@ function Overview({ latest, version }: { latest: string; version: number }) {
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
-      {mode === "year" ? <YearOverview latest={latest} version={version} /> : <MonthOverview latest={latest} version={version} />}
+      {mode === "year" ? <YearOverview latest={latest} dataMonths={dataMonths} version={version} /> : <MonthOverview latest={latest} dataMonths={dataMonths} version={version} />}
     </>
   );
 }
 
-function MonthOverview({ latest, version }: { latest: string; version: number }) {
+function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMonths: string[]; version: number }) {
   const [month, setMonth] = useState(latest);
   const [metric, setMetric] = useState<MetricKey>("gmv");
   const filter = useFilter();
   const months13 = useMemo(() => Array.from({ length: 13 }, (_, i) => monthKey(i - 12, month)), [month]);
   const { data, error, retry } = useSessions(monthWindow(months13[0]).from, monthWindow(month).to, version);
 
-  const nav = <MonthNav label={monthLabel(month)} onPrev={() => setMonth(monthKey(-1, month))} onNext={() => setMonth(monthKey(1, month))} />;
+  const nav = (
+    <div className="my-2 flex items-center justify-between gap-3">
+      <IconButton label="เดือนก่อนหน้า" onClick={() => setMonth(monthKey(-1, month))}><ChevronLeftIcon /></IconButton>
+      <MonthPicker mode="single" value={{ from: month, to: month }} onChange={(r) => setMonth(r.from)} marked={dataMonths} />
+      <IconButton label="เดือนถัดไป" onClick={() => setMonth(monthKey(1, month))}><ChevronRightIcon /></IconButton>
+    </div>
+  );
   if (!data) return <>{nav}{error ? <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={error} onRetry={retry} /> : <LoadingBlock />}</>;
 
   const list = filterSessions(data, filter.platform, filter.account);
@@ -319,84 +327,119 @@ function MonthOverview({ latest, version }: { latest: string; version: number })
 }
 
 /**
- * ภาพรวมทั้งปี: ยอดรวมปี + YoY / กราฟ 12 เดือนเทียบปีก่อน / ตารางรายไตรมาส / แยกบัญชี
- *   ปีปัจจุบันยังไม่จบ = เทียบ YoY กับช่วงเดียวกันของปีก่อน (ม.ค. ถึงเดือนนี้)
+ * ภาพรวมทั้งปี / ช่วงเดือนที่เลือก (ไม่เกิน 12 เดือน): ยอดรวม + YoY / กราฟรายเดือนเทียบปีก่อน / ตารางรายไตรมาส / แยกบัญชี
+ *   ช่วงที่ยังไม่จบ (มีเดือนนี้) = เทียบ YoY กับปีก่อนถึงวันเดียวกัน
+ *   โหลดข้อมูลย้อนหลัง 12 เดือนก่อนช่วงด้วย (ใช้คิด YoY, MoM เดือนแรก, QoQ ไตรมาสแรก)
  */
-function YearOverview({ latest, version }: { latest: string; version: number }) {
-  const [year, setYear] = useState(+latest.slice(0, 4));
+function YearOverview({ latest, dataMonths, version }: { latest: string; dataMonths: string[]; version: number }) {
+  const [range, setRange] = useState<MonthRange>(() => ({ from: `${latest.slice(0, 4)}-01`, to: `${latest.slice(0, 4)}-12` }));
   const [metric, setMetric] = useState<MetricKey>("gmv");
   const filter = useFilter();
-  const { data, error, retry } = useSessions(monthWindow(`${year - 1}-01`).from, monthWindow(`${year}-12`).to, version);
+  const n = monthsIn(range);
+  const loadFrom = monthKey(-12, range.from);
+  const { data, error, retry } = useSessions(monthWindow(loadFrom).from, monthWindow(range.to).to, version);
+  const shift = (by: number) => setRange({ from: monthKey(by, range.from), to: monthKey(by, range.to) });
 
   const nav = (
     <div className="my-2 flex items-center justify-between gap-3">
-      <IconButton label="ปีก่อนหน้า" onClick={() => setYear(year - 1)}><ChevronLeftIcon /></IconButton>
-      <strong aria-live="polite">ปี {year}</strong>
-      <IconButton label="ปีถัดไป" onClick={() => setYear(year + 1)}><ChevronRightIcon /></IconButton>
+      <IconButton label="ช่วงก่อนหน้า (ปีก่อน)" onClick={() => shift(-12)}><ChevronLeftIcon /></IconButton>
+      <MonthPicker mode="range" value={range} onChange={setRange} marked={dataMonths} />
+      <IconButton label="ช่วงถัดไป (ปีหน้า)" onClick={() => shift(12)}><ChevronRightIcon /></IconButton>
     </div>
   );
   if (!data) return <>{nav}{error ? <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={error} onRetry={retry} /> : <LoadingBlock />}</>;
 
   const now = monthKey();
-  const ongoing = now.startsWith(String(year));
-  const lastIdx = ongoing ? +now.slice(5, 7) : 12; // นับถึงเดือนที่เท่าไร (YTD)
-  const keysOf = (y: number) => Array.from({ length: 12 }, (_, i) => `${y}-${String(i + 1).padStart(2, "0")}`);
-  const curKeys = keysOf(year), prevKeys = keysOf(year - 1);
+  const curKeys = Array.from({ length: n }, (_, i) => monthKey(i, range.from));
+  const prevKeys = curKeys.map((k) => monthKey(-12, k));
+  const ongoing = curKeys.includes(now);
+  const doneKeys = curKeys.filter((k) => k <= now); // เดือนที่ถึงแล้ว (ใช้คิด YTD)
 
   const list = filterSessions(data, filter.platform, filter.account);
-  const byMonth = new Map<string, LiveSession[]>([...curKeys, ...prevKeys].map((m) => [m, []]));
+  const byMonth = new Map<string, LiveSession[]>(Array.from({ length: n + 12 }, (_, i) => [monthKey(i, loadFrom), []]));
   for (const s of list) byMonth.get(monthOf(s.startedAt))?.push(s);
-  const sessionsOf = (keys: string[]) => keys.flatMap((k) => byMonth.get(k)!);
-  const totals = new Map([...byMonth].map(([k, v]) => [k, totalsOf(v)]));
-  const curList = sessionsOf(curKeys.slice(0, lastIdx));
-  // ปีที่ยังไม่จบ: ปีก่อนนับถึงวันเดียวกัน (YTD)
+  const sessionsOf = (keys: string[]) => keys.flatMap((k) => byMonth.get(k) ?? []);
+  const totalsAt = (k: string) => totalsOf(byMonth.get(k) ?? []);
+  const curList = sessionsOf(doneKeys);
+  // ช่วงที่ยังไม่จบ: ปีก่อนนับถึงวันเดียวกัน (YTD)
   const today = new Date();
   const sameDayLastYear = new Date(today.getTime()).setFullYear(today.getFullYear() - 1);
-  const prevList = sessionsOf(prevKeys.slice(0, lastIdx)).filter((s) => !ongoing || Date.parse(s.startedAt) < sameDayLastYear);
+  const prevList = sessionsOf(doneKeys.map((k) => monthKey(-12, k))).filter((s) => !ongoing || Date.parse(s.startedAt) < sameDayLastYear);
   const cur = totalsOf(curList), prev = totalsOf(prevList);
-  const rangeText = ongoing ? `1 ม.ค.–${bkkDate.format(today)}` : "ทั้งปี";
+  const aName = rangeLabel(range);
+  const bName = rangeLabel({ from: prevKeys[0], to: prevKeys[n - 1] });
+  const rangeText = ongoing ? `1 ${shortMonth(range.from).split(" ")[0]} ${range.from.slice(0, 4)} – ${bkkDate.format(today)}` : aName;
 
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
-  const valOf = (k: string) => (totals.get(k)!.lives ? def.value(totals.get(k)!) : null);
-  const series = [{ name: String(year), color: CUR, values: curKeys.map(valOf) }];
-  const hasPrev = prevKeys.some((k) => totals.get(k)!.lives);
-  if (hasPrev) series.push({ name: String(year - 1), color: PREV, values: prevKeys.map(valOf) });
+  const valOf = (k: string) => { const t = totalsAt(k); return t.lives ? def.value(t) : null; };
+  const series = [{ name: aName, color: CUR, values: curKeys.map(valOf) }];
+  const hasPrev = prevKeys.some((k) => totalsAt(k).lives);
+  if (hasPrev) series.push({ name: bName, color: PREV, values: prevKeys.map(valOf) });
 
-  // ไตรมาส: Q4 ปีก่อน -> Q1..Q4 ปีนี้ (ใช้เทียบ QoQ)
-  const quarter = (y: number, q: number) => totalsOf(sessionsOf(keysOf(y).slice(q * 3 - 3, q * 3)));
-  const quarters = [1, 2, 3, 4].map((q) => ({ q, t: quarter(year, q), before: q === 1 ? quarter(year - 1, 4) : quarter(year, q - 1), lastYear: quarter(year - 1, q) }));
+  // ไตรมาสที่อยู่ในช่วง (บางไตรมาสอาจมีไม่ครบ 3 เดือน) + ไตรมาสก่อนหน้า (QoQ) + ปีก่อน (YoY)
+  const quarterKeys = [...new Set(curKeys.map(quarterOf))];
+  const quarters = quarterKeys.map((q) => {
+    const months = curKeys.filter((k) => quarterOf(k) === q);
+    const first = firstMonthOfQuarter(q);
+    const beforeMonths = Array.from({ length: 3 }, (_, i) => monthKey(i - 3, first));
+    return {
+      q, label: quarterName(q), months, partial: months.length < 3, open: months.includes(now),
+      a: sessionsOf(months), b: sessionsOf(months.map((k) => monthKey(-12, k))), before: sessionsOf(beforeMonths),
+    };
+  });
   const v = (t: Totals) => (t.lives ? def.value(t) : null);
+
+  // สไลด์: ช่วงนี้ vs ปีก่อน รายเดือน / ยังไม่มีข้อมูลปีก่อน = วิเคราะห์เดือนล่าสุดที่จบแล้วเทียบเดือนก่อนหน้า
+  const buildSlides = (target: "pptx" | "gslides") => {
+    const lastDone = [...doneKeys].reverse().find((k) => k < now && totalsAt(k).lives && totalsAt(monthKey(-1, k)).lives);
+    return buildCompareDeck({
+      report: "ภาพรวม", aName, bName, aRange: rangeText, bRange: `${bName} ช่วงเดียวกัน`,
+      a: curList, b: prevList, timeName: "รายเดือน",
+      time: doneKeys.map((k) => ({ short: `${shortMonth(k)}${k === now ? "*" : ""}`, a: byMonth.get(k) ?? [], b: byMonth.get(monthKey(-12, k)) ?? [] })),
+      filterText: filterText({ platform: filter.platform, account: filter.account, sessions: data }).join(" · "),
+      exportedAt: bkkStamp(new Date().toISOString()),
+      cover: { kicker: `ภาพรวม${ongoing ? " (ยังไม่จบช่วง)" : ""}`, headline: aName },
+      quarters: quarters.map((q) => ({ label: q.partial || q.open ? `${q.label}*` : q.label, a: q.a, b: q.b, before: q.before, open: q.open || q.partial })),
+      focus: !prev.lives && lastDone
+        ? { aName: monthLabel(lastDone), bName: monthLabel(monthKey(-1, lastDone)), a: byMonth.get(lastDone)!, b: byMonth.get(monthKey(-1, lastDone)) ?? [] }
+        : undefined,
+    }, target);
+  };
 
   return (
     <>
       {nav}
       <FilterBar filter={filter} sessions={data}>
-        <ExportMenu size="sm" label="ส่งออก" build={() => yearBook({
-          year, rangeText, monthLabel, curKeys, prevKeys, byMonth, curList, prevList,
-          filter: { platform: filter.platform, account: filter.account, sessions: data },
-        })} />
+        <div className="flex flex-wrap gap-2">
+          <ExportMenu size="sm" label="ส่งออก" build={() => yearBook({
+            aName, bName, rangeText, monthLabel, curKeys, prevKeys, byMonth, curList, prevList,
+            quarters: quarters.map((q) => ({ label: q.partial ? `${q.label} (บางเดือน)` : q.label, a: q.a, b: q.b })),
+            filter: { platform: filter.platform, account: filter.account, sessions: data },
+          })} />
+          <SlidesMenu label="สไลด์" title={`GLORY ภาพรวม ${aName}`} build={buildSlides} />
+        </div>
       </FilterBar>
       {!cur.lives ? (
-        <StateBox title={`ไม่มีข้อมูลไลฟ์ปี ${year}`}>ลองเปลี่ยนปี / แพลตฟอร์ม หรืออัปโหลดไฟล์ของปีนี้</StateBox>
+        <StateBox title={`ไม่มีข้อมูลไลฟ์ ${aName}`}>ลองเปลี่ยนช่วงเดือน / แพลตฟอร์ม หรืออัปโหลดไฟล์ของช่วงนี้</StateBox>
       ) : (
         <>
           <p className="mt-2 text-xs text-muted-foreground">
-            ยอดรวมปี {year} {ongoing ? `${rangeText} (ปีนี้ยังไม่จบ)` : "ทั้งปี"} · YoY เทียบกับปี {year - 1} ช่วงเดียวกัน
+            ยอดรวม {ongoing ? `${rangeText} (ยังไม่จบช่วง)` : aName} · YoY เทียบกับ {bName} ช่วงเดียวกัน
           </p>
-          <KpiGrid cur={cur} compare={[{ totals: prev, label: `YoY vs ${year - 1} (${rangeText})` }]} />
+          <KpiGrid cur={cur} compare={[{ totals: prev, label: `YoY vs ${bName}` }]} />
         </>
       )}
 
       <section className="my-4 rounded-2xl border bg-card p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-bold">{def.label} รายเดือน ปี {year}{hasPrev ? ` เทียบ ${year - 1}` : ""}</h2>
+          <h2 className="font-bold">{def.label} รายเดือน {aName}{hasPrev ? ` เทียบ ${bName}` : ""}</h2>
           <MetricSelect value={metric} onChange={setMetric} />
         </div>
         {hasPrev ? <div className="mb-2"><Legend series={series} /></div> : null}
         <BarChart
-          label={`${def.label} รายเดือน ปี ${year}`}
-          categories={curKeys.map((k) => fmtMonthShort.format(new Date(`${k}-01T12:00:00Z`)))}
+          label={`${def.label} รายเดือน ${aName}`}
+          categories={curKeys.map(shortMonth)}
           tooltipTitles={curKeys.map((k, i) => (hasPrev ? `${monthLabel(k)} vs ${monthLabel(prevKeys[i])}` : monthLabel(k)))}
           series={series}
           format={fmt}
@@ -404,7 +447,7 @@ function YearOverview({ latest, version }: { latest: string; version: number }) 
         />
         <TableView title="ดูเป็นตาราง">
           <Table>
-            <TableHeader><TableRow><TableHead>เดือน</TableHead><TableHead className="text-right">{year}</TableHead><TableHead className="text-right">MoM</TableHead><TableHead className="text-right">{year - 1}</TableHead><TableHead className="text-right">YoY</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>เดือน</TableHead><TableHead className="text-right">{def.label}</TableHead><TableHead className="text-right">MoM</TableHead><TableHead className="text-right">ปีก่อน</TableHead><TableHead className="text-right">YoY</TableHead></TableRow></TableHeader>
             <TableBody>
               {curKeys.map((k, i) => {
                 const show = valOf(k) !== null && k !== now; // เดือนนี้ยังไม่จบ ไม่แสดง %
@@ -412,7 +455,7 @@ function YearOverview({ latest, version }: { latest: string; version: number }) 
                   <TableRow key={k}>
                     <TableCell>{monthLabel(k)}{k === now ? <span className="text-xs text-muted-foreground"> (ยังไม่จบ)</span> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{fmt(valOf(k))}</TableCell>
-                    <TableCell className="text-right">{show ? <ChangeText cur={valOf(k)} prev={valOf(i ? curKeys[i - 1] : prevKeys[11])} /> : null}</TableCell>
+                    <TableCell className="text-right">{show ? <ChangeText cur={valOf(k)} prev={valOf(monthKey(-1, k))} /> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{fmt(valOf(prevKeys[i]))}</TableCell>
                     <TableCell className="text-right">{show ? <ChangeText cur={valOf(k)} prev={valOf(prevKeys[i])} /> : null}</TableCell>
                   </TableRow>
@@ -434,17 +477,21 @@ function YearOverview({ latest, version }: { latest: string; version: number }) 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {quarters.map(({ q, t, before, lastYear }) => {
-                // ไตรมาสที่ยังไม่จบ ไม่แสดง % (ยอดยังไม่ครบ เทียบแล้วดูเหมือนตก)
-                const open = ongoing && q === Math.ceil(lastIdx / 3);
-                const pending = <span className="text-xs text-muted-foreground">รอจบไตรมาส</span>;
+              {quarters.map((q) => {
+                const t = totalsOf(q.a);
+                // ไตรมาสที่ยังไม่จบ ไม่แสดง % (ยอดยังไม่ครบ เทียบแล้วดูเหมือนตก) / มีไม่ครบ 3 เดือนในช่วง = ไม่คิด QoQ
+                const pending = <span className="text-xs text-muted-foreground">{q.open ? "รอจบไตรมาส" : "-"}</span>;
                 return (
-                  <TableRow key={q}>
-                    <TableCell className="font-medium">Q{q}/{year}{open ? <span className="text-xs font-normal text-muted-foreground"> (ยังไม่จบ)</span> : null}</TableCell>
+                  <TableRow key={q.q}>
+                    <TableCell className="font-medium">
+                      {q.label}
+                      {q.open ? <span className="text-xs font-normal text-muted-foreground"> (ยังไม่จบ)</span>
+                        : q.partial ? <span className="text-xs font-normal text-muted-foreground"> (เฉพาะ {q.months.map((k) => shortMonth(k).split(" ")[0]).join(", ")})</span> : null}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">{t.lives}</TableCell>
                     <TableCell className="text-right tabular-nums">{fmt(v(t))}</TableCell>
-                    <TableCell className="text-right">{!t.lives ? null : open ? pending : <ChangeText cur={v(t)} prev={v(before)} />}</TableCell>
-                    <TableCell className="text-right">{!t.lives ? null : open ? pending : <ChangeText cur={v(t)} prev={v(lastYear)} />}</TableCell>
+                    <TableCell className="text-right">{!t.lives ? null : q.open || q.partial ? pending : <ChangeText cur={v(t)} prev={v(totalsOf(q.before))} />}</TableCell>
+                    <TableCell className="text-right">{!t.lives ? null : q.open ? pending : <ChangeText cur={v(t)} prev={v(totalsOf(q.b))} />}</TableCell>
                   </TableRow>
                 );
               })}
@@ -453,7 +500,7 @@ function YearOverview({ latest, version }: { latest: string; version: number }) 
         </div>
       </section>
 
-      {cur.lives ? <AccountTable cur={curList} prev={prevList} prevLabel={`${year - 1}`} /> : null}
+      {cur.lives ? <AccountTable cur={curList} prev={prevList} prevLabel="ปีก่อน" /> : null}
     </>
   );
 }
@@ -492,7 +539,7 @@ function AccountTable({ cur, prev, prevLabel }: { cur: LiveSession[]; prev: Live
               const p = totalsOf(prev.filter((s) => `${s.platform}|${s.accountId}` === a.key));
               return (
                 <TableRow key={a.key}>
-                  <TableCell><span className="text-xs text-muted-foreground">{a.platform}</span><br />{a.name}</TableCell>
+                  <TableCell>{a.name !== a.platform ? <><span className="text-xs text-muted-foreground">{a.platform}</span><br /></> : null}{a.name}</TableCell>
                   <TableCell className="text-right tabular-nums">{t.lives}</TableCell>
                   <TableCell className="text-right tabular-nums">{(t.durationSec / 3600).toFixed(1)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMetric("baht", t.gmv)}</TableCell>
@@ -559,9 +606,211 @@ const PERIOD_KINDS = {
 } as const;
 type PeriodKind = keyof typeof PERIOD_KINDS;
 
-function CompareView({ dataMonths, version }: { dataMonths: string[]; version: number }) {
+/** +12.7% / -1.14pp สีเขียว/แดง (ไม่มีข้อมูล = -) */
+function Delta({ kind, a, b, className }: { kind: (typeof METRICS)[number]["kind"]; a: number | null; b: number | null; className?: string }) {
+  const d = deltaOf(kind, a, b);
+  if (!d) return <span className={cn("text-muted-foreground", className)}>-</span>;
+  const flat = Math.abs(d.value) < (kind === "pct" ? 0.005 : 0.0005);
+  return <span className={cn("font-semibold tabular-nums", flat ? "text-muted-foreground" : d.value > 0 ? "text-success" : "text-destructive", className)}>{d.text}</span>;
+}
+
+/**
+ * เทียบหลายเดือน (ไม่เกิน 12): ค่าของทุกเดือน + เดือนหลัก vs เดือนอื่นทีละเดือน (เช่น ก.ย. vs ก.ค. / ก.ย. vs ส.ค.)
+ *   เดือนหลัก = เดือนสุดท้ายของช่วง (ค่าเริ่มต้น) / เลือกเองได้ / GMV สูงสุด (ไม่นับเดือนที่ยังไม่จบ)
+ *   CTR / CO เทียบเป็น pp ค่าอื่นเป็น %
+ */
+function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; dataMonths: string[]; version: number }) {
   const sorted = dataMonths.slice().sort();
-  const [kind, setKind] = useState<PeriodKind>("month");
+  const last = sorted.length ? sorted[sorted.length - 1] : monthKey();
+  const [range, setRange] = useState<MonthRange>(() => ({ from: monthKey(-2, last), to: last }));
+  const [focusPick, setFocusPick] = useState<string>("last"); // "last" / "best" / "YYYY-MM"
+  const [metric, setMetric] = useState<MetricKey>("gmv");
+  const filter = useFilter();
+  const n = monthsIn(range);
+  const keys = Array.from({ length: n }, (_, i) => monthKey(i, range.from));
+  const now = monthKey();
+  const { data, error, retry } = useSessions(monthWindow(range.from).from, monthWindow(range.to).to, version);
+
+  const controls = (
+    <div className="my-3 rounded-xl border bg-card p-3">
+      {toggle}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-0 flex-1">
+          <span className="mb-1 block text-xs text-muted-foreground">ช่วงเดือน (กดเดือนเริ่ม แล้วกดเดือนสุดท้าย)</span>
+          <MonthPicker mode="range" value={range} onChange={(r) => { setRange(r); setFocusPick("last"); }} marked={dataMonths} className="w-full justify-start" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <span className="mb-1 block text-xs text-muted-foreground">เดือนหลัก (เทียบกับเดือนอื่นทีละเดือน)</span>
+          <Select value={focusPick} onValueChange={setFocusPick}>
+            <SelectTrigger aria-label="เดือนหลัก" className="h-9 w-full rounded-full bg-card font-semibold"><SelectValue /></SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="last">เดือนสุดท้าย ({shortMonth(range.to).split(" ")[0]})</SelectItem>
+              <SelectItem value="best">เดือนที่ GMV สูงสุด</SelectItem>
+              {keys.map((k) => <SelectItem key={k} value={k}>{monthLabel(k)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+    </div>
+  );
+  if (n < 2) return <>{controls}<StateBox title="เลือกอย่างน้อย 2 เดือน">กดเดือนเริ่ม แล้วกดเดือนสุดท้าย เช่น ก.ค. ถึง ก.ย.</StateBox></>;
+  if (!data) return <>{controls}{error ? <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={error} onRetry={retry} /> : <LoadingBlock />}</>;
+
+  const list = filterSessions(data, filter.platform, filter.account);
+  const byMonth = new Map<string, LiveSession[]>(keys.map((k) => [k, []]));
+  for (const s of list) byMonth.get(monthOf(s.startedAt))?.push(s);
+  const totals = new Map(keys.map((k) => [k, totalsOf(byMonth.get(k)!)]));
+  const valueAt = (k: string, mk: MetricKey) => { const t = totals.get(k)!; return t.lives ? metricOf(mk).value(t) : null; };
+  // เดือนที่จบแล้วและมีข้อมูล (ใช้หาเดือนสูงสุด / ต่ำสุด)
+  const complete = keys.filter((k) => k !== now && totals.get(k)!.lives);
+  const bestBy = (mk: MetricKey, dir = 1) => complete.reduce<string | null>((b, k) => (b === null || dir * ((valueAt(k, mk) ?? 0) - (valueAt(b, mk) ?? 0)) > 0 ? k : b), null);
+  const focus = focusPick === "best" ? bestBy("gmv") ?? range.to : focusPick === "last" ? range.to : keys.includes(focusPick) ? focusPick : range.to;
+  const others = keys.filter((k) => k !== focus);
+  const short = (k: string) => `${shortMonth(k).split(" ")[0]}${k.slice(0, 4) !== range.to.slice(0, 4) ? ` ${k.slice(2, 4)}` : ""}${k === now ? "*" : ""}`;
+  const metrics = MULTI_ORDER.map((mk) => metricOf(mk));
+
+  const best = bestBy("gmv"), worst = bestBy("gmv", -1);
+  const gmvSum = complete.reduce((s, k) => s + (valueAt(k, "gmv") ?? 0), 0);
+  const firstDone = complete[0], lastDone = complete[complete.length - 1];
+  const def = metricOf(metric);
+  const fmtV = (v: number | null) => fmtMetric(def.kind, v);
+  const chartBest = keys.indexOf(bestBy(metric) ?? "");
+  const exportFilter = { platform: filter.platform, account: filter.account, sessions: data };
+
+  return (
+    <>
+      {controls}
+      {keys.includes(now) ? <Notice>{monthLabel(now)} ยังไม่จบเดือน (*) ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว และไม่นับเป็นเดือนสูงสุด/ต่ำสุด</Notice> : null}
+      <FilterBar filter={filter} sessions={data}>
+        <div className="flex flex-wrap gap-2">
+          <ExportMenu size="sm" label="ส่งออก" build={() => multiBook({
+            rangeText: rangeLabel(range), monthLabel, shortLabel: short, keys, focus, byMonth, filter: exportFilter,
+          })} />
+          <SlidesMenu label="สไลด์" title={`GLORY เทียบหลายเดือน ${rangeLabel(range)}`} build={(target) => buildMultiDeck({
+            rangeText: rangeLabel(range), keys, focus, label: short, longLabel: monthLabel, byMonth, now,
+            filterText: filterText(exportFilter).join(" · "), exportedAt: bkkStamp(new Date().toISOString()),
+          }, target)} />
+        </div>
+      </FilterBar>
+
+      {complete.length ? (
+        <div className="my-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {([
+            ["GMV สูงสุด", best ? monthLabel(best) : "-", best ? fmtMetric("baht", valueAt(best, "gmv")) : ""],
+            ["GMV ต่ำสุด", worst ? monthLabel(worst) : "-", worst ? fmtMetric("baht", valueAt(worst, "gmv")) : ""],
+            ["GMV เฉลี่ยต่อเดือน", fmtMetric("baht", gmvSum / complete.length), `${complete.length} เดือนที่จบแล้ว`],
+            ["แนวโน้ม", firstDone && lastDone && firstDone !== lastDone ? `${short(firstDone)} → ${short(lastDone)}` : "-", ""],
+          ] as const).map(([label, big, sub], i) => (
+            <div key={label} className="rounded-xl border bg-card px-3 py-2.5">
+              <div className="text-xs text-muted-foreground">{label}</div>
+              <div className="font-bold">{big}</div>
+              {i === 3 && firstDone && lastDone && firstDone !== lastDone
+                ? <Delta kind="baht" a={valueAt(lastDone, "gmv")} b={valueAt(firstDone, "gmv")} className="text-sm" />
+                : <div className="text-sm tabular-nums text-muted-foreground">{sub}</div>}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <section className="my-4">
+        <h2 className="mb-2 text-lg font-bold">เทียบทุกตัวชี้วัด <span className="text-sm font-normal text-muted-foreground">เดือนหลัก: {monthLabel(focus)}</span></h2>
+        <div className="overflow-x-auto rounded-xl border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Total</TableHead>
+                {keys.map((k) => <TableHead key={k} className={cn("text-right", k === focus && "text-foreground")}>{short(k)}</TableHead>)}
+                {others.map((k) => <TableHead key={k} className="border-l text-right whitespace-nowrap">{short(focus)} vs {short(k)}</TableHead>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {metrics.map((m) => (
+                <TableRow key={m.key}>
+                  <TableCell className="font-semibold whitespace-nowrap">{m.label}{m.note && m.note.length <= 8 ? <span className="text-xs font-normal text-muted-foreground"> · {m.note}</span> : null}</TableCell>
+                  {keys.map((k) => (
+                    <TableCell key={k} className={cn("text-right tabular-nums whitespace-nowrap", k === focus && "font-bold")}>{fmtMetric(m.kind, valueAt(k, m.key))}</TableCell>
+                  ))}
+                  {others.map((k) => (
+                    <TableCell key={k} className="border-l text-right whitespace-nowrap"><Delta kind={m.kind} a={valueAt(focus, m.key)} b={valueAt(k, m.key)} /></TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">CTR / CO เทียบเป็น pp (ผลต่างของ %) · ค่าอื่นเป็น % ที่เปลี่ยน · CO รวมสองแพลตฟอร์มไม่คำนวณ เลือก TikTok หรือ Shopee เพื่อดู</p>
+      </section>
+
+      <section className="my-4 rounded-2xl border bg-card p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-bold">{def.label} รายเดือน</h2>
+          <MetricSelect value={metric} onChange={setMetric} />
+        </div>
+        <BarChart
+          label={`${def.label} รายเดือน`}
+          categories={keys.map(short)}
+          tooltipTitles={keys.map(monthLabel)}
+          series={[{ name: def.label, color: CUR, values: keys.map((k) => valueAt(k, metric)) }]}
+          format={fmtV}
+          formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
+          highlight={chartBest >= 0 ? chartBest : undefined}
+        />
+        {chartBest >= 0 ? <p className="mt-1 text-xs text-muted-foreground">แท่งเข้ม = เดือนที่ {def.label} สูงสุด ({monthLabel(keys[chartBest])})</p> : null}
+      </section>
+
+      <section className="my-4">
+        <h2 className="mb-2 text-lg font-bold">GMV แยกตามบัญชี</h2>
+        <div className="overflow-x-auto rounded-xl border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>บัญชี</TableHead>
+                {keys.map((k) => <TableHead key={k} className="text-right">{short(k)}</TableHead>)}
+                {others.map((k) => <TableHead key={k} className="border-l text-right whitespace-nowrap">{short(focus)} vs {short(k)}</TableHead>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {accountsOf(keys.flatMap((k) => byMonth.get(k)!)).map((acc) => {
+                const g = (k: string) => { const t = totalsOf(byMonth.get(k)!.filter((s) => `${s.platform}|${s.accountId}` === acc.key)); return t.lives ? t.gmv : null; };
+                return (
+                  <TableRow key={acc.key}>
+                    <TableCell className="whitespace-nowrap">{acc.name}</TableCell>
+                    {keys.map((k) => <TableCell key={k} className={cn("text-right tabular-nums whitespace-nowrap", k === focus && "font-bold")}>{fmtMetric("baht", g(k))}</TableCell>)}
+                    {others.map((k) => <TableCell key={k} className="border-l text-right whitespace-nowrap"><Delta kind="baht" a={g(focus)} b={g(k)} /></TableCell>)}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+type CompareMode = PeriodKind | "multi";
+const COMPARE_MODES: [CompareMode, string][] = [["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"]];
+
+/** แท็บเทียบช่วง: เดือน / ไตรมาส (เทียบ 2 ช่วง) หรือ หลายเดือน (เดือนหลัก vs เดือนอื่นทีละเดือน) */
+function CompareView({ dataMonths, version }: { dataMonths: string[]; version: number }) {
+  const [mode, setMode] = useState<CompareMode>("month");
+  const toggle = (
+    <ToggleGroup type="single" spacing={1} value={mode} onValueChange={(v) => { if (v) setMode(v as CompareMode); }}
+      aria-label="เทียบเป็น" className="mb-3 rounded-full border bg-card p-1">
+      {COMPARE_MODES.map(([id, text]) => (
+        <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+          {text}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+  return mode === "multi"
+    ? <MultiMonthView toggle={toggle} dataMonths={dataMonths} version={version} />
+    : <PairCompare kind={mode} toggle={toggle} dataMonths={dataMonths} version={version} />;
+}
+
+function PairCompare({ kind, toggle, dataMonths, version }: { kind: PeriodKind; toggle: ReactNode; dataMonths: string[]; version: number }) {
+  const sorted = dataMonths.slice().sort();
   const k = PERIOD_KINDS[kind];
   const now = k.of(monthKey());
   const latest = sorted.length ? k.of(sorted[sorted.length - 1]) : now;
@@ -570,34 +819,26 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
   const { a, b } = picked[kind] ?? { a: latest, b: k.shift(latest, -1) };
   const setA = (v: string) => setPicked((p) => ({ ...p, [kind]: { a: v, b } }));
   const setB = (v: string) => setPicked((p) => ({ ...p, [kind]: { a, b: v } }));
-  // ตัวเลือก: ตั้งแต่ 1 ปีก่อนข้อมูลแรก ถึงช่วงปัจจุบัน (ใหม่สุดก่อน)
-  const options: string[] = [];
-  const oldest = k.shift(sorted.length ? k.of(sorted[0]) : now, -k.yoy);
-  for (let q = now > latest ? now : latest; q >= oldest; q = k.shift(q, -1)) options.push(q);
-
+  // ปฏิทินเลือกเดือน / ไตรมาส (จุดใต้ชื่อ = มีข้อมูลแล้ว)
+  const toRange = (v: string): MonthRange => kind === "month" ? { from: v, to: v } : { from: firstMonthOfQuarter(v), to: monthKey(2, firstMonthOfQuarter(v)) };
   const picker = (value: string, onChange: (q: string) => void, label: string, swatch: string) => (
     <div className="min-w-0 flex-1">
       <span className="mb-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-2.5 rounded-[3px]", swatch)} />{label}</span>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger aria-label={label} className="h-9 w-full rounded-full bg-card font-semibold"><SelectValue /></SelectTrigger>
-        <SelectContent position="popper">
-          {options.map((q) => <SelectItem key={q} value={q}>{k.label(q)}</SelectItem>)}
-        </SelectContent>
-      </Select>
+      <MonthPicker
+        mode={kind === "month" ? "single" : "quarter"}
+        value={toRange(value)}
+        onChange={(r) => onChange(kind === "month" ? r.from : quarterOf(r.from))}
+        marked={dataMonths}
+        label={k.label(value)}
+        className="w-full justify-start"
+      />
     </div>
   );
 
   return (
     <>
       <div className="my-3 rounded-xl border bg-card p-3">
-        <ToggleGroup type="single" spacing={1} value={kind} onValueChange={(v) => { if (v) setKind(v as PeriodKind); }}
-          aria-label="เทียบเป็น" className="mb-3 rounded-full border bg-card p-1">
-          {(Object.keys(PERIOD_KINDS) as PeriodKind[]).map((id) => (
-            <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
-              {PERIOD_KINDS[id].tab}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        {toggle}
         <div className="flex flex-wrap gap-3 sm:flex-nowrap">
           {picker(a, setA, k.pick, "bg-viz-cur")}
           {picker(b, setB, "เทียบกับ", "bg-viz-prev")}
@@ -806,7 +1047,7 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
   } else {
     const accounts = accountsOf([...cur, ...prev]);
     categories = accounts.map((a) => a.name);
-    titles = accounts.map((a) => `${a.platform} · ${a.name}`);
+    titles = accounts.map(accountLabel);
     const of = (list: LiveSession[], key: string) => list.filter((s) => `${s.platform}|${s.accountId}` === key);
     curVals = accounts.map((a) => val(of(cur, a.key)));
     prevVals = accounts.map((a) => val(of(prev, a.key)));
@@ -824,7 +1065,15 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
   return (
     <>
       <FilterBar filter={filter} sessions={[...curQ.data, ...prevQ.data]}>
-        <ExportMenu size="sm" label="ส่งออก" build={exportBook} />
+        <div className="flex flex-wrap gap-2">
+          <ExportMenu size="sm" label="ส่งออก" build={exportBook} />
+          <SlidesMenu label="สไลด์" title={`GLORY ${report} ${curName} vs ${prevName}`} build={(target) => buildCompareDeck({
+            report, aName: curName, bName: prevName, aRange: windowText(pc.from, pc.to), bRange: windowText(pp.from, pp.to),
+            a: cur, b: prev, timeName: timeText, time: timeGroups,
+            filterText: filterText({ platform: filter.platform, account: filter.account, sessions: [...curQ.data!, ...prevQ.data!] }).join(" · "),
+            exportedAt: bkkStamp(new Date().toISOString()),
+          }, target)} />
+        </div>
       </FilterBar>
       {missing.length ? (
         <Notice variant="warning" icon title={`ยังไม่ได้อัปโหลดข้อมูลเดือน ${missing.join(", ")}`}>

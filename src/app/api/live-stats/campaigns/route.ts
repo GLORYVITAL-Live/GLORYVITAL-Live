@@ -1,4 +1,4 @@
-import { fail, ok, requireOwner } from "@/lib/api";
+import { fail, ok, requireAnalytics } from "@/lib/api";
 import type { Campaign } from "@/lib/live-stats";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -16,7 +16,7 @@ const fromRow = (r: Record<string, unknown>): Campaign => ({
 });
 
 export async function GET() {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูสถิติไลฟ์");
+  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ดูสถิติไลฟ์");
   if ("res" in r) return r.res;
   const { data, error } = await createAdminClient().from("live_campaigns")
     .select("id, name, starts_at, ends_at, compare_id").order("starts_at", { ascending: false });
@@ -25,7 +25,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์แก้แคมเปญ");
+  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์แก้แคมเปญ");
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
   const id = body?.id ? Number(body.id) : null;
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ลบแคมเปญ");
+  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ลบแคมเปญ");
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
   const id = Number(body?.id);

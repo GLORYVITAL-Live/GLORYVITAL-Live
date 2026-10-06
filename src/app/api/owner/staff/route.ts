@@ -86,6 +86,8 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     if (!partial || "can_manage_admin" in body) out.can_manage_admin = body.can_manage_admin !== false;
     // จัดการหลักฐานไลฟ์ทุก slot (แนบ / แทนที่ / ลบ) ไม่ติ๊ก = ค่าเริ่มต้นปิด
     if (!partial || "can_manage_proofs" in body) out.can_manage_proofs = body.can_manage_proofs === true;
+    // เข้าหน้า Data analytics (สถิติไลฟ์) ไม่ติ๊ก = ค่าเริ่มต้นปิด
+    if (!partial || "can_view_analytics" in body) out.can_view_analytics = body.can_view_analytics === true;
   }
   return { data: out };
 }
@@ -101,7 +103,7 @@ export async function GET() {
   if ("res" in r) return r.res;
   const db = createAdminClient();
   const { data: rows, error } = await db.from("staff")
-    .select("id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, is_salaried, can_manage_mc, can_manage_admin, can_manage_proofs").order("name");
+    .select("id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, is_salaried, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics").order("name");
   if (error) return fail(error.message, 500);
   const staff = (rows ?? []).filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id);
 
@@ -153,7 +155,7 @@ export async function PATCH(request: Request) {
 
   const db = createAdminClient();
   const { data: cur, error: curErr } = await db.from("staff")
-    .select("id, role, name, email, phone, can_manage_mc, can_manage_admin, can_manage_proofs").eq("id", id).maybeSingle();
+    .select("id, role, name, email, phone, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics").eq("id", id).maybeSingle();
   if (curErr) return fail(curErr.message, 500);
   if (!cur) return fail("ไม่พบรายชื่อนี้");
   const role = cur.role as Role;
@@ -168,13 +170,14 @@ export async function PATCH(request: Request) {
   if (role === "owner") {
     const scopeChanged = ("can_manage_mc" in changes && changes.can_manage_mc !== cur.can_manage_mc)
       || ("can_manage_admin" in changes && changes.can_manage_admin !== cur.can_manage_admin)
-      || ("can_manage_proofs" in changes && changes.can_manage_proofs !== cur.can_manage_proofs);
+      || ("can_manage_proofs" in changes && changes.can_manage_proofs !== cur.can_manage_proofs)
+      || ("can_view_analytics" in changes && changes.can_view_analytics !== cur.can_view_analytics);
     if (scopeChanged && isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้ง Mc และ Admin แก้ให้");
     if (scopeChanged && !r.scope.full) return noRole("owner");
     const mc = "can_manage_mc" in changes ? changes.can_manage_mc : cur.can_manage_mc;
     const admin = "can_manage_admin" in changes ? changes.can_manage_admin : cur.can_manage_admin;
     if (!mc && !admin) return fail("ติ๊กสิทธิ์อย่างน้อย 1 ฝั่ง (Mc หรือ Admin)");
-    if (isMe) { delete changes.can_manage_mc; delete changes.can_manage_admin; delete changes.can_manage_proofs; }
+    if (isMe) { delete changes.can_manage_mc; delete changes.can_manage_admin; delete changes.can_manage_proofs; delete changes.can_view_analytics; }
   }
 
   const { error } = await db.from("staff").update(changes).eq("id", id);

@@ -237,7 +237,7 @@ const FORMATS: {
       const accountId = String(Math.round(id));
       return {
         accountId,
-        accountName: `Shopee ${accountId}`,
+        accountName: "Shopee", // ไฟล์ Shopee ไม่มีชื่อร้าน (มีแค่ User Id)
         title: get("ชื่อ Live") ?? "",
         startedAt,
         durationSec: toSeconds(get("ระยะเวลา"), "day") ?? 0,
@@ -394,6 +394,10 @@ export const changeOf = (cur: number | null, prev: number | null) =>
 export function filterSessions(list: LiveSession[], platform: Platform | "", account: string) {
   return list.filter((s) => (!platform || s.platform === platform) && (!account || `${s.platform}|${s.accountId}` === account));
 }
+
+/** ชื่อบัญชีพร้อมแพลตฟอร์ม เช่น "TikTok · GLORY VITAL" (ชื่อซ้ำกับแพลตฟอร์ม = "Shopee" เฉย ๆ) */
+export const accountLabel = (a: { platform: string; name: string }) =>
+  a.name.toLowerCase() === a.platform.toLowerCase() ? a.name : `${a.platform} · ${a.name}`;
 
 /** บัญชีทั้งหมดที่เจอ เรียงตามแพลตฟอร์ม -> ชื่อ */
 export function accountsOf(list: LiveSession[]) {

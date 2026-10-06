@@ -2,7 +2,7 @@
 //   ทุกไฟล์มีแผ่น "ข้อมูล" (ช่วงเวลา ตัวกรอง นิยามตัวชี้วัด) ตัวเลขเป็นตัวเลขจริง คำนวณต่อใน Excel / Google Sheet ได้
 
 import type { Cell, ExportBook, ExportSheet } from "@/lib/export";
-import { accountsOf, bkkParts, changeOf, METRICS, totalsOf, type LiveSession, type Totals } from "@/lib/live-stats";
+import { accountLabel, accountsOf, bkkParts, changeOf, METRICS, totalsOf, type LiveSession, type Totals } from "@/lib/live-stats";
 
 type Kind = (typeof METRICS)[number]["kind"];
 
@@ -25,9 +25,9 @@ const keyOf = (s: LiveSession) => `${s.platform}|${s.accountId}`;
 export type ExportFilter = { platform: string; account: string; sessions: LiveSession[] };
 
 /** ข้อความตัวกรองที่ใช้อยู่ (แพลตฟอร์ม / บัญชี) */
-function filterText(f: ExportFilter) {
+export function filterText(f: ExportFilter) {
   const acc = f.account ? accountsOf(f.sessions).find((a) => a.key === f.account) : null;
-  return [f.platform || "ทุกแพลตฟอร์ม", acc ? `${acc.platform} · ${acc.name}` : "ทุกบัญชี"];
+  return [f.platform || "ทุกแพลตฟอร์ม", acc ? accountLabel(acc) : "ทุกบัญชี"];
 }
 
 /** แผ่น "ข้อมูล": รายงานอะไร ช่วงไหน กรองอะไร + นิยามตัวชี้วัด */
@@ -151,30 +151,93 @@ export function monthBook(o: {
 
 /** ภาพรวมทั้งปี: สรุปปี + YoY / รายเดือนเทียบปีก่อน / รายไตรมาส / แยกบัญชี / รายการไลฟ์ */
 export function yearBook(o: {
-  year: number; rangeText: string; monthLabel: (k: string) => string; curKeys: string[]; prevKeys: string[];
-  byMonth: Map<string, LiveSession[]>; curList: LiveSession[]; prevList: LiveSession[]; filter: ExportFilter;
+  aName: string; bName: string; rangeText: string; monthLabel: (k: string) => string; curKeys: string[]; prevKeys: string[];
+  /** ไลฟ์รายเดือน (มีเดือนก่อนช่วงด้วย ใช้คิด MoM ของเดือนแรก) */
+  byMonth: Map<string, LiveSession[]>; curList: LiveSession[]; prevList: LiveSession[];
+  quarters: { label: string; a: LiveSession[]; b: LiveSession[] }[]; filter: ExportFilter;
 }): ExportBook {
-  const { year, curKeys, prevKeys, byMonth, monthLabel } = o;
+  const { aName, bName, curKeys, prevKeys, byMonth, monthLabel } = o;
   const t = (k: string) => totalsOf(byMonth.get(k) ?? []);
-  const q = (keys: string[], n: number) => keys.slice(n * 3 - 3, n * 3).flatMap((k) => byMonth.get(k) ?? []);
+  const gmv = (key: string) => (t(key).lives ? t(key).gmv : null);
+  const before = (k: string) => { const [y, m] = k.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; };
   return {
-    title: `GLORY สถิติไลฟ์ ปี ${year}`,
+    title: `GLORY สถิติไลฟ์ ${aName}`,
     sheets: [
-      infoSheet([["รายงาน", "ภาพรวมทั้งปี (YoY / QoQ)"], ["ปี", `${year} (${o.rangeText})`], ["YoY เทียบกับ", `${year - 1} ช่วงเดียวกัน`]], o.filter),
-      summarySheet("สรุปปี", `${year}`, totalsOf(o.curList), [{ label: `${year - 1}`, totals: totalsOf(o.prevList) }]),
+      infoSheet([["รายงาน", "ภาพรวม (YoY / QoQ / MoM)"], ["ช่วง", `${aName} (${o.rangeText})`], ["YoY เทียบกับ", `${bName} ช่วงเดียวกัน`]], o.filter),
+      summarySheet("สรุป", aName, totalsOf(o.curList), [{ label: bName, totals: totalsOf(o.prevList) }]),
       {
         name: "รายเดือน",
         rows: [
-          ["เดือน", ...METRIC_HEADERS, `GMV ${year - 1}`, "GMV YoY", "GMV MoM"],
-          ...curKeys.map((k, i): Cell[] => {
-            const gmv = (key: string) => (t(key).lives ? t(key).gmv : null);
-            return [monthLabel(k), ...metricCells(t(k)), num("baht", gmv(prevKeys[i])), pct(gmv(k), gmv(prevKeys[i])), pct(gmv(k), gmv(i ? curKeys[i - 1] : prevKeys[11]))];
-          }),
+          ["เดือน", ...METRIC_HEADERS, "GMV ปีก่อน", "GMV YoY", "GMV MoM"],
+          ...curKeys.map((k, i): Cell[] => [monthLabel(k), ...metricCells(t(k)), num("baht", gmv(prevKeys[i])), pct(gmv(k), gmv(prevKeys[i])), pct(gmv(k), gmv(before(k)))]),
         ],
       },
-      pairSheet("รายไตรมาส", "ไตรมาส", `${year}`, `${year - 1}`, [1, 2, 3, 4].map((n) => ({ label: `Q${n}`, a: q(curKeys, n), b: q(prevKeys, n) }))),
-      accountSheet(o.curList, o.prevList, `${year - 1}`),
+      pairSheet("รายไตรมาส", "ไตรมาส", aName, bName, o.quarters),
+      accountSheet(o.curList, o.prevList, bName),
       sessionSheet("ไลฟ์", o.curList),
+    ],
+  };
+}
+
+/** ลำดับตัวชี้วัดของตารางเทียบหลายเดือน (ตามตารางที่ทีมใช้: GMV, Duration, GMV/hr, Order, Viewer, View, Impressions, CTR, CO) */
+export const MULTI_ORDER = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "views", "impressions", "ctr", "co", "lives"] as const;
+
+/** ผลต่าง: อัตรา (CTR / CO) = pp / อื่น ๆ = % เช่น "+1.14pp" / "-12.7%" */
+export function deltaOf(kind: Kind, a: number | null, b: number | null) {
+  if (a === null || b === null) return null;
+  if (kind === "pct") {
+    const pp = (a - b) * 100;
+    return { value: pp, text: `${pp >= 0 ? "+" : ""}${pp.toFixed(2)}pp` };
+  }
+  const c = changeOf(a, b);
+  return c === null ? null : { value: c, text: `${c >= 0 ? "+" : ""}${(c * 100).toFixed(1)}%` };
+}
+
+/**
+ * เทียบหลายเดือน: ค่าของทุกเดือน + เดือนหลัก vs เดือนอื่นทีละเดือน (เช่น ก.ย. vs ก.ค. / ก.ย. vs ส.ค.)
+ *   อัตรา (CTR / CO) เทียบเป็น pp ค่าอื่นเป็น %
+ */
+export function multiBook(o: {
+  rangeText: string; monthLabel: (k: string) => string; shortLabel: (k: string) => string;
+  keys: string[]; focus: string; byMonth: Map<string, LiveSession[]>; filter: ExportFilter;
+}): ExportBook {
+  const { keys, byMonth, monthLabel, shortLabel, focus } = o;
+  const list = (k: string) => byMonth.get(k) ?? [];
+  const others = keys.filter((k) => k !== focus);
+  const metrics = MULTI_ORDER.map((k) => METRICS.find((m) => m.key === k)!);
+  const valueAt = (k: string, m: (typeof METRICS)[number], sel?: (s: LiveSession) => boolean) => {
+    const t = totalsOf(sel ? list(k).filter(sel) : list(k));
+    return t.lives ? m.value(t) : null;
+  };
+  const vsHeaders = others.map((k) => `${shortLabel(focus)} vs ${shortLabel(k)}`);
+  const row = (label: string, m: (typeof METRICS)[number], sel?: (s: LiveSession) => boolean): Cell[] => [
+    label,
+    ...keys.map((k) => num(m.kind, valueAt(k, m, sel))),
+    ...others.map((k) => {
+      const d = deltaOf(m.kind, valueAt(focus, m, sel), valueAt(k, m, sel));
+      return m.kind === "pct" ? d?.text ?? null : d ? { v: d.value, f: "pct" as const } : null;
+    }),
+  ];
+  const gmv = METRICS.find((m) => m.key === "gmv")!;
+  return {
+    title: `GLORY สถิติไลฟ์ เทียบหลายเดือน ${o.rangeText}`,
+    sheets: [
+      infoSheet([["รายงาน", "เทียบหลายเดือน"], ["ช่วง", o.rangeText], ["เดือนหลัก", `${monthLabel(focus)} เทียบกับทุกเดือนที่เหลือ (CTR / CO เทียบเป็น pp)`]], o.filter),
+      { name: "เทียบ", rows: [["Total", ...keys.map(shortLabel), ...vsHeaders], ...metrics.map((m) => row(m.label, m))] },
+      ...(["TikTok", "Shopee"] as const)
+        .filter((p) => keys.some((k) => list(k).some((s) => s.platform === p)))
+        .map((p): ExportSheet => ({
+          name: p,
+          rows: [[p, ...keys.map(shortLabel), ...vsHeaders], ...metrics.map((m) => row(m.label, m, (s) => s.platform === p))],
+        })),
+      {
+        name: "แยกบัญชี GMV",
+        rows: [
+          ["บัญชี", ...keys.map(shortLabel), ...vsHeaders],
+          ...accountsOf(keys.flatMap(list)).map((a) => row(accountLabel(a), gmv, (s) => keyOf(s) === a.key)),
+        ],
+      },
+      sessionSheet("ไลฟ์", keys.flatMap(list)),
     ],
   };
 }
@@ -191,7 +254,7 @@ export function compareBook(o: {
       infoSheet([["รายงาน", o.report], [`ช่วง ${o.aName}`, o.aRange], [`เทียบกับ ${o.bName}`, o.bRange]], o.filter),
       summarySheet("สรุปเทียบ", o.aName, totalsOf(o.a), [{ label: o.bName, totals: totalsOf(o.b) }]),
       pairSheet("แยกบัญชี", "บัญชี", o.aName, o.bName, [
-        ...accounts.map((acc) => ({ label: `${acc.platform} · ${acc.name}`, a: o.a.filter((s) => keyOf(s) === acc.key), b: o.b.filter((s) => keyOf(s) === acc.key) })),
+        ...accounts.map((acc) => ({ label: accountLabel(acc), a: o.a.filter((s) => keyOf(s) === acc.key), b: o.b.filter((s) => keyOf(s) === acc.key) })),
         { label: "รวม", a: o.a, b: o.b },
       ]),
       ...(o.time.length > 1 ? [pairSheet(o.timeName, o.timeName, o.aName, o.bName, o.time)] : []),

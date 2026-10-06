@@ -93,7 +93,8 @@ function Shell({ me }: { me: Me | null }) {
   const pages: Page[] = [
     ...roles,
     ...(me && (me.admin || me.owner?.mc || me.owner?.proofs) ? ["proof" as const] : []),
-    ...(me?.owner && (me.owner.mc || me.owner.admin) ? ["stats" as const] : []),
+    // Data analytics: เฉพาะ Owner ที่ติ๊กสิทธิ์ "เข้าถึง Data analytics"
+    ...(me?.owner && (me.owner.mc || me.owner.admin) && me.owner.analytics ? ["stats" as const] : []),
   ];
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
   const savedPage = useLocal(ROLE_KEY) as Page | null;

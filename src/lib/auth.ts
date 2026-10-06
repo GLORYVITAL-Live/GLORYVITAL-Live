@@ -15,7 +15,7 @@ export async function getMe(): Promise<Me | null> {
 
   const { data: rows, error } = await createAdminClient()
     .from("staff")
-    .select("id, role, name, is_extra_admin, can_manage_mc, can_manage_admin, can_manage_proofs")
+    .select("id, role, name, is_extra_admin, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics")
     .eq("email", email);
   if (error) throw error;
 
@@ -27,6 +27,7 @@ export async function getMe(): Promise<Me | null> {
       me.owner = {
         id: r.id, name: r.name, mc: r.can_manage_mc !== false, admin: r.can_manage_admin !== false,
         proofs: r.can_manage_proofs === true,
+        analytics: r.can_view_analytics === true,
       };
     }
   }

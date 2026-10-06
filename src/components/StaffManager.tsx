@@ -22,7 +22,7 @@ type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
   hourly_rate: number | null; is_extra_admin: boolean; is_salaried: boolean; upcoming: number;
   commit_tiers: CommitTier[] | null;
-  can_manage_mc: boolean; can_manage_admin: boolean; can_manage_proofs: boolean;
+  can_manage_mc: boolean; can_manage_admin: boolean; can_manage_proofs: boolean; can_view_analytics: boolean;
 };
 
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
@@ -138,6 +138,7 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
                   {p.role === "owner" && p.can_manage_proofs && !p.can_manage_mc
                     ? <Badge className="bg-p2/15 text-[11px] text-p2">หลักฐานไลฟ์</Badge>
                     : null}
+                  {p.role === "owner" && p.can_view_analytics ? <Badge className="bg-p3/15 text-[11px] text-p3">Data analytics</Badge> : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
@@ -207,6 +208,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   const [canMc, setCanMc] = useState(person?.can_manage_mc ?? true);
   const [canAdmin, setCanAdmin] = useState(person?.can_manage_admin ?? true);
   const [canProofs, setCanProofs] = useState(person?.can_manage_proofs ?? false);
+  const [canAnalytics, setCanAnalytics] = useState(person?.can_view_analytics ?? false);
   const [saving, setSaving] = useState(false);
 
   const emailChanged = (person?.email ?? "") !== email.trim().toLowerCase();
@@ -220,7 +222,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
         name, email, phone, hourly_rate: rate, is_extra_admin: extra, is_salaried: salaried,
         ...(role !== "owner" ? { commit_tiers: tiers } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
-        ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin, can_manage_proofs: canProofs } : {}),
+        ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin, can_manage_proofs: canProofs, can_view_analytics: canAnalytics } : {}),
       };
       const res = person
         ? await api("/api/owner/staff", { id: person.id, ...fields }, "PATCH")
@@ -376,6 +378,20 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
                   {canMc
                     ? "ติ๊กจัดการ Mc แล้ว มีสิทธิ์นี้อยู่แล้ว"
                     : "แนบ / แทนที่ / ลบ รูปหลักฐานไลฟ์ของทุก slot ได้ ไม่ใช่แค่ slot ที่ตัวเองเป็น Admin"}
+                </span>
+              </span>
+            </Label>
+            <Label className="items-start pb-1 leading-snug font-normal">
+              <Checkbox
+                checked={canAnalytics}
+                disabled={isMe}
+                onCheckedChange={(v) => setCanAnalytics(v === true)}
+                className="mt-0.5"
+              />
+              <span>
+                เข้าถึง Data analytics
+                <span className="block text-xs text-muted-foreground">
+                  ดูสถิติไลฟ์ TikTok / Shopee อัปโหลดข้อมูล ส่งออก Excel / Google Sheet และสไลด์
                 </span>
               </span>
             </Label>
