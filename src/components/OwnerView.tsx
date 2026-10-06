@@ -90,13 +90,14 @@ function summaryBook(data: OwnerSummary) {
 
 // ใบสรุปค่าจ้างรายคน: ทุกคิวของแต่ละคน + แถวรวมต่อคน (ไม่นับคิวที่ยกเลิก หักมาสายตามกฎ + ไลฟ์ชดเชย)
 function payrollBook(data: OwnerSummary) {
-  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
+  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน", "GMV", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
   for (const [type, people] of groups(data)) {
-    let groupHours = 0, groupMoney = 0;
+    let groupHours = 0, groupMoney = 0, groupGmv = 0, groupGmvCount = 0;
     for (const p of people) {
       const rate = rateOf(data, type, p.name);
       const items = slotsOf(data, type, p.name);
       if (!items.length) continue;
+      const gmv = gmvOf(items);
       let h = 0, paid = 0;
       for (const d of items) {
         const hrs = round2(d.hours);
@@ -109,6 +110,7 @@ function payrollBook(data: OwnerSummary) {
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), hrs,
           lateText(d), cut ? `${Math.round(cut * 100)}%` : "",
           bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
+          d.gmv ?? "",
           d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "ยังไม่มีหลักฐาน",
           d.proof?.by ?? "",
           d.proof ? d.proof.driveUrl ?? "ยังไม่ได้อัปขึ้น Drive" : "",
@@ -116,14 +118,19 @@ function payrollBook(data: OwnerSummary) {
       }
       const m = rate ? Math.round(paid * rate) : 0;
       rows.push([
-        `รวม ${p.name}`, `${items.length} slot`, "", "", "", round2(h), "", "", "", "", rate ? m : "", "", "",
-        // คอลัมน์ N: โฟลเดอร์รวมหลักฐานทั้งเดือนของ Mc คนนี้ใน Google Drive
+        `รวม ${p.name}`, `${items.length} slot`, "", "", "", round2(h), "", "", "", "", rate ? m : "",
+        gmv.count ? round2(gmv.total) : "", "", "",
+        // คอลัมน์ O: โฟลเดอร์รวมหลักฐานทั้งเดือนของ Mc คนนี้ใน Google Drive
         type === "Mc" ? monthFolderText(items) : "",
       ], []);
       groupHours += h;
       groupMoney += m;
+      groupGmv += gmv.total;
+      groupGmvCount += gmv.count;
     }
-    rows.push([`รวม ${type} ทั้งหมด`, "", "", "", "", round2(groupHours), "", "", "", "", groupMoney || ""], []);
+    rows.push([
+      `รวม ${type} ทั้งหมด`, "", "", "", "", round2(groupHours), "", "", "", "", groupMoney || "", groupGmvCount ? round2(groupGmv) : "",
+    ], []);
   }
   return book(`GLORY ใบสรุปค่าจ้างรายคน ${data.month}`, "ค่าจ้างรายคน", rows);
 }
