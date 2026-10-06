@@ -135,7 +135,9 @@ export async function POST(request: Request) {
   if (!ROLES.includes(role)) return fail("กรุณาเลือกบทบาท");
   if (!canRole(r.scope, role)) return noRole(role);
   const c = clean(role, body, false);
-  if (role === "owner" && !c.data?.can_manage_mc && !c.data?.can_manage_admin) return fail("ติ๊กสิทธิ์อย่างน้อย 1 ฝั่ง (Mc หรือ Admin)");
+  if (role === "owner" && !c.data?.can_manage_mc && !c.data?.can_manage_admin && !c.data?.can_manage_proofs && !c.data?.can_view_analytics) {
+    return fail("ติ๊กสิทธิ์อย่างน้อย 1 อย่าง");
+  }
   if (c.error) return fail(c.error);
 
   const { data, error } = await createAdminClient().from("staff").insert({ role, ...c.data }).select("id").single();
@@ -174,9 +176,11 @@ export async function PATCH(request: Request) {
       || ("can_view_analytics" in changes && changes.can_view_analytics !== cur.can_view_analytics);
     if (scopeChanged && isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้ง Mc และ Admin แก้ให้");
     if (scopeChanged && !r.scope.full) return noRole("owner");
-    const mc = "can_manage_mc" in changes ? changes.can_manage_mc : cur.can_manage_mc;
-    const admin = "can_manage_admin" in changes ? changes.can_manage_admin : cur.can_manage_admin;
-    if (!mc && !admin) return fail("ติ๊กสิทธิ์อย่างน้อย 1 ฝั่ง (Mc หรือ Admin)");
+    // ต้องมีสิทธิ์อย่างน้อย 1 อย่าง (เช่น ติ๊กแค่ Data analytics อย่างเดียวได้)
+    const pick = (k: "can_manage_mc" | "can_manage_admin" | "can_manage_proofs" | "can_view_analytics") => (k in changes ? changes[k] : cur[k]);
+    if (!pick("can_manage_mc") && !pick("can_manage_admin") && !pick("can_manage_proofs") && !pick("can_view_analytics")) {
+      return fail("ติ๊กสิทธิ์อย่างน้อย 1 อย่าง");
+    }
     if (isMe) { delete changes.can_manage_mc; delete changes.can_manage_admin; delete changes.can_manage_proofs; delete changes.can_view_analytics; }
   }
 

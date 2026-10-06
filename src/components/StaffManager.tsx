@@ -31,7 +31,7 @@ const displayName = (p: Pick<Person, "role" | "name">) => (p.role === "mc" ? `Mc
 const rolesOf = (scope: OwnerScope): Role[] =>
   [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : []), ...(scope.mc && scope.admin ? ["owner" as const] : [])];
 const scopeLabel = (p: Pick<Person, "can_manage_mc" | "can_manage_admin">) =>
-  p.can_manage_mc && p.can_manage_admin ? "จัดการทั้งหมด" : p.can_manage_mc ? "จัดการ Mc" : p.can_manage_admin ? "จัดการ Admin" : "ไม่มีสิทธิ์";
+  p.can_manage_mc && p.can_manage_admin ? "จัดการทั้งหมด" : p.can_manage_mc ? "จัดการ Mc" : p.can_manage_admin ? "จัดการ Admin" : "";
 
 /** จัดการรายชื่อพนักงาน: ดู / ค้นหา / เพิ่ม / แก้ / ลบ (เฉพาะบทบาทที่มีสิทธิ์) */
 export function StaffManager({ scope }: { scope: OwnerScope }) {
@@ -134,7 +134,7 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
                   {displayName(p)}
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
                   {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">Mc ประจำ</Badge> : null}
-                  {p.role === "owner" ? <Badge className="bg-p2/15 text-[11px] text-p2">{scopeLabel(p)}</Badge> : null}
+                  {p.role === "owner" && scopeLabel(p) ? <Badge className="bg-p2/15 text-[11px] text-p2">{scopeLabel(p)}</Badge> : null}
                   {p.role === "owner" && p.can_manage_proofs && !p.can_manage_mc
                     ? <Badge className="bg-p2/15 text-[11px] text-p2">หลักฐานไลฟ์</Badge>
                     : null}
@@ -213,7 +213,7 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
 
   const emailChanged = (person?.email ?? "") !== email.trim().toLowerCase();
   const renamed = !!person && person.name !== name.trim().replace(/^mc\s*/i, "");
-  const noScope = role === "owner" && !canMc && !canAdmin;
+  const noScope = role === "owner" && !canMc && !canAdmin && !canProofs && !canAnalytics;
 
   async function save() {
     setSaving(true);
@@ -397,8 +397,9 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
             </Label>
             <span className="mt-1 block text-xs text-muted-foreground">
               {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้งคู่แก้ให้"
-                : noScope ? <span className="text-destructive">ติ๊กอย่างน้อย 1 ฝั่ง</span>
-                  : "ติ๊กทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อและสิทธิ์ของ Owner คนอื่น"}
+                : noScope ? <span className="text-destructive">ติ๊กอย่างน้อย 1 อย่าง</span>
+                  : !canMc && !canAdmin ? "ไม่ได้ติ๊กจัดการ Mc / Admin = ไม่เห็นหน้าเจ้าของ (สรุปรายเดือน ค่าจ้าง slot รายชื่อ) เห็นเฉพาะหน้าที่ติ๊กไว้"
+                    : "ติ๊ก Mc + Admin ทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อและสิทธิ์ของ Owner คนอื่น"}
             </span>
           </fieldset>
         ) : null}

@@ -34,12 +34,15 @@ export async function requireOwner(denied = "บัญชีนี้ไม่�
   return { me: r.me, scope: { mc: o.mc, admin: o.admin, full: o.mc && o.admin } };
 }
 
-/** Owner ที่ติ๊กสิทธิ์ "เข้าถึง Data analytics" (หน้าสถิติไลฟ์ + API ของหน้านี้) */
+/**
+ * Owner ที่ติ๊กสิทธิ์ "เข้าถึง Data analytics" (หน้าสถิติไลฟ์ + API ของหน้านี้)
+ *   ไม่ต้องมีสิทธิ์จัดการ Mc / Admin (ติ๊กแค่ Data analytics อย่างเดียวได้)
+ */
 export async function requireAnalytics(denied = "บัญชีนี้ไม่มีสิทธิ์เข้าหน้า Data analytics") {
-  const r = await requireOwner(denied);
+  const r = await requireMe();
   if ("res" in r) return r;
   if (!r.me.owner?.analytics) return { res: fail(`${denied} ให้ Owner ที่มีสิทธิ์ทั้ง Mc และ Admin ติ๊กสิทธิ์ให้ในหน้าพนักงาน`, 403) };
-  return r;
+  return { me: r.me };
 }
 
 /** ตาราง slot นี้อยู่ในสิทธิ์ของ Owner หรือไม่ */

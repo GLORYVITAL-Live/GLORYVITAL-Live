@@ -65,7 +65,8 @@ const THEME_KEY = "glory_booking_theme";
  */
 export function rolesOf(me: Me | null): Role[] {
   if (!me) return [];
-  const real = (["mc", "admin", "owner"] as const).filter((r) => me[r]);
+  // หน้าเจ้าของ: เฉพาะ Owner ที่ติ๊กจัดการ Mc หรือ Admin (ติ๊กแค่ Data analytics / หลักฐานไลฟ์ = ไม่เห็นหน้าเจ้าของ)
+  const real = (["mc", "admin", "owner"] as const).filter((r) => (r === "owner" ? !!me.owner && (me.owner.mc || me.owner.admin) : me[r]));
   const view = (["mc", "admin"] as const).filter((r) => !me[r] && me.owner?.[r]);
   return [...real, ...view];
 }
@@ -94,7 +95,7 @@ function Shell({ me }: { me: Me | null }) {
     ...roles,
     ...(me && (me.admin || me.owner?.mc || me.owner?.proofs) ? ["proof" as const] : []),
     // Data analytics: เฉพาะ Owner ที่ติ๊กสิทธิ์ "เข้าถึง Data analytics"
-    ...(me?.owner && (me.owner.mc || me.owner.admin) && me.owner.analytics ? ["stats" as const] : []),
+    ...(me?.owner?.analytics ? ["stats" as const] : []),
   ];
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
   const savedPage = useLocal(ROLE_KEY) as Page | null;

@@ -1,5 +1,5 @@
 import { google, type sheets_v4 } from "googleapis";
-import { fail, ok, requireOwner } from "@/lib/api";
+import { fail, ok, requireMe } from "@/lib/api";
 import { cleanBook, isUrl, sheetNames, type Cell } from "@/lib/export";
 import { googleAuth } from "@/lib/google";
 
@@ -41,8 +41,11 @@ function googleError(err: unknown) {
 }
 
 export async function POST(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล");
+  // Owner ที่จัดการ Mc / Admin (สรุปค่าจ้าง) หรือมีสิทธิ์ Data analytics
+  const r = await requireMe();
   if ("res" in r) return r.res;
+  const o = r.me.owner;
+  if (!o || !(o.mc || o.admin || o.analytics)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
   const book = cleanBook(await request.json().catch(() => null));
   if (!book) return fail("ข้อมูลที่ส่งออกไม่ถูกต้อง หรือใหญ่เกินไป");
   const auth = googleAuth();
