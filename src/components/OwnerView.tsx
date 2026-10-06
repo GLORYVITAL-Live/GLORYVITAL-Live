@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
+import { fmtGmv } from "@/lib/gmv";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
 import { ChevronRightIcon } from "lucide-react";
 import type { Cell, ExportBook } from "@/lib/export";
@@ -55,6 +56,11 @@ const monthFolderText = (items: OwnerDetail[]) =>
 /** คิวที่ไม่ถูกยกเลิกของคนหนึ่ง เรียงตามเวลา */
 const slotsOf = (data: OwnerSummary, type: Type, name: string) =>
   data.details.filter((d) => d.type === type && d.name === name && !d.cancelled).sort((a, b) => a.startMs - b.startMs);
+/** ยอด GMV รวมของคิว (เฉพาะ slot ที่กรอก GMV แล้ว) count = จำนวน slot ที่กรอก */
+const gmvOf = (items: OwnerDetail[]) => {
+  const filled = items.filter((d) => d.gmv !== null);
+  return { total: filled.reduce((a, d) => a + d.gmv!, 0), count: filled.length };
+};
 
 // ---------- ส่งออก (Microsoft Excel / Google Sheet ผ่าน ExportMenu) ----------
 
@@ -240,11 +246,11 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
   const num_ = "text-right tabular-nums";
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
-      <Table className="min-w-[600px]">
+      <Table className="min-w-[680px]">
         <TableHeader className="bg-secondary">
           <TableRow className="hover:bg-transparent">
             <TableHead className="px-3 text-xs font-semibold text-muted-foreground">ชื่อ</TableHead>
-            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "หลักฐาน", "ยอดเงิน"].map((h) => (
+            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "หลักฐาน", "GMV", "ยอดเงิน"].map((h) => (
               <TableHead key={h} className="px-3 text-right text-xs font-semibold text-muted-foreground">{h}</TableHead>
             ))}
           </TableRow>
@@ -257,6 +263,7 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
             const items = slotsOf(data, type, r.name);
             const need = items.filter((d) => !d.noProof); // ไม่นับคิวของ Mc ประจำ (ไม่ต้องแนบ)
             const proved = need.filter((d) => d.proof).length;
+            const gmv = gmvOf(items);
             return (
               <Fragment key={r.name}>
                 <TableRow
@@ -302,11 +309,17 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                       {items.length ? "ไม่ต้องแนบ" : "–"}
                     </TableCell>
                   )}
+                  <TableCell
+                    title={gmv.count ? `กรอก GMV แล้ว ${gmv.count}/${items.length} slot` : "ยังไม่ได้กรอก GMV"}
+                    className={num_}
+                  >
+                    {gmv.count ? fmtGmv(gmv.total) : "–"}
+                  </TableCell>
                   <TableCell className={cn(num_, "px-3")}>{rate ? money(r.paidHours * rate) : "–"}</TableCell>
                 </TableRow>
                 {isOpen ? (
                   <TableRow className="bg-secondary hover:bg-secondary">
-                    <TableCell colSpan={9} className="px-3 pt-1 pb-3 pl-8 whitespace-normal">
+                    <TableCell colSpan={10} className="px-3 pt-1 pb-3 pl-8 whitespace-normal">
                       <div className="flex flex-wrap gap-1.5">
                         {daily.length ? daily.map((x) => (
                           <Badge key={x.date} variant="outline" className="h-auto bg-card px-2.5 py-1 font-normal">
@@ -349,6 +362,8 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
                                 </a>
                               ) : d.noProof ? <span className="text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</span>
                                 : <span className="font-semibold text-destructive">ยังไม่มีหลักฐาน</span>}
+                              {d.gmv !== null ? <span className="font-semibold tabular-nums">GMV {fmtGmv(d.gmv)}</span>
+                                : <span className="text-muted-foreground">ยังไม่ได้กรอก GMV</span>}
                             </li>
                           ))}
                         </ul>
@@ -373,6 +388,12 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
               {(() => {
                 const need = rows.flatMap((r) => slotsOf(data, type, r.name)).filter((d) => !d.noProof);
                 return need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "–";
+              })()}
+            </TableCell>
+            <TableCell className={num_}>
+              {(() => {
+                const g = gmvOf(rows.flatMap((r) => slotsOf(data, type, r.name)));
+                return g.count ? fmtGmv(g.total) : "–";
               })()}
             </TableCell>
             <TableCell className={cn(num_, "px-3")}>{tm ? money(tm) : "–"}</TableCell>

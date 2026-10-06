@@ -2,7 +2,7 @@ import "server-only";
 import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays, bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
-import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
+import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo, SlotGmv } from "@/lib/types";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -53,6 +53,27 @@ type ProofRow = {
   id: number; started_at: string; ended_at: string; uploaded_by_name: string; uploaded_by_email: string;
   slots: { mc_slot_id: number; drive_url: string | null; drive_folder_id: string | null; slot: { starts_at: string; ends_at: string } | null }[] | null;
 };
+
+const numOrNull = (v: number | string | null | undefined) => (v === null || v === undefined || v === "" ? null : Number(v));
+
+/**
+ * ยอด GMV ของ slot ของ Mc ในช่วงวันที่: Map<mc_slot_id, GMV> (เฉพาะ slot ที่กรอกแล้ว)
+ *   ยังไม่ได้รัน SQL 20261016000000_proof_gmv = ว่าง (หน้าอื่นใช้งานได้ตามเดิม)
+ */
+export async function gmvBySlot(db: Db, first: string, last: string) {
+  const map = new Map<number, SlotGmv>();
+  type Row = { id: number; gmv: number | string | null; gmv_input: string | null; gmv_minus: number | string | null };
+  try {
+    const rows = await fetchAll<Row>((from, to) =>
+      db.from("mc_slots").select("id, gmv, gmv_input, gmv_minus")
+        .not("gmv", "is", null).gte("live_date", first).lte("live_date", last)
+        .order("id").range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>);
+    for (const r of rows) map.set(Number(r.id), { value: Number(r.gmv), input: r.gmv_input ?? null, minus: numOrNull(r.gmv_minus) });
+  } catch (err) {
+    console.warn("โหลดยอด GMV ไม่สำเร็จ (รัน SQL 20261016000000_proof_gmv แล้วหรือยัง?):", (err as { message?: string })?.message ?? err);
+  }
+  return map;
+}
 
 /**
  * หลักฐานไลฟ์ที่ผูกกับ slot ของ Mc ในช่วงวันที่: Map<mc_slot_id, หลักฐาน> (ยังไม่ได้รัน SQL = ว่าง)
@@ -248,17 +269,21 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         .or("confirmed.is.null,confirmed.eq.true")
         .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
     );
-  const [mcRows, adminRows, proofs] = await Promise.all([
-    load("mc_slots", "mc_id"), load("admin_slots", "admin_id"), proofsBySlot(db, first, last),
+  const [mcRows, adminRows, proofs, gmvs] = await Promise.all([
+    load("mc_slots", "mc_id"), load("admin_slots", "admin_id"), proofsBySlot(db, first, last), gmvBySlot(db, first, last),
   ]);
   // หลักฐานไลฟ์ผูกกับ slot ของ Mc -> ฝั่ง Admin ของ slot เดียวกันใช้หลักฐานเดียวกัน
   const proofOf = new Map<string, ProofInfo>();
+  const gmvOf = new Map<string, number>();
   // slot ที่ Mc เป็น Mc ประจำ (เงินเดือน) = ไม่ต้องแนบหลักฐาน (ฝั่ง Admin ของ slot เดียวกันก็ไม่ต้อง)
   const salaried = new Set<string>();
   for (const r of mcRows) {
     const p = proofs.get(Number(r.id));
     if (p) proofOf.set(slotKey(r), { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, driveFolderUrl: p.driveFolderUrl });
     if (r.person?.is_salaried && !r.is_cancelled) salaried.add(slotKey(r));
+    // GMV กรอกที่ slot ของ Mc -> ฝั่ง Admin ของ slot เดียวกันใช้ยอดเดียวกัน
+    const g = gmvs.get(Number(r.id));
+    if (g && !r.is_cancelled) gmvOf.set(slotKey(r), g.value);
   }
 
   const rates: OwnerSummary["rates"] = {
@@ -281,6 +306,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         ...lb,
         proof: proofOf.get(slotKey(r)) ?? null,
         noProof: salaried.has(slotKey(r)),
+        gmv: gmvOf.get(slotKey(r)) ?? null,
       });
     }
   };

@@ -12,8 +12,9 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { computeGmv, fmtGmv, type GmvSlot } from "@/lib/gmv";
 import { cn } from "@/lib/utils";
-import type { ProofSlot } from "@/lib/types";
+import type { ProofSlot, SlotGmv } from "@/lib/types";
 
 type DayData = { date: string; all: boolean; slots: ProofSlot[] };
 type MonthDay = { date: string; total: number; done: number };
@@ -24,6 +25,97 @@ const proofTime = (p: { startedAt: string; endedAt: string }) => `${hms.format(n
 /** เวลา (ms) -> ค่าในช่อง datetime-local แบบเวลาไทย "YYYY-MM-DDTHH:mm:ss" */
 const toInput = (ms: number) => new Date(ms + 7 * 3600_000).toISOString().slice(0, 19);
 const fromInput = (v: string) => Date.parse(`${v.length === 16 ? `${v}:00` : v}+07:00`);
+const hm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+
+// ---------- ยอด GMV ----------
+
+type GmvDraft = { input: string; auto: boolean };
+const gmvSlot = (s: ProofSlot): GmvSlot => ({ id: s.mcSlotId, platform: s.platform, startMs: s.startMs, endMs: s.endMs, gmv: null });
+
+/**
+ * คิด GMV ของ slot ที่กำลังกรอก (ตัวอย่างบนหน้าจอ ฝั่ง server คิดซ้ำตอนบันทึก)
+ *   ยอดสะสมก่อน slot แรกในชุดมาจาก server (gmvBefore) ส่วน slot ถัดไปในชุดใช้ยอดที่กำลังกรอกของ slot ก่อนหน้า
+ */
+function previewGmv(slots: ProofSlot[], drafts: Record<number, GmvDraft>) {
+  const known: GmvSlot[] = slots
+    .filter((s) => s.gmvBefore)
+    .map((s) => ({ id: -s.mcSlotId, platform: s.platform, startMs: s.gmvBefore!.fromMs, endMs: s.startMs, gmv: s.gmvBefore!.amount }));
+  const res = computeGmv(slots.map((s) => ({ slot: gmvSlot(s), ...(drafts[s.mcSlotId] ?? { input: "", auto: true }) })), known);
+  return new Map(res.map((r) => [r.id, r]));
+}
+
+/** ยอด GMV ที่บันทึกไว้: "82,058 (205,564 − 123,506)" */
+function gmvText(g: SlotGmv) {
+  const typed = g.input && g.input !== String(g.value) ? g.input : "";
+  const detail = g.minus !== null ? `${typed || fmtGmv(g.value + g.minus)} − ${fmtGmv(g.minus)}` : typed;
+  return `${fmtGmv(g.value)}${detail ? ` (${detail})` : ""}`;
+}
+
+/** ค่าเริ่มต้นในช่องกรอก: ค่าที่บันทึกไว้ (ไม่มี = ว่าง ติ๊กหักยอดไว้) */
+const draftOf = (s: ProofSlot): GmvDraft => (s.gmv
+  ? { input: s.gmv.input ?? String(s.gmv.value), auto: s.gmv.minus !== null }
+  : { input: "", auto: true });
+
+/** ช่องกรอก GMV ของ slot หนึ่ง: บวก/ลบกันได้ + ติ๊กหักยอดสะสมของ slot ก่อนหน้า + แสดงผลลัพธ์ */
+function GmvField({ slot, draft, result, before, disabled, onChange, showSlot }: {
+  slot: ProofSlot;
+  draft: GmvDraft;
+  result: ReturnType<typeof computeGmv>[number] | undefined;
+  /** ยอดสะสมก่อนหน้าที่จะหัก (คิดรวม slot ก่อนหน้าในชุดเดียวกันแล้ว) */
+  before: { amount: number; fromMs: number; toMs: number } | null;
+  disabled: boolean;
+  onChange: (d: GmvDraft) => void;
+  showSlot: boolean;
+}) {
+  const id = `gmv-${slot.mcSlotId}`;
+  const value = draft.input.trim() ? result : undefined;
+  return (
+    <div className="rounded-lg border p-2.5">
+      <Label htmlFor={id} className="mb-1.5">
+        GMV{showSlot ? <span className="font-normal text-muted-foreground"> · {slot.start}–{slot.end} {slot.mcName}</span> : null}
+      </Label>
+      <Input
+        id={id}
+        inputMode="decimal"
+        value={draft.input}
+        disabled={disabled}
+        placeholder={before ? "ยอดสะสมตอนจบ slot นี้ เช่น 205564" : "เช่น 60540 หรือ 123506 - 60540"}
+        onChange={(e) => onChange({ ...draft, input: e.target.value })}
+        aria-invalid={!!value?.error}
+      />
+      {before ? (
+        <Label className="mt-2 items-start leading-snug font-normal">
+          <Checkbox checked={draft.auto} disabled={disabled} onCheckedChange={(v) => onChange({ ...draft, auto: v === true })} className="mt-0.5" />
+          <span>
+            ไลฟ์ต่อจาก slot ก่อนหน้า: หักยอดสะสม {hm.format(before.fromMs)}–{hm.format(before.toMs)}{" "}
+            <strong className="tabular-nums">{fmtGmv(before.amount)}</strong> ให้อัตโนมัติ
+            <span className="block text-xs text-muted-foreground">เอาติ๊กออกถ้าเริ่มไลฟ์ใหม่ (ยอดในแดชบอร์ดเริ่มนับใหม่)</span>
+          </span>
+        </Label>
+      ) : null}
+      <p className={cn("mt-1.5 text-xs", value?.error ? "font-semibold text-destructive" : "text-muted-foreground")}>
+        {!value ? "ไม่บังคับ · พิมพ์บวก/ลบกันได้ เช่น 123506 - 60540"
+          : value.error ? value.error
+            : <>GMV ของ slot นี้ <strong className="text-foreground tabular-nums">{fmtGmv(value.gmv ?? 0)}</strong>
+                {value.minus !== null ? <span className="tabular-nums"> ({fmtGmv((value.gmv ?? 0) + value.minus)} − {fmtGmv(value.minus)})</span> : null}</>}
+      </p>
+    </div>
+  );
+}
+
+/** ยอดสะสมก่อนหน้าที่ slot นี้จะหัก (slot ก่อนหน้าในชุด = ยอดที่กำลังกรอก) */
+function beforeOf(
+  slots: ProofSlot[], i: number, preview: Map<number, { gmv: number | null }>,
+): { amount: number; fromMs: number; toMs: number } | null {
+  const s = slots[i], prev = slots[i - 1];
+  if (prev && prev.platform === s.platform && prev.endMs === s.startMs) {
+    const g = preview.get(prev.mcSlotId)?.gmv;
+    if (g === null || g === undefined) return null;
+    const chain = beforeOf(slots, i - 1, preview);
+    return { amount: (chain?.amount ?? 0) + g, fromMs: chain?.fromMs ?? prev.startMs, toMs: prev.endMs };
+  }
+  return s.gmvBefore;
+}
 
 /**
  * หน้าหลักฐานไลฟ์ (ใช้ทำเบิก): แนบรูปแดชบอร์ด TikTok LIVE + เวลาเริ่ม/จบจริง เข้า slot ของ Mc
@@ -41,6 +133,7 @@ export function ProofPage() {
   const [selected, setSelected] = useState<number[]>([]);
   const [onlyMissing, setOnlyMissing] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [gmvSlot, setGmvSlot] = useState<ProofSlot | null>(null);
   const [busy, setBusy] = useState(false);
   const reload = () => setTick((n) => n + 1);
   const monthOf = date.slice(0, 7);
@@ -67,9 +160,11 @@ export function ProofPage() {
   const day = data?.date === date ? data : null;
   const error = failed?.date === date ? failed.message : "";
   const missingDays = month?.key === monthOf ? month.days.filter((d) => d.done < d.total) : [];
-  const shown = day ? day.slots.filter((s) => !onlyMissing || !s.proof) : [];
+  // Mc ประจำ ไม่ต้องแนบหลักฐาน: ไม่นับในจำนวน "มีหลักฐาน" และไม่อยู่ใน "เฉพาะที่ยังไม่มีหลักฐาน"
+  const need = day ? day.slots.filter((s) => !s.salaried) : [];
+  const shown = day ? day.slots.filter((s) => !onlyMissing || (!s.salaried && !s.proof)) : [];
   const picked = day ? day.slots.filter((s) => selected.includes(s.mcSlotId)) : [];
-  const done = day ? day.slots.filter((s) => s.proof).length : 0;
+  const done = need.filter((s) => s.proof).length;
 
   const platforms = useMemo(() => [...new Set((day?.slots ?? []).map((s) => s.platform))], [day]);
   const groups = platforms
@@ -82,6 +177,7 @@ export function ProofPage() {
   }
 
   function toggle(s: ProofSlot) {
+    if (s.salaried) return; // Mc ประจำ ไม่ต้องแนบหลักฐาน
     if (selected.includes(s.mcSlotId)) return setSelected(selected.filter((x) => x !== s.mcSlotId));
     // ไลฟ์ 1 ครั้ง = 1 แพลตฟอร์ม เลือกคนละแพลตฟอร์ม = เริ่มเลือกใหม่
     if (picked.length && picked[0].platform !== s.platform) {
@@ -154,8 +250,8 @@ export function ProofPage() {
         {fmtDayLong.format(parseKey(date))}
         <DayBadge label={relLabel(date)} />
         {day?.slots.length ? (
-          <span className={cn("ml-auto text-xs font-medium", done === day.slots.length ? "text-success" : "text-muted-foreground")}>
-            มีหลักฐาน {done}/{day.slots.length} slot
+          <span className={cn("ml-auto text-xs font-medium", done === need.length ? "text-success" : "text-muted-foreground")}>
+            มีหลักฐาน {done}/{need.length} slot
           </span>
         ) : null}
       </h2>
@@ -189,14 +285,16 @@ export function ProofPage() {
                       key={s.mcSlotId}
                       className={cn("flex items-start gap-3 rounded-xl border bg-card p-3 shadow-card", on && "border-primary ring-1 ring-primary")}
                     >
-                      <Checkbox
-                        checked={on}
-                        onCheckedChange={() => toggle(s)}
-                        aria-label={`เลือก ${s.platform} ${s.start}–${s.end}`}
-                        className="mt-0.5 size-5"
-                      />
+                      {s.salaried ? <span aria-hidden className="mt-0.5 size-5 shrink-0" /> : (
+                        <Checkbox
+                          checked={on}
+                          onCheckedChange={() => toggle(s)}
+                          aria-label={`เลือก ${s.platform} ${s.start}–${s.end}`}
+                          className="mt-0.5 size-5"
+                        />
+                      )}
                       <div className="min-w-0 flex-1 text-sm">
-                        <button type="button" onClick={() => toggle(s)} className="text-left">
+                        <button type="button" onClick={() => toggle(s)} disabled={s.salaried} className="text-left disabled:cursor-default">
                           <span className="font-bold tabular-nums">{s.start}–{s.end}</span>
                           <span className="ml-2">{s.mcName || "—"}</span>
                           {day.all && s.adminName ? <span className="ml-2 text-muted-foreground">Admin {s.adminName}</span> : null}
@@ -223,7 +321,16 @@ export function ProofPage() {
                               </Button>
                             ) : null}
                           </div>
-                        ) : <div className="mt-1 text-xs font-semibold text-destructive">ยังไม่มีหลักฐาน</div>}
+                        ) : s.salaried ? <div className="mt-1 text-xs text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</div>
+                          : <div className="mt-1 text-xs font-semibold text-destructive">ยังไม่มีหลักฐาน</div>}
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                          {s.gmv ? (
+                            <span className="font-semibold tabular-nums">GMV {gmvText(s.gmv)}</span>
+                          ) : <span className="font-semibold text-warning-foreground">ยังไม่ได้กรอก GMV</span>}
+                          <Button variant="link" size="xs" disabled={busy} onClick={() => setGmvSlot(s)} className="h-auto p-0">
+                            {s.gmv ? "แก้ GMV" : "กรอก GMV"}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -247,6 +354,16 @@ export function ProofPage() {
             <Button size="lg" onClick={() => setUploadOpen(true)}>แนบหลักฐาน</Button>
           </div>
         </div>
+      ) : null}
+
+      {gmvSlot ? (
+        <GmvDialog
+          slot={gmvSlot}
+          onClose={(saved) => {
+            setGmvSlot(null);
+            if (saved) reload();
+          }}
+        />
       ) : null}
 
       {uploadOpen && picked.length ? (
@@ -351,6 +468,10 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
   const [end, setEnd] = useState(() => toInput(slots[slots.length - 1].endMs));
   const [busy, setBusy] = useState(false);
   const replacing = slots.filter((s) => s.proof).length;
+  // GMV ต่อ slot: กรอกไว้แล้ว = เริ่มจากค่าเดิม
+  const [gmv, setGmv] = useState<Record<number, GmvDraft>>(() => Object.fromEntries(slots.map((s) => [s.mcSlotId, draftOf(s)])));
+  const preview = previewGmv(slots, gmv);
+  const gmvError = [...preview.values()].find((g) => g.error);
 
   async function takeFile(file: File | null | undefined) {
     if (!file) return;
@@ -386,7 +507,7 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
   })();
 
   async function save() {
-    if (!image || invalid) return;
+    if (!image || invalid || gmvError) return;
     setBusy(true);
     try {
       const fd = new FormData();
@@ -394,6 +515,7 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
       fd.append("slotIds", JSON.stringify(slots.map((s) => s.mcSlotId)));
       fd.append("startedAt", start);
       fd.append("endedAt", end);
+      fd.append("gmv", JSON.stringify(slots.map((s) => ({ id: s.mcSlotId, ...gmv[s.mcSlotId] }))));
       const res = await fetch("/api/proofs", { method: "POST", body: fd });
       const json = await res.json().catch(() => null) as { ok?: boolean; message?: string } | null;
       if (!json?.ok) throw new Error(json?.message ?? `อัปโหลดไม่สำเร็จ (HTTP ${res.status})`);
@@ -438,15 +560,68 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
         <Notice variant={invalid ? "warning" : "info"}>
           {invalid || <>ไลฟ์จริง <strong>{spanText}</strong> · แก้ให้ตรงกับในรูป (ระบบใส่เวลาตาม slot ไว้ให้ก่อน)</>}
         </Notice>
+        <div className="space-y-2">
+          {slots.map((s, i) => (
+            <GmvField
+              key={s.mcSlotId}
+              slot={s}
+              draft={gmv[s.mcSlotId]}
+              result={preview.get(s.mcSlotId)}
+              before={beforeOf(slots, i, preview)}
+              disabled={busy}
+              showSlot={slots.length > 1}
+              onChange={(d) => setGmv({ ...gmv, [s.mcSlotId]: d })}
+            />
+          ))}
+        </div>
         {replacing ? (
           <Notice variant="warning">มี {replacing} slot ที่แนบหลักฐานไว้แล้ว จะถูกแทนที่ด้วยรูปนี้</Notice>
         ) : null}
       </DialogBody>
       <DialogActions>
         <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>
-        <Button size="lg" disabled={busy || !image || !!invalid} onClick={save}>
+        <Button size="lg" disabled={busy || !image || !!invalid || !!gmvError} onClick={save}>
           {busy ? "กำลังอัปโหลด..." : `บันทึกให้ ${slots.length} slot`}
         </Button>
+      </DialogActions>
+    </AppDialog>
+  );
+}
+
+/** กรอก / แก้ยอด GMV ของ slot (ไม่ต้องอัปรูป ใช้ได้ทุก slot รวม Mc ประจำ) */
+function GmvDialog({ slot, onClose }: { slot: ProofSlot; onClose: (saved: boolean) => void }) {
+  const toast = useToast();
+  const [draft, setDraft] = useState<GmvDraft>(() => draftOf(slot));
+  const [busy, setBusy] = useState(false);
+  const result = previewGmv([slot], { [slot.mcSlotId]: draft }).get(slot.mcSlotId);
+
+  async function save() {
+    if (result?.error) return;
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/proofs", { items: [{ id: slot.mcSlotId, ...draft }] }, "PATCH");
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onClose(true);
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppDialog
+      open
+      onClose={() => onClose(false)}
+      busy={busy}
+      title={slot.gmv ? "แก้ยอด GMV" : "กรอกยอด GMV"}
+      description={`${slot.platform} · ${slot.start}–${slot.end} ${slot.mcName}`}
+    >
+      <GmvField slot={slot} draft={draft} result={result} before={slot.gmvBefore} disabled={busy} showSlot={false} onChange={setDraft} />
+      <DialogActions>
+        <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>
+        <Button size="lg" disabled={busy || !!result?.error} onClick={save}>{busy ? "กำลังบันทึก..." : "บันทึก GMV"}</Button>
       </DialogActions>
     </AppDialog>
   );

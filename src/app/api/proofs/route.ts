@@ -2,7 +2,9 @@ import { after } from "next/server";
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
 import { syncProofsToDrive, trashUnusedDriveFiles } from "@/lib/drive";
-import { PROOF_BUCKET, canSeeAll, canUseProofs, proofSlots, removeOrphanProofs } from "@/lib/proofs";
+import {
+  PROOF_BUCKET, canSeeAll, canUseProofs, parseGmvEntries, proofSlots, removeOrphanProofs, resolveGmv, saveGmv,
+} from "@/lib/proofs";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // หลักฐานไลฟ์ (หน้า "หลักฐานไลฟ์") — Admin ของ slot นั้น + Owner ที่มีสิทธิ์ฝั่ง Mc
@@ -10,6 +12,8 @@ import { createAdminClient } from "@/lib/supabase/server";
 //          ?month=YYYY-MM    จำนวน slot / ที่มีหลักฐานแล้ว รายวัน (ถึงวันนี้)
 //   POST   form-data: file (รูป), slotIds (JSON), startedAt / endedAt ("YYYY-MM-DDTHH:mm:ss" เวลาไทย)
 //          รูปเดียวผูกได้หลาย slot (ไลฟ์ครั้งเดียวคลุมหลาย slot) slot ที่มีหลักฐานอยู่แล้วจะถูกแทนที่
+//          gmv (JSON ไม่บังคับ): [{ id, input: "205564", auto: true }] auto = หักยอดสะสมของ slot ก่อนหน้าให้
+//   PATCH  { items: [{ id, input, auto }] }  กรอก / แก้ยอด GMV ของ slot (ทุก slot รวม Mc ประจำ ไม่ต้องมีหลักฐาน)
 //   DELETE { id }  ลบหลักฐาน (คนที่อัปโหลด หรือ Owner ฝั่ง Mc)
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -40,6 +44,7 @@ export async function GET(request: Request) {
   const days = new Map<string, { date: string; total: number; done: number }>();
   if (first <= until) {
     for (const s of await proofSlots(r.me, first, until)) {
+      if (s.salaried) continue; // Mc ประจำ ไม่ต้องแนบหลักฐาน ไม่นับว่าขาด
       const d = days.get(s.date) ?? { date: s.date, total: 0, done: 0 };
       d.total++;
       if (s.proof) d.done++;
@@ -85,6 +90,14 @@ export async function POST(request: Request) {
   const picked = (await proofSlots(r.me, dates[0], dates[dates.length - 1])).filter((s) => ids.includes(s.mcSlotId));
   if (picked.length !== ids.length) return fail("มี slot ที่คุณแนบหลักฐานไม่ได้ (ไม่ใช่ slot ของคุณ หรือถูกยกเลิกแล้ว)", 403);
   if (new Set(picked.map((s) => s.platform)).size > 1) return fail("เลือกได้ทีละแพลตฟอร์ม (ไลฟ์ 1 ครั้ง = 1 แพลตฟอร์ม)");
+  if (picked.some((s) => s.salaried)) return fail("slot ของ Mc ประจำไม่ต้องแนบหลักฐาน (กรอก GMV ได้จากปุ่ม \"กรอก GMV\")");
+
+  // ยอด GMV ต่อ slot (ไม่บังคับ) คิดใหม่ฝั่ง server
+  let gmvRaw: unknown = [];
+  try { gmvRaw = JSON.parse(String(form.get("gmv") ?? "[]")); } catch {}
+  const gmv = await resolveGmv(db, parseGmvEntries(gmvRaw).filter((e) => ids.includes(e.id)));
+  const gmvError = gmv.find((g) => g.error);
+  if (gmvError) return fail(`GMV ${picked.find((s) => s.mcSlotId === gmvError.id)?.start ?? ""}: ${gmvError.error}`);
 
   const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
   const path = `${dates[0].slice(0, 7)}/${dates[0]}-${crypto.randomUUID()}.${ext}`;
@@ -113,6 +126,8 @@ export async function POST(request: Request) {
     await db.storage.from(PROOF_BUCKET).remove([path]);
     return fail("ผูกหลักฐานกับ slot ไม่สำเร็จ: " + linkErr.message, 500);
   }
+  // GMV เก็บที่ slot (หลักฐานบันทึกแล้ว ถ้า GMV พลาดแจ้งให้กรอกใหม่ทีหลังได้)
+  const gmvFail = gmv.some((g) => g.gmv !== null || g.input) ? await saveGmv(db, gmv) : "";
 
   // หลักฐานเก่าที่ถูกแทนที่จนไม่เหลือ slot ไหนแล้ว -> ลบทิ้ง (รวมไฟล์รูป)
   const replaced = [...new Set(picked.map((s) => s.proof?.id).filter((x): x is number => !!x))];
@@ -129,7 +144,40 @@ export async function POST(request: Request) {
     email: r.me.email, role: r.me.owner?.mc ? "Owner" : "Admin", name, action: replaced.length ? "แนบหลักฐานไลฟ์ (แทนที่)" : "แนบหลักฐานไลฟ์",
     slot_table: "mc_slots", slot_id: s.mcSlotId, platform: s.platform, live_date: s.date, time_range: `${s.start}-${s.end}`, result: "สำเร็จ",
   })));
-  return ok({ message: `แนบหลักฐานให้ ${ids.length} slot แล้ว` });
+  return ok({
+    message: gmvFail
+      ? `แนบหลักฐานให้ ${ids.length} slot แล้ว แต่บันทึก GMV ไม่สำเร็จ: ${gmvFail}`
+      : `แนบหลักฐานให้ ${ids.length} slot แล้ว`,
+  });
+}
+
+/** กรอก / แก้ยอด GMV ของ slot (ไม่ต้องอัปรูป) body: { items: [{ id, input, auto }] } */
+export async function PATCH(request: Request) {
+  const r = await requireProofUser();
+  if ("res" in r) return r.res;
+  const body = await request.json().catch(() => null);
+  const entries = parseGmvEntries(body?.items).slice(0, MAX_SLOTS);
+  if (!entries.length) return fail("ยังไม่ได้เลือก slot");
+
+  const db = createAdminClient();
+  const { data: rows, error } = await db.from("mc_slots").select("id, live_date").in("id", entries.map((e) => e.id));
+  if (error) return fail(error.message, 500);
+  if (!rows || rows.length !== entries.length) return fail("ไม่พบ slot บางรายการ ลองรีเฟรชหน้า");
+  const dates = rows.map((x) => String(x.live_date)).sort();
+  const visible = (await proofSlots(r.me, dates[0], dates[dates.length - 1])).filter((s) => entries.some((e) => e.id === s.mcSlotId));
+  if (visible.length !== entries.length) return fail("มี slot ที่คุณแก้ GMV ไม่ได้ (ไม่ใช่ slot ของคุณ หรือถูกยกเลิกแล้ว)", 403);
+
+  const gmv = await resolveGmv(db, entries);
+  const bad = gmv.find((g) => g.error);
+  if (bad) return fail(`GMV ${visible.find((s) => s.mcSlotId === bad.id)?.start ?? ""}: ${bad.error}`);
+  const saveErr = await saveGmv(db, gmv);
+  if (saveErr) return fail(saveErr, 500);
+  const name = r.me.owner?.name || r.me.admin?.name || r.me.email;
+  await db.from("booking_logs").insert(visible.map((s) => ({
+    email: r.me.email, role: r.me.owner ? "Owner" : "Admin", name, action: `แก้ GMV: ${gmv.find((g) => g.id === s.mcSlotId)?.gmv ?? "ล้าง"}`,
+    slot_table: "mc_slots", slot_id: s.mcSlotId, platform: s.platform, live_date: s.date, time_range: `${s.start}-${s.end}`, result: "สำเร็จ",
+  })));
+  return ok({ message: `บันทึก GMV ${gmv.length} slot แล้ว` });
 }
 
 export async function DELETE(request: Request) {

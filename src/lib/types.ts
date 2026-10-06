@@ -1,3 +1,5 @@
+import type { GmvBefore } from "@/lib/gmv";
+
 export type Role = "mc" | "admin" | "owner";
 
 export type Me = {
@@ -84,6 +86,7 @@ export type OwnerDetail = {
   bonusFromProof: boolean;
   proof: ProofInfo | null; // หลักฐานไลฟ์ (รูปแดชบอร์ด + เวลาจริง) ของ slot นี้
   noProof: boolean; // Mc ของ slot นี้เป็น Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน
+  gmv: number | null; // ยอด GMV ของ slot นี้ (ฝั่ง Admin ใช้ยอดเดียวกับ slot ของ Mc) ว่าง = ยังไม่ได้กรอก
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */
@@ -91,6 +94,13 @@ export type ProofInfo = {
   id: number; startedAt: string; endedAt: string; by: string;
   driveUrl: string | null; // สำเนาใน Google Drive (โฟลเดอร์ปี > เดือน > Mc) ว่าง = ยังไม่ได้อัป
   driveFolderUrl: string | null; // โฟลเดอร์ของ Mc เดือนนั้นใน Drive (รวมหลักฐานทั้งเดือนของคนนั้น)
+};
+
+/** ยอด GMV ของ slot (เก็บที่ mc_slots กรอกได้ทุก slot ไม่ต้องมีหลักฐาน) */
+export type SlotGmv = {
+  value: number; // ยอดของ slot นี้ (หักยอดของ slot ก่อนหน้าแล้ว)
+  input: string | null; // ที่พิมพ์ไว้ (บวก/ลบกันได้)
+  minus: number | null; // ยอดสะสมของ slot ก่อนหน้าที่ระบบหักให้อัตโนมัติ
 };
 
 /** slot ในหน้าหลักฐานไลฟ์ (slot ของ Mc ที่มีคนไลฟ์และไม่ถูกยกเลิก) */
@@ -105,6 +115,11 @@ export type ProofSlot = {
   mcName: string;
   adminName: string;
   proof: (ProofInfo & { canDelete: boolean }) | null;
+  /** Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน แต่กรอก GMV ได้ */
+  salaried: boolean;
+  gmv: SlotGmv | null;
+  /** ยอด GMV สะสมของ slot ก่อนหน้าที่ไลฟ์ต่อกันมา (แพลตฟอร์มเดียวกัน เวลาต่อกัน) ใช้หักให้อัตโนมัติ */
+  gmvBefore: GmvBefore | null;
 };
 
 /**
