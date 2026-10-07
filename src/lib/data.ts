@@ -1,5 +1,4 @@
 import "server-only";
-import { AGENCY_ILIKE } from "@/lib/agency";
 import { gmvCoverage } from "@/lib/gmv";
 import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -175,8 +174,7 @@ export async function openMcSlots(settings: Settings, personId?: number | null) 
   const r = bookingRange(settings, "mc", personId);
   if (r.empty) return [];
   const rows = await fetchAll<SlotRow>((from, to) => {
-    // slot ของ Agency (หมายเหตุ "Agency ...") Mc ของเราจองไม่ได้
-    let q = db.from("mc_slots").select(SLOT_COLS).is("mc_id", null).not("remark", "ilike", AGENCY_ILIKE).gte("live_date", r.from);
+    let q = db.from("mc_slots").select(SLOT_COLS).is("mc_id", null).gte("live_date", r.from);
     if (r.to) q = q.lte("live_date", r.to);
     return q.order("starts_at").range(from, to);
   });

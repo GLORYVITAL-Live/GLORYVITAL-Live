@@ -1,5 +1,4 @@
 import { after } from "next/server";
-import { AGENCY_ILIKE } from "@/lib/agency";
 import { fail, ok, requireMe } from "@/lib/api";
 import { processSyncJobs } from "@/lib/sync";
 import { bookingRange, getSettings, personPeriod, writeLogs } from "@/lib/data";
@@ -45,14 +44,6 @@ export async function POST(request: Request) {
     blocked = (data ?? [])
       .filter((s) => range.empty || s.live_date < range.from || (range.to !== null && s.live_date > range.to))
       .map((s) => ({ id: Number(s.id), success: false, message }));
-  }
-  // slot ของ Agency (หมายเหตุ "Agency ...") Mc ของเราจองไม่ได้
-  if (role === "mc") {
-    const { data, error } = await db.from("mc_slots").select("id").in("id", ids).ilike("remark", AGENCY_ILIKE);
-    if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
-    for (const s of data ?? []) {
-      if (!blocked.some((b) => b.id === Number(s.id))) blocked.push({ id: Number(s.id), success: false, message: "slot นี้เป็นของ Agency จองไม่ได้" });
-    }
   }
   const allowed = ids.filter((id) => !blocked.some((b) => b.id === id));
 

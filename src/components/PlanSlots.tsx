@@ -25,29 +25,34 @@ import { cn } from "@/lib/utils";
 // ---------- ข้อมูล ----------
 
 type Side = { id: number; name: string; cancelled: boolean; free: boolean };
-/** agency = slot ของ Agency (เช่น "TDH" ไลฟ์ผ่านช่อง GLORY MALL) null = ของเรา */
 type Existing = {
-  key: string; date: string; platform: string; start: string; end: string; campaign: string; agency: string | null;
+  key: string; date: string; platform: string; start: string; end: string; campaign: string;
   mc: Side | null; admin: (Side & { extra: boolean }) | null;
 };
-type PlanData = { month: string; slots: Existing[]; platforms: string[]; campaigns: string[] };
+/** แพลนของ Agency (ตาราง agency_slots ไม่ลงชีต) */
+type AgencySlot = { id: number; agency: string; platform: string; date: string; start: string; end: string };
+type PlanData = {
+  month: string; slots: Existing[]; platforms: string[]; campaigns: string[];
+  agencySlots: AgencySlot[]; agencyReady: boolean; // agencyReady = false: ยังไม่ได้รัน SQL ตาราง agency_slots
+};
+/** agency = แพลนของ Agency (เช่น "TDH") ไม่ระบุ / null = slot ของเรา (ลงชีต) */
 type NewSlot = { date: string; platform: string; start: string; end: string; campaign: string; agency?: string | null };
 /** ช่วงวันที่ตั้ง Campaign ไว้ (slot ที่ติ๊กเพิ่มทีหลังในช่วงนี้ได้ Campaign นี้อัตโนมัติ) platform = ALL = ทุกแพลตฟอร์ม */
 type CampaignRange = { from: string; to: string; platform: string; campaign: string };
 /**
- * ร่างของเดือน: slot ใหม่ / Campaign ที่แก้ของ slot เดิม (ตาม key) / slot เดิมที่จะลบ (key) / ช่วง Campaign
- *   agency = slot เดิมที่ย้ายเจ้าของ (key -> ชื่อ Agency / null = ของเรา)
+ * ร่างของเดือน: slot ใหม่ (ของเรา + Agency) / Campaign ที่แก้ของ slot เดิม (ตาม key) / slot เดิมที่จะลบ (key)
+ *   / ช่วง Campaign / แพลน Agency เดิมที่จะลบ (key ของ Agency)
  */
-type Draft = { add: NewSlot[]; campaign: Record<string, string>; del: string[]; ranges: CampaignRange[]; agency: Record<string, string | null> };
+type Draft = { add: NewSlot[]; campaign: Record<string, string>; del: string[]; ranges: CampaignRange[]; agencyDel: string[] };
 /** กลุ่มคอลัมน์ติ๊ก: แพลตฟอร์ม (+ Agency ที่ไลฟ์ผ่านช่องนั้น) */
 type Column = { platform: string; agency?: string; times: { start: string; end: string }[] };
-/** slot หนึ่งแถวในหน้า (ทั้งที่มีอยู่แล้วและร่างใหม่) */
+/** slot หนึ่งแถวในหน้า (ทั้งที่มีอยู่แล้วและร่างใหม่) agency = แพลนของ Agency (agencyId = มีในระบบแล้ว) */
 type Item = {
   key: string; date: string; platform: string; start: string; end: string; campaign: string; agency: string | null;
-  existing: Existing | null; deleting: boolean; campaignChanged: boolean; agencyChanged: boolean; overlap: boolean;
+  existing: Existing | null; agencyId: number | null; deleting: boolean; campaignChanged: boolean; overlap: boolean;
 };
 
-const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agency: {} };
+const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agencyDel: [] };
 const DRAFT_KEY = "glory_plan_draft_";
 const MONTH_KEY = "glory_plan_month";
 const VIEW_KEY = "glory_plan_view";
@@ -56,6 +61,10 @@ const ALL = "__all";
 const OURS = "__ours"; // ToggleGroup ใช้ค่าว่างไม่ได้ จึงแทน "ของเรา" ด้วยค่านี้
 
 const keyOf = (s: { platform: string; date: string; start: string; end: string }) => `${s.platform}|${s.date}|${s.start}|${s.end}`;
+/** key ของแพลน Agency (แยกจาก slot ของเราที่เวลาเดียวกัน) */
+const agencyKey = (agency: string, k: string) => `@${agency}|${k}`;
+/** key ของช่องติ๊ก: ของเรา = keyOf / Agency = agencyKey */
+const ownKey = (k: string, agency: string | null | undefined) => (agency ? agencyKey(agency, k) : k);
 const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 const fmtMin = (m: number) => `${String(Math.floor((((m % 1440) + 1440) % 1440) / 60)).padStart(2, "0")}:${String(((m % 60) + 60) % 60).padStart(2, "0")}`;
 /** ความยาว slot เป็นนาที (เวลาจบก่อนเวลาเริ่ม = ข้ามเที่ยงคืน) */
@@ -103,7 +112,7 @@ function parseDraft(raw: string | null): Draft | null {
       campaign: v?.campaign && typeof v.campaign === "object" ? v.campaign : {},
       del: Array.isArray(v?.del) ? v.del : [],
       ranges: Array.isArray(v?.ranges) ? v.ranges : [],
-      agency: v?.agency && typeof v.agency === "object" ? v.agency : {},
+      agencyDel: Array.isArray(v?.agencyDel) ? v.agencyDel : [],
     };
   } catch {
     return null;
@@ -155,32 +164,44 @@ export function PlanSlots() {
 
   const plan = data?.month === month ? data : null;
   const existingMap = useMemo(() => new Map((plan?.slots ?? []).map((s) => [s.key, s])), [plan]);
+  const agencyMap = useMemo(() => new Map((plan?.agencySlots ?? []).map((s) => [agencyKey(s.agency, keyOf(s)), s])), [plan]);
 
-  // รวม slot เดิม + ร่างใหม่ เรียงตามชีต (วัน > แพลตฟอร์ม > เวลา) และหาเวลาที่ทับกันในแพลตฟอร์มเดียวกัน
+  // รวม slot เดิม + ร่างใหม่ (ของเรา + แพลน Agency) เรียงตามชีต (วัน > แพลตฟอร์ม > เวลา) และหาเวลาที่ทับกันในแพลตฟอร์มเดียวกัน
   const items = useMemo<Item[]>(() => {
     if (!plan) return [];
     const del = new Set(draft.del);
+    const agencyDel = new Set(draft.agencyDel);
     const list: Item[] = [
       ...plan.slots.map((s) => {
         const campaign = draft.campaign[s.key] ?? s.campaign;
-        const agency = s.key in draft.agency ? draft.agency[s.key] : s.agency;
         return {
-          key: s.key, date: s.date, platform: s.platform, start: s.start, end: s.end, campaign, agency,
-          existing: s, deleting: del.has(s.key), campaignChanged: !!s.mc && campaign !== s.campaign,
-          agencyChanged: !!s.mc && agency !== s.agency, overlap: false,
+          key: s.key, date: s.date, platform: s.platform, start: s.start, end: s.end, campaign, agency: null,
+          existing: s, agencyId: null, deleting: del.has(s.key), campaignChanged: !!s.mc && campaign !== s.campaign, overlap: false,
         };
       }),
-      ...draft.add.filter((s) => s.date.startsWith(month) && !existingMap.has(keyOf(s))).map((s) => ({
-        ...s, agency: s.agency ?? null, key: keyOf(s), existing: null, deleting: false, campaignChanged: false, agencyChanged: false, overlap: false,
-      })),
+      ...plan.agencySlots.map((s) => {
+        const key = agencyKey(s.agency, keyOf(s));
+        return {
+          key, date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: "", agency: s.agency,
+          existing: null, agencyId: s.id, deleting: agencyDel.has(key), campaignChanged: false, overlap: false,
+        };
+      }),
+      ...draft.add.filter((s) => s.date.startsWith(month) && (s.agency ? !agencyMap.has(agencyKey(s.agency, keyOf(s))) : !existingMap.has(keyOf(s))))
+        .map((s) => ({
+          ...s, campaign: s.agency ? "" : s.campaign, agency: s.agency ?? null, key: ownKey(keyOf(s), s.agency),
+          existing: null, agencyId: null, deleting: false, campaignChanged: false, overlap: false,
+        })),
     ].sort((a, b) => a.date.localeCompare(b.date) || a.platform.localeCompare(b.platform) || dayOrder(a.start) - dayOrder(b.start));
+    // เวลาทับกันในช่องเดียวกัน (รวมของเรากับ Agency เพราะไลฟ์ช่องเดียวกัน)
     const live = list.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
     for (let i = 1; i < live.length; i++) {
       const a = live[i - 1], b = live[i];
       if (a.date === b.date && a.platform === b.platform && dayOrder(b.start) < dayOrder(a.start) + lenOf(a)) a.overlap = b.overlap = true;
     }
     return list;
-  }, [plan, draft, month, existingMap]);
+  }, [plan, draft, month, existingMap, agencyMap]);
+  /** slot ของเรา (ลงชีต) — ใช้กับแบบชีต / Campaign / แก้รายวัน */
+  const ours = useMemo(() => items.filter((x) => !x.agency), [items]);
 
   // คอลัมน์ติ๊ก: ช่องหลัก (+ ช่วงเวลาอื่นที่มีในเดือนนี้) แล้วต่อด้วยแพลตฟอร์มอื่นที่มี slot
   const columns = useMemo<Column[]>(() => {
@@ -206,44 +227,134 @@ export function PlanSlots() {
 
   // สิ่งที่จะบันทึก
   const changes = useMemo(() => {
-    const create = items.filter((x) => !x.existing);
-    const campaigns = items.filter((x) => x.existing?.mc && x.campaignChanged && !x.deleting)
+    const create = ours.filter((x) => !x.existing);
+    const campaigns = ours.filter((x) => x.existing?.mc && x.campaignChanged && !x.deleting)
       .map((x) => ({ mcId: x.existing!.mc!.id, campaign: x.campaign }));
-    const deletes = items.filter((x) => x.deleting && x.existing && canDelete(x.existing)).map((x) => x.existing!);
-    const agencies = items.filter((x) => x.existing?.mc && x.agencyChanged && !x.deleting)
-      .map((x) => ({ mcId: x.existing!.mc!.id, agency: x.agency }));
-    return { create, campaigns, deletes, agencies, total: create.length + campaigns.length + deletes.length + agencies.length };
-  }, [items]);
+    const deletes = ours.filter((x) => x.deleting && x.existing && canDelete(x.existing)).map((x) => x.existing!);
+    const agencyCreate = items.filter((x) => x.agency && !x.agencyId);
+    const agencyDelete = items.filter((x) => x.agencyId && x.deleting).map((x) => x.agencyId!);
+    return {
+      create, campaigns, deletes, agencyCreate, agencyDelete,
+      total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length,
+    };
+  }, [items, ours]);
 
-  // เพิ่ม slot ลงร่าง (ข้ามที่มีอยู่แล้ว / ซ้ำในร่าง ถ้าเป็น slot เดิมที่กดลบไว้ = ยกเลิกการลบ)
+  // ---------- ติ๊ก ----------
+  // ช่องเดียวกัน (แพลตฟอร์ม + วัน + เวลา) เป็นของเรา (agency = null) หรือของ Agency อย่างใดอย่างหนึ่ง
+
+  /** ช่อง k ของเจ้าของ agency ติ๊กอยู่ในร่าง d หรือไม่ */
+  function isOn(d: Draft, k: string, agency: string | null) {
+    if (agency) {
+      const ak = agencyKey(agency, k);
+      if (agencyMap.has(ak)) return !d.agencyDel.includes(ak);
+      return d.add.some((s) => s.agency === agency && keyOf(s) === k);
+    }
+    if (existingMap.has(k)) return !d.del.includes(k);
+    return d.add.some((s) => !s.agency && keyOf(s) === k);
+  }
+  /** เจ้าของอื่นที่ติ๊กช่อง k อยู่ (undefined = ไม่มี) ของเรา = null */
+  function otherOwner(d: Draft, k: string, agency: string | null, platform: string): string | null | undefined {
+    const owners = [null, ...CHANNELS.filter((c) => c.platform === platform && c.agency).map((c) => c.agency!)];
+    for (const a of [...owners, ...d.add.filter((s) => s.agency && keyOf(s) === k).map((s) => s.agency!)]) {
+      if (a !== agency && isOn(d, k, a)) return a;
+    }
+    return undefined;
+  }
+  /** ติ๊ก: ร่างใหม่ / ยกเลิกการลบ slot เดิม */
+  function withOn(d: Draft, slot: Omit<NewSlot, "campaign">, agency: string | null, campaign?: string): Draft {
+    const k = keyOf(slot);
+    if (agency) {
+      const ak = agencyKey(agency, k);
+      if (agencyMap.has(ak)) return { ...d, agencyDel: d.agencyDel.filter((x) => x !== ak) };
+      return { ...d, add: [...d.add, { ...slot, agency, campaign: "" }] };
+    }
+    if (existingMap.has(k)) return { ...d, del: d.del.filter((x) => x !== k) };
+    return { ...d, add: [...d.add, { ...slot, agency: null, campaign: campaign ?? campaignFor(slot.date, slot.platform) }] };
+  }
+  /** เอาติ๊กออก: ร่างใหม่ = ลบจากร่าง / ของเดิม = ลบตอนบันทึก */
+  function withOff(d: Draft, k: string, agency: string | null): Draft {
+    if (agency) {
+      const ak = agencyKey(agency, k);
+      if (agencyMap.has(ak)) return { ...d, agencyDel: d.agencyDel.includes(ak) ? d.agencyDel : [...d.agencyDel, ak] };
+      return { ...d, add: d.add.filter((s) => !(s.agency === agency && keyOf(s) === k)) };
+    }
+    if (existingMap.has(k)) return { ...d, del: d.del.includes(k) ? d.del : [...d.del, k] };
+    return { ...d, add: d.add.filter((s) => !(!s.agency && keyOf(s) === k)) };
+  }
+  /** slot ของเราที่มีคนจองแล้ว เอาออกไม่ได้ */
+  const locked = (k: string, agency: string | null) => {
+    const ex = agency ? undefined : existingMap.get(k);
+    return !!ex && !canDelete(ex);
+  };
+  const lockedMsg = "slot นี้มีคนจองแล้ว แก้ไม่ได้ (เอาคนออกที่หน้าจัดการ slot ก่อน)";
+  const ownerName = (agency: string | null | undefined) => (agency ? `Agency ${agency}` : "ของเรา");
+
+  /** ติ๊ก / เอาติ๊กออก 1 ช่อง ถ้าอีกฝั่งติ๊กเวลานี้อยู่ = ย้ายมาฝั่งนี้ (เอาออกจากอีกฝั่ง) */
+  function toggleCell(date: string, platform: string, t: { start: string; end: string }, agency: string | null = null) {
+    const slot = { date, platform, start: t.start, end: t.end };
+    const k = keyOf(slot);
+    if (isOn(draft, k, agency)) {
+      if (locked(k, agency)) { toast(lockedMsg, "error"); return; }
+      update((d) => withOff(d, k, agency));
+      return;
+    }
+    const other = otherOwner(draft, k, agency, platform);
+    if (other !== undefined) {
+      if (locked(k, other)) { toast(`เวลานี้มี slot ${ownerName(other)}ที่มีคนจองแล้ว ย้ายไม่ได้`, "error"); return; }
+      update((d) => withOn(withOff(d, k, other), slot, agency));
+      toast(`ย้าย ${platform} ${t.start}–${t.end} จาก${ownerName(other)}เป็น${ownerName(agency)}`);
+      return;
+    }
+    update((d) => withOn(d, slot, agency));
+  }
+
+  /** กดหัวคอลัมน์: ติ๊กเวลานี้ทุกวัน (ตั้งแต่วันนี้) ถ้าติ๊กครบแล้ว = เอาติ๊กออกทั้งหมด (slot ที่มีคนจอง / เป็นของอีกฝั่ง คงไว้) */
+  function toggleColumn(platform: string, t: { start: string; end: string }, agency: string | null = null) {
+    const today = todayKey();
+    const slots = daysOf(month).filter((d) => d >= today).map((date) => ({ date, platform, start: t.start, end: t.end }));
+    if (!slots.length) { toast("เดือนนี้ผ่านไปแล้ว", "error"); return; }
+    const allOn = slots.every((s) => isOn(draft, keyOf(s), agency));
+    let kept = 0;
+    let next = draft;
+    for (const s of slots) {
+      const k = keyOf(s);
+      if (allOn) {
+        if (locked(k, agency)) kept++;
+        else next = withOff(next, k, agency);
+      } else if (!isOn(next, k, agency)) {
+        if (otherOwner(next, k, agency, platform) !== undefined) kept++; // เป็นของอีกฝั่งอยู่แล้ว ไม่ย้ายให้ทั้งคอลัมน์
+        else next = withOn(next, s, agency);
+      }
+    }
+    const result = next;
+    update(() => result);
+    toast(`${allOn ? "เอาติ๊กออก" : "ติ๊ก"} ${agency ? `Agency ${agency} ` : ""}${platform} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
+      + (kept ? ` (คงไว้ ${kept} slot ที่มีคนจองแล้ว / เป็นของอีกฝั่ง)` : ""));
+  }
+
+  // เพิ่ม slot ลงร่าง (ข้ามที่มีอยู่แล้ว / เวลาที่อีกฝั่งใช้อยู่ ถ้าเป็นของเดิมที่กดลบไว้ = ยกเลิกการลบ)
   function addSlots(list: NewSlot[]) {
-    const del = new Set(draft.del);
-    const taken = new Set(draft.add.map(keyOf));
-    const add = [...draft.add];
-    const undel = new Set<string>();
+    let next = draft;
     let added = 0, skipped = 0;
     for (const s of list) {
       const k = keyOf(s);
-      if (existingMap.has(k)) {
-        if (del.has(k)) { undel.add(k); added++; } else skipped++;
-        continue;
-      }
-      if (taken.has(k)) { skipped++; continue; }
-      taken.add(k);
-      add.push(s);
+      const agency = s.agency ?? null;
+      if (isOn(next, k, agency) || otherOwner(next, k, agency, s.platform) !== undefined) { skipped++; continue; }
+      next = withOn(next, s, agency, s.campaign);
       added++;
     }
-    update((d) => ({ ...d, add, del: d.del.filter((k) => !undel.has(k)) }));
+    const result = next;
+    update(() => result);
     return { added, skipped };
   }
   const report = ({ added, skipped }: { added: number; skipped: number }) =>
     toast(added ? `เพิ่มลงร่าง ${added} slot${skipped ? ` (ข้าม ${skipped} ที่มีอยู่แล้ว)` : ""}` : "ไม่มี slot ใหม่ (มีอยู่แล้วทั้งหมด)");
 
-  const removeNew = (key: string) => update((d) => ({ ...d, add: d.add.filter((s) => keyOf(s) !== key) }));
+  const removeNew = (key: string) => update((d) => ({ ...d, add: d.add.filter((s) => s.agency || keyOf(s) !== key) }));
   const toggleDelete = (key: string) =>
     update((d) => ({ ...d, del: d.del.includes(key) ? d.del.filter((k) => k !== key) : [...d.del, key] }));
 
-  /** ตั้ง Campaign ให้หลาย slot (ร่างใหม่ = แก้ในร่าง / slot เดิม = จดว่าจะแก้) */
+  /** ตั้ง Campaign ให้หลาย slot ของเรา (ร่างใหม่ = แก้ในร่าง / slot เดิม = จดว่าจะแก้) */
   const setCampaign = (keys: string[], campaign: string) => update(withCampaign(keys, campaign));
   function withCampaign(keys: string[], campaign: string) {
     const want = new Set(keys);
@@ -255,13 +366,13 @@ export function PlanSlots() {
         if (campaign === s.campaign) delete next[k];
         else next[k] = campaign;
       }
-      return { ...d, add: d.add.map((s) => (want.has(keyOf(s)) ? { ...s, campaign } : s)), campaign: next };
+      return { ...d, add: d.add.map((s) => (!s.agency && want.has(keyOf(s)) ? { ...s, campaign } : s)), campaign: next };
     };
   }
 
   /** ตั้ง Campaign ทั้งช่วงวัน: slot ที่มีตอนนี้ + จำช่วงไว้ให้ slot ที่ติ๊กเพิ่มทีหลัง (ว่าง = ล้าง) */
   function applyRange(r: CampaignRange) {
-    const keys = items.filter((x) => x.date >= r.from && x.date <= r.to && (r.platform === ALL || x.platform === r.platform)
+    const keys = ours.filter((x) => x.date >= r.from && x.date <= r.to && (r.platform === ALL || x.platform === r.platform)
       && !x.deleting && (!x.existing || x.existing.mc)).map((x) => x.key);
     update((d) => {
       const n = withCampaign(keys, r.campaign)(d);
@@ -272,80 +383,6 @@ export function PlanSlots() {
   }
   const removeRange = (i: number) => update((d) => ({ ...d, ranges: d.ranges.filter((_, j) => j !== i) }));
 
-  // ---------- ติ๊ก ----------
-  // แต่ละ slot (แพลตฟอร์ม + วัน + เวลา) มีได้ครั้งเดียว เป็นของเรา (agency = null) หรือของ Agency อย่างใดอย่างหนึ่ง
-
-  /** สถานะของ slot ในร่าง d: ไม่มี = null */
-  function stateOf(d: Draft, k: string): { agency: string | null } | null {
-    const ex = existingMap.get(k);
-    if (ex) return d.del.includes(k) ? null : { agency: k in d.agency ? d.agency[k] : ex.agency };
-    const s = d.add.find((x) => keyOf(x) === k);
-    return s ? { agency: s.agency ?? null } : null;
-  }
-  /** ตั้งเจ้าของ slot ในร่าง (slot เดิม = จดว่าจะย้าย / ร่างใหม่ = แก้ในร่าง) */
-  function withOwner(d: Draft, k: string, agency: string | null): Draft {
-    const ex = existingMap.get(k);
-    if (!ex) return { ...d, add: d.add.map((s) => (keyOf(s) === k ? { ...s, agency } : s)) };
-    const next = { ...d.agency };
-    if (agency === ex.agency) delete next[k];
-    else next[k] = agency;
-    return { ...d, agency: next };
-  }
-  /** ติ๊ก slot k ให้เจ้าของ agency (สร้างใหม่ / ยกเลิกการลบ / ย้ายเจ้าของ) */
-  function withOn(d: Draft, slot: Omit<NewSlot, "campaign">, agency: string | null): Draft {
-    const k = keyOf(slot);
-    if (existingMap.has(k)) return withOwner({ ...d, del: d.del.filter((x) => x !== k) }, k, agency);
-    if (d.add.some((s) => keyOf(s) === k)) return withOwner(d, k, agency);
-    return { ...d, add: [...d.add, { ...slot, agency, campaign: campaignFor(slot.date, slot.platform) }] };
-  }
-  /** เอาติ๊กออก: ร่างใหม่ = ลบจากร่าง / slot เดิม = ลบตอนบันทึก */
-  const withOff = (d: Draft, k: string): Draft =>
-    existingMap.has(k) ? { ...d, del: d.del.includes(k) ? d.del : [...d.del, k] } : { ...d, add: d.add.filter((s) => keyOf(s) !== k) };
-  const lockedMsg = "slot นี้มีคนจองแล้ว แก้ไม่ได้ (เอาคนออกที่หน้าจัดการ slot ก่อน)";
-  const ownerName = (agency: string | null | undefined) => (agency ? `Agency ${agency}` : "ของเรา");
-
-  /** ติ๊ก / เอาติ๊กออก 1 ช่อง: ช่องว่าง = เพิ่มร่าง, slot เดิม = ลบ (เฉพาะที่ยังว่าง), ช่องที่เป็นของอีกฝั่ง = ย้ายมา */
-  function toggleCell(date: string, platform: string, t: { start: string; end: string }, agency: string | null = null) {
-    const slot = { date, platform, start: t.start, end: t.end };
-    const k = keyOf(slot);
-    const ex = existingMap.get(k);
-    const st = stateOf(draft, k);
-    // เอาออก = ต้องว่างทั้ง Mc + Admin / ย้ายเจ้าของ = ช่อง Mc ต้องว่าง
-    if (ex && st && (st.agency === agency ? !canDelete(ex) : ex.mc ? !ex.mc.free : true)) { toast(lockedMsg, "error"); return; }
-    update((d) => (st && st.agency === agency ? withOff(d, k) : withOn(d, slot, agency)));
-    if (st && st.agency !== agency) toast(`ย้าย ${platform} ${t.start}–${t.end} เป็น${ownerName(agency)}`);
-  }
-
-  /** กดหัวคอลัมน์: ติ๊กเวลานี้ทุกวัน (ตั้งแต่วันนี้) ถ้าติ๊กครบแล้ว = เอาติ๊กออกทั้งหมด (slot ที่มีคนจอง / เป็นของอีกฝั่ง คงไว้) */
-  function toggleColumn(platform: string, t: { start: string; end: string }, agency: string | null = null) {
-    const today = todayKey();
-    const slots = daysOf(month).filter((d) => d >= today).map((date) => ({ date, platform, start: t.start, end: t.end }));
-    if (!slots.length) { toast("เดือนนี้ผ่านไปแล้ว", "error"); return; }
-    const allOn = slots.every((s) => {
-      const st = stateOf(draft, keyOf(s));
-      return !!st && st.agency === agency;
-    });
-    let kept = 0;
-    let next = draft;
-    for (const s of slots) {
-      const k = keyOf(s);
-      const ex = existingMap.get(k);
-      const st = stateOf(next, k);
-      if (allOn) {
-        if (ex && !canDelete(ex)) kept++;
-        else next = withOff(next, k);
-      } else if (!st) {
-        next = withOn(next, s, agency);
-      } else if (st.agency !== agency) {
-        kept++; // เป็นของอีกฝั่งอยู่แล้ว ไม่ย้ายให้ทั้งคอลัมน์
-      }
-    }
-    const result = next;
-    update(() => result);
-    toast(`${allOn ? "เอาติ๊กออก" : "ติ๊ก"} ${agency ? `Agency ${agency} ` : ""}${platform} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
-      + (kept ? ` (คงไว้ ${kept} slot ที่มีคนจองแล้ว / เป็นของอีกฝั่ง)` : ""));
-  }
-
   async function copyPrevMonth() {
     const prev = monthKey(-1, month);
     try {
@@ -354,8 +391,11 @@ export function PlanSlots() {
       // ช่วงเวลาที่ใช้บ่อยของแต่ละวันในสัปดาห์ (อย่างน้อยครึ่งหนึ่งของวันนั้นๆ ที่มีไลฟ์แพลตฟอร์มนั้น)
       const days = new Map<string, Set<string>>();
       const freq = new Map<string, { platform: string; wd: number; start: string; end: string; agency: string | null; n: number }>();
-      for (const s of res.slots) {
-        if (s.mc?.cancelled) continue;
+      const prevSlots = [
+        ...res.slots.filter((s) => !s.mc?.cancelled).map((s) => ({ ...s, agency: null as string | null })),
+        ...(res.agencySlots ?? []).map((s) => ({ ...s, agency: s.agency as string | null })),
+      ];
+      for (const s of prevSlots) {
         const wd = parseKey(s.date).getUTCDay();
         const pk = `${s.platform}|${wd}`;
         days.set(pk, (days.get(pk) ?? new Set()).add(s.date));
@@ -385,17 +425,17 @@ export function PlanSlots() {
   }
 
   async function save() {
-    const { create, campaigns, deletes, agencies } = changes;
-    const agencyNew = create.filter((s) => s.agency).length;
+    const { create, campaigns, deletes, agencyCreate, agencyDelete } = changes;
     const ok = await confirm({
-      title: `บันทึกแพลน ${monthLabel(month)} ลงชีต?`,
+      title: `บันทึกแพลน ${monthLabel(month)}?`,
       description: [
-        create.length ? `สร้าง ${create.length} slot${agencyNew ? ` (ของ Agency ${agencyNew})` : ""} เขียนทั้งแท็บ Deal Mc และ Admin เสริม` : "",
+        create.length ? `สร้าง ${create.length} slot (เขียนทั้งแท็บ Deal Mc และ Admin เสริม)` : "",
         campaigns.length ? `แก้ Campaign ${campaigns.length} slot` : "",
-        agencies.length ? `ย้ายเจ้าของ (ของเรา / Agency) ${agencies.length} slot` : "",
         deletes.length ? `ลบ ${deletes.length} slot ที่ยังว่าง` : "",
+        agencyCreate.length || agencyDelete.length
+          ? `แพลน Agency +${agencyCreate.length} / ลบ ${agencyDelete.length} slot (เก็บในเว็บ ไม่ลงชีต)` : "",
       ].filter(Boolean).join(" · "),
-      confirmText: "บันทึกลงชีต",
+      confirmText: "บันทึก",
     });
     if (!ok) return;
     setSaving(true);
@@ -408,16 +448,17 @@ export function PlanSlots() {
         update((d) => ({ ...d, del: [] }));
         if (res.kept) toast(`มี ${res.kept} slot ที่มีคนจองแล้ว ไม่ได้ลบ`, "error");
       }
-      if (create.length || campaigns.length || agencies.length) {
+      if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length) {
         const res = await api<{ created: number; skipped: number; updated: number }>("/api/plan", {
-          create: create.map((s) => ({ date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: s.campaign, agency: s.agency })),
+          create: create.map((s) => ({ date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: s.campaign })),
           campaigns,
-          agencies,
+          agencyCreate: agencyCreate.map((s) => ({ agency: s.agency, date: s.date, platform: s.platform, start: s.start, end: s.end })),
+          agencyDelete,
         });
         if (!res.ok) throw new Error(res.message);
       }
       update((d) => ({ ...EMPTY, ranges: d.ranges }));
-      toast("บันทึกแล้ว ระบบกำลังเขียนลงชีต (อาจใช้เวลา 1–2 นาที)");
+      toast(create.length || campaigns.length || deletes.length ? "บันทึกแล้ว ระบบกำลังเขียนลงชีต (อาจใช้เวลา 1–2 นาที)" : "บันทึกแพลน Agency แล้ว");
       reload();
     } catch (err) {
       toast((err as Error).message, "error");
@@ -432,8 +473,11 @@ export function PlanSlots() {
     update(() => EMPTY);
   }
 
-  const live = items.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
+  // สรุปบนตาราง: slot ของเรา (ลงชีต) แยกกับแพลน Agency
+  const live = ours.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
   const hours = live.reduce((h, x) => h + lenOf(x) / 60, 0);
+  const agencyLive = items.filter((x) => x.agency && !x.deleting);
+  const agencyNames = [...new Set(agencyLive.map((x) => x.agency!))];
   const days = daysOf(month);
   const overlaps = items.filter((x) => x.overlap).length;
 
@@ -474,7 +518,7 @@ export function PlanSlots() {
           <CampaignPanel
             key={`c-${month}`}
             month={month}
-            items={items}
+            items={ours}
             platforms={platforms}
             ranges={draft.ranges}
             onApply={applyRange}
@@ -494,7 +538,19 @@ export function PlanSlots() {
                 </span>
               );
             })}
+            {agencyNames.map((a) => {
+              const mine = agencyLive.filter((x) => x.agency === a);
+              return (
+                <span key={a} className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+                  <Badge className="bg-foreground text-[11px] font-semibold text-background">Agency {a}</Badge>
+                  {mine.length} slot · {num(mine.reduce((h, x) => h + lenOf(x) / 60, 0))} ชม. (ไม่ลงชีต)
+                </span>
+              );
+            })}
           </div>
+          {!plan.agencyReady ? (
+            <Notice variant="warning">ยังบันทึกแพลนของ Agency ไม่ได้ ต้องรัน SQL 20261017000000_plan_slots ใน Supabase ก่อน (ติ๊กดูในร่างได้)</Notice>
+          ) : null}
           <Legend tick={view === "tick"} />
           {overlaps ? (
             <Notice variant="warning">มี {overlaps} slot ที่เวลาทับกันในแพลตฟอร์มเดียวกัน (กรอบสีส้ม) ตรวจดูก่อนบันทึก</Notice>
@@ -504,13 +560,14 @@ export function PlanSlots() {
             <>
               <p className="mb-2 text-xs text-muted-foreground">
                 ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน
+                · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต
               </p>
               <TickView month={month} columns={columns} itemMap={itemMap} tagIndex={tagIndex} onToggle={toggleCell} onColumn={toggleColumn} onOpenDay={setOpenDay} />
             </>
-          ) : !items.length ? (
+          ) : !ours.length ? (
             <StateBox title={`${monthLabel(month)} ยังไม่มี slot`}>ติ๊กเลือก slot ในมุมมอง &quot;ติ๊กเลือก slot&quot; หรือใช้ &quot;เติมทั้งเดือน&quot; ด้านบน</StateBox>
           ) : (
-            <SheetView items={items} tagIndex={tagIndex} onOpenDay={setOpenDay} />
+            <SheetView items={ours} tagIndex={tagIndex} onOpenDay={setOpenDay} />
           )}
         </>
       )}
@@ -519,7 +576,7 @@ export function PlanSlots() {
         <DayDialog
           key={openDay}
           date={openDay}
-          items={items.filter((x) => x.date === openDay)}
+          items={ours.filter((x) => x.date === openDay)}
           platforms={platforms}
           tagIndex={tagIndex}
           onAdd={(s) => addSlots([s])}
@@ -540,14 +597,15 @@ export function PlanSlots() {
                 {[
                   changes.create.length ? `+${changes.create.length} slot ใหม่` : "",
                   changes.campaigns.length ? `แก้ Campaign ${changes.campaigns.length}` : "",
-                  changes.agencies.length ? `ย้ายเจ้าของ ${changes.agencies.length}` : "",
                   changes.deletes.length ? `ลบ ${changes.deletes.length}` : "",
-                ].filter(Boolean).join(" · ")} — ยังไม่ลงชีตจนกว่าจะกดบันทึก
+                  changes.agencyCreate.length || changes.agencyDelete.length
+                    ? `แพลน Agency +${changes.agencyCreate.length}${changes.agencyDelete.length ? ` / ลบ ${changes.agencyDelete.length}` : ""}` : "",
+                ].filter(Boolean).join(" · ")} — ยังไม่บันทึกจนกว่าจะกดบันทึก
               </span>
             </div>
             <Button variant="outline" size="lg" disabled={saving} onClick={clearDraft}>ล้างร่าง</Button>
             <Button size="lg" disabled={saving} onClick={save}>
-              {saving ? <><Spinner />กำลังบันทึก...</> : "บันทึกลงชีต"}
+              {saving ? <><Spinner />กำลังบันทึก...</> : "บันทึก"}
             </Button>
           </div>
         </div>
@@ -574,11 +632,11 @@ function chipClass(x: Item) {
 const mcText = (x: Item) => (x.agency ? `Agency ${x.agency}` : x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : "Mc ว่าง");
 
 const chipTitle = (x: Item) => [
-  `${x.platform} ${x.start}–${x.end}`,
+  `${x.agency ? `Agency ${x.agency} · ` : ""}${x.platform} ${x.start}–${x.end}`,
   x.campaign ? `Campaign: ${x.campaign}` : "",
-  !x.existing ? `ร่างใหม่ (ยังไม่ลงชีต)${x.agency ? ` · Agency ${x.agency}` : ""}`
-    : `${mcText(x)} · Admin: ${x.existing.admin?.name || "ว่าง"}${x.existing.mc?.cancelled ? " · แคน" : ""}`,
-  x.agencyChanged ? "จะย้ายเจ้าของตอนบันทึก" : "",
+  x.agency ? `แพลนของ Agency (ไม่ลงชีต)${x.agencyId ? "" : " · ร่างใหม่"}`
+    : !x.existing ? "ร่างใหม่ (ยังไม่ลงชีต)"
+      : `${mcText(x)} · Admin: ${x.existing.admin?.name || "ว่าง"}${x.existing.mc?.cancelled ? " · แคน" : ""}`,
   x.deleting ? "จะลบตอนบันทึก" : "",
 ].filter(Boolean).join("\n");
 
@@ -611,17 +669,21 @@ function Legend({ tick }: { tick: boolean }) {
  * ช่องติ๊ก 1 slot ของคอลัมน์ (เจ้าของ = agency)
  *   slot เดียวกันที่เป็นของอีกฝั่ง (ของเรา / Agency) แสดงเป็นขีดจาง กด = ย้ายมาฝั่งนี้
  */
-function Tick({ item, agency, label, onClick }: { item: Item | undefined; agency: string | null; label: string; onClick: () => void }) {
-  const other = !!item && !item.deleting && item.agency !== agency;
-  const st = !item ? "none" : other ? "other" : item.deleting ? (item.agency === agency ? "del" : "none") : !item.existing ? "new"
-    : item.existing.mc?.cancelled ? "cancel" : item.existing.mc?.name || !canDelete(item.existing) ? "taken" : item.agencyChanged ? "new" : "have";
+function Tick({ item, other, agency, label, onClick }: {
+  item: Item | undefined; other: Item | undefined; agency: string | null; label: string; onClick: () => void;
+}) {
+  const st = !item || (item.deleting && other) ? (other ? "other" : "none")
+    : item.deleting ? "del"
+      : item.agency ? (item.agencyId ? "have" : "new")
+        : !item.existing ? "new"
+          : item.existing.mc?.cancelled ? "cancel" : item.existing.mc?.name || !canDelete(item.existing) ? "taken" : "have";
   return (
     <button
       type="button"
       role="checkbox"
       aria-checked={st !== "none" && st !== "del" && st !== "other"}
       aria-label={label}
-      title={other ? `${chipTitle(item)}\n(กดเพื่อย้ายมาเป็น${agency ? `ของ Agency ${agency}` : "ของเรา"})`
+      title={st === "other" && other ? `${chipTitle(other)}\n(กดเพื่อย้ายมาเป็น${agency ? `ของ Agency ${agency}` : "ของเรา"})`
         : item && st !== "none" ? chipTitle(item) : `${label} (กดเพื่อเพิ่ม)`}
       onClick={onClick}
       className={cn(
@@ -633,7 +695,7 @@ function Tick({ item, agency, label, onClick }: { item: Item | undefined; agency
         st === "taken" && "border-p2 bg-p2 text-white",
         st === "cancel" && "bg-muted text-muted-foreground",
         st === "del" && "border-destructive bg-destructive/15 text-destructive",
-        item?.overlap && "ring-2 ring-warning-border",
+        st !== "other" && item?.overlap && "ring-2 ring-warning-border",
       )}
     >
       {st === "new" || st === "have" ? <CheckIcon /> : st === "taken" ? <UserIcon /> : st === "del" ? <XIcon />
@@ -660,6 +722,17 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
   const tint = (c: Column) => (c.agency ? "bg-p0/[0.06]" : "");
   // ช่วงหลังเที่ยงคืน (00:00–07:29) ยังนับเป็นวันไลฟ์เดิม แยกสีให้เห็น
   const night = (t: { start: string }) => toMin(t.start) < DAY_START;
+  // ช่องเวลาเดียวกันที่อีกฝั่ง (ของเรา / Agency) ติ๊กอยู่
+  const liveAt = new Map<string, Item[]>();
+  for (const x of items) {
+    if (x.deleting) continue;
+    const k = keyOf(x);
+    liveAt.set(k, [...(liveAt.get(k) ?? []), x]);
+  }
+  /** ชั่วโมงของกลุ่มนี้ในวันนั้น / ทั้งเดือน (ไม่นับที่จะลบ / แคน) */
+  const groupHours = (c: Column, d?: string) => items
+    .filter((x) => x.platform === c.platform && x.agency === (c.agency ?? null) && (!d || x.date === d) && !x.deleting && !x.existing?.mc?.cancelled)
+    .reduce((h, x) => h + lenOf(x) / 60, 0);
   return (
     <div className="max-h-[78vh] overflow-auto rounded-xl border bg-card">
       <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
@@ -670,14 +743,15 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
               // สรุปของช่องนี้ทั้งเดือน (รวมร่าง ไม่นับที่จะลบ / แคน)
               const mine = items.filter((x) => x.platform === c.platform && x.agency === (c.agency ?? null)
                 && !x.deleting && !x.existing?.mc?.cancelled);
-              const hours = mine.reduce((h, x) => h + lenOf(x) / 60, 0);
+              const hours = groupHours(c);
               return (
-                <th key={colKey(c)} colSpan={c.times.length} className="sticky top-0 z-20 h-8 border-b border-l bg-muted px-2 text-left whitespace-nowrap">
+                <th key={colKey(c)} colSpan={c.times.length + 1} className="sticky top-0 z-20 h-8 border-b border-l bg-muted px-2 text-left whitespace-nowrap">
                   <PlatformBadge name={c.platform} index={tagIndex(c.platform)} />
                   {c.agency ? (
                     <>
                       <span className="mx-1 text-muted-foreground">›</span>
                       <Badge className="bg-foreground text-[11px] font-semibold text-background">Agency {c.agency}</Badge>
+                      <span className="ml-1 text-[11px] font-normal text-muted-foreground">(ไม่ลงชีต)</span>
                     </>
                   ) : null}
                   <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">
@@ -689,7 +763,7 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
             <th rowSpan={2} className="sticky top-0 z-20 min-w-36 border-b border-l bg-muted px-2 text-left text-xs font-semibold">Campaign</th>
           </tr>
           <tr>
-            {columns.flatMap((c) => c.times.map((t, i) => (
+            {columns.flatMap((c) => [...c.times.map((t, i) => (
               <th key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("sticky top-8 z-20 border-b bg-muted px-0.5 py-1 font-medium", i === 0 && "border-l", night(t) && "text-p3")}>
                 <button
                   type="button"
@@ -700,7 +774,11 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
                   {t.start}<br /><span className="text-muted-foreground">{t.end}</span>
                 </button>
               </th>
-            )))}
+            )), (
+              <th key={`${colKey(c)}|sum`} className="sticky top-8 z-20 border-b bg-muted px-1.5 py-1 text-[11px] font-semibold whitespace-nowrap">
+                รวม<br /><span className="font-normal text-muted-foreground">ชม./วัน</span>
+              </th>
+            )])}
           </tr>
         </thead>
         <tbody>
@@ -726,16 +804,25 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
                     {fmtDayNum(d)}
                   </button>
                 </th>
-                {columns.flatMap((c) => c.times.map((t, i) => (
-                  <td key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("border-b px-1 py-1 text-center", i === 0 && "border-l", tint(c), night(t) && "bg-p3/[0.06]")}>
-                    <Tick
-                      item={itemMap.get(keyOf({ platform: c.platform, date: d, start: t.start, end: t.end }))}
-                      agency={c.agency ?? null}
-                      label={`${fmtDayNum(d)} ${c.agency ? `Agency ${c.agency} ` : ""}${c.platform} ${t.start}–${t.end}`}
-                      onClick={() => onToggle(d, c.platform, t, c.agency ?? null)}
-                    />
+                {columns.flatMap((c) => [...c.times.map((t, i) => {
+                  const k = keyOf({ platform: c.platform, date: d, start: t.start, end: t.end });
+                  const agency = c.agency ?? null;
+                  return (
+                    <td key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("border-b px-1 py-1 text-center", i === 0 && "border-l", tint(c), night(t) && "bg-p3/[0.06]")}>
+                      <Tick
+                        item={itemMap.get(ownKey(k, agency))}
+                        other={liveAt.get(k)?.find((x) => x.agency !== agency)}
+                        agency={agency}
+                        label={`${fmtDayNum(d)} ${c.agency ? `Agency ${c.agency} ` : ""}${c.platform} ${t.start}–${t.end}`}
+                        onClick={() => onToggle(d, c.platform, t, agency)}
+                      />
+                    </td>
+                  );
+                }), (
+                  <td key={`${colKey(c)}|sum`} className={cn("border-b px-1.5 py-1 text-right text-xs font-semibold tabular-nums", tint(c))}>
+                    {groupHours(c, d) ? num(groupHours(c, d)) : <span className="font-normal text-muted-foreground/50">–</span>}
                   </td>
-                )))}
+                )])}
                 <td className="border-b border-l px-2 py-1">
                   <button
                     type="button"
@@ -785,8 +872,8 @@ function SheetView({ items, tagIndex, onOpenDay }: { items: Item[]; tagIndex: (p
               <td className="px-2 py-1.5 tabular-nums">{x.start}</td>
               <td className="px-2 py-1.5 tabular-nums">{x.end}</td>
               <td className={cn("px-2 py-1.5", x.campaignChanged && "font-semibold text-primary")}>{x.campaign}</td>
-              <td className={cn("px-2 py-1.5", x.agencyChanged && "font-semibold text-primary")}>
-                {x.agency ? `Agency ${x.agency}` : x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : x.existing ? <span className="text-muted-foreground">ว่าง</span> : ""}
+              <td className="px-2 py-1.5">
+                {x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : x.existing ? <span className="text-muted-foreground">ว่าง</span> : ""}
               </td>
               <td className="px-2 py-1.5">
                 {x.existing ? (x.existing.admin?.name || <span className="text-muted-foreground">{x.existing.admin ? "ว่าง" : "–"}</span>) : ""}
@@ -795,8 +882,7 @@ function SheetView({ items, tagIndex, onOpenDay }: { items: Item[]; tagIndex: (p
                 {x.deleting ? <Badge variant="destructive">จะลบ</Badge>
                   : !x.existing ? <Badge>ร่างใหม่</Badge>
                     : x.existing.mc?.cancelled ? <Badge variant="secondary">แคน</Badge>
-                      : x.agencyChanged ? <Badge variant="outline">ย้ายเจ้าของ</Badge>
-                        : x.campaignChanged ? <Badge variant="outline">แก้ Campaign</Badge> : null}
+                      : x.campaignChanged ? <Badge variant="outline">แก้ Campaign</Badge> : null}
               </td>
             </tr>
           ))}
