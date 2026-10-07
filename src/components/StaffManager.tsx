@@ -23,6 +23,7 @@ type Person = {
   hourly_rate: number | null; is_extra_admin: boolean; is_salaried: boolean; upcoming: number;
   commit_tiers: CommitTier[] | null;
   can_manage_mc: boolean; can_manage_admin: boolean; can_manage_proofs: boolean; can_view_analytics: boolean;
+  can_plan_slots?: boolean; // ไม่มี = ยังไม่ได้รัน SQL 20261017000000_plan_slots
 };
 
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
@@ -33,8 +34,11 @@ const rolesOf = (scope: OwnerScope): Role[] =>
 const scopeLabel = (p: Pick<Person, "can_manage_mc" | "can_manage_admin">) =>
   p.can_manage_mc && p.can_manage_admin ? "จัดการทั้งหมด" : p.can_manage_mc ? "จัดการ Mc" : p.can_manage_admin ? "จัดการ Admin" : "";
 
-/** จัดการรายชื่อพนักงาน: ดู / ค้นหา / เพิ่ม / แก้ / ลบ (เฉพาะบทบาทที่มีสิทธิ์) */
-export function StaffManager({ scope }: { scope: OwnerScope }) {
+/**
+ * จัดการรายชื่อพนักงาน: ดู / ค้นหา / เพิ่ม / แก้ / ลบ (เฉพาะบทบาทที่มีสิทธิ์)
+ *   canGrantPlan = คนที่ใช้อยู่มีสิทธิ์ Plan Slot Live (ติ๊ก / เอาสิทธิ์นี้ของ Owner คนอื่นออกได้)
+ */
+export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScope; canGrantPlan?: boolean }) {
   const toast = useToast();
   const roles = rolesOf(scope);
   const [data, setData] = useState<{ staff: Person[]; meId: number | null } | null>(null);
@@ -139,6 +143,7 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
                     ? <Badge className="bg-p2/15 text-[11px] text-p2">หลักฐานไลฟ์</Badge>
                     : null}
                   {p.role === "owner" && p.can_view_analytics ? <Badge className="bg-p3/15 text-[11px] text-p3">Data analytics</Badge> : null}
+                  {p.role === "owner" && p.can_plan_slots ? <Badge className="bg-p3/15 text-[11px] text-p3">Plan Slot Live</Badge> : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
@@ -164,6 +169,7 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
           roles={roles}
           defaultRole={role}
           isMe={editing !== "new" && editing.id === data.meId}
+          canGrantPlan={canGrantPlan && data.staff.some((p) => p.can_plan_slots !== undefined)}
           onClose={(changed) => {
             setEditing(null);
             if (changed) { toast(changed); reload(); }
@@ -174,11 +180,12 @@ export function StaffManager({ scope }: { scope: OwnerScope }) {
   );
 }
 
-function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, onClose }: {
   person: Person | null;
   roles: Role[];
   defaultRole: Role;
   isMe: boolean;
+  canGrantPlan: boolean;
   onClose: (message?: string) => void;
 }) {
   const toast = useToast();
@@ -209,11 +216,12 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
   const [canAdmin, setCanAdmin] = useState(person?.can_manage_admin ?? true);
   const [canProofs, setCanProofs] = useState(person?.can_manage_proofs ?? false);
   const [canAnalytics, setCanAnalytics] = useState(person?.can_view_analytics ?? false);
+  const [canPlan, setCanPlan] = useState(person?.can_plan_slots ?? false);
   const [saving, setSaving] = useState(false);
 
   const emailChanged = (person?.email ?? "") !== email.trim().toLowerCase();
   const renamed = !!person && person.name !== name.trim().replace(/^mc\s*/i, "");
-  const noScope = role === "owner" && !canMc && !canAdmin && !canProofs && !canAnalytics;
+  const noScope = role === "owner" && !canMc && !canAdmin && !canProofs && !canAnalytics && !canPlan;
 
   async function save() {
     setSaving(true);
@@ -223,6 +231,8 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
         ...(role !== "owner" ? { commit_tiers: tiers } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { can_manage_mc: canMc, can_manage_admin: canAdmin, can_manage_proofs: canProofs, can_view_analytics: canAnalytics } : {}),
+        // Plan Slot Live: ติ๊กให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
+        ...(role === "owner" && !isMe && canGrantPlan ? { can_plan_slots: canPlan } : {}),
       };
       const res = person
         ? await api("/api/owner/staff", { id: person.id, ...fields }, "PATCH")
@@ -395,6 +405,23 @@ function EditDialog({ person, roles, defaultRole, isMe, onClose }: {
                 </span>
               </span>
             </Label>
+            {canGrantPlan || person?.can_plan_slots ? (
+              <Label className="items-start pb-1 leading-snug font-normal">
+                <Checkbox
+                  checked={canPlan}
+                  disabled={isMe || !canGrantPlan}
+                  onCheckedChange={(v) => setCanPlan(v === true)}
+                  className="mt-0.5"
+                />
+                <span>
+                  Plan Slot Live
+                  <span className="block text-xs text-muted-foreground">
+                    แพลน slot ไลฟ์ทั้งเดือน แล้วเขียนลงชีตทั้ง &quot;ลงตาราง Deal Mc&quot; และ &quot;ลงตาราง Admin เสริม&quot;
+                    {!canGrantPlan ? " (ติ๊ก / เอาออกได้เฉพาะคนที่มีสิทธิ์นี้)" : ""}
+                  </span>
+                </span>
+              </Label>
+            ) : null}
             <span className="mt-1 block text-xs text-muted-foreground">
               {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้งคู่แก้ให้"
                 : noScope ? <span className="text-destructive">ติ๊กอย่างน้อย 1 อย่าง</span>

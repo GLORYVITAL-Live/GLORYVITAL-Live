@@ -9,6 +9,7 @@ import { BookingWindowEditor } from "@/components/BookingWindow";
 import { LiveStats } from "@/components/LiveStats";
 import { MySchedule } from "@/components/MySchedule";
 import { OwnerView } from "@/components/OwnerView";
+import { PlanSlots } from "@/components/PlanSlots";
 import { ProofPage } from "@/components/ProofPage";
 import { RulesDialog } from "@/components/RulesDialog";
 import { RulesEditor } from "@/components/RulesEditor";
@@ -51,10 +52,15 @@ export const MODES = {
     hint: "ยอดไลฟ์ TikTok / Shopee จากไฟล์ Export เทียบเดือนก่อน (MoM) ปีก่อน (YoY) และเทียบแคมเปญกับช่วงเดียวกันของเดือนก่อน",
     rule: "",
   },
+  plan: {
+    sub: "Plan slot", title: "Plan Slot Live", label: "Plan Slot Live",
+    hint: "แพลน slot ไลฟ์ทั้งเดือนเป็นร่างก่อน แล้วกดบันทึก ระบบจะเขียนลงชีตทั้งแท็บ \"ลงตาราง Deal Mc\" และ \"ลงตาราง Admin เสริม\" (กำหนด Mc / Admin ต่อที่หน้าจัดการ slot)",
+    rule: "",
+  },
 } as const;
 
-/** หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ (Owner) */
-type Page = Role | "proof" | "stats";
+/** หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ / Plan Slot Live (Owner ที่ติ๊กสิทธิ์) */
+type Page = Role | "proof" | "stats" | "plan";
 
 const ROLE_KEY = "glory_booking_role";
 const THEME_KEY = "glory_booking_theme";
@@ -96,11 +102,13 @@ function Shell({ me }: { me: Me | null }) {
     ...(me && (me.admin || me.owner?.mc || me.owner?.proofs) ? ["proof" as const] : []),
     // Data analytics: เฉพาะ Owner ที่ติ๊กสิทธิ์ "เข้าถึง Data analytics"
     ...(me?.owner?.analytics ? ["stats" as const] : []),
+    // Plan Slot Live: เฉพาะ Owner ที่ติ๊กสิทธิ์ "Plan Slot Live"
+    ...(me?.owner?.plan ? ["plan" as const] : []),
   ];
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
   const savedPage = useLocal(ROLE_KEY) as Page | null;
   const page: Page | null = savedPage && pages.includes(savedPage) ? savedPage : pages[0] ?? null;
-  const role: Role | null = page === "proof" || page === "stats" ? null : page;
+  const role: Role | null = page === "proof" || page === "stats" || page === "plan" ? null : page;
   const preview = isPreview(me, role);
   const [myOpen, setMyOpen] = useState(false);
   const [rulesManual, setRulesManual] = useState(false);
@@ -154,7 +162,7 @@ function Shell({ me }: { me: Me | null }) {
   const registered = pages.length > 0;
   const name = me && role ? displayName(me, role)
     : me && page === "proof" ? me.owner?.name || me.admin?.name || ""
-      : me && page === "stats" ? me.owner?.name || "" : "";
+      : me && (page === "stats" || page === "plan") ? me.owner?.name || "" : "";
 
   // เมนูเลือกหน้า: จอกว้างอยู่ในแถวบน / มือถืออยู่แถวที่ 2 เต็มความกว้าง (แถวบนจะได้ไม่ล้นจอจนปุ่มทับกัน)
   const rolePicker = (cls: string) => pages.length > 1 && page ? (
@@ -173,7 +181,7 @@ function Shell({ me }: { me: Me | null }) {
   // หน้าหลักฐานไลฟ์ไม่มีบทบาท (role = null) จึงเปิดตารางของฉันไม่ได้
   const canOpenMine = registered && !!role && role !== "owner" && !preview;
   return (
-    <div className="mx-auto max-w-[760px] px-4">
+    <div className={cn("mx-auto px-4", page === "plan" ? "max-w-[1200px]" : "max-w-[760px]")}>
       <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-[calc(14px+env(safe-area-inset-top))] pb-2">
         <div className="flex min-w-0 items-baseline gap-2 whitespace-nowrap">
           <span className="text-[15px] font-bold tracking-[.12em] sm:text-[17px] sm:tracking-[.14em]" aria-label="GLORY VITAL">
@@ -240,10 +248,11 @@ function Shell({ me }: { me: Me | null }) {
 
       {mode?.rule ? <Notice>{mode.rule}</Notice> : null}
 
-      {me?.owner && role === "owner" ? <OwnerTabs scope={{ mc: me.owner.mc, admin: me.owner.admin }} /> : null}
+      {me?.owner && role === "owner" ? <OwnerTabs scope={{ mc: me.owner.mc, admin: me.owner.admin }} canGrantPlan={me.owner.plan} /> : null}
       {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
       {me && registered && page === "stats" ? <LiveStats /> : null}
+      {me && registered && page === "plan" ? <PlanSlots /> : null}
       {!me || !registered ? (
         <StateBox title="เข้าสู่ระบบเพื่อดูตาราง">Mc จะเห็น slot ที่เปิดให้จอง ส่วน Admin จะเห็น slot ที่รอ Admin</StateBox>
       ) : null}
@@ -268,7 +277,7 @@ function Shell({ me }: { me: Me | null }) {
 const OWNER_TAB_KEY = "glory_owner_tab";
 
 /** หน้าเจ้าของ: สรุปรายเดือน | จัดการ slot | พนักงาน (จำแท็บล่าสุดไว้ในเครื่อง) — เห็นเฉพาะฝั่งที่มีสิทธิ์ */
-function OwnerTabs({ scope }: { scope: OwnerScope }) {
+function OwnerTabs({ scope, canGrantPlan }: { scope: OwnerScope; canGrantPlan: boolean }) {
   const saved = useLocal(OWNER_TAB_KEY);
   const tab = saved === "slots" || saved === "staff" || saved === "rules" ? saved : "summary";
   const tabs = [["summary", "สรุปรายเดือน"], ["slots", "จัดการ slot"], ["staff", "พนักงาน"], ["rules", "กฎการทำงาน"]] as const;
@@ -297,7 +306,7 @@ function OwnerTabs({ scope }: { scope: OwnerScope }) {
       ) : null}
       <TabsContent value="summary"><OwnerView /></TabsContent>
       <TabsContent value="slots"><BookingWindowEditor scope={scope} /><SlotManager scope={scope} /></TabsContent>
-      <TabsContent value="staff"><StaffManager scope={scope} /></TabsContent>
+      <TabsContent value="staff"><StaffManager scope={scope} canGrantPlan={canGrantPlan} /></TabsContent>
       <TabsContent value="rules"><RulesEditor scope={scope} /></TabsContent>
     </Tabs>
   );

@@ -45,6 +45,17 @@ export async function requireAnalytics(denied = "บัญชีนี้ไม�
   return { me: r.me };
 }
 
+/**
+ * Owner ที่ติ๊กสิทธิ์ "Plan Slot Live" (แพลน slot ทั้งเดือน เขียนทั้งแท็บ Deal Mc + Admin เสริม)
+ *   ไม่ต้องมีสิทธิ์จัดการ Mc / Admin · ติ๊กให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
+ */
+export async function requirePlanner(denied = "บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Plan Slot Live") {
+  const r = await requireMe();
+  if ("res" in r) return r;
+  if (!r.me.owner?.plan) return { res: fail(`${denied} ให้คนที่มีสิทธิ์ Plan Slot Live ติ๊กสิทธิ์ให้ในหน้าพนักงาน`, 403) };
+  return { me: r.me };
+}
+
 /** ตาราง slot นี้อยู่ในสิทธิ์ของ Owner หรือไม่ */
 export const canTable = (scope: { mc: boolean; admin: boolean }, table: "mc_slots" | "admin_slots") =>
   table === "mc_slots" ? scope.mc : scope.admin;
