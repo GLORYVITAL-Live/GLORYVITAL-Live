@@ -138,25 +138,31 @@ function sameCell(tab: TabKey, col: number, have: Cell, want: Cell) {
 
 type Item = { vals: Row; isNew?: boolean };
 
+/** ลำดับกลุ่มแพลตฟอร์มในแต่ละวัน: GLORY MALL อยู่บนสุดเสมอ แพลตฟอร์มอื่นต่อท้ายตามลำดับที่ลงชีต */
+const platformRank = (p: string) => (p.trim().toUpperCase() === "GLORY MALL" ? 0 : 1);
+
 /**
  * ตำแหน่งแทรกแถวใหม่ ให้อยู่ในกลุ่ม วันเดียวกัน -> แพลตฟอร์มเดียวกัน -> เรียงตามเวลาเริ่ม (แบบที่ทีมจัดในชีต)
  *   1) ต่อจากแถวสุดท้ายของวัน+แพลตฟอร์มเดียวกันที่เวลาเริ่ม <= slot ใหม่
  *   2) ไม่มี (slot ใหม่เริ่มเร็วสุดของแพลตฟอร์มนั้น) = ก่อนแถวแรกของวัน+แพลตฟอร์มเดียวกัน
- *   3) วันนั้นยังไม่มีแพลตฟอร์มนี้ = ต่อท้ายกลุ่มวันนั้น
+ *   3) วันนั้นยังไม่มีแพลตฟอร์มนี้ = ก่อนกลุ่มแรกของวันที่ลำดับต่ำกว่า (GLORY MALL ขึ้นก่อน) ไม่มี = ต่อท้ายกลุ่มวันนั้น
  *   4) ยังไม่มีวันนั้น = ต่อจากวันก่อนหน้าที่ใกล้ที่สุด
  */
 export function insertIndex(tab: TabKey, items: Item[], s: Pick<DbSlot, "platform" | "live_date" | "start_time">) {
   const c = COLS[tab];
   const day = dateSerial(s.live_date);
   const start = Math.round(timeSerial(s.start_time) * 1440);
-  let lastLE = -1, firstSame = -1, lastOfDay = -1, prevIdx = -1, prevDay = -Infinity;
+  const rank = platformRank(s.platform);
+  let lastLE = -1, firstSame = -1, lastOfDay = -1, firstLower = -1, prevIdx = -1, prevDay = -Infinity;
   items.forEach((it, i) => {
     const dv = it.vals[c.date];
     if (typeof dv !== "number" || dv < 1) return;
     const d = Math.floor(dv);
     if (d === day) {
       lastOfDay = i;
-      if (str(it.vals[c.platform]) !== s.platform) return;
+      const p = str(it.vals[c.platform]);
+      if (firstLower < 0 && platformRank(p) > rank) firstLower = i;
+      if (p !== s.platform) return;
       if (firstSame < 0) firstSame = i;
       const sv = minutes(it.vals[c.start]);
       if (sv !== null && sv <= start) lastLE = i;
@@ -167,6 +173,7 @@ export function insertIndex(tab: TabKey, items: Item[], s: Pick<DbSlot, "platfor
   });
   if (lastLE >= 0) return lastLE + 1;
   if (firstSame >= 0) return firstSame;
+  if (firstLower >= 0) return firstLower;
   if (lastOfDay >= 0) return lastOfDay + 1;
   if (prevIdx >= 0) return prevIdx + 1;
   return items.length;
