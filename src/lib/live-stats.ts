@@ -323,12 +323,14 @@ export type Totals = {
   views: number | null;
   impressions: number | null;
   clicks: number | null;
+  /** ชั่วโมงไลฟ์ของ TikTok (วินาที) ใช้หาร Impressions ต่อชั่วโมง (ไม่ปนชั่วโมงของ Shopee) */
+  tiktokSec: number | null;
   /** ฐานของ CO (TikTok = clicks, Shopee = viewers) null = มีทั้งสองแพลตฟอร์มปนกัน */
   coBase: number | null;
 };
 
 export function totalsOf(list: LiveSession[]): Totals {
-  const t: Totals = { lives: 0, gmv: 0, orders: 0, items: 0, durationSec: 0, viewers: 0, views: null, impressions: null, clicks: null, coBase: 0 };
+  const t: Totals = { lives: 0, gmv: 0, orders: 0, items: 0, durationSec: 0, viewers: 0, views: null, impressions: null, clicks: null, tiktokSec: null, coBase: 0 };
   const platforms = new Set<Platform>();
   const add = (a: number | null, b: number | null) => (b === null ? a : (a ?? 0) + b);
   for (const s of list) {
@@ -343,6 +345,7 @@ export function totalsOf(list: LiveSession[]): Totals {
       t.views = add(t.views, s.views ?? 0);
       t.impressions = add(t.impressions, s.impressions ?? 0);
       t.clicks = add(t.clicks, s.clicks ?? 0);
+      t.tiktokSec = add(t.tiktokSec, s.durationSec);
     }
     t.coBase = (t.coBase ?? 0) + (s.platform === "TikTok" ? s.clicks ?? 0 : s.viewers);
   }
@@ -352,7 +355,7 @@ export function totalsOf(list: LiveSession[]): Totals {
 
 const ratio = (a: number | null, b: number | null) => (a === null || b === null || !b ? null : a / b);
 
-export type MetricKey = "gmv" | "orders" | "duration" | "gmvPerHour" | "viewers" | "views" | "impressions" | "ctr" | "co" | "lives";
+export type MetricKey = "gmv" | "orders" | "duration" | "gmvPerHour" | "viewers" | "views" | "impressions" | "impressionsPerHour" | "ctr" | "co" | "lives";
 
 export const METRICS: {
   key: MetricKey;
@@ -369,6 +372,8 @@ export const METRICS: {
   { key: "viewers", label: "Viewers", kind: "int", value: (t) => t.viewers },
   { key: "views", label: "Views", note: "TikTok", kind: "int", value: (t) => t.views },
   { key: "impressions", label: "Product Impressions", note: "TikTok", kind: "int", value: (t) => t.impressions },
+  // Impressions ÷ ชั่วโมงไลฟ์ของ TikTok (Shopee ไม่มี Impressions)
+  { key: "impressionsPerHour", label: "Impressions / ชม.", note: "TikTok", kind: "int", value: (t) => ratio(t.impressions, t.tiktokSec === null ? null : t.tiktokSec / 3600) },
   { key: "ctr", label: "CTR", note: "คลิก ÷ Impressions (TikTok)", kind: "pct", value: (t) => ratio(t.clicks, t.impressions) },
   { key: "co", label: "CO", note: "TikTok: ÷ คลิก · Shopee: ÷ Viewers", kind: "pct", value: (t) => ratio(t.orders, t.coBase) },
   { key: "lives", label: "จำนวนไลฟ์", kind: "int", value: (t) => t.lives },

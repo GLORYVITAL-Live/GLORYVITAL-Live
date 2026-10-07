@@ -365,7 +365,7 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
       ]);
     }
     s.addTable(rows, {
-      x: M, y: 1.45, w: 7.9, colW: hasB ? [2.5, 1.9, 1.9, 1.6] : [4.4, 3.5], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.43,
+      x: M, y: 1.45, w: 7.9, colW: hasB ? [2.5, 1.9, 1.9, 1.6] : [4.4, 3.5], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.4,
       border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
     });
     s.addShape(pres.ShapeType.roundRect, { x: 8.9, y: 1.45, w: W - M - 8.9, h: 4.75, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
@@ -533,7 +533,7 @@ export type MultiDeckInput = {
 };
 
 /** ลำดับตัวชี้วัดของตารางเทียบหลายเดือน (เหมือนหน้าเว็บ / ไฟล์ส่งออก) */
-const MULTI_KEYS: MetricKey[] = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "views", "impressions", "ctr", "co", "lives"];
+const MULTI_KEYS: MetricKey[] = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "views", "impressions", "impressionsPerHour", "ctr", "co", "lives"];
 
 /** +12.7% / +1.14pp (อัตรา = ผลต่าง pp) */
 function deltaText(kind: (typeof METRICS)[number]["kind"], a: number | null, b: number | null) {
@@ -641,7 +641,7 @@ export async function buildMultiDeck(o: MultiDeckInput, target: "pptx" | "gslide
     const first = 2.3, rest = (W - 2 * M - first) / (cols - 1);
     s.addTable(rows, {
       x: M, y: 1.4, w: W - 2 * M, colW: [first, ...Array(cols - 1).fill(rest)], fontSize: cols > 9 ? 10 : cols > 6 ? 12 : 14,
-      fontFace: FONT, color: C.text, rowH: 0.44, border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
+      fontFace: FONT, color: C.text, rowH: 0.4, border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
     });
     s.addText(note ?? "CTR / CO เทียบเป็น pp (ผลต่างของ %) · ค่าอื่นเป็น % ที่เปลี่ยน · ตัวหนา = เดือนหลัก", { x: M, y: 6.4, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
   };

@@ -45,6 +45,7 @@ function infoSheet(lines: [string, string][], f: ExportFilter): ExportSheet {
       ["นิยามตัวชี้วัด", ""],
       ["GMV", "TikTok = LIVE-attributed GMV · Shopee = ยอดขายคำสั่งซื้อที่ยืนยันแล้ว"],
       ["ออเดอร์", "TikTok = Orders Paid · Shopee = คำสั่งซื้อที่ยืนยันแล้ว"],
+      ["Impressions / ชม.", "Product Impressions ÷ ชั่วโมงไลฟ์ (เฉพาะไลฟ์ TikTok · Shopee ไม่มี Impressions)"],
       ["CTR", "Product Clicks ÷ Product Impressions (TikTok)"],
       ["CO", "TikTok = ออเดอร์ ÷ Product Clicks · Shopee = ออเดอร์ ÷ Viewers (รวมสองแพลตฟอร์มไม่คำนวณ)"],
       ["หมายเหตุ", "ไลฟ์นับตามเวลาเริ่มไลฟ์ (เวลาไทย) · ค่าที่เป็นอัตราคำนวณจากยอดรวม"],
@@ -57,12 +58,13 @@ function sessionSheet(name: string, list: LiveSession[]): ExportSheet {
   return {
     name,
     rows: [
-      ["เริ่มไลฟ์ (เวลาไทย)", "แพลตฟอร์ม", "บัญชี", "ชื่อไลฟ์", "ชั่วโมง", "GMV", "ออเดอร์", "ชิ้นที่ขาย", "Viewers", "Views", "Product Impressions", "Product Clicks", "CTR", "CO"],
+      ["เริ่มไลฟ์ (เวลาไทย)", "แพลตฟอร์ม", "บัญชี", "ชื่อไลฟ์", "ชั่วโมง", "GMV", "ออเดอร์", "ชิ้นที่ขาย", "Viewers", "Views", "Product Impressions", "Impressions / ชม.", "Product Clicks", "CTR", "CO"],
       ...list.map((s): Cell[] => {
         const coBase = s.platform === "TikTok" ? s.clicks : s.viewers;
         return [
           bkkStamp(s.startedAt), s.platform, s.accountName, s.title,
-          { v: s.durationSec / 3600, f: "dec" }, { v: s.gmv, f: "money" }, s.orders, s.itemsSold, s.viewers, s.views, s.impressions, s.clicks,
+          { v: s.durationSec / 3600, f: "dec" }, { v: s.gmv, f: "money" }, s.orders, s.itemsSold, s.viewers, s.views, s.impressions,
+          s.impressions !== null && s.durationSec ? { v: s.impressions / (s.durationSec / 3600), f: "int" } : null, s.clicks,
           s.impressions ? { v: (s.clicks ?? 0) / s.impressions, f: "pct" } : null,
           coBase ? { v: s.orders / coBase, f: "pct" } : null,
         ];
@@ -203,7 +205,7 @@ export function yearBook(o: {
 }
 
 /** ลำดับตัวชี้วัดของตารางเทียบหลายเดือน (ตามตารางที่ทีมใช้: GMV, Duration, GMV/hr, Order, Viewer, View, Impressions, CTR, CO) */
-export const MULTI_ORDER = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "views", "impressions", "ctr", "co", "lives"] as const;
+export const MULTI_ORDER = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "views", "impressions", "impressionsPerHour", "ctr", "co", "lives"] as const;
 
 /** ผลต่าง: อัตรา (CTR / CO) = pp / อื่น ๆ = % เช่น "+1.14pp" / "-12.7%" */
 export function deltaOf(kind: Kind, a: number | null, b: number | null) {
