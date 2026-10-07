@@ -71,13 +71,16 @@ export async function GET(request: Request) {
   const since = new Date(Date.now() - 180 * 86400_000).toISOString().slice(0, 10);
 
   try {
-    const [mc, admin, recent] = await Promise.all([
+    const [mc, admin, recent, regulars] = await Promise.all([
       all<SlotRow & { mc_id: number | null; campaign: string }>((a, b) => db.from("mc_slots")
         .select(`${cols}, mc_id, campaign, person:staff!mc_id(name)`).gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<SlotRow & { admin_id: number | null; needs_extra_admin: boolean }>((a, b) => db.from("admin_slots")
         .select(`${cols}, admin_id, needs_extra_admin, person:staff!admin_id(name)`).gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<{ platform: string; campaign: string }>((a, b) => db.from("mc_slots")
         .select("platform, campaign").gte("live_date", since).order("id").range(a, b)),
+      // Mc ประจำ (เงินเดือน) ให้เลือกลงชื่อตอนติ๊กแพลนได้เลย
+      all<{ id: number; name: string }>((a, b) => db.from("staff")
+        .select("id, name").eq("role", "mc").eq("is_salaried", true).order("name").range(a, b)),
     ]);
 
     // แพลนของ Agency (ยังไม่มีตาราง = ยังใช้ไม่ได้ ส่วนอื่นของหน้าใช้ได้ตามปกติ)
@@ -94,7 +97,7 @@ export async function GET(request: Request) {
     // จับคู่ Mc + Admin ของ slot เดียวกันด้วย แพลตฟอร์ม + วัน + เวลาเริ่ม + เวลาจบ
     type Plan = {
       key: string; date: string; platform: string; start: string; end: string; campaign: string;
-      mc: { id: number; name: string; cancelled: boolean; free: boolean } | null;
+      mc: { id: number; personId: number | null; name: string; cancelled: boolean; free: boolean } | null;
       admin: { id: number; name: string; cancelled: boolean; free: boolean; extra: boolean } | null;
     };
     const rows = new Map<string, Plan>();
@@ -104,7 +107,7 @@ export async function GET(request: Request) {
     for (const x of mc) {
       const row = rows.get(keyOf(x)) ?? base(x);
       if (!row.mc) {
-        row.mc = { id: x.id, name: x.person?.name ?? "", cancelled: x.is_cancelled, free: !x.mc_id && !x.calendar_event_id };
+        row.mc = { id: x.id, personId: x.mc_id, name: x.person?.name ?? "", cancelled: x.is_cancelled, free: !x.mc_id && !x.calendar_event_id };
         row.campaign = x.campaign ?? "";
       }
       rows.set(row.key, row);
@@ -135,6 +138,7 @@ export async function GET(request: Request) {
         id: x.id, agency: x.agency, platform: x.platform, date: x.live_date, start: hm(x.start_time), end: hm(x.end_time),
       })),
       agencyReady,
+      regulars: regulars.map((x) => ({ id: x.id, name: x.name })),
     });
   } catch (err) {
     return fail((err as Error).message, 500);
@@ -147,7 +151,8 @@ export async function POST(request: Request) {
   const r = await requirePlanner();
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
-  const create: { date: string; platform: string; start: string; end: string; campaign: string }[] = [];
+  // mcId = ลงชื่อ Mc ไว้เลยตอนสร้าง (Mc ประจำ) ไม่ระบุ = slot ว่างเปิดให้ Mc จอง
+  const create: { date: string; platform: string; start: string; end: string; campaign: string; mcId: number | null }[] = [];
   for (const x of Array.isArray(body?.create) ? body.create : []) {
     const platform = String(x?.platform ?? "").trim().slice(0, 60);
     const date = String(x?.date ?? "");
@@ -156,7 +161,7 @@ export async function POST(request: Request) {
     if (!platform) return fail("มี slot ที่ไม่ได้ใส่แพลตฟอร์ม");
     if (!DATE_RE.test(date)) return fail("มี slot ที่วันที่ไม่ถูกต้อง");
     if (!TIME_RE.test(start) || !TIME_RE.test(end) || start === end) return fail(`ช่วงเวลา ${start}–${end} ไม่ถูกต้อง`);
-    create.push({ date, platform, start, end, campaign: cleanCampaign(x?.campaign) });
+    create.push({ date, platform, start, end, campaign: cleanCampaign(x?.campaign), mcId: Number.isInteger(x?.mcId) ? x.mcId : null });
   }
   const campaigns: { mcId: number; campaign: string }[] = [];
   for (const x of Array.isArray(body?.campaigns) ? body.campaigns : []) {
@@ -175,12 +180,26 @@ export async function POST(request: Request) {
     agencyCreate.push({ agency, platform, live_date: x.date, start_time: start, end_time: end, created_by: r.me.email });
   }
   const agencyDelete: number[] = (Array.isArray(body?.agencyDelete) ? body.agencyDelete : []).filter((id: unknown) => Number.isInteger(id));
-  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length) return fail("ยังไม่มีอะไรให้บันทึก");
+  // ลงชื่อ Mc ใน slot เดิมที่ยังว่าง { slotId (mc_slots), personId (staff) }
+  const assigns: { slotId: number; personId: number }[] = [];
+  for (const x of Array.isArray(body?.assigns) ? body.assigns : []) {
+    if (!Number.isInteger(x?.slotId) || !Number.isInteger(x?.personId)) return fail("ข้อมูลลงชื่อ Mc ไม่ถูกต้อง");
+    assigns.push({ slotId: x.slotId, personId: x.personId });
+  }
+  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length && !assigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
+  if (assigns.length > MAX_CREATE) return fail(`ลงชื่อ Mc ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (agencyCreate.length > MAX_CREATE || agencyDelete.length > MAX_CREATE) return fail(`แก้แพลนของ Agency ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (create.length > MAX_CREATE) return fail(`สร้างได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (campaigns.length > MAX_CREATE) return fail(`แก้ Campaign ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
 
   const db = createAdminClient();
+  // Mc ที่จะลงชื่อต้องมีอยู่จริงในรายชื่อ Mc
+  const personIds = [...new Set([...create.map((x) => x.mcId), ...assigns.map((a) => a.personId)].filter((x): x is number => x !== null))];
+  if (personIds.length) {
+    const { data, error } = await db.from("staff").select("id").eq("role", "mc").in("id", personIds);
+    if (error) return fail(error.message, 500);
+    if ((data ?? []).length !== personIds.length) return fail("ไม่พบรายชื่อ Mc ที่เลือก");
+  }
   try {
     // ข้าม slot ที่มีอยู่แล้ว (แพลตฟอร์ม + วัน + เวลาเดียวกัน) และที่ส่งมาซ้ำกัน แยกแต่ละฝั่ง
     const dates = [...new Set(create.map((x) => x.date))];
@@ -202,7 +221,7 @@ export async function POST(request: Request) {
       });
     };
     const row = (x: (typeof create)[number]) => ({ live_date: x.date, start_time: x.start, end_time: x.end, platform: x.platform });
-    const newMc = pick(haveMc).map((x) => ({ ...row(x), campaign: x.campaign }));
+    const newMc = pick(haveMc).map((x) => ({ ...row(x), campaign: x.campaign, ...(x.mcId ? { mc_id: x.mcId, confirmed: true } : {}) }));
     const newAdmin = pick(haveAdmin).map((x) => ({ ...row(x), remark: "" }));
 
     const insert = async (table: Table, rows: object[]) => {
@@ -216,6 +235,25 @@ export async function POST(request: Request) {
     };
     const mcIds = await insert("mc_slots", newMc);
     const adminIds = await insert("admin_slots", newAdmin);
+
+    // ลงชื่อ Mc ใน slot เดิม (เฉพาะที่ช่อง Mc ยังว่าง กันทับคนที่จองเข้ามาระหว่างนั้น)
+    const assigned: number[] = [];
+    const byPerson = new Map<number, number[]>();
+    for (const a of assigns) byPerson.set(a.personId, [...(byPerson.get(a.personId) ?? []), a.slotId]);
+    for (const [personId, ids] of byPerson) {
+      for (let i = 0; i < ids.length; i += 300) {
+        const { data, error } = await db.from("mc_slots").update({ mc_id: personId, confirmed: true })
+          .in("id", ids.slice(i, i + 300)).is("mc_id", null).select("id");
+        if (error) throw new Error(error.message);
+        assigned.push(...(data ?? []).map((x) => x.id as number));
+      }
+    }
+    // ลงปฏิทินของ Mc ที่ลงชื่อไว้ (slot ใหม่ที่มีชื่อ + slot เดิมที่ลงชื่อ)
+    const withPerson = [...mcIds.filter((_, i) => newMc[i] && "mc_id" in newMc[i]), ...assigned];
+    for (let i = 0; i < withPerson.length; i += 500) {
+      const { error } = await db.from("calendar_jobs").insert(withPerson.slice(i, i + 500).map((slot_id) => ({ slot_table: "mc_slots", slot_id })));
+      if (error) throw new Error(error.message);
+    }
 
     // แก้ Campaign ของ slot เดิม: รวมตามค่าที่ตั้ง (ยิงครั้งเดียวต่อ Campaign)
     const byCampaign = new Map<string, number[]>();
@@ -255,9 +293,11 @@ export async function POST(request: Request) {
       await log(r.me, "Plan Slot Live: สร้าง slot", "mc_slots", mcIds);
       await log(r.me, "Plan Slot Live: สร้าง slot", "admin_slots", adminIds);
       if (updated) await log(r.me, "Plan Slot Live: แก้ Campaign", "mc_slots", campaigns.map((c) => c.mcId));
+      if (withPerson.length) await log(r.me, "Plan Slot Live: ลงชื่อ Mc ประจำ", "mc_slots", withPerson);
     });
     return ok({
       created: mcIds.length, adminCreated: adminIds.length, skipped: create.length - Math.max(mcIds.length, adminIds.length), updated, agencyAdded, agencyRemoved,
+      assigned: withPerson.length, assignSkipped: assigns.length - assigned.length,
     });
   } catch (err) {
     return fail((err as Error).message, 500);
