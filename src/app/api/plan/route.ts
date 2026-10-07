@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { AGENCY_ILIKE, agencyOf, agencyRemark, cleanAgency } from "@/lib/agency";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
@@ -7,8 +8,9 @@ import type { Me } from "@/lib/types";
 
 // หน้า Plan Slot Live: แพลน slot ทั้งเดือน แล้วเขียนลงชีตทั้งแท็บ "ลงตาราง Deal Mc" และ "ลงตาราง Admin เสริม"
 //   GET    ?month=YYYY-MM  slot ที่มีอยู่แล้วทั้งเดือน (จับคู่ Mc + Admin) + แพลตฟอร์ม / แคมเปญที่เคยใช้
-//   POST   { create: [{ date, platform, start, end, campaign }], campaigns: [{ mcId, campaign }] }
-//          สร้าง slot (ทั้งฝั่ง Mc + Admin ข้ามที่มีอยู่แล้ว) + แก้ Campaign ของ slot เดิม
+//   POST   { create: [{ date, platform, start, end, campaign, agency? }], campaigns: [{ mcId, campaign }], agencies: [{ mcId, agency }] }
+//          สร้าง slot (ทั้งฝั่ง Mc + Admin ข้ามที่มีอยู่แล้ว) + แก้ Campaign ของ slot เดิม + ย้าย slot ที่ยังว่างไปเป็นของ Agency / กลับมาเป็นของเรา
+//          slot ของ Agency = หมายเหตุฝั่ง Mc "Agency <ชื่อ>" (ดู lib/agency)
 //   DELETE { slots: [{ mcId?, adminId? }] }  ลบ slot ที่ยังว่าง (ไม่มีคน + ไม่มี event ในปฏิทิน)
 // สิทธิ์: Owner ที่ติ๊ก "Plan Slot Live" เท่านั้น (เขียนได้ทั้งสองแท็บ)
 
@@ -63,8 +65,8 @@ export async function GET(request: Request) {
 
   try {
     const [mc, admin, recent] = await Promise.all([
-      all<SlotRow & { mc_id: number | null; campaign: string }>((a, b) => db.from("mc_slots")
-        .select(`${cols}, mc_id, campaign, person:staff!mc_id(name)`).gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
+      all<SlotRow & { mc_id: number | null; campaign: string; remark: string }>((a, b) => db.from("mc_slots")
+        .select(`${cols}, mc_id, campaign, remark, person:staff!mc_id(name)`).gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<SlotRow & { admin_id: number | null; needs_extra_admin: boolean }>((a, b) => db.from("admin_slots")
         .select(`${cols}, admin_id, needs_extra_admin, person:staff!admin_id(name)`).gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<{ platform: string; campaign: string }>((a, b) => db.from("mc_slots")
@@ -74,18 +76,20 @@ export async function GET(request: Request) {
     // จับคู่ Mc + Admin ของ slot เดียวกันด้วย แพลตฟอร์ม + วัน + เวลาเริ่ม + เวลาจบ
     type Plan = {
       key: string; date: string; platform: string; start: string; end: string; campaign: string;
+      agency: string | null; // slot ของ Agency (เช่น "TDH") null = ของเรา
       mc: { id: number; name: string; cancelled: boolean; free: boolean } | null;
       admin: { id: number; name: string; cancelled: boolean; free: boolean; extra: boolean } | null;
     };
     const rows = new Map<string, Plan>();
     const base = (x: SlotRow): Plan => ({
-      key: keyOf(x), date: x.live_date, platform: x.platform, start: hm(x.start_time), end: hm(x.end_time), campaign: "", mc: null, admin: null,
+      key: keyOf(x), date: x.live_date, platform: x.platform, start: hm(x.start_time), end: hm(x.end_time), campaign: "", agency: null, mc: null, admin: null,
     });
     for (const x of mc) {
       const row = rows.get(keyOf(x)) ?? base(x);
       if (!row.mc) {
         row.mc = { id: x.id, name: x.person?.name ?? "", cancelled: x.is_cancelled, free: !x.mc_id && !x.calendar_event_id };
         row.campaign = x.campaign ?? "";
+        row.agency = agencyOf(x.remark);
       }
       rows.set(row.key, row);
     }
@@ -123,7 +127,7 @@ export async function POST(request: Request) {
   const r = await requirePlanner();
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
-  const create: { date: string; platform: string; start: string; end: string; campaign: string }[] = [];
+  const create: { date: string; platform: string; start: string; end: string; campaign: string; agency: string | null }[] = [];
   for (const x of Array.isArray(body?.create) ? body.create : []) {
     const platform = String(x?.platform ?? "").trim().slice(0, 60);
     const date = String(x?.date ?? "");
@@ -132,16 +136,24 @@ export async function POST(request: Request) {
     if (!platform) return fail("มี slot ที่ไม่ได้ใส่แพลตฟอร์ม");
     if (!DATE_RE.test(date)) return fail("มี slot ที่วันที่ไม่ถูกต้อง");
     if (!TIME_RE.test(start) || !TIME_RE.test(end) || start === end) return fail(`ช่วงเวลา ${start}–${end} ไม่ถูกต้อง`);
-    create.push({ date, platform, start, end, campaign: cleanCampaign(x?.campaign) });
+    const agency = x?.agency ? cleanAgency(x.agency) : null;
+    if (x?.agency && !agency) return fail("ชื่อ Agency ไม่ถูกต้อง");
+    create.push({ date, platform, start, end, campaign: cleanCampaign(x?.campaign), agency });
   }
   const campaigns: { mcId: number; campaign: string }[] = [];
   for (const x of Array.isArray(body?.campaigns) ? body.campaigns : []) {
     if (!Number.isInteger(x?.mcId)) return fail("ข้อมูล Campaign ไม่ถูกต้อง");
     campaigns.push({ mcId: x.mcId, campaign: cleanCampaign(x?.campaign) });
   }
-  if (!create.length && !campaigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
+  const agencies: { mcId: number; agency: string | null }[] = [];
+  for (const x of Array.isArray(body?.agencies) ? body.agencies : []) {
+    const agency = x?.agency ? cleanAgency(x.agency) : null;
+    if (!Number.isInteger(x?.mcId) || (x?.agency && !agency)) return fail("ข้อมูล Agency ไม่ถูกต้อง");
+    agencies.push({ mcId: x.mcId, agency });
+  }
+  if (!create.length && !campaigns.length && !agencies.length) return fail("ยังไม่มีอะไรให้บันทึก");
   if (create.length > MAX_CREATE) return fail(`สร้างได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
-  if (campaigns.length > MAX_CREATE) return fail(`แก้ Campaign ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
+  if (campaigns.length > MAX_CREATE || agencies.length > MAX_CREATE) return fail(`แก้ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
 
   const db = createAdminClient();
   try {
@@ -165,7 +177,7 @@ export async function POST(request: Request) {
       });
     };
     const row = (x: (typeof create)[number]) => ({ live_date: x.date, start_time: x.start, end_time: x.end, platform: x.platform });
-    const newMc = pick(haveMc).map((x) => ({ ...row(x), campaign: x.campaign }));
+    const newMc = pick(haveMc).map((x) => ({ ...row(x), campaign: x.campaign, remark: x.agency ? agencyRemark(x.agency) : "" }));
     const newAdmin = pick(haveAdmin).map((x) => ({ ...row(x), remark: "" }));
 
     const insert = async (table: Table, rows: object[]) => {
@@ -192,15 +204,31 @@ export async function POST(request: Request) {
       }
     }
 
+    // ย้ายเจ้าของ slot เดิม: เป็นของ Agency ได้เฉพาะ slot ที่ช่อง Mc ยังว่าง / กลับมาเป็นของเรา = ล้างหมายเหตุ Agency
+    const byAgency = new Map<string, number[]>();
+    for (const a of agencies) byAgency.set(a.agency ?? "", [...(byAgency.get(a.agency ?? "") ?? []), a.mcId]);
+    let moved = 0;
+    for (const [agency, ids] of byAgency) {
+      for (let i = 0; i < ids.length; i += 300) {
+        const part = ids.slice(i, i + 300);
+        const { data, error } = agency
+          ? await db.from("mc_slots").update({ remark: agencyRemark(agency) }).in("id", part).is("mc_id", null).select("id")
+          : await db.from("mc_slots").update({ remark: "" }).in("id", part).ilike("remark", AGENCY_ILIKE).select("id");
+        if (error) throw new Error(error.message);
+        moved += data?.length ?? 0;
+      }
+    }
+
     // หลังตอบผู้ใช้: เขียนชีต (DB trigger จดงานเขียนชีตไว้ให้แล้ว)
     after(async () => {
       await processSyncJobs();
       await log(r.me, "Plan Slot Live: สร้าง slot", "mc_slots", mcIds);
       await log(r.me, "Plan Slot Live: สร้าง slot", "admin_slots", adminIds);
       if (updated) await log(r.me, "Plan Slot Live: แก้ Campaign", "mc_slots", campaigns.map((c) => c.mcId));
+      if (moved) await log(r.me, "Plan Slot Live: ย้าย slot ของเรา / Agency", "mc_slots", agencies.map((a) => a.mcId));
     });
     return ok({
-      created: mcIds.length, adminCreated: adminIds.length, skipped: create.length - Math.max(mcIds.length, adminIds.length), updated,
+      created: mcIds.length, adminCreated: adminIds.length, skipped: create.length - Math.max(mcIds.length, adminIds.length), updated, moved,
     });
   } catch (err) {
     return fail((err as Error).message, 500);
