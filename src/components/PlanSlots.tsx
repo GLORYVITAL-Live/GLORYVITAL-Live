@@ -194,26 +194,58 @@ function planBook(month: string, columns: Column[], items: Item[]): ExportBook {
   };
   const summary: Cell[][] = [sumHead, ...days.map((d) => [dayText(d), weekday(d), ...sumRow(d)]), ["รวมทั้งเดือน", "", ...sumRow()]];
 
-  // รายการ slot แบบชีต
-  const list: Cell[][] = [
-    ["Platform", "วันที่", "วัน", "เวลาเริ่ม", "เวลาจบ", "ชม.", "ผู้ไลฟ์", "Campaign", "Mc", "Admin", "สถานะ"],
-    // เรียงแบบชีต: วัน > GLORY MALL ก่อน > แพลตฟอร์ม > เวลา (หลังเที่ยงคืนอยู่ท้ายวัน)
-    ...[...live].sort((a, b) => a.date.localeCompare(b.date)
-      || Number(a.platform !== "GLORY MALL") - Number(b.platform !== "GLORY MALL") || a.platform.localeCompare(b.platform)
-      || Number(!!a.agency) - Number(!!b.agency) || dayOrder(a.start) - dayOrder(b.start)).map((x) => [
-      x.platform, dayText(x.date), weekday(x.date), x.start, x.end, hoursCell(lenOf(x) / 60),
-      x.agency ? `Agency ${x.agency}` : "ของเรา", x.campaign,
-      x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : "", x.existing?.admin?.name ?? "",
-      x.agency ? (x.agencyId ? "แพลน Agency (ไม่ลงชีต)" : "ร่าง (Agency)") : x.existing ? "มีในชีตแล้ว" : "ร่าง (ยังไม่บันทึก)",
-    ]),
+  // รายการ slot แบบชีต เรียง: วัน > GLORY MALL ก่อน > แพลตฟอร์ม > เวลา (หลังเที่ยงคืนอยู่ท้ายวัน)
+  const sorted = [...live].sort((a, b) => a.date.localeCompare(b.date)
+    || Number(a.platform !== "GLORY MALL") - Number(b.platform !== "GLORY MALL") || a.platform.localeCompare(b.platform)
+    || Number(!!a.agency) - Number(!!b.agency) || dayOrder(a.start) - dayOrder(b.start));
+  const listHead: Cell[] = ["Platform", "วันที่", "วัน", "เวลาเริ่ม", "เวลาจบ", "ชม.", "ผู้ไลฟ์", "Campaign", "Mc", "Admin", "สถานะ"];
+  const listRow = (x: Item): Cell[] => [
+    x.platform, dayText(x.date), weekday(x.date), x.start, x.end, hoursCell(lenOf(x) / 60),
+    x.agency ? `Agency ${x.agency}` : "ของเรา", x.campaign,
+    x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : "", x.existing?.admin?.name ?? "",
+    x.agency ? (x.agencyId ? "แพลน Agency (ไม่ลงชีต)" : "ร่าง (Agency)") : x.existing ? "มีในชีตแล้ว" : "ร่าง (ยังไม่บันทึก)",
   ];
+  const totalOf = (list: Item[]): Cell[] => ["รวม", "", "", "", `${list.length} slot`, hoursCell(list.reduce((h, x) => h + lenOf(x) / 60, 0))];
+  const list: Cell[][] = [listHead, ...sorted.map(listRow), totalOf(sorted)];
+
+  // สรุปรายช่อง + Agency: จำนวน slot / ชั่วโมง / วันที่มีไลฟ์ / Mc จองแล้ว / ยังว่าง / ร่าง
+  const used = columns.filter((c) => live.some((x) => own(c, x)));
+  const stat = (name: string, list: Item[]): Cell[] => {
+    const hours = list.reduce((h, x) => h + lenOf(x) / 60, 0);
+    const liveDays = new Set(list.map((x) => x.date)).size;
+    const booked = list.filter((x) => x.existing?.mc?.name).length;
+    const drafts = list.filter((x) => (x.agency ? !x.agencyId : !x.existing)).length;
+    return [
+      name, list.length, hoursCell(hours), liveDays, liveDays ? { v: hours / liveDays, f: "dec" } : null,
+      list.some((x) => x.agency) ? "" : booked, list.some((x) => x.agency) ? "" : list.length - booked - drafts, drafts,
+    ];
+  };
+  const ourLive = live.filter((x) => !x.agency);
+  const agencyLive = live.filter((x) => x.agency);
+  const byChannel: Cell[][] = [
+    ["ช่อง", "จำนวน slot", "ชั่วโมงรวม", "วันที่มีไลฟ์", "เฉลี่ย ชม./วัน", "Mc จองแล้ว (slot)", "Mc ยังว่าง (slot)", "ร่างยังไม่บันทึก (slot)"],
+    ...used.filter((c) => !c.agency).map((c) => stat(c.platform, live.filter((x) => own(c, x)))),
+    stat("รวมของเรา (ลงชีต)", ourLive),
+    [],
+    ...used.filter((c) => c.agency).map((c) => stat(`Agency ${c.agency} (ผ่าน ${c.platform} ไม่ลงชีต)`, live.filter((x) => own(c, x)))),
+    ...(agencyLive.length ? [stat("รวม Agency", agencyLive), []] : []),
+    stat("รวมทั้งหมด", live),
+  ];
+
+  // แผ่นงานแยกของแต่ละช่อง / Agency (รายการ slot ของกลุ่มนั้น + แถวรวม)
+  const perGroup = used.map((c) => {
+    const mine = sorted.filter((x) => own(c, x));
+    return { name: c.agency ? `Agency ${c.agency}` : c.platform, rows: [listHead, ...mine.map(listRow), totalOf(mine)] };
+  });
 
   return {
     title: `Plan Slot Live ${monthLabel(month)}`,
     sheets: [
       { name: "ภาพรวม", rows: grid, header: 1 },
-      { name: "สรุปชั่วโมง", rows: summary },
-      { name: "รายการ slot", rows: list },
+      { name: "สรุปรายช่อง", rows: byChannel },
+      { name: "สรุปชั่วโมงต่อวัน", rows: summary },
+      ...perGroup,
+      { name: "รายการ slot ทั้งหมด", rows: list },
     ],
   };
 }
