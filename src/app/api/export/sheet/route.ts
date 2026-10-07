@@ -1,6 +1,6 @@
 import { google, type sheets_v4 } from "googleapis";
 import { fail, ok, requireMe } from "@/lib/api";
-import { cleanBook, isUrl, sheetNames, type Cell } from "@/lib/export";
+import { cleanBook, isUrl, sheetNames, type Cell, type RowStyle } from "@/lib/export";
 import { googleAuth } from "@/lib/google";
 
 // ส่งออกเป็น Google Sheet (หน้าเจ้าของ: สรุปรายเดือน / สถิติไลฟ์ / Plan Slot Live) เฉพาะ Owner
@@ -16,21 +16,31 @@ const NUMBER_FORMAT = {
 
 const HEADER_BG = { red: 0.992, green: 0.91, blue: 0.941 }; // ชมพูอ่อน #fde8f0
 
-function cellData(c: Cell, bold: boolean): sheets_v4.Schema$CellData {
+/** "00FFFF" -> สีของ Google Sheets (0..1) */
+const rgb = (hex: string) => ({
+  red: parseInt(hex.slice(0, 2), 16) / 255, green: parseInt(hex.slice(2, 4), 16) / 255, blue: parseInt(hex.slice(4, 6), 16) / 255,
+});
+
+/** bold = แถวหัวตาราง / style = สีทั้งแถว (มาก่อนหัวตาราง) */
+function cellData(c: Cell, bold: boolean, style?: RowStyle): sheets_v4.Schema$CellData {
   const format: sheets_v4.Schema$CellFormat = {};
-  if (bold) {
+  if (style) {
+    format.backgroundColor = rgb(style.bg);
+    format.textFormat = { bold: !!style.bold, ...(style.color ? { foregroundColor: rgb(style.color) } : {}) };
+  } else if (bold) {
     format.textFormat = { bold: true };
     format.backgroundColor = HEADER_BG;
   }
-  if (c === null || c === undefined || c === "") return bold ? { userEnteredFormat: format } : {};
+  const styled = !!style || bold;
+  if (c === null || c === undefined || c === "") return styled ? { userEnteredFormat: format } : {};
   if (typeof c === "object") {
-    if (c.v === null) return {};
+    if (c.v === null) return styled ? { userEnteredFormat: format } : {};
     return { userEnteredValue: { numberValue: c.v }, userEnteredFormat: { ...format, numberFormat: NUMBER_FORMAT[c.f] } };
   }
-  if (typeof c === "number") return { userEnteredValue: { numberValue: c }, ...(bold ? { userEnteredFormat: format } : {}) };
+  if (typeof c === "number") return { userEnteredValue: { numberValue: c }, ...(styled ? { userEnteredFormat: format } : {}) };
   // ข้อความเก็บเป็นข้อความเสมอ (ขึ้นต้นด้วย = ก็ไม่กลายเป็นสูตร) / ลิงก์กดได้
-  if (isUrl(c) && !bold) return { userEnteredValue: { stringValue: c }, userEnteredFormat: { textFormat: { link: { uri: c } } } };
-  return { userEnteredValue: { stringValue: c }, ...(bold ? { userEnteredFormat: format } : {}) };
+  if (isUrl(c) && !styled) return { userEnteredValue: { stringValue: c }, userEnteredFormat: { textFormat: { link: { uri: c } } } };
+  return { userEnteredValue: { stringValue: c }, ...(styled ? { userEnteredFormat: format } : {}) };
 }
 
 function googleError(err: unknown) {
@@ -83,7 +93,12 @@ export async function POST(request: Request) {
         requests.push({
           updateCells: {
             start: { sheetId: i, rowIndex: 0, columnIndex: 0 },
-            rows: s.rows.map((row, ri) => ({ values: row.map((c) => cellData(c, ri === header)) })),
+            rows: s.rows.map((row, ri) => {
+              // แถวที่มีสี: ระบายเต็มความกว้างตาราง
+              const style = s.rowStyles?.[ri];
+              const width = style ? Math.max(...s.rows.map((r) => r.length)) : row.length;
+              return { values: Array.from({ length: width }, (_, j) => cellData(row[j], ri === header, style)) };
+            }),
             fields: "userEnteredValue,userEnteredFormat",
           },
         });

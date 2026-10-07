@@ -11,7 +11,7 @@ import {
 } from "@/components/shared";
 import { DatePicker, DateRangePicker, MonthPicker, TimePicker } from "@/components/date-picker";
 import { ExportMenu } from "@/components/ExportMenu";
-import type { Cell, ExportBook } from "@/lib/export";
+import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -155,6 +155,52 @@ function useDraft(month: string) {
 
 // ---------- ส่งออก (Excel / Google Sheet) ----------
 
+// ---------- ส่งออก Shopee แบบตารางส่งทีม (แบบที่ใช้ส่ง Agency / MCN) ----------
+
+/** สีหัวกลุ่ม Shopee (เหมือนชีตที่ทีมใช้) */
+const SHOPEE_COLORS: Record<string, string> = { Infinite: "00FFFF", MCN: "FF9900", "In house": "FFFF00" };
+const SHOPEE_ORDER = ["Infinite", "MCN", "In house"];
+const MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayEn = (d: string) => `${Number(d.slice(8))} ${MONTHS_EN[Number(d.slice(5, 7)) - 1]}`;
+const clock = (t: string) => `${Number(t.slice(0, 2))}:${t.slice(3, 5)}`; // "08:00" -> "8:00"
+const hmText = (min: number) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
+
+/** slot ของวันเดียวกันที่ต่อกัน (จบ = เริ่มของถัดไป) รวมเป็นช่วงเดียว เช่น 08:00–11:00 + 11:00–13:00 = 08:00–13:00 */
+function mergedRanges(list: Item[]) {
+  const out: { start: string; end: string; min: number }[] = [];
+  for (const x of [...list].sort((a, b) => dayOrder(a.start, a.platform) - dayOrder(b.start, b.platform))) {
+    const last = out.at(-1);
+    if (last && last.end === x.start) { last.end = x.end; last.min += lenOf(x); }
+    else out.push({ start: x.start, end: x.end, min: lenOf(x) });
+  }
+  return out;
+}
+
+/**
+ * ตาราง Shopee แบบส่งทีม: หัวตาราง (ดำ) > หัวกลุ่ม (สีของกลุ่ม + ชั่วโมงรวม) > วันละแถว (ช่วงที่ต่อกันรวมเป็นช่วงเดียว)
+ *   คอลัมน์: DATE / Time Start / Time End / ชั่วโมง (h:mm) / Total hrs
+ */
+function shopeeTeamSheet(name: string, groups: { agency: string; items: Item[] }[]): ExportSheet {
+  const rows: Cell[][] = [["DATE", "Time Start", "Time End", "", "Total hrs"]];
+  const rowStyles: Record<number, RowStyle> = { 0: { bg: "000000", color: "FFFFFF", bold: true } };
+  groups.forEach((g, gi) => {
+    if (gi > 0) rows.push([]);
+    const total = g.items.reduce((m, x) => m + lenOf(x), 0);
+    rowStyles[rows.length] = { bg: SHOPEE_COLORS[g.agency] ?? "D9D9D9", bold: true };
+    rows.push([ownerLabel(g.agency), "", "", "", { v: total / 60, f: "money" }]);
+    const dates = [...new Set(g.items.map((x) => x.date))].sort();
+    for (const d of dates) {
+      // สลับสีทีละสัปดาห์ (ชมพู / ฟ้า) ให้อ่านง่าย
+      const week = Math.floor((Number(d.slice(8)) - 1) / 7);
+      for (const r of mergedRanges(g.items.filter((x) => x.date === d))) {
+        rowStyles[rows.length] = { bg: week % 2 ? "CFE2F3" : "EAD1DC" };
+        rows.push([dayEn(d), clock(r.start), clock(r.end), hmText(r.min), { v: r.min / 60, f: "money" }]);
+      }
+    }
+  });
+  return { name, rows, rowStyles };
+}
+
 const groupName = (c: Pick<Column, "platform" | "agency">) => (c.agency ? `${c.platform} › ${ownerLabel(c.agency)}` : c.platform);
 const hoursCell = (h: number): Cell => (h ? { v: h, f: "dec" } : null);
 
@@ -256,15 +302,29 @@ function planBook(month: string, columns: Column[], items: Item[], mode: Mode = 
     return { name: c.agency ? `${c.platform === SHOPEE ? "Shopee " : ""}${ownerLabel(c.agency)}` : c.platform, rows: [listHead, ...mine.map(listRow), totalOf(mine)] };
   });
 
+  const base: ExportSheet[] = [
+    { name: "ภาพรวม", rows: grid, header: 1 },
+    { name: "สรุปรายช่อง", rows: byChannel },
+    { name: "สรุปชั่วโมงต่อวัน", rows: summary },
+  ];
+  if (mode === "shopee") {
+    // Shopee: ตารางส่งทีมขึ้นก่อน (รวมทุกกลุ่ม + แยกกลุ่ม ไว้ส่งให้ Agency / MCN) แล้วตามด้วยสรุปแบบปกติ
+    const agencies = [...new Set(live.filter((x) => x.agency).map((x) => x.agency!))]
+      .sort((a, b) => (SHOPEE_ORDER.indexOf(a) + 1 || 99) - (SHOPEE_ORDER.indexOf(b) + 1 || 99));
+    const groups = agencies.map((agency) => ({ agency, items: live.filter((x) => x.agency === agency) }));
+    return {
+      title: `Plan Slot Live Shopee ${monthLabel(month)}`,
+      sheets: [
+        shopeeTeamSheet("Shopee ทุกกลุ่ม", groups),
+        ...groups.map((g) => shopeeTeamSheet(ownerLabel(g.agency), [g])),
+        ...base,
+        { name: "รายการ slot ทั้งหมด", rows: list },
+      ],
+    };
+  }
   return {
-    title: `Plan Slot Live ${mode === "shopee" ? "Shopee " : ""}${monthLabel(month)}`,
-    sheets: [
-      { name: "ภาพรวม", rows: grid, header: 1 },
-      { name: "สรุปรายช่อง", rows: byChannel },
-      { name: "สรุปชั่วโมงต่อวัน", rows: summary },
-      ...perGroup,
-      { name: "รายการ slot ทั้งหมด", rows: list },
-    ],
+    title: `Plan Slot Live ${monthLabel(month)}`,
+    sheets: [...base, ...perGroup, { name: "รายการ slot ทั้งหมด", rows: list }],
   };
 }
 
