@@ -820,11 +820,14 @@ function sameDayLastMonth(k: string) {
   const last = new Date(Date.UTC(y, m - 1, 0)).getUTCDate();
   return new Date(Date.UTC(y, m - 2, Math.min(d, last))).toISOString().slice(0, 10);
 }
-const fmtDayFull = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+const fmtWeekday = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { weekday: "long", timeZone: "UTC" });
+const fmtDayDate = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 /** วัน "YYYY-MM-DD" -> ช่วง 00:00–24:00 เวลาไทย */
 function dayPeriod(k: string): Period {
   const [y, m, d] = k.split("-").map(Number);
-  return { from: bkkIso(y, m, d), to: bkkIso(y, m, d + 1), name: fmtDayFull.format(new Date(`${k}T12:00:00Z`)) };
+  // ชื่อช่วง เช่น "อาทิตย์ 6 ก.ย. 2026" (Intl ให้ "วันอาทิตย์" ตัดคำว่า "วัน" ออก)
+  const date = new Date(`${k}T12:00:00Z`);
+  return { from: bkkIso(y, m, d), to: bkkIso(y, m, d + 1), name: `${fmtWeekday.format(date).replace(/^วัน/, "")} ${fmtDayDate.format(date)}` };
 }
 
 /**

@@ -105,15 +105,22 @@ function pairSheet(name: string, first: string, aName: string, bName: string, gr
   };
 }
 
-/** สรุปตัวชี้วัด: ช่วงหลัก + ช่วงเทียบแต่ละช่วง (ค่า + เปลี่ยน %) */
-function summarySheet(name: string, curLabel: string, cur: Totals, compare: { label: string; totals: Totals }[]): ExportSheet {
+/**
+ * สรุปตัวชี้วัด: ช่วงหลัก + ช่วงเทียบแต่ละช่วง (ค่า + เปลี่ยน %)
+ *   A1 = ชื่อแพลตฟอร์ม ("TikTok" / "Shopee" / "รวม") · หัวคอลัมน์เปลี่ยน = "VS" (เทียบช่วงเดียว) หรือ "VS ชื่อช่วง"
+ *   แผ่นของแพลตฟอร์ม: ตัดหมายเหตุที่เป็นชื่อแพลตฟอร์มเดียวกัน เช่น "Views (TikTok)" ในแผ่น TikTok = "Views"
+ */
+function summarySheet(name: string, curLabel: string, cur: Totals, compare: { label: string; totals: Totals }[], title = "รวม"): ExportSheet {
+  const vs = (label: string) => (compare.length > 1 ? `VS ${label}` : "VS");
   return {
     name,
     rows: [
-      ["ตัวชี้วัด", curLabel, ...compare.flatMap((c) => [c.label, `เปลี่ยน vs ${c.label}`])],
+      [title, curLabel, ...compare.flatMap((c) => [c.label, vs(c.label)])],
       ...METRICS.map((m): Cell[] => {
         const v = cur.lives ? m.value(cur) : null;
-        return [m.note ? `${m.label} (${m.note})` : m.label, num(m.kind, v), ...compare.flatMap((c) => {
+        // แผ่นแพลตฟอร์ม: เหลือแค่หมายเหตุสูตร CTR (นิยามเต็มอยู่ในแผ่น "ข้อมูล") เช่น "CTR (คลิก ÷ Impressions)" / "Views" / "CO"
+        const note = title === "รวม" ? m.note ?? "" : m.key === "ctr" ? "คลิก ÷ Impressions" : "";
+        return [note ? `${m.label} (${note})` : m.label, num(m.kind, v), ...compare.flatMap((c) => {
           const p = c.totals.lives ? m.value(c.totals) : null;
           return [num(m.kind, p), pct(v, p)];
         })];
@@ -132,7 +139,7 @@ function platformSheets(curLabel: string, cur: LiveSession[], compare: { label: 
   return PLATFORM_ORDER
     .filter((p) => [cur, ...compare.map((c) => c.list)].some((l) => l.some((s) => s.platform === p)))
     .map((p) => summarySheet(p, curLabel, totalsOf(cur.filter((s) => s.platform === p)),
-      compare.map((c) => ({ label: c.label, totals: totalsOf(c.list.filter((s) => s.platform === p)) }))));
+      compare.map((c) => ({ label: c.label, totals: totalsOf(c.list.filter((s) => s.platform === p)) })), p));
 }
 
 // ---------- รายงานแต่ละแบบ ----------
