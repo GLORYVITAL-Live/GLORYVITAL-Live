@@ -2,13 +2,14 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 import {
-  ChevronLeftIcon, ChevronRightIcon, CopyIcon, PlusIcon, TagIcon, Trash2Icon, Undo2Icon, WandSparklesIcon, XIcon,
+  CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, MinusIcon, PlusIcon, TagIcon, Trash2Icon, Undo2Icon, UserIcon,
+  WandSparklesIcon, XIcon,
 } from "lucide-react";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, PlatformBadge, StateBox, api,
   useConfirm, useToast,
 } from "@/components/shared";
-import { DatePicker, MonthPicker, TimePicker } from "@/components/date-picker";
+import { DatePicker, DateRangePicker, MonthPicker, TimePicker } from "@/components/date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -17,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { fmtDayLong, fmtWeekShort, monthKey, monthLabel, num, parseKey, todayKey } from "@/lib/format";
+import { fmtDayLong, fmtDayMonth, fmtWeekShort, monthKey, monthLabel, num, parseKey, todayKey } from "@/lib/format";
 import { readLocal, useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
@@ -30,15 +31,18 @@ type Existing = {
 };
 type PlanData = { month: string; slots: Existing[]; platforms: string[]; campaigns: string[] };
 type NewSlot = { date: string; platform: string; start: string; end: string; campaign: string };
-/** ร่างของเดือน: slot ใหม่ / Campaign ที่แก้ของ slot เดิม (ตาม key) / slot เดิมที่จะลบ (key) */
-type Draft = { add: NewSlot[]; campaign: Record<string, string>; del: string[] };
+/** ช่วงวันที่ตั้ง Campaign ไว้ (slot ที่ติ๊กเพิ่มทีหลังในช่วงนี้ได้ Campaign นี้อัตโนมัติ) platform = ALL = ทุกแพลตฟอร์ม */
+type CampaignRange = { from: string; to: string; platform: string; campaign: string };
+/** ร่างของเดือน: slot ใหม่ / Campaign ที่แก้ของ slot เดิม (ตาม key) / slot เดิมที่จะลบ (key) / ช่วง Campaign */
+type Draft = { add: NewSlot[]; campaign: Record<string, string>; del: string[]; ranges: CampaignRange[] };
+type Column = { platform: string; times: { start: string; end: string }[] };
 /** slot หนึ่งแถวในหน้า (ทั้งที่มีอยู่แล้วและร่างใหม่) */
 type Item = {
   key: string; date: string; platform: string; start: string; end: string; campaign: string;
   existing: Existing | null; deleting: boolean; campaignChanged: boolean; overlap: boolean;
 };
 
-const EMPTY: Draft = { add: [], campaign: {}, del: [] };
+const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [] };
 const DRAFT_KEY = "glory_plan_draft_";
 const MONTH_KEY = "glory_plan_month";
 const VIEW_KEY = "glory_plan_view";
@@ -52,6 +56,20 @@ const fmtMin = (m: number) => `${String(Math.floor((((m % 1440) + 1440) % 1440) 
 const lenOf = (s: { start: string; end: string }) => (toMin(s.end) - toMin(s.start) + 1440) % 1440;
 const canDelete = (s: Existing) => (!s.mc || s.mc.free) && (!s.admin || s.admin.free);
 const fmtDayNum = (d: string) => `${fmtWeekShort.format(parseKey(d))} ${parseKey(d).getUTCDate()}`;
+const fmtRange = (r: { from: string; to: string }) => r.from === r.to ? fmtDayMonth.format(parseKey(r.from))
+  : `${parseKey(r.from).getUTCDate()}–${fmtDayMonth.format(parseKey(r.to))}`;
+/** ช่วง 2 ชม. ที่เริ่มเวลานี้ */
+const two = (start: string) => ({ start, end: fmtMin(toMin(start) + 120) });
+
+/**
+ * ช่องไลฟ์หลัก + ช่วงเวลาให้ติ๊ก (ตามที่ใช้จริงในชีต) เรียงตามคอลัมน์ในหน้า
+ * ช่วงเวลาอื่นที่มีในเดือนนั้น / แพลตฟอร์มอื่นที่มี slot จะเพิ่มเป็นคอลัมน์ให้เอง
+ */
+const CHANNELS: Column[] = [
+  { platform: "GLORY MALL", times: ["07:30", "09:30", "11:30", "13:30", "15:30", "17:30", "19:30", "21:30"].map(two) },
+  { platform: "Skin Expert", times: ["09:30", "11:30", "17:30", "19:30", "21:30"].map(two) },
+  { platform: "Cherry Glory", times: ["09:30", "11:30", "13:30", "17:30", "19:30", "21:30"].map(two) },
+];
 
 function daysOf(month: string) {
   const [y, m] = month.split("-").map(Number);
@@ -67,6 +85,7 @@ function parseDraft(raw: string | null): Draft | null {
       add: Array.isArray(v?.add) ? v.add : [],
       campaign: v?.campaign && typeof v.campaign === "object" ? v.campaign : {},
       del: Array.isArray(v?.del) ? v.del : [],
+      ranges: Array.isArray(v?.ranges) ? v.ranges : [],
     };
   } catch {
     return null;
@@ -96,7 +115,7 @@ export function PlanSlots() {
   const savedMonth = useLocal(MONTH_KEY);
   const month = savedMonth && /^\d{4}-\d{2}$/.test(savedMonth) ? savedMonth : monthKey();
   const setMonth = (m: string) => writeLocal(MONTH_KEY, m);
-  const view = useLocal(VIEW_KEY) === "sheet" ? "sheet" : "matrix";
+  const view = useLocal(VIEW_KEY) === "sheet" ? "sheet" : "tick";
   const [data, setData] = useState<PlanData | null>(null);
   const [error, setError] = useState<{ month: string; message: string } | null>(null);
   const [tick, setTick] = useState(0);
@@ -143,12 +162,23 @@ export function PlanSlots() {
     return list;
   }, [plan, draft, month, existingMap]);
 
-  const platforms = useMemo(() => {
-    const used = new Set(items.map((x) => x.platform));
-    const order = plan?.platforms ?? [];
-    return [...used].sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999) || a.localeCompare(b));
-  }, [items, plan]);
-  const tagIndex = (p: string) => Math.max(0, (plan?.platforms ?? []).indexOf(p)) % 4;
+  // คอลัมน์ติ๊ก: ช่องหลัก (+ ช่วงเวลาอื่นที่มีในเดือนนี้) แล้วต่อด้วยแพลตฟอร์มอื่นที่มี slot
+  const columns = useMemo<Column[]>(() => {
+    const cols = CHANNELS.map((c) => ({ platform: c.platform, set: new Set(c.times.map((t) => `${t.start}-${t.end}`)) }));
+    for (const x of items) {
+      let col = cols.find((c) => c.platform === x.platform);
+      if (!col) cols.push(col = { platform: x.platform, set: new Set() });
+      col.set.add(`${x.start}-${x.end}`);
+    }
+    return cols.map((c) => ({ platform: c.platform, times: [...c.set].sort().map((t) => ({ start: t.slice(0, 5), end: t.slice(6, 11) })) }));
+  }, [items]);
+  const platforms = columns.map((c) => c.platform);
+  const tagIndex = (p: string) => Math.max(0, platforms.indexOf(p)) % 4;
+  const itemMap = useMemo(() => new Map(items.map((x) => [x.key, x])), [items]);
+
+  /** Campaign ของช่วงวันที่ตั้งไว้ (ช่วงที่ตั้งทีหลังชนะ) */
+  const campaignFor = (date: string, platform: string) =>
+    draft.ranges.findLast((r) => r.from <= date && date <= r.to && (r.platform === ALL || r.platform === platform))?.campaign ?? "";
 
   // สิ่งที่จะบันทึก
   const changes = useMemo(() => {
@@ -188,9 +218,10 @@ export function PlanSlots() {
     update((d) => ({ ...d, del: d.del.includes(key) ? d.del.filter((k) => k !== key) : [...d.del, key] }));
 
   /** ตั้ง Campaign ให้หลาย slot (ร่างใหม่ = แก้ในร่าง / slot เดิม = จดว่าจะแก้) */
-  function setCampaign(keys: string[], campaign: string) {
+  const setCampaign = (keys: string[], campaign: string) => update(withCampaign(keys, campaign));
+  function withCampaign(keys: string[], campaign: string) {
     const want = new Set(keys);
-    update((d) => {
+    return (d: Draft): Draft => {
       const next = { ...d.campaign };
       for (const k of want) {
         const s = existingMap.get(k);
@@ -199,7 +230,64 @@ export function PlanSlots() {
         else next[k] = campaign;
       }
       return { ...d, add: d.add.map((s) => (want.has(keyOf(s)) ? { ...s, campaign } : s)), campaign: next };
+    };
+  }
+
+  /** ตั้ง Campaign ทั้งช่วงวัน: slot ที่มีตอนนี้ + จำช่วงไว้ให้ slot ที่ติ๊กเพิ่มทีหลัง (ว่าง = ล้าง) */
+  function applyRange(r: CampaignRange) {
+    const keys = items.filter((x) => x.date >= r.from && x.date <= r.to && (r.platform === ALL || x.platform === r.platform)
+      && !x.deleting && (!x.existing || x.existing.mc)).map((x) => x.key);
+    update((d) => {
+      const n = withCampaign(keys, r.campaign)(d);
+      const others = n.ranges.filter((x) => !(x.from === r.from && x.to === r.to && x.platform === r.platform));
+      return { ...n, ranges: r.campaign ? [...others, r] : others };
     });
+    toast(`ตั้ง Campaign ${keys.length} slot ในร่างแล้ว${r.campaign ? " — slot ที่ติ๊กเพิ่มในช่วงนี้จะได้ Campaign นี้ด้วย" : ""}`);
+  }
+  const removeRange = (i: number) => update((d) => ({ ...d, ranges: d.ranges.filter((_, j) => j !== i) }));
+
+  // ---------- ติ๊ก ----------
+  const isOn = (d: Draft, k: string) => (existingMap.has(k) ? !d.del.includes(k) : d.add.some((s) => keyOf(s) === k));
+
+  /** ติ๊ก / เอาติ๊กออก 1 ช่อง: ช่องว่าง = เพิ่มร่าง, slot เดิม = ลบ (เฉพาะที่ยังว่าง) */
+  function toggleCell(date: string, platform: string, t: { start: string; end: string }) {
+    const slot = { date, platform, start: t.start, end: t.end };
+    const k = keyOf(slot);
+    const ex = existingMap.get(k);
+    if (ex && !draft.del.includes(k) && !canDelete(ex)) {
+      toast("slot นี้มีคนจองแล้ว เอาติ๊กออกไม่ได้ (เอาคนออกที่หน้าจัดการ slot ก่อน)", "error");
+      return;
+    }
+    update((d) => ex
+      ? { ...d, del: d.del.includes(k) ? d.del.filter((x) => x !== k) : [...d.del, k] }
+      : isOn(d, k)
+        ? { ...d, add: d.add.filter((s) => keyOf(s) !== k) }
+        : { ...d, add: [...d.add, { ...slot, campaign: campaignFor(date, platform) }] });
+  }
+
+  /** กดหัวคอลัมน์: ติ๊กเวลานี้ทุกวัน (ตั้งแต่วันนี้) ถ้าติ๊กครบแล้ว = เอาติ๊กออกทั้งหมด (slot ที่มีคนจองคงไว้) */
+  function toggleColumn(platform: string, t: { start: string; end: string }) {
+    const today = todayKey();
+    const keys = daysOf(month).filter((d) => d >= today).map((date) => ({ date, k: keyOf({ date, platform, start: t.start, end: t.end }) }));
+    if (!keys.length) { toast("เดือนนี้ผ่านไปแล้ว", "error"); return; }
+    const allOn = keys.every(({ k }) => isOn(draft, k));
+    const locked = allOn ? keys.filter(({ k }) => existingMap.has(k) && !canDelete(existingMap.get(k)!)).length : 0;
+    update((d) => {
+      let { add, del } = d;
+      for (const { date, k } of keys) {
+        const ex = existingMap.get(k);
+        if (allOn) {
+          if (!ex) add = add.filter((s) => keyOf(s) !== k);
+          else if (canDelete(ex) && !del.includes(k)) del = [...del, k];
+        } else if (ex) {
+          del = del.filter((x) => x !== k);
+        } else if (!add.some((s) => keyOf(s) === k)) {
+          add = [...add, { date, platform, start: t.start, end: t.end, campaign: campaignFor(date, platform) }];
+        }
+      }
+      return { ...d, add, del };
+    });
+    toast(`${allOn ? "เอาติ๊กออก" : "ติ๊ก"} ${platform} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน${locked ? ` (มีคนจองแล้ว ${locked} slot คงไว้)` : ""}`);
   }
 
   async function copyPrevMonth() {
@@ -267,7 +355,7 @@ export function PlanSlots() {
         });
         if (!res.ok) throw new Error(res.message);
       }
-      update(() => EMPTY);
+      update((d) => ({ ...EMPTY, ranges: d.ranges }));
       toast("บันทึกแล้ว ระบบกำลังเขียนลงชีต (อาจใช้เวลา 1–2 นาที)");
       reload();
     } catch (err) {
@@ -303,7 +391,7 @@ export function PlanSlots() {
           aria-label="มุมมอง"
           className="ml-auto bg-card"
         >
-          <ToggleGroupItem value="matrix" className="font-semibold">ภาพรวมทั้งเดือน</ToggleGroupItem>
+          <ToggleGroupItem value="tick" className="font-semibold">ติ๊กเลือก slot</ToggleGroupItem>
           <ToggleGroupItem value="sheet" className="font-semibold">แบบชีต</ToggleGroupItem>
         </ToggleGroup>
       </div>
@@ -317,44 +405,52 @@ export function PlanSlots() {
           <PatternPanel
             key={month}
             month={month}
-            platforms={plan.platforms}
+            platforms={[...new Set([...platforms, ...plan.platforms])]}
             campaigns={plan.campaigns}
             onAdd={(list) => report(addSlots(list))}
             onCopyPrev={copyPrevMonth}
           />
-          <CampaignPanel key={`c-${month}`} month={month} items={items} platforms={platforms} onApply={setCampaign} />
+          <CampaignPanel
+            key={`c-${month}`}
+            month={month}
+            items={items}
+            platforms={platforms}
+            ranges={draft.ranges}
+            onApply={applyRange}
+            onRemove={removeRange}
+          />
           <datalist id="plan-campaigns">{plan.campaigns.map((c) => <option key={c} value={c} />)}</datalist>
-          <datalist id="plan-platforms">{plan.platforms.map((p) => <option key={p} value={p} />)}</datalist>
+          <datalist id="plan-platforms">{[...new Set([...platforms, ...plan.platforms])].map((p) => <option key={p} value={p} />)}</datalist>
 
           <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
             <strong className="text-base">{monthLabel(month)}</strong>
             <span className="text-muted-foreground tabular-nums">{live.length} slot · {num(hours)} ชม.</span>
             {platforms.map((p) => {
               const mine = live.filter((x) => x.platform === p);
-              return (
+              return !mine.length ? null : (
                 <span key={p} className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
                   <PlatformBadge name={p} index={tagIndex(p)} />{mine.length} slot · {num(mine.reduce((h, x) => h + lenOf(x) / 60, 0))} ชม.
                 </span>
               );
             })}
           </div>
-          <Legend />
+          <Legend tick={view === "tick"} />
           {overlaps ? (
             <Notice variant="warning">มี {overlaps} slot ที่เวลาทับกันในแพลตฟอร์มเดียวกัน (กรอบสีส้ม) ตรวจดูก่อนบันทึก</Notice>
           ) : null}
 
-          {!items.length ? (
-            <StateBox title={`${monthLabel(month)} ยังไม่มี slot`}>
-              ใช้ &quot;เติมทั้งเดือน&quot; ด้านบน หรือคัดลอกรูปแบบจากเดือนก่อน แล้วกด &quot;บันทึกลงชีต&quot;
-            </StateBox>
-          ) : view === "matrix" ? (
-            <MatrixView days={days} items={items} platforms={platforms} tagIndex={tagIndex} onOpenDay={setOpenDay} />
+          {view === "tick" ? (
+            <>
+              <p className="mb-2 text-xs text-muted-foreground">
+                ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน
+              </p>
+              <TickView month={month} columns={columns} itemMap={itemMap} tagIndex={tagIndex} onToggle={toggleCell} onColumn={toggleColumn} onOpenDay={setOpenDay} />
+            </>
+          ) : !items.length ? (
+            <StateBox title={`${monthLabel(month)} ยังไม่มี slot`}>ติ๊กเลือก slot ในมุมมอง &quot;ติ๊กเลือก slot&quot; หรือใช้ &quot;เติมทั้งเดือน&quot; ด้านบน</StateBox>
           ) : (
             <SheetView items={items} tagIndex={tagIndex} onOpenDay={setOpenDay} />
           )}
-          {view === "matrix" && items.length ? (
-            <p className="mt-2 text-xs text-muted-foreground">แตะที่วันเพื่อเพิ่ม / ลบ slot หรือใส่ Campaign ของวันนั้น</p>
-          ) : null}
         </>
       )}
 
@@ -363,7 +459,7 @@ export function PlanSlots() {
           key={openDay}
           date={openDay}
           items={items.filter((x) => x.date === openDay)}
-          platforms={platforms.length ? platforms : plan.platforms}
+          platforms={platforms}
           tagIndex={tagIndex}
           onAdd={(s) => addSlots([s])}
           onRemoveNew={removeNew}
@@ -420,75 +516,146 @@ const chipTitle = (x: Item) => [
   x.deleting ? "จะลบตอนบันทึก" : "",
 ].filter(Boolean).join("\n");
 
-function Legend() {
+function Legend({ tick }: { tick: boolean }) {
   const sample = (cls: string, text: string) => (
-    <span className="flex items-center gap-1"><span className={cn("inline-block h-3.5 w-6 rounded border", cls)} />{text}</span>
+    <span className="flex items-center gap-1"><span className={cn("inline-block rounded border", tick ? "size-3.5" : "h-3.5 w-6", cls)} />{text}</span>
   );
   return (
     <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-      {sample("bg-card", "มีในชีตแล้ว (ยังว่าง)")}
-      {sample("border-transparent bg-secondary", "มีคนจองแล้ว")}
-      {sample("border-dashed border-primary bg-primary/10", "ร่างใหม่")}
-      {sample("border-destructive/60 bg-destructive/10", "จะลบ")}
+      {tick ? (
+        <>
+          {sample("border-2 border-dashed border-primary bg-primary/15", "ร่างใหม่")}
+          {sample("border-primary bg-primary", "มีในชีตแล้ว (ยังว่าง)")}
+          {sample("border-p2 bg-p2", "มีคนจองแล้ว (เอาออกไม่ได้)")}
+          {sample("border-destructive bg-destructive/15", "จะลบ")}
+        </>
+      ) : (
+        <>
+          {sample("bg-card", "มีในชีตแล้ว (ยังว่าง)")}
+          {sample("border-transparent bg-secondary", "มีคนจองแล้ว")}
+          {sample("border-dashed border-primary bg-primary/10", "ร่างใหม่")}
+          {sample("border-destructive/60 bg-destructive/10", "จะลบ")}
+        </>
+      )}
     </div>
   );
 }
 
-/** ภาพรวมทั้งเดือน: แถว = วัน, คอลัมน์ = แพลตฟอร์ม, ช่อง = ช่วงเวลา */
-function MatrixView({ days, items, platforms, tagIndex, onOpenDay }: {
-  days: string[];
-  items: Item[];
-  platforms: string[];
+/** ช่องติ๊ก 1 slot */
+function Tick({ item, label, onClick }: { item: Item | undefined; label: string; onClick: () => void }) {
+  const st = !item ? "none" : item.deleting ? "del" : !item.existing ? "new"
+    : item.existing.mc?.cancelled ? "cancel" : item.existing.mc?.name || !canDelete(item.existing) ? "taken" : "have";
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={st !== "none" && st !== "del"}
+      aria-label={label}
+      title={item ? chipTitle(item) : `${label} (กดเพื่อเพิ่ม)`}
+      onClick={onClick}
+      className={cn(
+        "mx-auto grid size-6 place-items-center rounded-md border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5",
+        st === "none" && "bg-card hover:border-primary hover:bg-primary/10",
+        st === "new" && "border-2 border-dashed border-primary bg-primary/15 text-primary",
+        st === "have" && "border-primary bg-primary text-primary-foreground",
+        st === "taken" && "border-p2 bg-p2 text-white",
+        st === "cancel" && "bg-muted text-muted-foreground",
+        st === "del" && "border-destructive bg-destructive/15 text-destructive",
+        item?.overlap && "ring-2 ring-warning-border",
+      )}
+    >
+      {st === "new" || st === "have" ? <CheckIcon /> : st === "taken" ? <UserIcon /> : st === "del" ? <XIcon /> : st === "cancel" ? <MinusIcon /> : null}
+    </button>
+  );
+}
+
+/** ตารางติ๊ก: แถว = วันทั้งเดือน, คอลัมน์ = ช่อง x ช่วงเวลา */
+function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpenDay }: {
+  month: string;
+  columns: Column[];
+  itemMap: Map<string, Item>;
   tagIndex: (p: string) => number;
+  onToggle: (date: string, platform: string, t: { start: string; end: string }) => void;
+  onColumn: (platform: string, t: { start: string; end: string }) => void;
   onOpenDay: (d: string) => void;
 }) {
-  const byCell = useMemo(() => {
-    const m = new Map<string, Item[]>();
-    for (const x of items) m.set(`${x.date}|${x.platform}`, [...(m.get(`${x.date}|${x.platform}`) ?? []), x]);
-    return m;
-  }, [items]);
+  const days = daysOf(month);
   const today = todayKey();
+  const items = [...itemMap.values()];
   return (
-    <div className="overflow-x-auto rounded-xl border bg-card">
-      <table className="w-full min-w-[560px] border-collapse text-sm">
+    <div className="max-h-[78vh] overflow-auto rounded-xl border bg-card">
+      <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
         <thead>
-          <tr className="border-b bg-muted/50 text-left text-xs">
-            <th className="sticky left-0 z-10 w-20 bg-muted px-2 py-2 font-semibold">วันที่</th>
-            {platforms.map((p) => (
-              <th key={p} className="px-2 py-2 font-semibold"><PlatformBadge name={p} index={tagIndex(p)} /></th>
-            ))}
-            <th className="w-40 px-2 py-2 font-semibold">Campaign</th>
+          <tr>
+            <th rowSpan={2} className="sticky top-0 left-0 z-30 border-b bg-muted px-2 text-left text-xs font-semibold">วันที่</th>
+            {columns.map((c) => {
+              const n = items.filter((x) => x.platform === c.platform && !x.deleting && !x.existing?.mc?.cancelled).length;
+              return (
+                <th key={c.platform} colSpan={c.times.length} className="sticky top-0 z-20 h-8 border-b border-l bg-muted px-2 text-left whitespace-nowrap">
+                  <PlatformBadge name={c.platform} index={tagIndex(c.platform)} />
+                  <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">{n} slot</span>
+                </th>
+              );
+            })}
+            <th rowSpan={2} className="sticky top-0 z-20 min-w-36 border-b border-l bg-muted px-2 text-left text-xs font-semibold">Campaign</th>
+          </tr>
+          <tr>
+            {columns.flatMap((c) => c.times.map((t, i) => (
+              <th key={`${c.platform}|${t.start}|${t.end}`} className={cn("sticky top-8 z-20 border-b bg-muted px-0.5 py-1 font-medium", i === 0 && "border-l")}>
+                <button
+                  type="button"
+                  title={`ติ๊ก / เอาติ๊กออก ${c.platform} ${t.start}–${t.end} ทุกวันตั้งแต่วันนี้`}
+                  onClick={() => onColumn(c.platform, t)}
+                  className="rounded px-1 text-[11px] leading-tight tabular-nums outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {t.start}<br /><span className="text-muted-foreground">{t.end}</span>
+                </button>
+              </th>
+            )))}
           </tr>
         </thead>
         <tbody>
           {days.map((d) => {
             const wd = parseKey(d).getUTCDay();
-            const mine = items.filter((x) => x.date === d && !x.deleting);
-            const camps = [...new Set(mine.map((x) => x.campaign).filter(Boolean))];
+            const weekend = wd === 0 || wd === 6;
+            const camps = [...new Set(items.filter((x) => x.date === d && !x.deleting).map((x) => x.campaign).filter(Boolean))];
             return (
-              <tr
-                key={d}
-                onClick={() => onOpenDay(d)}
-                className={cn("cursor-pointer border-b align-top last:border-b-0 hover:bg-muted/60", (wd === 0 || wd === 6) && "bg-muted/30")}
-              >
-                <th scope="row" className={cn("sticky left-0 z-10 bg-card px-2 py-1.5 text-left font-semibold whitespace-nowrap", d === today && "text-primary")}>
-                  <button type="button" className="outline-none focus-visible:underline" onClick={(e) => { e.stopPropagation(); onOpenDay(d); }}>
+              <tr key={d} className={cn(d < today && "opacity-55", weekend && "bg-muted/40")}>
+                <th
+                  scope="row"
+                  className={cn(
+                    "sticky left-0 z-10 border-b px-2 py-1 text-left font-semibold whitespace-nowrap",
+                    weekend ? "bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))]" : "bg-card",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onOpenDay(d)}
+                    title="เพิ่มเวลาอื่น / ใส่ Campaign ของวันนี้"
+                    className={cn("rounded px-1 outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring", d === today && "text-primary")}
+                  >
                     {fmtDayNum(d)}
                   </button>
                 </th>
-                {platforms.map((p) => (
-                  <td key={p} className="px-2 py-1.5">
-                    <div className="flex flex-wrap gap-1">
-                      {(byCell.get(`${d}|${p}`) ?? []).map((x) => (
-                        <span key={x.key} className={chipClass(x)} title={chipTitle(x)}>{x.start}–{x.end}</span>
-                      ))}
-                    </div>
+                {columns.flatMap((c) => c.times.map((t, i) => (
+                  <td key={`${c.platform}|${t.start}|${t.end}`} className={cn("border-b px-1 py-1 text-center", i === 0 && "border-l")}>
+                    <Tick
+                      item={itemMap.get(keyOf({ platform: c.platform, date: d, start: t.start, end: t.end }))}
+                      label={`${fmtDayNum(d)} ${c.platform} ${t.start}–${t.end}`}
+                      onClick={() => onToggle(d, c.platform, t)}
+                    />
                   </td>
-                ))}
-                <td className="px-2 py-1.5">
-                  <div className="flex flex-wrap gap-1">
-                    {camps.map((c) => <Badge key={c} variant="secondary" className="text-[11px]">{c}</Badge>)}
-                  </div>
+                )))}
+                <td className="border-b border-l px-2 py-1">
+                  <button
+                    type="button"
+                    onClick={() => onOpenDay(d)}
+                    aria-label={`Campaign ${fmtDayNum(d)}`}
+                    className="flex min-h-6 w-full flex-wrap items-center gap-1 text-left outline-none"
+                  >
+                    {camps.length ? camps.map((c) => <Badge key={c} variant="secondary" className="text-[11px]">{c}</Badge>)
+                      : <span className="text-xs text-muted-foreground/60">+ Campaign</span>}
+                  </button>
                 </td>
               </tr>
             );
@@ -697,20 +864,24 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
 
 // ---------- Campaign ตามช่วงวัน ----------
 
-function CampaignPanel({ month, items, platforms, onApply }: {
+function CampaignPanel({ month, items, platforms, ranges, onApply, onRemove }: {
   month: string;
   items: Item[];
   platforms: string[];
-  onApply: (keys: string[], campaign: string) => void;
+  ranges: CampaignRange[];
+  onApply: (r: CampaignRange) => void;
+  onRemove: (i: number) => void;
 }) {
-  const toast = useToast();
   const id = useId();
   const days = daysOf(month);
-  const [from, setFrom] = useState(days[0]);
-  const [to, setTo] = useState(days[days.length - 1]);
+  const [range, setRange] = useState(() => {
+    const today = todayKey();
+    const from = today >= days[0] && today <= days[days.length - 1] ? today : days[0];
+    return { from, to: from };
+  });
   const [platform, setPlatform] = useState(ALL);
   const [campaign, setCampaign] = useState("");
-  const targets = items.filter((x) => x.date >= from && x.date <= to && (platform === ALL || x.platform === platform)
+  const targets = items.filter((x) => x.date >= range.from && x.date <= range.to && (platform === ALL || x.platform === platform)
     && !x.deleting && (!x.existing || x.existing.mc));
 
   return (
@@ -718,9 +889,7 @@ function CampaignPanel({ month, items, platforms, onApply }: {
       <CardContent className="space-y-3 text-sm">
         <strong className="flex items-center gap-1.5 text-base"><TagIcon className="size-4 text-primary" />ตั้ง Campaign ตามช่วงวัน</strong>
         <div className="flex flex-wrap items-center gap-2">
-          <DatePicker value={from} min={days[0]} onChange={(v) => { if (v) { setFrom(v); if (v > to) setTo(v); } }} aria-label="Campaign ตั้งแต่วันที่" className="w-auto" />
-          <span className="text-muted-foreground">ถึง</span>
-          <DatePicker value={to} min={from} onChange={(v) => { if (v) setTo(v); }} aria-label="Campaign ถึงวันที่" className="w-auto" />
+          <DateRangePicker value={range} onChange={setRange} defaultMonth={month} aria-label="ช่วงวันของ Campaign" className="w-auto min-w-56" />
           <Select value={platform} onValueChange={setPlatform}>
             <SelectTrigger aria-label="แพลตฟอร์ม" className="w-auto min-w-36"><SelectValue /></SelectTrigger>
             <SelectContent position="popper">
@@ -728,16 +897,35 @@ function CampaignPanel({ month, items, platforms, onApply }: {
               {platforms.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Input id={id} list="plan-campaigns" value={campaign} onChange={(e) => setCampaign(e.target.value)} placeholder="ชื่อ Campaign (ว่าง = ล้าง)" aria-label="ชื่อ Campaign" className="w-48 flex-1" />
-          <Button
-            variant="outline"
-            disabled={!targets.length}
-            onClick={() => { onApply(targets.map((x) => x.key), campaign.trim()); toast(`ตั้ง Campaign ${targets.length} slot ในร่างแล้ว`); }}
-          >
-            ใช้กับ {targets.length} slot
+          <Input
+            id={id}
+            list="plan-campaigns"
+            value={campaign}
+            onChange={(e) => setCampaign(e.target.value)}
+            placeholder="ชื่อ Campaign เช่น Pay Day (ว่าง = ล้าง)"
+            aria-label="ชื่อ Campaign"
+            className="w-48 flex-1"
+          />
+          <Button onClick={() => onApply({ ...range, platform, campaign: campaign.trim() })}>
+            ตั้ง Campaign{targets.length ? ` (${targets.length} slot)` : ""}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">ใช้ได้ทั้ง slot ร่างใหม่และ slot ที่มีในชีตแล้ว (แก้คอลัมน์ Campaign ในแท็บ Deal Mc ตอนกดบันทึก)</p>
+        {ranges.length ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">ช่วงที่ตั้งไว้:</span>
+            {ranges.map((r, i) => (
+              <Badge key={i} variant="secondary" className="gap-1 pr-1 text-xs">
+                {r.campaign} · {fmtRange(r)}{r.platform !== ALL ? ` · ${r.platform}` : ""}
+                <button type="button" aria-label={`เลิกใช้ช่วง ${r.campaign}`} onClick={() => onRemove(i)} className="rounded-full p-0.5 hover:bg-foreground/10">
+                  <XIcon className="size-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          กดวันแรกแล้วกดวันสุดท้ายในปฏิทิน ใส่ชื่อ Campaign แล้วกดตั้ง — ใช้กับ slot ที่มีในชีตแล้วและร่างใหม่ และ slot ที่ติ๊กเพิ่มทีหลังในช่วงนี้จะได้ Campaign นี้อัตโนมัติ
+        </p>
       </CardContent>
     </Card>
   );

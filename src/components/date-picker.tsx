@@ -104,6 +104,56 @@ export function DatePicker({ value, onChange, min, disabled, clearable = false, 
   );
 }
 
+/**
+ * เลือกช่วงวันที่ในปฏิทินเดียว: กดวันแรก แล้วกดวันสุดท้าย (กดวันเดียวกันสองครั้ง = วันเดียว)
+ *   value { from, to } เป็น "YYYY-MM-DD" / defaultMonth = เดือนที่เปิดปฏิทินครั้งแรก "YYYY-MM"
+ */
+export function DateRangePicker({ value, onChange, defaultMonth, disabled, placeholder = "เลือกช่วงวันที่", className, ...aria }: {
+  value: { from: string; to: string };
+  onChange: (value: { from: string; to: string }) => void;
+  defaultMonth?: string;
+  disabled?: boolean;
+  placeholder?: string;
+  className?: string;
+  "aria-label": string;
+}) {
+  const [open, setOpen] = useState(false);
+  // กดวันแรกแล้ว รอกดวันสุดท้าย
+  const [start, setStart] = useState<string | null>(null);
+  const from = start ?? value.from;
+  const to = start ?? value.to;
+  const short = opts({ day: "numeric", month: "short" });
+  const text = !value.from ? placeholder
+    : value.from === value.to ? fmtDate.format(parseKey(value.from))
+      : `${short.format(parseKey(value.from))} – ${fmtDate.format(parseKey(value.to))}`;
+
+  return (
+    <Popover open={open} onOpenChange={(next) => { setOpen(next); setStart(null); }}>
+      <PickerTrigger text={text} empty={!value.from} disabled={disabled} label={aria["aria-label"]} className={className} />
+      <PopoverContent align="start" className="w-auto overflow-hidden p-0">
+        <Calendar
+          mode="range"
+          locale={th}
+          captionLayout="dropdown"
+          {...yearRange()}
+          selected={from ? { from: toDate(from), to: toDate(to) } : undefined}
+          defaultMonth={from ? toDate(from) : defaultMonth ? toDate(defaultMonth) : undefined}
+          onSelect={(_, day) => {
+            const k = toKey(day);
+            if (!start) { setStart(k); return; }
+            onChange(k < start ? { from: k, to: start } : { from: start, to: k });
+            setStart(null);
+            setOpen(false);
+          }}
+        />
+        <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+          {start ? "กดวันสุดท้ายของช่วง (กดวันเดิม = วันเดียว)" : "กดวันแรกของช่วง"}
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** เลือกเดือน (ปี + 12 เดือน) — value "YYYY-MM" หรือ "" = ยังไม่เลือก */
 export function MonthPicker({ value, onChange, disabled, placeholder = "เลือกเดือน", className, ...aria }: {
   value: string;
