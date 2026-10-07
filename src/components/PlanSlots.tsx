@@ -589,11 +589,15 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
           <tr>
             <th rowSpan={2} className="sticky top-0 left-0 z-30 border-b bg-muted px-2 text-left text-xs font-semibold">วันที่</th>
             {columns.map((c) => {
-              const n = items.filter((x) => x.platform === c.platform && !x.deleting && !x.existing?.mc?.cancelled).length;
+              // สรุปของช่องนี้ทั้งเดือน (รวมร่าง ไม่นับที่จะลบ / แคน)
+              const mine = items.filter((x) => x.platform === c.platform && !x.deleting && !x.existing?.mc?.cancelled);
+              const hours = mine.reduce((h, x) => h + lenOf(x) / 60, 0);
               return (
                 <th key={c.platform} colSpan={c.times.length} className="sticky top-0 z-20 h-8 border-b border-l bg-muted px-2 text-left whitespace-nowrap">
                   <PlatformBadge name={c.platform} index={tagIndex(c.platform)} />
-                  <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">{n} slot</span>
+                  <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">
+                    {mine.length} slot · <strong className="font-semibold text-foreground">{num(hours)} ชม.</strong>
+                  </span>
                 </th>
               );
             })}
