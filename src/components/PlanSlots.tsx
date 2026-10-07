@@ -67,18 +67,25 @@ const fmtRange = (r: { from: string; to: string }) => r.from === r.to ? fmtDayMo
 /** ช่วง 2 ชม. ที่เริ่มเวลานี้ */
 const two = (start: string) => ({ start, end: fmtMin(toMin(start) + 120) });
 
-const GLORY_MALL_TIMES = ["07:30", "09:30", "11:30", "13:30", "15:30", "17:30", "19:30", "21:30"].map(two);
+/**
+ * วันไลฟ์เริ่ม 07:30 แล้วไล่ไปจนข้ามเที่ยงคืน (23:30–01:30 ... 05:30–07:30 ยังนับเป็นวันเดิม เหมือนในชีต)
+ * ใช้เรียงคอลัมน์เวลา: 07:30 ก่อน ส่วน 01:30 / 03:30 / 05:30 อยู่ท้าย
+ */
+const DAY_START = toMin("07:30");
+const dayOrder = (start: string) => (toMin(start) - DAY_START + 1440) % 1440;
+/** ครบ 24 ชม.: ช่วงละ 2 ชม. ตั้งแต่ 07:30 ถึง 07:30 ของคืนนั้น (12 ช่วง) */
+const DAY_TIMES = Array.from({ length: 12 }, (_, i) => two(fmtMin(DAY_START + i * 120)));
 
 /**
- * ช่องไลฟ์หลัก + ช่วงเวลาให้ติ๊ก (ตามที่ใช้จริงในชีต) เรียงตามคอลัมน์ในหน้า
+ * ช่องไลฟ์หลัก + ช่วงเวลาให้ติ๊ก (ครบ 24 ชม.) เรียงตามคอลัมน์ในหน้า
  * ช่วงเวลาอื่นที่มีในเดือนนั้น / แพลตฟอร์มอื่นที่มี slot จะเพิ่มเป็นคอลัมน์ให้เอง
  * agency = Agency ที่ไลฟ์ผ่านช่องนั้น (slot เดียวกันเป็นของเราหรือของ Agency อย่างใดอย่างหนึ่ง)
  */
 const CHANNELS: Column[] = [
-  { platform: "GLORY MALL", times: GLORY_MALL_TIMES },
-  { platform: "GLORY MALL", agency: "TDH", times: GLORY_MALL_TIMES },
-  { platform: "Skin Expert", times: ["09:30", "11:30", "17:30", "19:30", "21:30"].map(two) },
-  { platform: "Cherry Glory", times: ["09:30", "11:30", "13:30", "17:30", "19:30", "21:30"].map(two) },
+  { platform: "GLORY MALL", times: DAY_TIMES },
+  { platform: "GLORY MALL", agency: "TDH", times: DAY_TIMES },
+  { platform: "Skin Expert", times: DAY_TIMES },
+  { platform: "Cherry Glory", times: DAY_TIMES },
 ];
 
 function daysOf(month: string) {
@@ -166,11 +173,11 @@ export function PlanSlots() {
       ...draft.add.filter((s) => s.date.startsWith(month) && !existingMap.has(keyOf(s))).map((s) => ({
         ...s, agency: s.agency ?? null, key: keyOf(s), existing: null, deleting: false, campaignChanged: false, agencyChanged: false, overlap: false,
       })),
-    ].sort((a, b) => a.date.localeCompare(b.date) || a.platform.localeCompare(b.platform) || a.start.localeCompare(b.start));
+    ].sort((a, b) => a.date.localeCompare(b.date) || a.platform.localeCompare(b.platform) || dayOrder(a.start) - dayOrder(b.start));
     const live = list.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
     for (let i = 1; i < live.length; i++) {
       const a = live[i - 1], b = live[i];
-      if (a.date === b.date && a.platform === b.platform && toMin(b.start) < toMin(a.start) + lenOf(a)) a.overlap = b.overlap = true;
+      if (a.date === b.date && a.platform === b.platform && dayOrder(b.start) < dayOrder(a.start) + lenOf(a)) a.overlap = b.overlap = true;
     }
     return list;
   }, [plan, draft, month, existingMap]);
@@ -184,7 +191,9 @@ export function PlanSlots() {
       col.set.add(`${x.start}-${x.end}`);
     }
     return cols.map((c) => ({
-      platform: c.platform, agency: c.agency, times: [...c.set].sort().map((t) => ({ start: t.slice(0, 5), end: t.slice(6, 11) })),
+      platform: c.platform, agency: c.agency,
+      times: [...c.set].map((t) => ({ start: t.slice(0, 5), end: t.slice(6, 11) }))
+        .sort((a, b) => dayOrder(a.start) - dayOrder(b.start) || lenOf(a) - lenOf(b)),
     }));
   }, [items]);
   const platforms = [...new Set(columns.map((c) => c.platform))];
@@ -649,6 +658,8 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
   const colKey = (c: Column) => `${c.platform}|${c.agency ?? ""}`;
   // กลุ่มของ Agency พื้นสีอ่อนแยกจากช่องหลัก
   const tint = (c: Column) => (c.agency ? "bg-p0/[0.06]" : "");
+  // ช่วงหลังเที่ยงคืน (00:00–07:29) ยังนับเป็นวันไลฟ์เดิม แยกสีให้เห็น
+  const night = (t: { start: string }) => toMin(t.start) < DAY_START;
   return (
     <div className="max-h-[78vh] overflow-auto rounded-xl border bg-card">
       <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
@@ -679,10 +690,10 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
           </tr>
           <tr>
             {columns.flatMap((c) => c.times.map((t, i) => (
-              <th key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("sticky top-8 z-20 border-b bg-muted px-0.5 py-1 font-medium", i === 0 && "border-l")}>
+              <th key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("sticky top-8 z-20 border-b bg-muted px-0.5 py-1 font-medium", i === 0 && "border-l", night(t) && "text-p3")}>
                 <button
                   type="button"
-                  title={`ติ๊ก / เอาติ๊กออก ${c.agency ? `Agency ${c.agency} ` : ""}${c.platform} ${t.start}–${t.end} ทุกวันตั้งแต่วันนี้`}
+                  title={`ติ๊ก / เอาติ๊กออก ${c.agency ? `Agency ${c.agency} ` : ""}${c.platform} ${t.start}–${t.end} ทุกวันตั้งแต่วันนี้${night(t) ? " (หลังเที่ยงคืน นับเป็นวันเดิม)" : ""}`}
                   onClick={() => onColumn(c.platform, t, c.agency ?? null)}
                   className="rounded px-1 text-[11px] leading-tight tabular-nums outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
                 >
@@ -716,7 +727,7 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
                   </button>
                 </th>
                 {columns.flatMap((c) => c.times.map((t, i) => (
-                  <td key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("border-b px-1 py-1 text-center", i === 0 && "border-l", tint(c))}>
+                  <td key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("border-b px-1 py-1 text-center", i === 0 && "border-l", tint(c), night(t) && "bg-p3/[0.06]")}>
                     <Tick
                       item={itemMap.get(keyOf({ platform: c.platform, date: d, start: t.start, end: t.end }))}
                       agency={c.agency ?? null}
