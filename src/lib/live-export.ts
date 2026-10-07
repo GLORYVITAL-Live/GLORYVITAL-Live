@@ -122,6 +122,19 @@ function summarySheet(name: string, curLabel: string, cur: Totals, compare: { la
   };
 }
 
+const PLATFORM_ORDER = ["TikTok", "Shopee"] as const;
+
+/**
+ * สรุปแยกแพลตฟอร์ม: แผ่น "TikTok" / "Shopee" (ตัวชี้วัดเดียวกับแผ่นสรุป เฉพาะไลฟ์ของแพลตฟอร์มนั้น)
+ *   ทำเฉพาะแพลตฟอร์มที่มีไลฟ์ในช่วงใดช่วงหนึ่ง
+ */
+function platformSheets(curLabel: string, cur: LiveSession[], compare: { label: string; list: LiveSession[] }[]): ExportSheet[] {
+  return PLATFORM_ORDER
+    .filter((p) => [cur, ...compare.map((c) => c.list)].some((l) => l.some((s) => s.platform === p)))
+    .map((p) => summarySheet(p, curLabel, totalsOf(cur.filter((s) => s.platform === p)),
+      compare.map((c) => ({ label: c.label, totals: totalsOf(c.list.filter((s) => s.platform === p)) }))));
+}
+
 // ---------- รายงานแต่ละแบบ ----------
 
 /** ภาพรวมรายเดือน: เดือนนี้ vs เดือนก่อน (MoM) vs ปีก่อน (YoY) + 13 เดือน + แยกบัญชี + รายการไลฟ์ */
@@ -136,6 +149,9 @@ export function monthBook(o: {
     sheets: [
       infoSheet([["รายงาน", "ภาพรวมรายเดือน (MoM / YoY)"], ["เดือน", monthLabel(month)], ["MoM เทียบกับ", monthLabel(prevKey)], ["YoY เทียบกับ", monthLabel(yoyKey)]], o.filter),
       summarySheet("สรุป", monthLabel(month), t(month), [{ label: monthLabel(prevKey), totals: t(prevKey) }, { label: monthLabel(yoyKey), totals: t(yoyKey) }]),
+      ...platformSheets(monthLabel(month), byMonth.get(month) ?? [], [
+        { label: monthLabel(prevKey), list: byMonth.get(prevKey) ?? [] }, { label: monthLabel(yoyKey), list: byMonth.get(yoyKey) ?? [] },
+      ]),
       {
         name: "13 เดือน",
         rows: [
@@ -224,7 +240,7 @@ export function multiBook(o: {
     sheets: [
       infoSheet([["รายงาน", "เทียบหลายเดือน"], ["ช่วง", o.rangeText], ["เดือนหลัก", `${monthLabel(focus)} เทียบกับทุกเดือนที่เหลือ (CTR / CO เทียบเป็น pp)`]], o.filter),
       { name: "เทียบ", rows: [["Total", ...keys.map(shortLabel), ...vsHeaders], ...metrics.map((m) => row(m.label, m))] },
-      ...(["TikTok", "Shopee"] as const)
+      ...PLATFORM_ORDER
         .filter((p) => keys.some((k) => list(k).some((s) => s.platform === p)))
         .map((p): ExportSheet => ({
           name: p,
@@ -253,6 +269,7 @@ export function compareBook(o: {
     sheets: [
       infoSheet([["รายงาน", o.report], [`ช่วง ${o.aName}`, o.aRange], [`เทียบกับ ${o.bName}`, o.bRange]], o.filter),
       summarySheet("สรุปเทียบ", o.aName, totalsOf(o.a), [{ label: o.bName, totals: totalsOf(o.b) }]),
+      ...platformSheets(o.aName, o.a, [{ label: o.bName, list: o.b }]),
       pairSheet("แยกบัญชี", "บัญชี", o.aName, o.bName, [
         ...accounts.map((acc) => ({ label: accountLabel(acc), a: o.a.filter((s) => keyOf(s) === acc.key), b: o.b.filter((s) => keyOf(s) === acc.key) })),
         { label: "รวม", a: o.a, b: o.b },
