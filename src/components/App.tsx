@@ -150,7 +150,8 @@ function Shell({ me }: { me: Me | null }) {
     router.refresh();
   }
 
-  const registered = roles.length > 0;
+  // ลงทะเบียนแล้ว = มีหน้าที่เปิดได้อย่างน้อยหนึ่งหน้า (รวม Owner ที่ติ๊กแค่ Data analytics / หลักฐานไลฟ์ ซึ่งไม่มีหน้าเจ้าของ)
+  const registered = pages.length > 0;
   const name = me && role ? displayName(me, role)
     : me && page === "proof" ? me.owner?.name || me.admin?.name || ""
       : me && page === "stats" ? me.owner?.name || "" : "";
