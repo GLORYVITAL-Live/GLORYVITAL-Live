@@ -10,6 +10,8 @@ import {
   useConfirm, useToast,
 } from "@/components/shared";
 import { DatePicker, DateRangePicker, MonthPicker, TimePicker } from "@/components/date-picker";
+import { ExportMenu } from "@/components/ExportMenu";
+import type { Cell, ExportBook } from "@/lib/export";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -131,6 +133,89 @@ function useDraft(month: string) {
     writeLocal(key, JSON.stringify(next));
   };
   return [draft, update] as const;
+}
+
+// ---------- ส่งออก (Excel / Google Sheet) ----------
+
+const groupName = (c: Pick<Column, "platform" | "agency">) => (c.agency ? `${c.platform} › Agency ${c.agency}` : c.platform);
+const hoursCell = (h: number): Cell => (h ? { v: h, f: "dec" } : null);
+
+/**
+ * แพลนทั้งเดือนตามที่เห็นในหน้า (รวมร่างที่ยังไม่บันทึก ไม่รวมที่จะลบ)
+ *   ภาพรวม = แถววัน x ช่อง/ช่วงเวลา (✓ / ชื่อ Mc / ร่าง) + รวม ชม./วัน ของแต่ละกลุ่ม
+ *   สรุปชั่วโมง = ชม./วัน ของแต่ละกลุ่ม / รายการ slot = แบบชีต (ของเรา + Agency)
+ */
+function planBook(month: string, columns: Column[], items: Item[]): ExportBook {
+  const days = daysOf(month);
+  const live = items.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
+  const own = (c: Column, x: Item) => x.platform === c.platform && x.agency === (c.agency ?? null);
+  const byKey = new Map(live.map((x) => [x.key, x]));
+  const hoursOf = (c: Column, d?: string) => live.filter((x) => own(c, x) && (!d || x.date === d)).reduce((h, x) => h + lenOf(x) / 60, 0);
+  const dayText = (d: string) => fmtDayMonth.format(parseKey(d));
+  const weekday = (d: string) => fmtWeekShort.format(parseKey(d));
+  const mark = (x: Item | undefined) => !x ? ""
+    : x.agency ? (x.agencyId ? "✓" : "✓ ร่าง")
+      : !x.existing ? "✓ ร่าง"
+        : x.existing.mc?.name ? `Mc ${x.existing.mc.name}` : "✓";
+
+  // ภาพรวม: แถว 1 = ชื่อกลุ่ม, แถว 2 = ช่วงเวลา (หัวตาราง)
+  const groupRow: Cell[] = ["", ""];
+  const head: Cell[] = ["วันที่", "วัน"];
+  for (const c of columns) {
+    c.times.forEach((t, i) => { groupRow.push(i === 0 ? groupName(c) : ""); head.push(`${t.start}–${t.end}`); });
+    groupRow.push("");
+    head.push("รวม ชม.");
+  }
+  groupRow.push("");
+  head.push("Campaign");
+  const grid: Cell[][] = [groupRow, head];
+  for (const d of days) {
+    const row: Cell[] = [dayText(d), weekday(d)];
+    for (const c of columns) {
+      for (const t of c.times) row.push(mark(byKey.get(ownKey(keyOf({ platform: c.platform, date: d, start: t.start, end: t.end }), c.agency))));
+      row.push(hoursCell(hoursOf(c, d)));
+    }
+    row.push([...new Set(live.filter((x) => x.date === d).map((x) => x.campaign).filter(Boolean))].join(", "));
+    grid.push(row);
+  }
+  const totalRow: Cell[] = ["รวมทั้งเดือน", ""];
+  for (const c of columns) {
+    c.times.forEach((t) => totalRow.push(live.filter((x) => own(c, x) && x.start === t.start && x.end === t.end).length || ""));
+    totalRow.push(hoursCell(hoursOf(c)));
+  }
+  grid.push(totalRow);
+
+  // สรุปชั่วโมงต่อวัน
+  const ourCols = columns.filter((c) => !c.agency);
+  const sumHead: Cell[] = ["วันที่", "วัน", ...columns.map((c) => `${groupName(c)} (ชม.)`), "รวมของเรา (ชม.)", "รวมทั้งหมด (ชม.)"];
+  const sumRow = (d?: string): Cell[] => {
+    const ours = ourCols.reduce((h, c) => h + hoursOf(c, d), 0);
+    return [...columns.map((c) => hoursCell(hoursOf(c, d))), hoursCell(ours), hoursCell(columns.reduce((h, c) => h + hoursOf(c, d), 0))];
+  };
+  const summary: Cell[][] = [sumHead, ...days.map((d) => [dayText(d), weekday(d), ...sumRow(d)]), ["รวมทั้งเดือน", "", ...sumRow()]];
+
+  // รายการ slot แบบชีต
+  const list: Cell[][] = [
+    ["Platform", "วันที่", "วัน", "เวลาเริ่ม", "เวลาจบ", "ชม.", "ผู้ไลฟ์", "Campaign", "Mc", "Admin", "สถานะ"],
+    // เรียงแบบชีต: วัน > GLORY MALL ก่อน > แพลตฟอร์ม > เวลา (หลังเที่ยงคืนอยู่ท้ายวัน)
+    ...[...live].sort((a, b) => a.date.localeCompare(b.date)
+      || Number(a.platform !== "GLORY MALL") - Number(b.platform !== "GLORY MALL") || a.platform.localeCompare(b.platform)
+      || Number(!!a.agency) - Number(!!b.agency) || dayOrder(a.start) - dayOrder(b.start)).map((x) => [
+      x.platform, dayText(x.date), weekday(x.date), x.start, x.end, hoursCell(lenOf(x) / 60),
+      x.agency ? `Agency ${x.agency}` : "ของเรา", x.campaign,
+      x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : "", x.existing?.admin?.name ?? "",
+      x.agency ? (x.agencyId ? "แพลน Agency (ไม่ลงชีต)" : "ร่าง (Agency)") : x.existing ? "มีในชีตแล้ว" : "ร่าง (ยังไม่บันทึก)",
+    ]),
+  ];
+
+  return {
+    title: `Plan Slot Live ${monthLabel(month)}`,
+    sheets: [
+      { name: "ภาพรวม", rows: grid, header: 1 },
+      { name: "สรุปชั่วโมง", rows: summary },
+      { name: "รายการ slot", rows: list },
+    ],
+  };
 }
 
 // ---------- หน้า ----------
@@ -499,6 +584,7 @@ export function PlanSlots() {
           <ToggleGroupItem value="tick" className="font-semibold">ติ๊กเลือก slot</ToggleGroupItem>
           <ToggleGroupItem value="sheet" className="font-semibold">แบบชีต</ToggleGroupItem>
         </ToggleGroup>
+        {plan ? <ExportMenu label="ส่งออก" build={() => planBook(month, columns, items)} className="bg-card" /> : null}
       </div>
 
       {error?.month === month && !plan ? (
