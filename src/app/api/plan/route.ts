@@ -27,8 +27,8 @@ const keyOf = (x: { platform: string; live_date: string; start_time: string; end
   `${x.platform}|${x.live_date}|${hm(x.start_time)}|${hm(x.end_time)}`;
 /** ชื่อ Agency ที่รับจากหน้าเว็บ (ตัวอักษร / ตัวเลข / ช่องว่าง สั้นๆ) */
 const cleanAgency = (v: unknown) => {
-  const t = String(v ?? "").trim().replace(/s+/g, " ");
-  return /^[p{L}p{N} ._-]{1,30}$/u.test(t) ? t : null;
+  const t = String(v ?? "").trim().replace(/\s+/g, " ");
+  return /^[\p{L}\p{N} ._-]{1,30}$/u.test(t) ? t : null;
 };
 /** ยังไม่ได้รัน SQL 20261017000000_plan_slots (ไม่มีตาราง agency_slots) */
 const noAgencyTable = (msg: string) => /agency_slots/.test(msg);
