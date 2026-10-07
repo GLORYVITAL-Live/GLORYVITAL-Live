@@ -788,6 +788,16 @@ export function PlanSlots() {
   const days = daysOf(month);
   const overlaps = shownItems.filter((x) => x.overlap).length;
   const allHours = [...live, ...agencyLive].reduce((h, x) => h + lenOf(x) / 60, 0);
+  /** ชั่วโมงรวมของรายการ slot */
+  const hrs = (list: { start: string; end: string }[]) => list.reduce((h, x) => h + lenOf(x) / 60, 0);
+  // ร่างที่ลงชื่อ Mc ประจำ (slot ใหม่ที่มีชื่อ + slot เดิมที่ลงชื่อ)
+  const namedDraft = ours.filter((x) => x.assign && !x.deleting);
+  // ชั่วโมง Mc ประจำเดือนนี้: ลงชีตแล้ว (ชื่ออยู่ใน slot แล้ว) / ในร่าง
+  const regularHours = regulars.map((m) => {
+    const saved = ours.filter((x) => !x.deleting && !x.existing?.mc?.cancelled && x.existing?.mc?.personId === m.id);
+    const draftOnes = namedDraft.filter((x) => x.assign!.id === m.id);
+    return { ...m, saved: hrs(saved), draft: hrs(draftOnes), slots: saved.length + draftOnes.length };
+  });
 
   return (
     <div className="pb-28">
@@ -908,6 +918,16 @@ export function PlanSlots() {
                   ? `ช่องที่ติ๊กจะลงชื่อ Mc ${regulars.find((m) => m.id === brushId)?.name} ไว้เลย (ลงชีต + ปฏิทินตอนบันทึก) · กดช่องที่ลงชื่อแล้วซ้ำ = ยกเลิก · ช่อง Agency ไม่ลงชื่อ`
                   : "เลือก Mc ประจำเพื่อลงชื่อในช่องที่ติ๊ก ไม่ต้องรอ Mc จองเอง"}
               </span>
+              {/* ชั่วโมงของ Mc ประจำเดือนนี้: ลงชีตแล้ว + ในร่าง */}
+              <div className="flex w-full flex-wrap gap-x-4 gap-y-1 border-t pt-1.5 text-xs">
+                {regularHours.map((m) => (
+                  <span key={m.id} className="tabular-nums">
+                    <strong>Mc {m.name}</strong> {monthLabel(month)}:{" "}
+                    <strong className="text-p2">{num(m.saved + m.draft)} ชม.</strong> ({m.slots} slot)
+                    <span className="text-muted-foreground"> · ลงชีตแล้ว {num(m.saved)} ชม. · ร่าง +{num(m.draft)} ชม.</span>
+                  </span>
+                ))}
+              </div>
             </div>
           ) : null}
           <Legend tick={view === "tick" || mode === "shopee"} />
@@ -963,13 +983,12 @@ export function PlanSlots() {
               <strong>ร่าง {monthLabel(month)}</strong>
               <span className="block truncate text-xs text-muted-foreground">
                 {[
-                  changes.create.length ? `+${changes.create.length} slot ใหม่` : "",
+                  changes.create.length ? `+${changes.create.length} slot ใหม่ (${num(hrs(changes.create))} ชม.)` : "",
                   changes.campaigns.length ? `แก้ Campaign ${changes.campaigns.length}` : "",
-                  changes.deletes.length ? `ลบ ${changes.deletes.length}` : "",
-                  changes.assigns.length + changes.create.filter((s) => s.assign).length
-                    ? `ลงชื่อ Mc ประจำ ${changes.assigns.length + changes.create.filter((s) => s.assign).length}` : "",
+                  changes.deletes.length ? `ลบ ${changes.deletes.length} (-${num(hrs(changes.deletes))} ชม.)` : "",
+                  namedDraft.length ? `ลงชื่อ Mc ประจำ ${namedDraft.length} (${num(hrs(namedDraft))} ชม.)` : "",
                   changes.agencyCreate.length || changes.agencyDelete.length
-                    ? `แพลนในเว็บ +${changes.agencyCreate.length}${changes.agencyDelete.length ? ` / ลบ ${changes.agencyDelete.length}` : ""}` : "",
+                    ? `แพลนในเว็บ +${changes.agencyCreate.length} (${num(hrs(changes.agencyCreate))} ชม.)${changes.agencyDelete.length ? ` / ลบ ${changes.agencyDelete.length}` : ""}` : "",
                 ].filter(Boolean).join(" · ")} — ยังไม่บันทึกจนกว่าจะกดบันทึก
               </span>
             </div>
