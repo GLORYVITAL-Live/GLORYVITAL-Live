@@ -11,6 +11,7 @@ import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, yearBook } from "@/lib/live-export";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
+import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
 import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
@@ -788,10 +789,10 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
   );
 }
 
-type CompareMode = PeriodKind | "multi";
-const COMPARE_MODES: [CompareMode, string][] = [["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"]];
+type CompareMode = PeriodKind | "day" | "multi";
+const COMPARE_MODES: [CompareMode, string][] = [["day", "วัน (DoD)"], ["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"]];
 
-/** แท็บเทียบช่วง: เดือน / ไตรมาส (เทียบ 2 ช่วง) หรือ หลายเดือน (เดือนหลัก vs เดือนอื่นทีละเดือน) */
+/** แท็บเทียบช่วง: วัน / เดือน / ไตรมาส (เทียบ 2 ช่วง) หรือ หลายเดือน (เดือนหลัก vs เดือนอื่นทีละเดือน) */
 function CompareView({ dataMonths, version }: { dataMonths: string[]; version: number }) {
   const [mode, setMode] = useState<CompareMode>("month");
   const toggle = (
@@ -806,7 +807,79 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
   );
   return mode === "multi"
     ? <MultiMonthView toggle={toggle} dataMonths={dataMonths} version={version} />
-    : <PairCompare kind={mode} toggle={toggle} dataMonths={dataMonths} version={version} />;
+    : mode === "day" ? <DayCompare toggle={toggle} dataMonths={dataMonths} version={version} />
+      : <PairCompare kind={mode} toggle={toggle} dataMonths={dataMonths} version={version} />;
+}
+
+// ---------- เทียบรายวัน (DoD) ----------
+
+const dayKeyShift = (k: string, by: number) => new Date(Date.parse(`${k}T00:00:00Z`) + by * 86400_000).toISOString().slice(0, 10);
+/** วันเดียวกันของเดือนก่อน (เดือนก่อนมีวันน้อยกว่า = วันสุดท้ายของเดือนนั้น) เช่น 31 ต.ค. -> 30 ก.ย. */
+function sameDayLastMonth(k: string) {
+  const [y, m, d] = k.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m - 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m - 2, Math.min(d, last))).toISOString().slice(0, 10);
+}
+const fmtDayFull = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+/** วัน "YYYY-MM-DD" -> ช่วง 00:00–24:00 เวลาไทย */
+function dayPeriod(k: string): Period {
+  const [y, m, d] = k.split("-").map(Number);
+  return { from: bkkIso(y, m, d), to: bkkIso(y, m, d + 1), name: fmtDayFull.format(new Date(`${k}T12:00:00Z`)) };
+}
+
+/**
+ * เทียบรายวัน: วันหลัก vs วันที่เลือก (ค่าเริ่มต้น = เมื่อวาน vs วันก่อนหน้า หรือวันสุดท้ายของเดือนล่าสุดที่มีข้อมูล)
+ *   ปุ่มลัด: วันก่อน (DoD) / วันเดียวกันสัปดาห์ก่อน (WoW) / วันเดียวกันเดือนก่อน · กราฟแบ่งรายชั่วโมงได้
+ */
+function DayCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMonths: string[]; version: number }) {
+  // คิดครั้งเดียวตอนเปิด: วันนี้ (เวลาไทย) และวันเริ่มต้น = เมื่อวาน (ถ้าเดือนนี้มีข้อมูล) ไม่งั้นวันสุดท้ายของเดือนล่าสุดที่มีข้อมูล
+  const [init] = useState(() => {
+    const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    const latestMonth = dataMonths.slice().sort().at(-1);
+    const start = !latestMonth || latestMonth >= today.slice(0, 7)
+      ? dayKeyShift(today, -1)
+      : dayKeyShift(`${monthKey(1, latestMonth)}-01`, -1);
+    return { today, start };
+  });
+  const today = init.today;
+  const [a, setA] = useState(init.start);
+  const [b, setB] = useState(() => dayKeyShift(init.start, -1));
+  const presets: [string, string][] = [
+    [dayKeyShift(a, -1), "วันก่อน (DoD)"],
+    [dayKeyShift(a, -7), "วันเดียวกันสัปดาห์ก่อน (WoW)"],
+    [sameDayLastMonth(a), "วันเดียวกันเดือนก่อน"],
+  ];
+  const kindOf = (v: string) =>
+    v === dayKeyShift(a, -1) ? "DoD" : v === dayKeyShift(a, -7) ? "WoW" : v === sameDayLastMonth(a) ? "วันเดียวกันเดือนก่อน" : "เลือกเอง";
+  const picker = (value: string, onChange: (v: string) => void, label: string, swatch: string) => (
+    <div className="min-w-0 flex-1">
+      <span className="mb-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-2.5 rounded-[3px]", swatch)} />{label}</span>
+      <DatePicker value={value} onChange={(v) => v && onChange(v)} aria-label={label} className="w-full" />
+    </div>
+  );
+
+  return (
+    <>
+      <div className="my-3 rounded-xl border bg-card p-3">
+        {toggle}
+        <div className="flex flex-wrap gap-3 sm:flex-nowrap">
+          {picker(a, setA, "วัน", "bg-viz-cur")}
+          {picker(b, setB, "เทียบกับ", "bg-viz-prev")}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {presets.map(([k, text]) => (
+            <Button key={text} variant={b === k ? "secondary" : "outline"} size="sm" className="rounded-full" onClick={() => setB(k)}>{text}</Button>
+          ))}
+        </div>
+      </div>
+      {a === today || b === today ? <Notice>วันนี้ยังไม่จบวัน ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice> : null}
+      {a === b ? <StateBox title="เลือกวันที่ต่างกัน">เลือกวันในช่อง &ldquo;เทียบกับ&rdquo; หรือกดปุ่มลัดด้านบน</StateBox> : (
+        <PeriodCompare
+          report={`เทียบวัน (${kindOf(b)})`}
+          cur={dayPeriod(a)} prev={dayPeriod(b)} unit="hour" dataMonths={dataMonths} version={version} fixHint="หรือเลือกวันอื่น" />
+      )}
+    </>
+  );
 }
 
 function PairCompare({ kind, toggle, dataMonths, version }: { kind: PeriodKind; toggle: ReactNode; dataMonths: string[]; version: number }) {
@@ -996,7 +1069,7 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
   report: string;
   cur: Period;
   prev: Period;
-  unit: "day" | "month";
+  unit: "hour" | "day" | "month";
   dataMonths: string[];
   version: number;
   fixHint: string;
@@ -1017,23 +1090,27 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
   const curName = pc.name, prevName = pp.name;
-  const timeText = unit === "day" ? "รายวัน" : "รายเดือน";
+  const timeText = unit === "hour" ? "รายชั่วโมง" : unit === "day" ? "รายวัน" : "รายเดือน";
+  const stepMs = unit === "hour" ? 3600_000 : 86400_000;
 
-  // กลุ่มในกราฟ: แยกบัญชี หรือ วัน/เดือนที่ 1, 2, ... นับจากต้นของแต่ละช่วง
-  const steps = unit === "day"
-    ? Math.ceil((Date.parse(pc.to) - Date.parse(pc.from)) / 86400_000)
-    : monthDiff(monthOf(pc.from), lastMonthOf(pc)) + 1;
+  // กลุ่มในกราฟ: แยกบัญชี หรือ ชั่วโมง/วัน/เดือนที่ 1, 2, ... นับจากต้นของแต่ละช่วง
+  const steps = unit === "month"
+    ? monthDiff(monthOf(pc.from), lastMonthOf(pc)) + 1
+    : Math.ceil((Date.parse(pc.to) - Date.parse(pc.from)) / stepMs);
   const byTime = groupBy === "time" && steps > 1;
-  const stepOf = (s: LiveSession, start: string) => unit === "day"
-    ? Math.floor((Date.parse(s.startedAt) - Date.parse(start)) / 86400_000)
-    : monthDiff(monthOf(start), monthOf(s.startedAt));
-  const stepLabel = (start: string, i: number) => unit === "day"
-    ? bkkDate.format(new Date(Date.parse(start) + i * 86400_000))
-    : shortMonth(monthKey(i, monthOf(start)));
-  // วัน/เดือนที่ 1, 2, ... ของทั้งสองช่วง (ใช้ทั้งกราฟและไฟล์ที่ส่งออก)
+  const stepOf = (s: LiveSession, start: string) => unit === "month"
+    ? monthDiff(monthOf(start), monthOf(s.startedAt))
+    : Math.floor((Date.parse(s.startedAt) - Date.parse(start)) / stepMs);
+  const stepLabel = (start: string, i: number) => unit === "hour"
+    ? `${String(bkkParts(new Date(Date.parse(start) + i * stepMs).toISOString()).h).padStart(2, "0")}:00`
+    : unit === "day" ? bkkDate.format(new Date(Date.parse(start) + i * stepMs))
+      : shortMonth(monthKey(i, monthOf(start)));
+  // ชั่วโมง/วัน/เดือนที่ 1, 2, ... ของทั้งสองช่วง (ใช้ทั้งกราฟและไฟล์ที่ส่งออก)
   const timeGroups = Array.from({ length: steps > 1 ? steps : 0 }, (_, i) => ({
     short: stepLabel(pc.from, i),
-    label: `${unit === "day" ? "วันที่" : "เดือนที่"} ${i + 1}: ${stepLabel(pc.from, i)} vs ${stepLabel(pp.from, i)}`,
+    label: unit === "hour"
+      ? `${stepLabel(pc.from, i)}–${stepLabel(pc.from, i + 1)} น.`
+      : `${unit === "day" ? "วันที่" : "เดือนที่"} ${i + 1}: ${stepLabel(pc.from, i)} vs ${stepLabel(pp.from, i)}`,
     a: cur.filter((s) => stepOf(s, pc.from) === i),
     b: prev.filter((s) => stepOf(s, pp.from) === i),
   }));
@@ -1117,7 +1194,7 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
             </div>
             <TableView title="ดูเป็นตาราง">
               <Table>
-                <TableHeader><TableRow><TableHead>{byTime ? (unit === "day" ? "วัน" : "เดือน") : "บัญชี"}</TableHead><TableHead className="text-right">{curName}</TableHead><TableHead className="text-right">{prevName}</TableHead><TableHead className="text-right">เปลี่ยน</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>{byTime ? (unit === "hour" ? "ช่วงเวลา" : unit === "day" ? "วัน" : "เดือน") : "บัญชี"}</TableHead><TableHead className="text-right">{curName}</TableHead><TableHead className="text-right">{prevName}</TableHead><TableHead className="text-right">เปลี่ยน</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {categories.map((cat, i) => (
                     <TableRow key={i}>

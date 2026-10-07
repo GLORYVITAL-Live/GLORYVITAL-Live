@@ -15,7 +15,7 @@ export type CompareDeckInput = {
   bRange: string;
   a: LiveSession[];
   b: LiveSession[];
-  timeName: string; // "รายวัน" / "รายเดือน"
+  timeName: string; // "รายชั่วโมง" / "รายวัน" / "รายเดือน"
   time: { short: string; a: LiveSession[]; b: LiveSession[] }[];
   filterText: string; // เช่น "TikTok · ทุกบัญชี"
   exportedAt: string;
@@ -38,6 +38,8 @@ const W = 13.333, H = 7.5, M = 0.6;
 
 const val = (t: Totals, k: MetricKey) => (t.lives ? metricOf(k).value(t) : null);
 const fmt = (k: MetricKey, v: number | null) => fmtMetric(metricOf(k).kind, v);
+/** หน่วยของกราฟตามเวลา: "รายชั่วโมง" -> "ชั่วโมง" / "รายวัน" -> "วัน" / "รายเดือน" -> "เดือน" */
+const stepWordOf = (timeName: string) => (timeName === "รายชั่วโมง" ? "ชั่วโมง" : timeName === "รายวัน" ? "วัน" : "เดือน");
 const pctText = (c: number | null) => (c === null ? "ไม่มีข้อมูลเทียบ" : `${c >= 0 ? "▲" : "▼"} ${Math.abs(c * 100).toFixed(1)}%`);
 const pctColor = (c: number | null) => (c === null ? C.muted : Math.abs(c) < 0.0005 ? C.muted : c > 0 ? C.up : C.down);
 const keyOf = (s: LiveSession) => `${s.platform}|${s.accountId}`;
@@ -67,7 +69,7 @@ function insights(o: CompareDeckInput, ta: Totals, tb: Totals) {
   if (tb.lives && up && up.diff > 0) out.push(`บัญชีที่ GMV เพิ่มมากสุด: ${up.name} (+${fmt("gmv", up.diff)})`);
   if (tb.lives && down && down.diff < 0) out.push(`บัญชีที่ GMV ลดมากสุด: ${down.name} (−${fmt("gmv", -down.diff)})`);
   const peak = o.time.map((t) => ({ label: t.short, gmv: totalsOf(t.a).gmv })).sort((x, y) => y.gmv - x.gmv)[0];
-  if (o.time.length > 1 && peak?.gmv) out.push(`${o.timeName === "รายวัน" ? "วัน" : "เดือน"}ที่ขายดีสุดของ ${o.aName}: ${peak.label} (${fmt("gmv", peak.gmv)})`);
+  if (o.time.length > 1 && peak?.gmv) out.push(`${stepWordOf(o.timeName)}ที่ขายดีสุดของ ${o.aName}: ${peak.label} (${fmt("gmv", peak.gmv)})`);
   return out;
 }
 
@@ -279,7 +281,7 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
   const f = o.focus;
   const analysis = f
     ? analyze({ aName: f.aName, bName: f.bName, a: f.a, b: f.b, time: [], stepWord: "วัน" })
-    : analyze({ aName: o.aName, bName: o.bName, a: o.a, b: o.b, time: o.time, stepWord: o.timeName === "รายวัน" ? "วัน" : "เดือน" });
+    : analyze({ aName: o.aName, bName: o.bName, a: o.a, b: o.b, time: o.time, stepWord: stepWordOf(o.timeName) });
   const gmvChange = changeOf(val(ta, "gmv"), val(tb, "gmv"));
   // เฉลี่ยต่อเดือน (ใช้แทน % เทียบ เมื่อไม่มีข้อมูลช่วงเทียบ)
   const activeMonths = o.timeName === "รายเดือน" ? o.time.filter((t) => t.a.length).length : 0;
@@ -434,7 +436,7 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     if (labels.some((l) => l.endsWith("*"))) {
       s.addText("* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)", { x: M, y: 6.75, w: 6, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
     }
-    s.addNotes(`${o.timeName === "รายวัน" ? "วัน" : "เดือน"}ที่ 1 ของ ${o.aName} เทียบกับ${o.timeName === "รายวัน" ? "วัน" : "เดือน"}ที่ 1 ของ ${o.bName} (ชื่อบนแกนเป็นของ ${o.aName})`);
+    s.addNotes(`${stepWordOf(o.timeName)}ที่ 1 ของ ${o.aName} เทียบกับ${stepWordOf(o.timeName)}ที่ 1 ของ ${o.bName} (ชื่อบนแกนเป็นของ ${o.aName})`);
   }
 
   // 6.5) รายไตรมาส (ภาพรวมทั้งปี): กราฟ GMV ต่อไตรมาส + QoQ ใต้กราฟ
