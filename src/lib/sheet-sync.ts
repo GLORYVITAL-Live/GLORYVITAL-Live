@@ -293,6 +293,63 @@ async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
   return { updated: cellWrites.length, inserted: newItems.length, removed };
 }
 
+/**
+ * จัดกลุ่มแพลตฟอร์มในแต่ละวันให้ GLORY MALL อยู่บนสุด (แถวที่ลงไว้ก่อนแก้ลำดับ) ช่วงวัน from..to (YYYY-MM-DD)
+ *   ย้ายทั้งแถว (moveDimension) ข้อมูล / รหัส / สูตรไปกับแถว ลำดับในกลุ่มเดิมไม่เปลี่ยน
+ *   ทำเฉพาะวันที่แถวอยู่ติดกันเป็นก้อนเดียว dryRun = นับอย่างเดียว ไม่แก้ชีต
+ */
+export async function sortDaysGloryFirst(tab: TabKey, from: string, to: string, dryRun = false) {
+  const run = async () => {
+    const c = COLS[tab];
+    const rows = await readTab(tab);
+    const lo = dateSerial(from), hi = dateSerial(to);
+    const dayOf = (r: Row | undefined) => (typeof r?.[c.date] === "number" ? Math.floor(r[c.date] as number) : NaN);
+    // ก้อนของวันเดียวกันที่อยู่ติดกัน [start, end)
+    const blocks: { start: number; end: number }[] = [];
+    for (let i = 0; i < rows.length;) {
+      const d = dayOf(rows[i]);
+      let j = i + 1;
+      while (j < rows.length && dayOf(rows[j]) === d) j++;
+      if (d >= lo && d <= hi) blocks.push({ start: i, end: j });
+      i = j;
+    }
+    const days = new Map<number, number>(); // วัน -> จำนวนก้อน (วันที่แยกหลายก้อนไม่แตะ)
+    for (const b of blocks) days.set(dayOf(rows[b.start]), (days.get(dayOf(rows[b.start])) ?? 0) + 1);
+
+    const sheetId = await sheetIdOf(tab);
+    const requests: sheets_v4.Schema$Request[] = [];
+    let fixedDays = 0, skipped = 0;
+    // จากล่างขึ้นบน: ย้ายในวันล่างไม่กระทบเลขแถวของวันบน
+    for (const b of [...blocks].reverse()) {
+      if ((days.get(dayOf(rows[b.start])) ?? 0) > 1) { skipped++; continue; }
+      const order = Array.from({ length: b.end - b.start }, (_, k) => b.start + k); // เลขแถวเดิมตามตำแหน่งปัจจุบัน
+      const glory = order.filter((r) => platformRank(str(rows[r][c.platform])) === 0);
+      let moved = false;
+      glory.forEach((r, k) => {
+        const at = order.indexOf(r);
+        if (at === k) return; // อยู่ที่แล้ว
+        requests.push({
+          moveDimension: {
+            source: { sheetId, dimension: "ROWS", startIndex: b.start + at, endIndex: b.start + at + 1 },
+            destinationIndex: b.start + k,
+          },
+        });
+        order.splice(at, 1);
+        order.splice(k, 0, r);
+        moved = true;
+      });
+      if (moved) fixedDays++;
+    }
+    if (!dryRun && requests.length) {
+      for (let i = 0; i < requests.length; i += 200) {
+        await sheetsApi().spreadsheets.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { requests: requests.slice(i, i + 200) } });
+      }
+    }
+    return { days: fixedDays, moves: requests.length, skipped };
+  };
+  return dryRun ? run() : withSheetLock(run);
+}
+
 /** เขียนการเปลี่ยนแปลงจากเว็บลงชีต (งานค้างใน sheet_jobs) */
 export async function processSheetJobs() {
   const db = createAdminClient();
