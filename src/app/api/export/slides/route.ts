@@ -1,6 +1,6 @@
 import { Readable } from "stream";
 import { google } from "googleapis";
-import { fail, ok, requireAnalytics } from "@/lib/api";
+import { fail, ok, requireMe } from "@/lib/api";
 import { googleAuth } from "@/lib/google";
 
 // แปลงไฟล์สไลด์ (.pptx ที่สร้างในเบราว์เซอร์) เป็น Google Slides เฉพาะ Owner
@@ -10,8 +10,11 @@ const PPTX = "application/vnd.openxmlformats-officedocument.presentationml.prese
 const MAX_BYTES = 4 * 1024 * 1024;
 
 export async function POST(request: Request) {
-  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล");
+  // Owner ที่เปิดหน้าไหนก็ได้ที่มีปุ่มสไลด์: Data analytics / สรุปรายเดือน + Campaign (จัดการ Mc หรือ Admin)
+  const r = await requireMe();
   if ("res" in r) return r.res;
+  const o = r.me.owner;
+  if (!o || !(o.analytics || o.mc || o.admin)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
   const title = (new URL(request.url).searchParams.get("title") ?? "").trim().slice(0, 150) || "GLORY VITAL สไลด์";
   const data = Buffer.from(await request.arrayBuffer());
   if (!data.length || data.length > MAX_BYTES) return fail("ไฟล์สไลด์ว่างหรือใหญ่เกินไป");

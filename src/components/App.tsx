@@ -8,6 +8,7 @@ import type { Me, OwnerScope, Role } from "@/lib/types";
 import { BookingWindowEditor } from "@/components/BookingWindow";
 import { LiveStats } from "@/components/LiveStats";
 import { MySchedule } from "@/components/MySchedule";
+import { CampaignView } from "@/components/CampaignView";
 import { OwnerView } from "@/components/OwnerView";
 import { PlanSlots } from "@/components/PlanSlots";
 import { ProofPage } from "@/components/ProofPage";
@@ -281,8 +282,13 @@ const OWNER_TAB_KEY = "glory_owner_tab";
 /** หน้าเจ้าของ: สรุปรายเดือน | จัดการ slot | พนักงาน (จำแท็บล่าสุดไว้ในเครื่อง) — เห็นเฉพาะฝั่งที่มีสิทธิ์ */
 function OwnerTabs({ scope, canGrantPlan }: { scope: OwnerScope; canGrantPlan: boolean }) {
   const saved = useLocal(OWNER_TAB_KEY);
-  const tab = saved === "slots" || saved === "staff" || saved === "rules" ? saved : "summary";
-  const tabs = [["summary", "สรุปรายเดือน"], ["slots", "จัดการ slot"], ["staff", "พนักงาน"], ["rules", "กฎการทำงาน"]] as const;
+  // Campaign ใช้ข้อมูลฝั่ง Mc (ยอด GMV ราย Mc) จึงเห็นเฉพาะ Owner ที่จัดการ Mc ได้
+  const tabs = [
+    ["summary", "สรุปรายเดือน"],
+    ...(scope.mc ? [["campaign", "Campaign"] as const] : []),
+    ["slots", "จัดการ slot"], ["staff", "พนักงาน"], ["rules", "กฎการทำงาน"],
+  ] as const;
+  const tab = tabs.some(([id]) => id === saved) ? saved! : "summary";
   if (!scope.mc && !scope.admin) {
     return (
       <Notice variant="warning" icon title="ยังไม่ได้รับสิทธิ์จัดการ" className="my-6">
@@ -307,6 +313,7 @@ function OwnerTabs({ scope, canGrantPlan }: { scope: OwnerScope; canGrantPlan: b
         <Notice>บัญชีนี้มีสิทธิ์จัดการเฉพาะฝั่ง <strong>{scope.mc ? "Mc" : "Admin"}</strong></Notice>
       ) : null}
       <TabsContent value="summary"><OwnerView /></TabsContent>
+      {scope.mc ? <TabsContent value="campaign"><CampaignView /></TabsContent> : null}
       <TabsContent value="slots"><BookingWindowEditor scope={scope} /><SlotManager scope={scope} /></TabsContent>
       <TabsContent value="staff"><StaffManager scope={scope} canGrantPlan={canGrantPlan} /></TabsContent>
       <TabsContent value="rules"><RulesEditor scope={scope} /></TabsContent>
