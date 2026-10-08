@@ -259,12 +259,13 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   const db = createAdminClient();
   const settings = await getSettings(db);
   type Person = { name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
-  type Row = SlotRow & { person: Person | null };
+  type Row = SlotRow & { person: Person | null; campaign?: string | null };
 
   const load = (table: "mc_slots" | "admin_slots", personCol: string) =>
     fetchAll<Row>((from, to) =>
       db.from(table)
-        .select(`${SLOT_COLS}, person:staff!${personCol}(name, hourly_rate, commit_tiers, is_salaried)`)
+        // Campaign อยู่ที่ slot ของ Mc (ฝั่ง Admin ใช้ของ slot Mc เดียวกัน)
+        .select(`${SLOT_COLS}, ${table === "mc_slots" ? "campaign, " : ""}person:staff!${personCol}(name, hourly_rate, commit_tiers, is_salaried)`)
         .not(personCol, "is", null)
         .gte("live_date", first).lte("live_date", last)
         .or("confirmed.is.null,confirmed.eq.true")
@@ -276,9 +277,11 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   // หลักฐานไลฟ์ผูกกับ slot ของ Mc -> ฝั่ง Admin ของ slot เดียวกันใช้หลักฐานเดียวกัน
   const proofOf = new Map<string, ProofInfo>();
   const gmvOf = new Map<string, number>();
+  const campaignOf = new Map<string, string>();
   // slot ที่ Mc เป็น Mc ประจำ (เงินเดือน) = ไม่ต้องแนบหลักฐาน (ฝั่ง Admin ของ slot เดียวกันก็ไม่ต้อง)
   const salaried = new Set<string>();
   for (const r of mcRows) {
+    if (r.campaign?.trim() && !r.is_cancelled) campaignOf.set(slotKey(r), r.campaign.trim());
     const p = proofs.get(Number(r.id));
     if (p) proofOf.set(slotKey(r), { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, driveFolderUrl: p.driveFolderUrl });
     if (r.person?.is_salaried && !r.is_cancelled) salaried.add(slotKey(r));
@@ -319,6 +322,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         noProof: salaried.has(slotKey(r)),
         gmv: gmvOf.get(slotKey(r)) ?? null,
         gmvCoveredBy: coveredBy.get(slotKey(r)) ?? null,
+        campaign: (type === "Mc" ? r.campaign?.trim() : campaignOf.get(slotKey(r))) || "",
       });
     }
   };

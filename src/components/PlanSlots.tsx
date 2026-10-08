@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import {
   CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, MinusIcon, PlusIcon, TagIcon, Trash2Icon, Undo2Icon, UserIcon,
-  WandSparklesIcon, XIcon,
+  UserXIcon, WandSparklesIcon, XIcon,
 } from "lucide-react";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, PlatformBadge, StateBox, api,
@@ -1040,7 +1040,8 @@ function Legend({ tick }: { tick: boolean }) {
         <>
           {sample("border-2 border-dashed border-primary bg-primary/15", "ร่างใหม่")}
           {sample("border-primary bg-primary", "มีในชีตแล้ว (ยังว่าง)")}
-          {sample("border-p2 bg-p2", "มีคนจองแล้ว (เอาออกไม่ได้)")}
+          {sample("border-p2 bg-p2", "Mc จองแล้ว (เอาออกไม่ได้)")}
+          {sample("border-2 border-warning-border bg-warning", "Admin จองแล้ว ยังไม่มี Mc")}
           {sample("border-2 border-dashed border-p2 bg-p2/20", "ร่างลงชื่อ Mc ประจำ")}
           {sample("border-destructive bg-destructive/15", "จะลบ")}
         </>
@@ -1068,7 +1069,9 @@ function Tick({ item, other, agency, label, onClick }: {
       : item.agency ? (item.agencyId ? "have" : "new")
         : item.assign ? "assign"
         : !item.existing ? "new"
-          : item.existing.mc?.cancelled ? "cancel" : item.existing.mc?.name || !canDelete(item.existing) ? "taken" : "have";
+          : item.existing.mc?.cancelled ? "cancel" : item.existing.mc?.name ? "taken"
+            // Admin ลงแล้วแต่ยังไม่มี Mc = ยังต้องหา Mc (ลบไม่ได้เพราะมี Admin)
+            : !canDelete(item.existing) ? "noMc" : "have";
   return (
     <button
       type="button"
@@ -1085,13 +1088,14 @@ function Tick({ item, other, agency, label, onClick }: {
         st === "new" && "border-2 border-dashed border-primary bg-primary/15 text-primary",
         st === "have" && "border-primary bg-primary text-primary-foreground",
         st === "taken" && "border-p2 bg-p2 text-white",
+        st === "noMc" && "border-2 border-warning-border bg-warning text-warning-foreground",
         st === "assign" && "border-2 border-dashed border-p2 bg-p2/20 text-p2",
         st === "cancel" && "bg-muted text-muted-foreground",
         st === "del" && "border-destructive bg-destructive/15 text-destructive",
         st !== "other" && item?.overlap && "ring-2 ring-warning-border",
       )}
     >
-      {st === "new" || st === "have" ? <CheckIcon /> : st === "taken" || st === "assign" ? <UserIcon /> : st === "del" ? <XIcon />
+      {st === "new" || st === "have" ? <CheckIcon /> : st === "taken" || st === "assign" ? <UserIcon /> : st === "noMc" ? <UserXIcon /> : st === "del" ? <XIcon />
         : st === "cancel" || st === "other" ? <MinusIcon /> : null}
     </button>
   );

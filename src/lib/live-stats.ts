@@ -355,7 +355,7 @@ export function totalsOf(list: LiveSession[]): Totals {
 
 const ratio = (a: number | null, b: number | null) => (a === null || b === null || !b ? null : a / b);
 
-export type MetricKey = "gmv" | "orders" | "duration" | "gmvPerHour" | "viewers" | "views" | "impressions" | "impressionsPerHour" | "ctr" | "co" | "lives";
+export type MetricKey = "gmv" | "orders" | "duration" | "gmvPerHour" | "viewers" | "viewersPerHour" | "views" | "impressions" | "impressionsPerHour" | "ctr" | "co" | "lives";
 
 export const METRICS: {
   key: MetricKey;
@@ -370,6 +370,8 @@ export const METRICS: {
   { key: "duration", label: "ชั่วโมงไลฟ์", kind: "hours", value: (t) => t.durationSec / 3600 },
   { key: "gmvPerHour", label: "GMV / ชม.", kind: "baht", value: (t) => ratio(t.gmv, t.durationSec / 3600) },
   { key: "viewers", label: "Viewers", kind: "int", value: (t) => t.viewers },
+  // Viewers ÷ ชั่วโมงไลฟ์ (ทั้ง TikTok และ Shopee มี Viewers)
+  { key: "viewersPerHour", label: "Viewers / ชม.", kind: "int", value: (t) => ratio(t.viewers, t.durationSec / 3600) },
   { key: "views", label: "Views", note: "TikTok", kind: "int", value: (t) => t.views },
   { key: "impressions", label: "Product Impressions", note: "TikTok", kind: "int", value: (t) => t.impressions },
   // Impressions ÷ ชั่วโมงไลฟ์ของ TikTok (Shopee ไม่มี Impressions)

@@ -205,7 +205,7 @@ export function yearBook(o: {
 }
 
 /** ลำดับตัวชี้วัดของตารางเทียบหลายเดือน (ตามตารางที่ทีมใช้: GMV, Duration, GMV/hr, Order, Viewer, View, Impressions, CTR, CO) */
-export const MULTI_ORDER = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "views", "impressions", "impressionsPerHour", "ctr", "co", "lives"] as const;
+export const MULTI_ORDER = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "viewersPerHour", "views", "impressions", "impressionsPerHour", "ctr", "co", "lives"] as const;
 
 /** ผลต่าง: อัตรา (CTR / CO) = pp / อื่น ๆ = % เช่น "+1.14pp" / "-12.7%" */
 export function deltaOf(kind: Kind, a: number | null, b: number | null) {

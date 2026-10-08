@@ -5,7 +5,8 @@ import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/ty
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
 import { fmtGmv } from "@/lib/gmv";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
-import { ChevronRightIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, ChevronRightIcon } from "lucide-react";
+import { MIN_RANK_HOURS, rankMc, type McRank, type RankPart } from "@/lib/mc-rank";
 import type { Cell, ExportBook } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
 import { LoadError, LoadingBlock, MonthNav, Notice, Stats, api } from "@/components/shared";
@@ -165,6 +166,213 @@ function detailBook(data: OwnerSummary) {
   return book(`GLORY รายละเอียด ${data.month}`, "รายละเอียด", rows);
 }
 
+// อันดับ Mc: GMV/ชม. เทียบค่าเฉลี่ยของแคมเปญ + ช่องเดียวกัน (src/lib/mc-rank.ts)
+const pct = (x: number | null | undefined) => (x == null ? "" : Math.round(x * 1000) / 10);
+const groupName = (campaign: string) => campaign || "วันปกติ";
+
+function rankBook(data: OwnerSummary): ExportBook {
+  const { rows, groups } = rankMc(data.details);
+  const partCells = (p: RankPart | null) => (p ? [round2(p.hours), round2(p.perHour), pct(p.index)] : ["", "", ""]);
+  const ranking: unknown[][] = [[
+    "อันดับ", "Mc", "ชม. ที่มียอด", "GMV", "GMV/ชม.",
+    "แคมเปญ: ชม.", "แคมเปญ: GMV/ชม.", "แคมเปญ: % เทียบค่าเฉลี่ย", "วันปกติ: ชม.", "วันปกติ: GMV/ชม.", "วันปกติ: % เทียบค่าเฉลี่ย",
+    "คะแนนรวม (%)", "ผล",
+  ]];
+  for (const r of rows.filter((x) => x.hours > 0)) {
+    ranking.push([
+      r.rank ?? "", r.name, round2(r.hours), round2(r.gmv), round2(r.perHour), ...partCells(r.campaign), ...partCells(r.normal),
+      pct(r.score), !r.ranked ? `ข้อมูลน้อย (ต่ำกว่า ${MIN_RANK_HOURS} ชม.)` : r.score! >= 1 ? "ผ่านค่าเฉลี่ย" : "ต่ำกว่าค่าเฉลี่ย",
+    ]);
+  }
+  const avg: unknown[][] = [["แคมเปญ", "ช่อง", "จำนวน Mc", "ชม.", "GMV", "ค่าเฉลี่ย GMV/ชม.", "หมายเหตุ"]];
+  for (const g of groups) {
+    avg.push([groupName(g.campaign), g.platform, g.mcs, round2(g.hours), round2(g.gmv), round2(g.avg), g.scored ? "" : "Mc คนเดียว ไม่นับคะแนน"]);
+  }
+  const detail: unknown[][] = [["Mc", "แคมเปญ", "ช่อง", "ชม.", "GMV", "GMV/ชม.", "ค่าเฉลี่ยกลุ่ม/ชม.", "% เทียบค่าเฉลี่ย", "ผล"]];
+  for (const r of rows) for (const c of [...(r.campaign?.cells ?? []), ...(r.normal?.cells ?? [])]) {
+    detail.push([
+      r.name, groupName(c.group.campaign), c.group.platform, round2(c.hours), round2(c.gmv), round2(c.perHour), round2(c.group.avg),
+      pct(c.index), c.index === null ? "ไม่นับ (Mc คนเดียว)" : c.index >= 1 ? "ผ่าน" : "ต่ำกว่า",
+    ]);
+  }
+  return {
+    title: `GLORY อันดับ Mc (GMV ต่อชม.) ${data.month}`,
+    sheets: [
+      { name: "อันดับ Mc", rows: ranking as Cell[][] },
+      { name: "ค่าเฉลี่ยแคมเปญ", rows: avg as Cell[][] },
+      { name: "รายแคมเปญ", rows: detail as Cell[][] },
+    ],
+  };
+}
+
+/** % เทียบค่าเฉลี่ย: เขียว = ผ่าน (100% ขึ้นไป) แดง = ต่ำกว่า */
+function IndexText({ index, className }: { index: number | null | undefined; className?: string }) {
+  if (index == null) return <span className="text-muted-foreground">–</span>;
+  return <span className={cn("font-semibold tabular-nums", index >= 1 ? "text-success" : "text-destructive", className)}>{pct(index)}%</span>;
+}
+
+function PartCell({ part }: { part: RankPart | null }) {
+  return (
+    <TableCell className="px-3 text-right tabular-nums">
+      {part ? (
+        <>
+          {part.index === null ? <span className="text-xs text-muted-foreground" title="ทุกกลุ่มที่ไลฟ์มี Mc คนเดียว">ไม่มีคนเทียบ</span> : <IndexText index={part.index} />}
+          <span className="block text-[11px] text-muted-foreground">฿{money(part.perHour)}/ชม. · {num(part.hours)} ชม.</span>
+        </>
+      ) : <span className="text-muted-foreground">–</span>}
+    </TableCell>
+  );
+}
+
+const RANK_COLS: [string, string][] = [["hours", "ชม. ที่มียอด"], ["gmv", "GMV"], ["perHour", "GMV/ชม."], ["campaign", "แคมเปญ"], ["normal", "วันปกติ"], ["score", "คะแนนรวม"]];
+
+function McRankPanel({ data }: { data: OwnerSummary }) {
+  const [sort, setSort] = useState<SortState>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const { rows: all, groups } = rankMc(data.details);
+  const has = all.filter((r) => r.hours > 0);
+  const none = all.filter((r) => r.hours <= 0);
+  const valueOf = (r: McRank, k: string): number | string | null => {
+    switch (k) {
+      case "rank": return r.rank;
+      case "name": return r.name;
+      case "hours": return r.hours;
+      case "gmv": return r.gmv;
+      case "perHour": return r.perHour;
+      case "campaign": return r.campaign?.index ?? null;
+      case "normal": return r.normal?.index ?? null;
+      case "score": return r.ranked ? r.score : null;
+      default: return null;
+    }
+  };
+  const rows = sortRows(has, sort, valueOf);
+
+  return (
+    <section className="mt-5">
+      <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+        <h2 className="flex flex-wrap items-baseline gap-2 text-lg font-bold">
+          อันดับ Mc
+          <span className="text-xs font-normal text-muted-foreground">
+            GMV/ชม. เทียบค่าเฉลี่ยของแคมเปญ + ช่องเดียวกัน · คะแนนรวม = แคมเปญ 50% + วันปกติ 50% · 100% ขึ้นไป = ผ่านค่าเฉลี่ย
+          </span>
+        </h2>
+        {has.length ? <ExportMenu label="อันดับ Mc" size="sm" build={() => rankBook(data)} /> : null}
+      </div>
+      {!has.length ? (
+        <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ยังไม่มียอด GMV ของเดือนนี้ (กรอกในหน้าหลักฐานไลฟ์)</div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <Table className="min-w-[720px]">
+            <TableHeader className="bg-secondary">
+              <TableRow className="hover:bg-transparent">
+                <SortHead k="rank" label="#" sort={sort} setSort={setSort} text className="w-10" />
+                <SortHead k="name" label="Mc" text sort={sort} setSort={setSort} />
+                {RANK_COLS.map(([k, h]) => <SortHead key={k} k={k} label={h} sort={sort} setSort={setSort} />)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => {
+                const isOpen = open === r.name;
+                const cells = [...(r.campaign?.cells ?? []), ...(r.normal?.cells ?? [])];
+                return (
+                  <Fragment key={r.name}>
+                    <TableRow
+                      tabIndex={0}
+                      aria-expanded={isOpen}
+                      data-state={isOpen ? "selected" : undefined}
+                      onClick={() => setOpen(isOpen ? null : r.name)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(isOpen ? null : r.name); } }}
+                      className={cn("cursor-pointer data-[state=selected]:bg-secondary", !r.ranked && "text-muted-foreground")}
+                    >
+                      <TableCell className="px-3 font-bold tabular-nums">
+                        {r.rank ?? "–"}
+                      </TableCell>
+                      <TableCell className="px-3">
+                        <ChevronRightIcon className={cn("mr-0.5 inline size-4 text-muted-foreground transition-transform", isOpen && "rotate-90 text-primary")} />
+                        {r.name}
+                        {!r.ranked ? (
+                          <Badge variant="outline" className="ml-1.5 text-[11px] text-muted-foreground" title={`ต้องมียอด GMV อย่างน้อย ${MIN_RANK_HOURS} ชม. ถึงเข้าอันดับ`}>
+                            {r.score === null ? "ไม่มีคนเทียบ" : `ข้อมูลน้อย (< ${MIN_RANK_HOURS} ชม.)`}
+                          </Badge>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="px-3 text-right tabular-nums">{num(r.hours)}</TableCell>
+                      <TableCell className="px-3 text-right tabular-nums">{money(r.gmv)}</TableCell>
+                      <TableCell className="px-3 text-right tabular-nums">{money(r.perHour)}</TableCell>
+                      <PartCell part={r.campaign} />
+                      <PartCell part={r.normal} />
+                      <TableCell className="px-3 text-right">
+                        {r.score === null ? <span className="text-muted-foreground">–</span> : (
+                          <>
+                            <IndexText index={r.score} className="text-base" />
+                            {r.ranked ? (
+                              <span className={cn("block text-[11px] font-semibold", r.score >= 1 ? "text-success" : "text-destructive")}>
+                                {r.score >= 1 ? "ผ่านค่าเฉลี่ย" : "ต่ำกว่าค่าเฉลี่ย"}
+                              </span>
+                            ) : null}
+                          </>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                    {isOpen ? (
+                      <TableRow className="bg-secondary hover:bg-secondary">
+                        <TableCell colSpan={8} className="px-3 pt-1 pb-3 pl-8 whitespace-normal">
+                          <ul className="space-y-1 text-xs">
+                            {cells.map((c) => (
+                              <li key={c.group.key} className="flex flex-wrap items-baseline gap-x-2">
+                                <b className={cn("font-semibold", c.group.campaign && "text-primary")}>{groupName(c.group.campaign)}</b>
+                                <span className="text-muted-foreground">{c.group.platform}</span>
+                                <span className="tabular-nums">
+                                  {num(c.hours)} ชม. · ฿{money(c.perHour)}/ชม. (ค่าเฉลี่ย ฿{money(c.group.avg)}/ชม.)
+                                </span>
+                                {c.index === null
+                                  ? <span className="text-muted-foreground">ไม่นับคะแนน (Mc คนเดียวในกลุ่มนี้)</span>
+                                  : <IndexText index={c.index} />}
+                              </li>
+                            ))}
+                          </ul>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+          <details className="border-t px-3 py-2 text-sm">
+            <summary className="cursor-pointer font-semibold">ค่าเฉลี่ย GMV/ชม. แต่ละแคมเปญ / ช่อง ({groups.length} กลุ่ม)</summary>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full min-w-[520px] text-xs">
+                <thead className="text-muted-foreground">
+                  <tr className="border-b">
+                    <th className="py-1 pr-2 text-left font-semibold">แคมเปญ</th>
+                    <th className="py-1 pr-2 text-left font-semibold">ช่อง</th>
+                    {["Mc", "ชม.", "GMV", "ค่าเฉลี่ย/ชม."].map((h) => <th key={h} className="py-1 pl-2 text-right font-semibold">{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((g) => (
+                    <tr key={g.key} className={cn("border-b last:border-0", !g.scored && "text-muted-foreground")}>
+                      <td className={cn("py-1 pr-2", g.campaign && "font-semibold text-primary")}>{groupName(g.campaign)}</td>
+                      <td className="py-1 pr-2">{g.platform}</td>
+                      <td className="py-1 pl-2 text-right tabular-nums" title={g.scored ? undefined : "Mc คนเดียว ไม่นับคะแนน"}>{g.mcs}{g.scored ? "" : " *"}</td>
+                      <td className="py-1 pl-2 text-right tabular-nums">{num(g.hours)}</td>
+                      <td className="py-1 pl-2 text-right tabular-nums">{money(g.gmv)}</td>
+                      <td className="py-1 pl-2 text-right font-semibold tabular-nums">{money(g.avg)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-1 text-[11px] text-muted-foreground">* Mc คนเดียวในกลุ่ม ไม่นับคะแนน · ชั่วโมง = เฉพาะ slot ที่กรอก GMV แล้ว (รวม slot ที่ยอดรวมอยู่ในคิวถัดไป)</p>
+            </div>
+          </details>
+        </div>
+      )}
+      {none.length ? <p className="mt-2 text-xs text-muted-foreground">ยังไม่มียอด GMV: {none.map((r) => r.name).join(", ")}</p> : null}
+    </section>
+  );
+}
+
 // ---------- หน้าจอ ----------
 
 export function OwnerView() {
@@ -224,6 +432,7 @@ export function OwnerView() {
         <ExportMenu label="สรุป" build={() => summaryBook(data)} />
         <ExportMenu label="รายละเอียด" build={() => detailBook(data)} />
       </div>
+      {data.scope?.mc !== false ? <McRankPanel data={data} /> : null}
       {groups(data).map(([type, rows]) => (
         <section key={type} className="mt-5">
           <h2 className="mb-2 flex flex-wrap items-baseline gap-2 text-lg font-bold">
@@ -237,9 +446,82 @@ export function OwnerView() {
   );
 }
 
-function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: OwnerPerson[] }) {
+// ---------- เรียงตาราง (กดหัวคอลัมน์) ----------
+
+type SortState = { key: string; desc: boolean } | null;
+
+/** เรียงแถว: ค่าว่าง (null) อยู่ท้ายเสมอ ไม่ว่าจะเรียงทางไหน */
+function sortRows<T>(rows: T[], sort: SortState, value: (r: T, key: string) => number | string | null): T[] {
+  if (!sort) return rows;
+  const dir = sort.desc ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const x = value(a, sort.key), y = value(b, sort.key);
+    if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;
+    return (typeof x === "string" ? x.localeCompare(String(y), "th") : x - (y as number)) * dir;
+  });
+}
+
+/** หัวคอลัมน์กดเรียง: ครั้งแรก = มากไปน้อย (ชื่อ = ก–ฮ) / ครั้งที่สอง = กลับด้าน / ครั้งที่สาม = ลำดับเดิม */
+function SortHead({ k, label, sort, setSort, text = false, className }: {
+  k: string; label: string; sort: SortState; setSort: (s: SortState) => void; text?: boolean; className?: string;
+}) {
+  const active = sort?.key === k;
+  const firstDesc = !text;
+  const next = () => setSort(!active ? { key: k, desc: firstDesc } : sort.desc === firstDesc ? { key: k, desc: !firstDesc } : null);
+  const Icon = !active ? ArrowUpDownIcon : sort.desc ? ArrowDownIcon : ArrowUpIcon;
+  return (
+    <TableHead
+      aria-sort={active ? (sort.desc ? "descending" : "ascending") : undefined}
+      className={cn("px-3 text-xs font-semibold text-muted-foreground", !text && "text-right", className)}
+    >
+      <button
+        type="button"
+        onClick={next}
+        title="กดเพื่อเรียง (มากไปน้อย / น้อยไปมาก / ลำดับเดิม)"
+        className={cn("inline-flex cursor-pointer items-center gap-0.5 whitespace-nowrap hover:text-foreground", active && "text-primary")}
+      >
+        {label}
+        <Icon className={cn("size-3", !active && "opacity-40")} />
+      </button>
+    </TableHead>
+  );
+}
+
+const SUM_COLS: [string, string][] = [
+  ["slots", "slot"], ["hours", "ชั่วโมง"], ["days", "วัน"], ["cancelled", "ยกเลิก"], ["late", "สาย"],
+  ["bonus", "ชดเชย"], ["proof", "หลักฐาน"], ["gmv", "GMV"], ["pay", "ยอดเงิน"],
+];
+
+function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; rows: OwnerPerson[] }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
-  if (!rows.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
+  const [sort, setSort] = useState<SortState>(null);
+  if (!base.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
+  const valueOf = (r: OwnerPerson, k: string): number | string | null => {
+    const items = slotsOf(data, type, r.name);
+    switch (k) {
+      case "name": return r.name;
+      case "slots": return r.slots;
+      case "hours": return r.hours;
+      case "days": return r.days;
+      case "cancelled": return r.cancelled;
+      case "late": return r.lateSlots;
+      case "bonus": return r.bonusMinutes;
+      case "proof": {
+        const need = items.filter((d) => !d.noProof);
+        return need.length ? need.filter((d) => d.proof).length / need.length : null;
+      }
+      case "gmv": {
+        const g = gmvOf(items);
+        return g.count ? g.total : null;
+      }
+      case "pay": {
+        const rate = rateOf(data, type, r.name);
+        return rate ? rate * r.paidHours : null;
+      }
+      default: return null;
+    }
+  };
+  const rows = sortRows(base, sort, valueOf);
   const toggle = (name: string) => {
     const next = new Set(open);
     if (next.has(name)) next.delete(name); else next.add(name);
@@ -256,10 +538,8 @@ function SumTable({ data, type, rows }: { data: OwnerSummary; type: Type; rows: 
       <Table className="min-w-[680px]">
         <TableHeader className="bg-secondary">
           <TableRow className="hover:bg-transparent">
-            <TableHead className="px-3 text-xs font-semibold text-muted-foreground">ชื่อ</TableHead>
-            {["slot", "ชั่วโมง", "วัน", "ยกเลิก", "สาย", "ชดเชย", "หลักฐาน", "GMV", "ยอดเงิน"].map((h) => (
-              <TableHead key={h} className="px-3 text-right text-xs font-semibold text-muted-foreground">{h}</TableHead>
-            ))}
+            <SortHead k="name" label="ชื่อ" text sort={sort} setSort={setSort} />
+            {SUM_COLS.map(([k, h]) => <SortHead key={k} k={k} label={h} sort={sort} setSort={setSort} />)}
           </TableRow>
         </TableHeader>
         <TableBody>

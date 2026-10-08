@@ -61,6 +61,8 @@ export const MODES = {
 
 /** หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ / Plan Slot Live (Owner ที่ติ๊กสิทธิ์) */
 type Page = Role | "proof" | "stats" | "plan";
+/** ลำดับในเมนูเลือกหน้า */
+const PAGE_ORDER: Page[] = ["owner", "stats", "plan", "mc", "admin", "proof"];
 
 const ROLE_KEY = "glory_booking_role";
 const THEME_KEY = "glory_booking_theme";
@@ -104,7 +106,7 @@ function Shell({ me }: { me: Me | null }) {
     ...(me?.owner?.analytics ? ["stats" as const] : []),
     // Plan Slot Live: เฉพาะ Owner ที่ติ๊กสิทธิ์ "Plan Slot Live"
     ...(me?.owner?.plan ? ["plan" as const] : []),
-  ];
+  ].sort((a, b) => PAGE_ORDER.indexOf(a) - PAGE_ORDER.indexOf(b));
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
   const savedPage = useLocal(ROLE_KEY) as Page | null;
   const page: Page | null = savedPage && pages.includes(savedPage) ? savedPage : pages[0] ?? null;

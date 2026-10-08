@@ -244,6 +244,64 @@ function addDriversSlide(pres: PptxGenJS, analysis: ReturnType<typeof analyze>, 
 }
 
 /** หน้า Top 5 ไลฟ์ (ตาม GMV) + สัดส่วนยอดของ 5 ไลฟ์นี้ */
+/** การ์ดในหน้า "ยอดต่อชั่วโมง": ค่าหลัก + % เทียบ + แท่งเทียบทุกช่วง */
+type PerHourCard = {
+  key: MetricKey;
+  value: number | null;
+  deltas: { label: string; text: string; color: string }[];
+  bars: { name: string; value: number | null; main: boolean }[];
+};
+const PER_HOUR_KEYS: MetricKey[] = ["gmvPerHour", "viewersPerHour", "impressionsPerHour"];
+
+/** หน้า "ยอดต่อชั่วโมง": GMV / Viewers / Impressions ต่อชั่วโมงไลฟ์ (3 การ์ดใหญ่) */
+function addPerHourSlide(pres: PptxGenJS, title: string, cards: PerHourCard[]) {
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  const gap = 0.35, cw = (W - 2 * M - 2 * gap) / 3, y0 = 1.45, ch = 4.95;
+  cards.forEach((c, i) => {
+    const x = M + i * (cw + gap), m = metricOf(c.key);
+    s.addShape(pres.ShapeType.roundRect, { x, y: y0, w: cw, h: ch, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
+    s.addText(m.label, { x: x + 0.3, y: y0 + 0.25, w: cw - 0.6, h: 0.45, fontSize: 18, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+    s.addText(m.note ? `เฉพาะ ${m.note}` : "ทุกแพลตฟอร์ม", { x: x + 0.3, y: y0 + 0.7, w: cw - 0.6, h: 0.3, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+    const big = fmt(c.key, c.value);
+    s.addText(big, { x: x + 0.3, y: y0 + 1.05, w: cw - 0.6, h: 0.8, fontSize: big.length > 12 ? 28 : 36, bold: true, color: C.pink, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+    if (c.deltas.length) {
+      s.addText(c.deltas.flatMap((d, j) => [
+        { text: `${d.label}  `, options: { color: C.muted } },
+        { text: d.text, options: { bold: true, color: d.color, breakLine: j < c.deltas.length - 1 } },
+      ]), { x: x + 0.3, y: y0 + 1.9, w: cw - 0.6, h: 0.85, fontSize: 15, fontFace: FONT, margin: 0, valign: "top", paraSpaceAfter: 2, fit: "shrink", isTextBox: true });
+    }
+    // แท่งเทียบ: ชื่อสั้น (เช่น ก.ค.) = ชื่อซ้ายแท่ง / ชื่อยาว (เช่น วันที่เต็ม) = ชื่อบนแท่ง ไม่เกิน 3 แท่ง
+    const bars = c.bars.filter((b) => b.value !== null);
+    if (bars.length > 1) {
+      const inline = bars.every((b) => b.name.length <= 9);
+      const list = inline ? bars.slice(0, 8) : bars.slice(0, 3);
+      const top = y0 + 2.85, area = ch - 2.85 - 0.25;
+      const rowH = Math.min(inline ? 0.42 : 0.62, area / list.length);
+      const max = Math.max(...list.map((b) => b.value!), 1);
+      const nameW = inline ? 0.95 : 0, valW = 1.15;
+      const barX = x + 0.3 + nameW, barMax = cw - 0.6 - nameW - valW - 0.08;
+      list.forEach((b, j) => {
+        const y = top + j * rowH;
+        const color = b.main ? C.pink : C.blue;
+        if (inline) {
+          s.addText(b.name, { x: x + 0.3, y, w: nameW - 0.05, h: rowH, fontSize: 11, bold: b.main, color: C.text, fontFace: FONT, margin: 0, valign: "middle", fit: "shrink", isTextBox: true });
+        } else {
+          s.addText(b.name, { x: x + 0.3, y, w: cw - 0.6, h: 0.26, fontSize: 11, bold: b.main, color: C.text, fontFace: FONT, margin: 0, valign: "bottom", fit: "shrink", isTextBox: true });
+        }
+        const by = inline ? y + rowH * 0.22 : y + 0.3, bh = inline ? rowH * 0.56 : 0.24;
+        s.addShape(pres.ShapeType.rect, { x: barX, y: by, w: Math.max(0.03, (barMax * Math.max(0, b.value!)) / max), h: bh, fill: { color }, line: { color } });
+        s.addText(fmtMetric(metricOf(c.key).kind, b.value, true), {
+          x: barX + barMax + 0.08, y: by - 0.06, w: valW, h: bh + 0.12, fontSize: 11, bold: b.main, color: C.text, fontFace: FONT, margin: 0, align: "right", valign: "middle", isTextBox: true,
+        });
+      });
+    }
+  });
+  s.addText("ต่อชั่วโมง = ยอดรวม ÷ ชั่วโมงไลฟ์ · Impressions / ชม. คิดจากชั่วโมงไลฟ์ของ TikTok เท่านั้น (Shopee ไม่มี Impressions)", {
+    x: M, y: 6.55, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true,
+  });
+}
+
 function addTop5Slide(pres: PptxGenJS, lives: LiveSession[], name: string) {
   if (!lives.length) return;
   const s = pres.addSlide({ masterName: "CONTENT" });
@@ -345,6 +403,16 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     });
   }
 
+  // 2.5) ยอดต่อชั่วโมง: GMV / Viewers / Impressions ต่อชั่วโมงไลฟ์
+  addPerHourSlide(pres, hasB ? `ยอดต่อชั่วโมง: ${o.aName} เทียบ ${o.bName}` : `ยอดต่อชั่วโมง: ${o.aName}`, PER_HOUR_KEYS.map((k) => {
+    const va = val(ta, k), vb = val(tb, k), c = changeOf(va, vb);
+    return {
+      key: k, value: va,
+      deltas: hasB ? [{ label: `vs ${o.bName}`, text: pctText(c), color: pctColor(c) }] : [],
+      bars: hasB ? [{ name: o.aName, value: va, main: true }, { name: o.bName, value: vb, main: false }] : [],
+    };
+  }));
+
   // 3) ทุกตัวชี้วัด (ตาราง) + ข้อสังเกต
   {
     const s = pres.addSlide({ masterName: "CONTENT" });
@@ -365,7 +433,7 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
       ]);
     }
     s.addTable(rows, {
-      x: M, y: 1.45, w: 7.9, colW: hasB ? [2.5, 1.9, 1.9, 1.6] : [4.4, 3.5], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.4,
+      x: M, y: 1.45, w: 7.9, colW: hasB ? [2.5, 1.9, 1.9, 1.6] : [4.4, 3.5], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.37,
       border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
     });
     s.addShape(pres.ShapeType.roundRect, { x: 8.9, y: 1.45, w: W - M - 8.9, h: 4.75, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
@@ -533,7 +601,7 @@ export type MultiDeckInput = {
 };
 
 /** ลำดับตัวชี้วัดของตารางเทียบหลายเดือน (เหมือนหน้าเว็บ / ไฟล์ส่งออก) */
-const MULTI_KEYS: MetricKey[] = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "views", "impressions", "impressionsPerHour", "ctr", "co", "lives"];
+const MULTI_KEYS: MetricKey[] = ["gmv", "duration", "gmvPerHour", "orders", "viewers", "viewersPerHour", "views", "impressions", "impressionsPerHour", "ctr", "co", "lives"];
 
 /** +12.7% / +1.14pp (อัตรา = ผลต่าง pp) */
 function deltaText(kind: (typeof METRICS)[number]["kind"], a: number | null, b: number | null) {
@@ -618,6 +686,19 @@ export async function buildMultiDeck(o: MultiDeckInput, target: "pptx" | "gslide
     });
   }
 
+  // 2.5) ยอดต่อชั่วโมง: ค่าของเดือนหลัก + เทียบทีละเดือน + แท่งทุกเดือน
+  {
+    const vs = others.slice().reverse().slice(0, 3);
+    addPerHourSlide(pres, `ยอดต่อชั่วโมง: ${o.longLabel(o.focus)}`, PER_HOUR_KEYS.map((k) => {
+      const m = metricOf(k), v = valueAt(o.focus, k);
+      return {
+        key: k, value: v,
+        deltas: vs.map((other) => ({ label: `vs ${o.label(other)}`, ...deltaText(m.kind, v, valueAt(other, k)) })),
+        bars: o.keys.map((key) => ({ name: o.label(key), value: valueAt(key, k), main: key === o.focus })),
+      };
+    }));
+  }
+
   // 3) ตารางเทียบ: ทุกแพลตฟอร์ม + แยกแพลตฟอร์ม (CO รวมสองแพลตฟอร์มคำนวณไม่ได้)
   const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.dark }, align } });
   const table = (title: string, sel?: (s: LiveSession) => boolean, note?: string) => {
@@ -641,7 +722,7 @@ export async function buildMultiDeck(o: MultiDeckInput, target: "pptx" | "gslide
     const first = 2.3, rest = (W - 2 * M - first) / (cols - 1);
     s.addTable(rows, {
       x: M, y: 1.4, w: W - 2 * M, colW: [first, ...Array(cols - 1).fill(rest)], fontSize: cols > 9 ? 10 : cols > 6 ? 12 : 14,
-      fontFace: FONT, color: C.text, rowH: 0.4, border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
+      fontFace: FONT, color: C.text, rowH: 0.37, border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
     });
     s.addText(note ?? "CTR / CO เทียบเป็น pp (ผลต่างของ %) · ค่าอื่นเป็น % ที่เปลี่ยน · ตัวหนา = เดือนหลัก", { x: M, y: 6.4, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
   };
