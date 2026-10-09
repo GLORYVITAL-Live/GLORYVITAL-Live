@@ -1,6 +1,6 @@
 import { google, type sheets_v4 } from "googleapis";
 import { fail, ok, requireMe } from "@/lib/api";
-import { cleanBook, isUrl, sheetNames, type Cell, type RowStyle } from "@/lib/export";
+import { cleanBook, isUrl, sheetNames, styleAt, type Cell, type RowStyle } from "@/lib/export";
 import { googleAuth } from "@/lib/google";
 
 // ส่งออกเป็น Google Sheet (หน้าเจ้าของ: สรุปรายเดือน / สถิติไลฟ์ / Plan Slot Live) เฉพาะ Owner
@@ -27,6 +27,11 @@ function cellData(c: Cell, bold: boolean, style?: RowStyle): sheets_v4.Schema$Ce
   if (style) {
     format.backgroundColor = rgb(style.bg);
     format.textFormat = { bold: !!style.bold, ...(style.color ? { foregroundColor: rgb(style.color) } : {}) };
+    if (style.border) {
+      const line = { style: "SOLID", color: rgb("999999") };
+      format.borders = { top: line, bottom: line, left: line, right: line };
+    }
+    if (style.align) format.horizontalAlignment = style.align.toUpperCase();
   } else if (bold) {
     format.textFormat = { bold: true };
     format.backgroundColor = HEADER_BG;
@@ -95,16 +100,26 @@ export async function POST(request: Request) {
           updateCells: {
             start: { sheetId: i, rowIndex: 0, columnIndex: 0 },
             rows: s.rows.map((row, ri) => {
-              // แถวที่มีสี: ระบายเต็มความกว้างตาราง
-              const style = s.rowStyles?.[ri];
-              const width = style ? Math.max(...s.rows.map((r) => r.length)) : row.length;
-              return { values: Array.from({ length: width }, (_, j) => cellData(row[j], ri === header, style)) };
+              // แถวที่มีสไตล์: เติมช่องให้ครบความกว้าง (ช่องว่างที่มีสีก็ต้องเขียน)
+              const styled = !!s.rowStyles?.[ri] || Object.keys(s.cellStyles ?? {}).some((k) => k.startsWith(`${ri}:`));
+              const width = styled ? Math.max(...s.rows.map((r) => r.length)) : row.length;
+              return { values: Array.from({ length: width }, (_, j) => cellData(row[j], ri === header, styleAt(s, ri, j))) };
             }),
             fields: "userEnteredValue,userEnteredFormat",
           },
         });
       }
-      requests.push({ autoResizeDimensions: { dimensions: { sheetId: i, dimension: "COLUMNS", startIndex: 0 } } });
+      // ความกว้างคอลัมน์: กำหนดเอง (ตัวอักษร x ~8 px) ไม่กำหนด = พอดีข้อความ
+      if (s.colWidths?.length) {
+        s.colWidths.forEach((w, j) => requests.push({
+          updateDimensionProperties: {
+            range: { sheetId: i, dimension: "COLUMNS", startIndex: j, endIndex: j + 1 },
+            properties: { pixelSize: Math.round(w * 8) }, fields: "pixelSize",
+          },
+        }));
+      } else {
+        requests.push({ autoResizeDimensions: { dimensions: { sheetId: i, dimension: "COLUMNS", startIndex: 0 } } });
+      }
     });
     await sheets.spreadsheets.batchUpdate({ spreadsheetId: id, requestBody: { requests } });
 

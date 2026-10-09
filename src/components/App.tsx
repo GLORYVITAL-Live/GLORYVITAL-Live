@@ -390,7 +390,7 @@ function OwnerTabs({ me }: { me: Me }) {
           ))}
         </Notice>
       ) : null}
-      <TabsContent value="summary"><OwnerView /></TabsContent>
+      <TabsContent value="summary"><OwnerView requester={o.name} /></TabsContent>
       {scope.mc ? <TabsContent value="performance"><PerformanceView /></TabsContent> : null}
       <TabsContent value="slots">
         <SlotWorkspace me={me} scope={scope} edit={edit} plan={o.see.plan ? (o.plan ? "edit" : "view") : null} />

@@ -326,13 +326,13 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   const db = createAdminClient();
   const settings = await getSettings(db);
   type Person = { name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
-  type Row = SlotRow & { person: Person | null; campaign?: string | null };
+  type Row = SlotRow & { person: Person | null; campaign?: string | null; remark?: string | null };
 
   const load = (table: "mc_slots" | "admin_slots", personCol: string) =>
     fetchAll<Row>((from, to) =>
       db.from(table)
         // Campaign อยู่ที่ slot ของ Mc (ฝั่ง Admin ใช้ของ slot Mc เดียวกัน)
-        .select(`${SLOT_COLS}, ${table === "mc_slots" ? "campaign, " : ""}person:staff!${personCol}(name, hourly_rate, commit_tiers, is_salaried)`)
+        .select(`${SLOT_COLS}, remark, ${table === "mc_slots" ? "campaign, " : ""}person:staff!${personCol}(name, hourly_rate, commit_tiers, is_salaried)`)
         .not(personCol, "is", null)
         .gte("live_date", first).lte("live_date", last)
         .or("confirmed.is.null,confirmed.eq.true")
@@ -391,6 +391,8 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         gmv: gmvOf.get(slotKey(r)) ?? null,
         gmvCoveredBy: coveredBy.get(slotKey(r)) ?? null,
         campaign: (type === "Mc" ? r.campaign?.trim() : campaignOf.get(slotKey(r))) || "",
+        // หมายเหตุในชีต ("Admin เสริม" เป็นป้ายเปิดรับ Admin ไม่ใช่หมายเหตุ)
+        remark: r.remark?.trim() === "Admin เสริม" ? "" : r.remark?.trim() ?? "",
       });
     }
   };

@@ -7,7 +7,7 @@ import { fmtGmv } from "@/lib/gmv";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
 import { ChevronRightIcon } from "lucide-react";
 import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
-import type { Cell, ExportBook } from "@/lib/export";
+import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
 import { LoadError, LoadingBlock, MonthNav, Notice, Stats, api } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
@@ -172,6 +172,153 @@ function payrollBook(data: OwnerSummary) {
     : book(`GLORY ใบสรุปค่าจ้างรายคน ${data.month}`, "ค่าจ้างรายคน", rows);
 }
 
+// ---------- ไฟล์เบิก: รายคน (Mc / Admin) + ตารางคุม Advance Payment (หน้าตาเดียวกับเอกสารที่ทีมใช้) ----------
+
+const MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "2026-09-01" -> "1/9/2026" */
+const dmy = (d: string) => `${Number(d.slice(8))}/${Number(d.slice(5, 7))}/${d.slice(0, 4)}`;
+/** วันที่จัดทำ เช่น "10 Oct 2026" (เวลาไทย) */
+const madeOn = () => {
+  const t = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  return `${Number(t.slice(8))} ${MONTHS_EN[Number(t.slice(5, 7)) - 1]} ${t.slice(0, 4)}`;
+};
+const BORDER: RowStyle = { bg: "FFFFFF", border: true };
+/** สีช่อง channel ตามชีตที่ทีมใช้ */
+const CHANNEL_STYLE: Record<string, RowStyle> = {
+  "GLORY VITAL": { bg: "F4CCCC", border: true, align: "center" },
+  "GLORY MALL": { bg: "F4CCCC", border: true, align: "center" },
+  "Cherry Glory": { bg: "FFFF00", border: true, align: "center" },
+  "Skin Expert": { bg: "93C47D", color: "FFFFFF", border: true, align: "center" },
+  Shopee: { bg: "F6B26B", border: true, align: "center" },
+};
+const channelStyle = (p: string) => CHANNEL_STYLE[p.trim()] ?? { bg: "EFEFEF", border: true, align: "center" as const };
+
+/** เงินของคิว (หักมาสาย + ไลฟ์ชดเชย) ปัดเป็นบาท */
+const slotMoney = (d: OwnerDetail, rate: number) =>
+  Math.round((round2(d.hours) * (1 - lateCut(d.lateMinutes)) + bonusPaidMinutes(d.bonusMinutes) / 60) * rate);
+/** หมายเหตุของคิว: หมายเหตุในชีต + สาย / ชดเชย */
+const claimRemark = (d: OwnerDetail) => [
+  d.remark ?? "",
+  d.lateMinutes && lateCut(d.lateMinutes) ? `สาย ${d.lateMinutes} นาที หัก ${Math.round(lateCut(d.lateMinutes) * 100)}%` : "",
+  bonusPaidMinutes(d.bonusMinutes) ? `ชดเชย +${d.bonusMinutes} นาที` : "",
+].filter(Boolean).join(" · ");
+
+/**
+ * สรุปรายละเอียดชั่วโมงทำงาน (รายคน): หัวเรื่องแถบดำ / แถวละคิว ช่อง channel ใส่สีตามช่อง / แถวสุดท้ายของแต่ละคน = Total + GMV
+ *   เฉพาะคนที่มีค่าจ้างรายชั่วโมง (Mc ประจำที่ได้เงินเดือนไม่อยู่ในไฟล์เบิก)
+ */
+function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
+  const [y, m] = data.month.split("-").map(Number);
+  const first = `${data.month}-01`, last = `${data.month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  const people = (type === "Mc" ? data.mc : data.admin)
+    .map((p) => ({ p, rate: rateOf(data, type, p.name), items: slotsOf(data, type, p.name) }))
+    .filter((x) => x.items.length && x.rate > 0)
+    .sort((a, b) => a.p.name.localeCompare(b.p.name, "th"));
+  const skipped = (type === "Mc" ? data.mc : data.admin).filter((p) => !rateOf(data, type, p.name) && slotsOf(data, type, p.name).length);
+  if (!people.length) return null;
+  const channels = new Set(people.flatMap((x) => x.items.map((d) => d.platform)));
+  const where = channels.has("Shopee") && channels.size > 1 ? "Tiktok / Shopee" : channels.has("Shopee") ? "Shopee" : "Tiktok";
+
+  const rows: Cell[][] = [
+    ["", `สรุปรายละเอียดชั่วโมงทำงาน ${type === "Mc" ? "MC" : "ADMIN"} LIVESTREAMING ${where} รอบ ${dmy(first)} - ${dmy(last)}`],
+    [madeOn(), "ชื่อ", "Name", "channel", "วันที่ live", "เวลาที่ live", "เวลาที่ ลง live", "รวมเป็น ชั่วโมง", "ราคาต่อชั่วโมง", "รวมเป็นเงิน", "Total", "จำนวน GMV ที่ได้", "remark"],
+  ];
+  const rowStyles: Record<number, RowStyle> = {
+    0: { bg: "000000", color: "FFFFFF", bold: true },
+    1: { bg: "F3F3F3", bold: true, border: true },
+  };
+  const cellStyles: Record<string, RowStyle> = {};
+  let grand = 0, grandGmv = 0, grandHours = 0;
+  for (const { p, rate, items } of people) {
+    let total = 0;
+    const gmv = gmvOf(items);
+    items.forEach((d, i) => {
+      const money_ = slotMoney(d, rate);
+      total += money_;
+      const lastRow = i === items.length - 1;
+      cellStyles[`${rows.length}:3`] = channelStyle(d.platform);
+      rows.push([
+        "", i === 0 ? p.name : "", p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end),
+        round2(d.hours), { v: rate, f: "int" }, { v: money_, f: "int" },
+        lastRow ? { v: total, f: "money" } : null, lastRow && gmv.count ? { v: round2(gmv.total), f: "money" } : null, claimRemark(d),
+      ]);
+    });
+    grand += total;
+    grandGmv += gmv.count ? gmv.total : 0;
+    grandHours += items.reduce((a, d) => a + d.hours, 0);
+    rows.push([]);
+  }
+  rowStyles[rows.length] = { bg: "F3F3F3", bold: true, border: true };
+  rows.push(["", `รวม ${type} ทั้งหมด`, `${people.length} คน`, "", "", "", "", round2(grandHours), "", "", { v: grand, f: "money" }, grandGmv ? { v: round2(grandGmv), f: "money" } : null, ""]);
+  if (skipped.length) rows.push([], ["", `ไม่อยู่ในไฟล์เบิก (ไม่มีค่าจ้างรายชั่วโมง เช่น Mc ประจำ): ${skipped.map((p) => p.name).join(", ")}`]);
+  return {
+    name: `รายคน ${type}`, rows, header: 1, rowStyles, cellStyles,
+    colWidths: [12, 14, 14, 14, 10, 10, 12, 10, 12, 12, 13, 16, 26],
+  };
+}
+
+/** ตารางคุม Advance Payment ประจำเดือน: วันละแถว จ่าย = ค่าตัว Mc + Admin ของวันนั้น / WHT 3% / ก่อน VAT = จ่าย - WHT */
+function advanceSheet(data: OwnerSummary, requester: string): ExportSheet | null {
+  const byDate = new Map<string, { mc: number; admin: number }>();
+  for (const [type, people] of groups(data)) for (const p of people) {
+    const rate = rateOf(data, type, p.name);
+    if (!rate) continue;
+    for (const d of slotsOf(data, type, p.name)) {
+      const x = byDate.get(d.date) ?? { mc: 0, admin: 0 };
+      x[type === "Mc" ? "mc" : "admin"] += slotMoney(d, rate);
+      byDate.set(d.date, x);
+    }
+  }
+  const days = [...byDate].filter(([, x]) => x.mc + x.admin > 0).sort(([a], [b]) => a.localeCompare(b));
+  if (!days.length) return null;
+  const WHT = 0.03;
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const rows: Cell[][] = [
+    ["", "GLORY VITAL", "", "", "ตารางคุม Advance Payment"],
+    ["", "", "", "", `ประจำเดือน ${monthLabel(data.month)}`],
+    ["", "", "", "", "", "", "ชื่อผู้เบิกเงินทดรองจ่าย", requester],
+    ["NO", "Date", "Department", "Sup. /Name", "Description", "จ่าย", "ก่อน VAT", "WHT 3%", "Balance"],
+  ];
+  const rowStyles: Record<number, RowStyle> = { 3: { bg: "D9D9D9", bold: true, border: true, align: "center" } };
+  const cellStyles: Record<string, RowStyle> = {
+    "0:1": { bg: "FFFFFF", color: "C2185B", bold: true },
+    "0:4": { bg: "FFFFFF", bold: true, align: "center" },
+    "1:4": { bg: "FFFFFF", bold: true, align: "center" },
+    "2:6": { bg: "FFFFFF", bold: true, align: "right" },
+    "2:7": { bg: "FFFFFF", bold: true },
+  };
+  let total = 0;
+  days.forEach(([date, x], i) => {
+    const pay = x.mc + x.admin;
+    total += pay;
+    const r = rows.length;
+    for (const c of [0, 1, 2]) cellStyles[`${r}:${c}`] = { ...BORDER, align: "center" };
+    rowStyles[r] = BORDER;
+    rows.push([
+      i + 1, dmy(date), "Live", "", `ค่าตัว ${[x.mc ? "Mc Live" : "", x.admin ? "Admin Live" : ""].filter(Boolean).join(",")}`,
+      { v: pay, f: "money" }, { v: r2(pay * (1 - WHT)), f: "money" }, { v: r2(pay * WHT), f: "money" }, "-",
+    ]);
+  });
+  rowStyles[rows.length] = { bg: "F3F3F3", bold: true, border: true };
+  rows.push(["", "", "", "", "รวม", { v: total, f: "money" }, { v: r2(total * (1 - WHT)), f: "money" }, { v: r2(total * WHT), f: "money" }, "-"]);
+  rows.push([]);
+  cellStyles[`${rows.length}:4`] = { bg: "FFFFFF", bold: true, align: "center" };
+  rows.push(["", "", "", "", `รวม ค่าใช้จ่าย  ${money(total)}  บาท`]);
+  rows.push([], [], ["", "........................................", "", "", "........................................", "", "........................................"]);
+  rows.push(["", "(ผู้จัดทำ)", "", "", "(ผู้ตรวจสอบ)", "", "(ผู้อนุมัติ)"]);
+  return { name: "Advance Payment", rows, header: -1, rowStyles, cellStyles, colWidths: [6, 12, 12, 14, 32, 14, 14, 14, 12] };
+}
+
+/** ไฟล์เบิก: รายคน Mc / รายคน Admin / ตารางคุม Advance Payment (เฉพาะฝั่งที่มีสิทธิ์) */
+function claimBook(data: OwnerSummary, requester: string): ExportBook {
+  const sheets = [
+    ...groups(data).map(([type]) => claimSheet(data, type)),
+    advanceSheet(data, requester),
+  ].filter((s): s is ExportSheet => !!s);
+  if (!sheets.length) throw new Error("เดือนนี้ไม่มีคิวที่มีค่าจ้างให้เบิก");
+  return { title: `GLORY ไฟล์เบิก ${monthLabel(data.month)}`, sheets };
+}
+
 // ตาราง คน x วันที่: แต่ละช่อง = ชั่วโมงของวันนั้น, ท้ายแถว = รวมชั่วโมงและจำนวนวัน
 function dailyBook(data: OwnerSummary) {
   const [y, m] = data.month.split("-").map(Number);
@@ -207,7 +354,8 @@ function detailBook(data: OwnerSummary) {
 
 // ---------- หน้าจอ ----------
 
-export function OwnerView() {
+/** requester = ชื่อผู้เบิกเงินทดรองจ่ายในไฟล์เบิก (Owner ที่กดส่งออก) */
+export function OwnerView({ requester = "" }: { requester?: string }) {
   const [month, setMonth] = useState(() => monthKey());
   const [cache, setCache] = useState<Record<string, OwnerSummary>>({});
   const [failed, setFailed] = useState<{ month: string; message: string } | null>(null);
@@ -260,7 +408,8 @@ export function OwnerView() {
         </Notice>
       ) : null}
       <div className="my-3 flex flex-wrap gap-2">
-        <ExportMenu variant="default" label={hideAll ? "ใบสรุปรายคน" : "ใบสรุปค่าจ้างรายคน"} build={() => payrollBook(data)} />
+        {!hideAll ? <ExportMenu variant="default" label="ไฟล์เบิก" build={() => claimBook(data, requester)} /> : null}
+        <ExportMenu label={hideAll ? "ใบสรุปรายคน" : "ใบสรุปค่าจ้าง (ละเอียด)"} build={() => payrollBook(data)} />
         <ExportMenu label="รายคน-รายวัน" build={() => dailyBook(data)} />
         <ExportMenu label="สรุป" build={() => summaryBook(data)} />
         <ExportMenu label="รายละเอียด" build={() => detailBook(data)} />

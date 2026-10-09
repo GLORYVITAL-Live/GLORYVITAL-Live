@@ -6,8 +6,11 @@ import { strToU8, zipSync } from "fflate";
 /** รูปแบบตัวเลข: int = 1,234 / money = 1,234.56 / pct = 12.34% (ค่า 0.1234) / dec = 1.5 */
 export type NumFmt = "int" | "money" | "pct" | "dec";
 export type Cell = string | number | null | undefined | { v: number | null; f: NumFmt };
-/** สีทั้งแถว: bg / color = hex 6 หลัก เช่น "00FFFF" */
-export type RowStyle = { bg: string; color?: string; bold?: boolean };
+/**
+ * สไตล์ช่อง: bg / color = hex 6 หลัก เช่น "00FFFF" · border = เส้นกรอบบาง 4 ด้าน · align = จัดแนวนอน
+ *   ใช้ได้ทั้งทั้งแถว (rowStyles) และทีละช่อง (cellStyles)
+ */
+export type RowStyle = { bg: string; color?: string; bold?: boolean; border?: boolean; align?: "left" | "center" | "right" };
 export type ExportSheet = {
   name: string;
   rows: Cell[][];
@@ -15,7 +18,17 @@ export type ExportSheet = {
   header?: number;
   /** สีของแถว (เลขแถวนับจาก 0) แถวที่มีสีจะระบายเต็มความกว้างตาราง */
   rowStyles?: Record<number, RowStyle>;
+  /** สไตล์ทีละช่อง key = "แถว:คอลัมน์" (นับจาก 0) ใช้แทนสไตล์ของแถว */
+  cellStyles?: Record<string, RowStyle>;
+  /** ความกว้างคอลัมน์ (จำนวนตัวอักษร) ไม่ใส่ = คำนวณจากข้อความ */
+  colWidths?: number[];
 };
+/** สไตล์ของช่อง (สไตล์ทีละช่องก่อน แล้วค่อยสไตล์ของแถว) */
+export const styleAt = (s: Pick<ExportSheet, "rowStyles" | "cellStyles">, row: number, col: number) =>
+  s.cellStyles?.[`${row}:${col}`] ?? s.rowStyles?.[row];
+/** แถวนี้มีสไตล์ไหม (ต้องเติมช่องว่างให้ครบความกว้าง) */
+const rowHasStyle = (s: Pick<ExportSheet, "rowStyles" | "cellStyles">, row: number) =>
+  !!s.rowStyles?.[row] || Object.keys(s.cellStyles ?? {}).some((k) => k.startsWith(`${row}:`));
 const HEX_RE = /^[0-9A-Fa-f]{6}$/;
 export type ExportBook = { title: string; sheets: ExportSheet[] };
 
@@ -51,7 +64,7 @@ const BASE_XFS = 7;
 const KINDS = ["plain", "int", "money", "pct", "dec"] as const;
 type Kind = (typeof KINDS)[number];
 const NUMFMT_ID: Record<Kind, number> = { plain: 0, int: 3, money: 4, pct: 10, dec: 164 };
-const styleKey = (s: RowStyle) => `${s.bg}|${s.color ?? ""}|${s.bold ? 1 : 0}`.toUpperCase();
+const styleKey = (s: RowStyle) => `${s.bg}|${s.color ?? ""}|${s.bold ? 1 : 0}|${s.border ? 1 : 0}|${s.align ?? ""}`.toUpperCase();
 
 /** styles.xml: สไตล์พื้นฐาน + สไตล์สีแถว (แต่ละสีมี 5 แบบตามรูปแบบตัวเลข) */
 function stylesXml(extra: RowStyle[]) {
@@ -75,15 +88,17 @@ function stylesXml(extra: RowStyle[]) {
     `<xf numFmtId="10" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>`,
     `<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>`,
     `<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>`,
-    ...extra.flatMap((_, i) => KINDS.map((k) =>
-      `<xf numFmtId="${NUMFMT_ID[k]}" fontId="${3 + i}" fillId="${3 + i}" borderId="0" xfId="0" applyFont="1" applyFill="1"${k === "plain" ? "" : ` applyNumberFormat="1"`}/>`)),
+    ...extra.flatMap((s, i) => KINDS.map((k) =>
+      `<xf numFmtId="${NUMFMT_ID[k]}" fontId="${3 + i}" fillId="${3 + i}" borderId="${s.border ? 1 : 0}" xfId="0" applyFont="1" applyFill="1"`
+      + `${s.border ? ` applyBorder="1"` : ""}${k === "plain" ? "" : ` applyNumberFormat="1"`}`
+      + (s.align ? ` applyAlignment="1"><alignment horizontal="${s.align}" vertical="center"/></xf>` : "/>"))),
   ];
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts>
 <fonts count="${fonts.length}">${fonts.join("")}</fonts>
 <fills count="${fills.length}">${fills.join("")}</fills>
-<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF999999"/></left><right style="thin"><color rgb="FF999999"/></right><top style="thin"><color rgb="FF999999"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
 <cellXfs count="${xfs.length}">
 ${xfs.join("\n")}
@@ -99,36 +114,36 @@ function cellText(c: Cell) {
   return typeof c === "number" ? c.toLocaleString("en-US", { maximumFractionDigits: 2 }) : c;
 }
 
-/** rowXf(i, kind) = เลขสไตล์ของแถวที่มีสี (null = แถวปกติ) */
-function sheetXml(sheet: ExportSheet, links: string[], rowXf: (row: number, kind: Kind) => number | null) {
+/** cellXf(i, j, kind) = เลขสไตล์ของช่องที่มีสไตล์ (null = ช่องปกติ) */
+function sheetXml(sheet: ExportSheet, links: string[], cellXf: (row: number, col: number, kind: Kind) => number | null) {
   const header = sheet.header ?? 0;
   const width = Math.max(1, ...sheet.rows.map((r) => r.length));
-  const widths = Array.from({ length: width }, (_, j) =>
-    Math.min(60, Math.max(8, ...sheet.rows.slice(0, 500).map((r) => (isUrl(r[j]) ? 16 : cellText(r[j]).length + 2)))));
+  const widths = Array.from({ length: width }, (_, j) => sheet.colWidths?.[j]
+    ?? Math.min(60, Math.max(8, ...sheet.rows.slice(0, 500).map((r) => (isUrl(r[j]) ? 16 : cellText(r[j]).length + 2)))));
   const hyperlinks: string[] = [];
   const rows = sheet.rows.map((r, i) => {
-    const styled = rowXf(i, "plain") !== null;
-    // แถวที่มีสี: ระบายเต็มความกว้างตาราง (ช่องว่างก็ใส่สี)
-    const row = styled ? Array.from({ length: width }, (_, j) => r[j]) : r;
+    // แถวที่มีสไตล์: เติมช่องให้ครบความกว้าง (ช่องว่างที่มีสีก็ต้องเขียน)
+    const row = rowHasStyle(sheet, i) ? Array.from({ length: width }, (_, j) => r[j]) : r;
     const cells = row.map((c, j) => {
       const ref = `${colName(j)}${i + 1}`;
       const bold = i === header;
-      const empty = styled ? `<c r="${ref}" s="${rowXf(i, "plain")}"/>` : "";
+      const styled = cellXf(i, j, "plain") !== null;
+      const empty = styled ? `<c r="${ref}" s="${cellXf(i, j, "plain")}"/>` : "";
       if (c === null || c === undefined || c === "") return empty;
       if (typeof c === "object") {
         if (c.v === null || !Number.isFinite(c.v)) return empty;
-        return `<c r="${ref}" s="${rowXf(i, c.f) ?? (bold ? STYLE.bold : STYLE[c.f])}"><v>${c.v}</v></c>`;
+        return `<c r="${ref}" s="${cellXf(i, j, c.f) ?? (bold ? STYLE.bold : STYLE[c.f])}"><v>${c.v}</v></c>`;
       }
       if (typeof c === "number") {
         if (!Number.isFinite(c)) return empty;
-        const s = rowXf(i, "plain") ?? (bold ? STYLE.bold : 0);
+        const s = cellXf(i, j, "plain") ?? (bold ? STYLE.bold : 0);
         return `<c r="${ref}"${s ? ` s="${s}"` : ""}><v>${c}</v></c>`;
       }
       if (isUrl(c) && !bold && !styled) {
         links.push(c);
         hyperlinks.push(`<hyperlink ref="${ref}" r:id="rId${links.length}"/>`);
       }
-      const s = rowXf(i, "plain") ?? (bold ? STYLE.bold : isUrl(c) ? STYLE.link : STYLE.plain);
+      const s = cellXf(i, j, "plain") ?? (bold ? STYLE.bold : isUrl(c) ? STYLE.link : STYLE.plain);
       return `<c r="${ref}" t="inlineStr"${s ? ` s="${s}"` : ""}><is><t xml:space="preserve">${esc(c)}</t></is></c>`;
     });
     return `<row r="${i + 1}">${cells.join("")}</row>`;
@@ -165,18 +180,18 @@ ${book.sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xm
   const extra: RowStyle[] = [];
   const extraIdx = new Map<string, number>();
   for (const sh of book.sheets) {
-    for (const st of Object.values(sh.rowStyles ?? {})) {
+    for (const st of [...Object.values(sh.rowStyles ?? {}), ...Object.values(sh.cellStyles ?? {})]) {
       if (!extraIdx.has(styleKey(st))) { extraIdx.set(styleKey(st), extra.length); extra.push(st); }
     }
   }
   files["xl/styles.xml"] = strToU8(stylesXml(extra));
   book.sheets.forEach((s, i) => {
     const links: string[] = [];
-    const rowXf = (row: number, kind: Kind) => {
-      const st = s.rowStyles?.[row];
+    const cellXf = (row: number, col: number, kind: Kind) => {
+      const st = styleAt(s, row, col);
       return st ? BASE_XFS + extraIdx.get(styleKey(st))! * KINDS.length + KINDS.indexOf(kind) : null;
     };
-    files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s, links, rowXf));
+    files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s, links, cellXf));
     if (links.length) {
       files[`xl/worksheets/_rels/sheet${i + 1}.xml.rels`] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${links.map((u, k) => `<Relationship Id="rId${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(u)}" TargetMode="External"/>`).join("")}</Relationships>`);
@@ -227,16 +242,31 @@ export function cleanBook(v: unknown): ExportBook | null {
         return String(c).slice(0, 5000);
       }));
     }
+    const cleanStyle = (v: unknown): RowStyle | null => {
+      const st = v as { bg?: unknown; color?: unknown; bold?: unknown; border?: unknown; align?: unknown } | null;
+      if (!st || !HEX_RE.test(String(st.bg ?? ""))) return null;
+      return {
+        bg: String(st.bg), ...(HEX_RE.test(String(st.color ?? "")) ? { color: String(st.color) } : {}), bold: st.bold === true,
+        border: st.border === true, ...(st.align === "left" || st.align === "center" || st.align === "right" ? { align: st.align } : {}),
+      };
+    };
     const rowStyles: Record<number, RowStyle> = {};
     for (const [k, v] of Object.entries((s.rowStyles ?? {}) as Record<string, unknown>)) {
-      const st = v as { bg?: unknown; color?: unknown; bold?: unknown } | null;
-      const row = Number(k);
-      if (!Number.isInteger(row) || row < 0 || !st || !HEX_RE.test(String(st.bg ?? ""))) continue;
-      rowStyles[row] = { bg: String(st.bg), ...(HEX_RE.test(String(st.color ?? "")) ? { color: String(st.color) } : {}), bold: st.bold === true };
+      const row = Number(k), st = cleanStyle(v);
+      if (Number.isInteger(row) && row >= 0 && st) rowStyles[row] = st;
     }
+    const cellStyles: Record<string, RowStyle> = {};
+    for (const [k, v] of Object.entries((s.cellStyles ?? {}) as Record<string, unknown>)) {
+      const st = cleanStyle(v);
+      if (/^\d{1,6}:\d{1,3}$/.test(k) && st) cellStyles[k] = st;
+    }
+    const colWidths = Array.isArray(s.colWidths)
+      ? (s.colWidths as unknown[]).slice(0, 200).map((w) => Math.min(100, Math.max(2, Number(w) || 10))) : null;
     sheets.push({
       name: String(s.name ?? "").slice(0, 100), rows, header: typeof s.header === "number" ? Math.floor(s.header) : 0,
       ...(Object.keys(rowStyles).length ? { rowStyles } : {}),
+      ...(Object.keys(cellStyles).length ? { cellStyles } : {}),
+      ...(colWidths ? { colWidths } : {}),
     });
   }
   return { title: String(o.title ?? "").slice(0, 150) || "GLORY VITAL export", sheets };

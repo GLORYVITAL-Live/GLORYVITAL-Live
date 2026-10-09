@@ -120,6 +120,7 @@ export type OwnerDetail = {
   gmv: number | null; // ยอด GMV ของ slot นี้ (ฝั่ง Admin ใช้ยอดเดียวกับ slot ของ Mc) ว่าง = ยังไม่ได้กรอก
   gmvCoveredBy: string | null; // ยังไม่มี GMV แต่ยอดรวมอยู่ใน slot ถัดไปของ Mc คนเดียวกัน เช่น "21:30–23:30"
   campaign: string; // Campaign ของ slot ตามที่พิมพ์ในชีต (ตั้งในหน้า Plan Slot Live) ว่าง = วันปกติ
+  remark?: string; // หมายเหตุของ slot ในชีต (ใช้ในไฟล์เบิก)
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */
