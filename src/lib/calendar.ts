@@ -2,6 +2,7 @@ import "server-only";
 import { google, type calendar_v3 } from "googleapis";
 import { googleAuth } from "@/lib/google";
 import { withSyncLock } from "@/lib/lock";
+import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -93,10 +94,14 @@ async function loadPartners(table: Table, s: Pick<Slot, "platform" | "starts_at"
 
 const active = (s: Slot) => !!s.person && s.confirmed !== false && !s.is_cancelled;
 
+/** ชื่อช่องในนัดปฏิทินใช้ชื่อที่แสดง (เช่น GLORY MALL -> GLORY VITAL) เฉพาะไลฟ์ตั้งแต่วันนี้ (วันไลฟ์ตามเวลาไทย) ก่อนหน้าคงชื่อเดิม */
+const CALENDAR_LABEL_FROM = "2026-11-01";
+const liveDateOf = (startsAt: string) => new Date(Date.parse(startsAt) + 7 * 3600_000).toISOString().slice(0, 10);
+
 function eventFor(table: Table, s: Slot, partner: Slot | undefined): calendar_v3.Schema$Event {
   const p = s.person!;
   const other = partner && active(partner) ? partner.person! : null;
-  const platform = s.platform || "Live";
+  const platform = (liveDateOf(s.starts_at) >= CALENDAR_LABEL_FROM ? platformLabel(s.platform) : s.platform) || "Live";
   // ป้ายบอกว่า event นี้เว็บสร้าง (ของ slot ไหน) ใช้หา event ซ้ำ/ค้างตอนเก็บกวาด
   const tag = { private: { [TAG_KEY]: `${table}:${s.id}` } };
   // status confirmed: ถ้า event เดิมถูกลบไปจากปฏิทิน (ยังอยู่ในถังขยะของ Google) การ patch จะกู้กลับมาให้เห็นอีกครั้ง
