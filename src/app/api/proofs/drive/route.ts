@@ -1,6 +1,6 @@
 import { fail, ok, requireMe } from "@/lib/api";
 import { driveStatus, syncProofsToDrive } from "@/lib/drive";
-import { canSeeAll } from "@/lib/proofs";
+import { canEditAll, canSeeAll } from "@/lib/proofs";
 
 // สำเนารูปหลักฐานไลฟ์ใน Google Drive (Owner ฝั่ง Mc)
 //   GET   สถานะ: ค้างกี่ slot / error ล่าสุด / ลิงก์โฟลเดอร์หลัก
@@ -23,6 +23,8 @@ export async function GET() {
 export async function POST() {
   const r = await requireProofOwner();
   if ("res" in r) return r.res;
+  // ส่งรูปขึ้น Drive = แก้ไข (ดูได้อย่างเดียวกดไม่ได้)
+  if (!canEditAll(r.me)) return fail("บัญชีนี้ดูหลักฐานได้อย่างเดียว ส่งรูปขึ้น Google Drive ไม่ได้", 403);
   try {
     const res = await syncProofsToDrive({ limit: 20 });
     return ok({ ...res, ...(await driveStatus()) });

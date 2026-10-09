@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
   const o = r.me.owner;
-  if (!o || !(o.analytics || o.mc || o.admin)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
+  if (!o || !(o.see.analytics || o.see.mc || o.see.admin)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
   const title = (new URL(request.url).searchParams.get("title") ?? "").trim().slice(0, 150) || "GLORY VITAL สไลด์";
   const data = Buffer.from(await request.arrayBuffer());
   if (!data.length || data.length > MAX_BYTES) return fail("ไฟล์สไลด์ว่างหรือใหญ่เกินไป");

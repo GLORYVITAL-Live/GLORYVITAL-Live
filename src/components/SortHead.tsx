@@ -8,6 +8,10 @@ import { cn } from "@/lib/utils";
 
 export type SortState = { key: string; desc: boolean } | null;
 
+/** คอลัมน์แรก (ชื่อ) ค้างไว้ตอนเลื่อนตารางกว้างไปด้านข้าง (มือถือ) — ใส่ที่หัวคอลัมน์ / ช่องในแถว */
+export const STICKY_HEAD = "sticky left-0 z-20 bg-secondary shadow-[inset_-1px_0_0_var(--border)]";
+export const STICKY_CELL = "sticky left-0 z-10 bg-card shadow-[inset_-1px_0_0_var(--border)] in-data-[state=selected]:bg-secondary";
+
 /** เรียงแถว: ค่าว่าง (null) อยู่ท้ายเสมอ ไม่ว่าจะเรียงทางไหน */
 export function sortRows<T>(rows: T[], sort: SortState, value: (r: T, key: string) => number | string | null): T[] {
   if (!sort) return rows;

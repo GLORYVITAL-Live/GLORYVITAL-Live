@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { canonicalCampaign } from "@/lib/campaign";
 import { googleAuth } from "@/lib/google";
 import { parseBonusMinutes, parseLateMinutes } from "@/lib/pay";
 
@@ -79,7 +80,8 @@ export function parseRow(tab: TabKey, r: Row): SheetSlot | null {
   return {
     platform: str(r[c.platform]),
     live_date, start_time, end_time,
-    campaign: tab === "mc" ? str(r[COLS.mc.campaign]) : "",
+    // ชีตเก็บ "10.10" เป็นตัวเลข 10.1 ได้ -> แปลงชื่อเป็นมาตรฐานก่อนเข้า DB
+    campaign: tab === "mc" ? canonicalCampaign(r[COLS.mc.campaign]) : "",
     person: tab === "mc" ? normalizeMcName(r[c.person]) : str(r[c.person]),
     confirmed: confirmedOf(r[c.confirm]),
     status: str(r[c.status]),

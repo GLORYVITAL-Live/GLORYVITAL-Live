@@ -5,7 +5,7 @@ import type { RankPeriod } from "@/lib/mc-rank";
 // อันดับ Mc ตามช่วง (?period=month|30|90&month=YYYY-MM) — Owner ฝั่ง Mc
 //   month = เดือนที่เลือก (เทียบเดือนก่อน) / 30 · 90 = ย้อนหลังจากวันนี้ (เทียบช่วงยาวเท่ากันก่อนหน้า)
 export async function GET(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูอันดับ Mc");
+  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูอันดับ Mc", "read");
   if ("res" in r) return r.res;
   if (!r.scope.mc) return fail("อันดับ Mc ใช้ข้อมูลฝั่ง Mc ต้องติ๊กสิทธิ์จัดการ Mc", 403);
   const sp = new URL(request.url).searchParams;

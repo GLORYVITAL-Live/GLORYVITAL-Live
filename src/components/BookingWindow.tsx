@@ -54,8 +54,8 @@ function summaryText(w: BookWindow | null, d: Data) {
   return w?.only.length ? `${general} · จองก่อน ${w.only.length} คน: ${effectText(w.early, d)}` : general;
 }
 
-/** หน้าเจ้าของ > จัดการ slot: ตั้งช่วงที่ Mc / Admin เสริม จองได้ (เฉพาะฝั่งที่มีสิทธิ์) */
-export function BookingWindowEditor({ scope }: { scope: OwnerScope }) {
+/** หน้าเจ้าของ > ตาราง slot: ตั้งช่วงที่ Mc / Admin เสริม จองได้ (เฉพาะฝั่งที่มีสิทธิ์ · ฝั่งที่ดูได้อย่างเดียว = เห็นแค่สรุป) */
+export function BookingWindowEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerScope }) {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);
@@ -77,7 +77,18 @@ export function BookingWindowEditor({ scope }: { scope: OwnerScope }) {
       : <Skeleton className="my-3 h-11 rounded-xl" />;
   }
   const roles = (["mc", "admin"] as const).filter((r) => scope[r]);
+  const editable = roles.filter((r) => edit[r]);
   const reload = () => setTick((n) => n + 1);
+
+  // ดูได้อย่างเดียวทุกฝั่ง: แสดงสรุปบรรทัดเดียว ไม่มีที่ตั้งค่า
+  if (!editable.length) {
+    return (
+      <div className="my-3 rounded-xl border bg-card px-3 py-2.5 text-sm">
+        <strong>ช่วงเปิดจอง</strong>
+        <span className="text-muted-foreground"> — {roles.map((r) => `${LABEL[r]}: ${summaryText(data[r] ?? null, data)}`).join(" | ")}</span>
+      </div>
+    );
+  }
 
   return (
     <Collapsible className="group/window my-3 rounded-xl border bg-card">
@@ -89,7 +100,10 @@ export function BookingWindowEditor({ scope }: { scope: OwnerScope }) {
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent className="space-y-4 border-t p-3">
-        {roles.map((r) => <RoleWindow key={`${r}${JSON.stringify(data[r] ?? null)}`} role={r} data={data} onSaved={reload} />)}
+        {editable.map((r) => <RoleWindow key={`${r}${JSON.stringify(data[r] ?? null)}`} role={r} data={data} onSaved={reload} />)}
+        {roles.filter((r) => !edit[r]).map((r) => (
+          <p key={r} className="text-sm text-muted-foreground">{LABEL[r]}: {summaryText(data[r] ?? null, data)} (ดูได้อย่างเดียว)</p>
+        ))}
         <CutoffMonth key={data.cutoffMonth} data={data} onSaved={reload} />
       </CollapsibleContent>
     </Collapsible>

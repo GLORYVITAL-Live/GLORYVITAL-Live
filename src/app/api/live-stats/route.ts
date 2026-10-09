@@ -67,7 +67,7 @@ const toRow = (s: LiveSession, fileName: string, by: string) => ({
 });
 
 export async function GET(request: Request) {
-  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ดูสถิติไลฟ์");
+  const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ดูสถิติไลฟ์", "read");
   if ("res" in r) return r.res;
   const sp = new URL(request.url).searchParams;
   const db = createAdminClient();

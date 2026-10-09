@@ -21,38 +21,52 @@ export async function requireMe(): Promise<{ me: Me } | { res: NextResponse }> {
   return { me };
 }
 
+/** read = เปิดดู (ดูได้อย่างเดียว หรือ จัดการได้) / write = แก้ไข (จัดการได้เท่านั้น) ค่าเริ่มต้น = write */
+export type Access = "read" | "write";
+const READ_ONLY = "บัญชีนี้ดูได้อย่างเดียว แก้ไขไม่ได้ (ให้ Owner ที่มีสิทธิ์จัดการเปลี่ยนให้ในหน้าพนักงาน)";
+
 /**
  * ตรวจว่าเป็น Owner ที่มีสิทธิ์อย่างน้อยหนึ่งฝั่ง คืน scope ของคนนั้น
- *   scope.mc / scope.admin = จัดการฝั่งนั้นได้, full = ทั้งคู่ (จัดการรายชื่อ/สิทธิ์ Owner ได้)
+ *   scope.mc / scope.admin = ฝั่งที่ใช้ได้ตาม access (read = ดูได้ / write = จัดการได้)
+ *   edit.mc / edit.admin = จัดการฝั่งนั้นได้ (ดูอย่างเดียว = ไม่เห็นค่าจ้าง) · full = จัดการได้ทั้งคู่ (รายชื่อ/สิทธิ์ Owner)
  */
-export async function requireOwner(denied = "บัญชีนี้ไม่มีสิทธิ์ใช้หน้าเจ้าของ") {
+export async function requireOwner(denied = "บัญชีนี้ไม่มีสิทธิ์ใช้หน้าเจ้าของ", access: Access = "write") {
   const r = await requireMe();
   if ("res" in r) return r;
   const o = r.me.owner;
   if (!o) return { res: fail(denied, 403) };
-  if (!o.mc && !o.admin) return { res: fail("บัญชีนี้ยังไม่ได้รับสิทธิ์จัดการฝั่ง Mc หรือ Admin ติดต่อเจ้าของคนอื่น", 403) };
-  return { me: r.me, scope: { mc: o.mc, admin: o.admin, full: o.mc && o.admin } };
+  const mc = access === "read" ? o.see.mc : o.mc, admin = access === "read" ? o.see.admin : o.admin;
+  if (!mc && !admin) {
+    return { res: fail(o.see.mc || o.see.admin ? READ_ONLY : "บัญชีนี้ยังไม่ได้รับสิทธิ์ฝั่ง Mc หรือ Admin ติดต่อเจ้าของคนอื่น", 403) };
+  }
+  return { me: r.me, scope: { mc, admin, full: o.mc && o.admin, edit: { mc: o.mc, admin: o.admin } } };
 }
 
 /**
  * Owner ที่ติ๊กสิทธิ์ "เข้าถึง Data analytics" (หน้าสถิติไลฟ์ + API ของหน้านี้)
- *   ไม่ต้องมีสิทธิ์จัดการ Mc / Admin (ติ๊กแค่ Data analytics อย่างเดียวได้)
+ *   ไม่ต้องมีสิทธิ์จัดการ Mc / Admin (ติ๊กแค่ Data analytics อย่างเดียวได้) · write = อัปโหลด / ลบ / แก้แคมเปญ
  */
-export async function requireAnalytics(denied = "บัญชีนี้ไม่มีสิทธิ์เข้าหน้า Data analytics") {
+export async function requireAnalytics(denied = "บัญชีนี้ไม่มีสิทธิ์เข้าหน้า Data analytics", access: Access = "write") {
   const r = await requireMe();
   if ("res" in r) return r;
-  if (!r.me.owner?.analytics) return { res: fail(`${denied} ให้ Owner ที่มีสิทธิ์ทั้ง Mc และ Admin ติ๊กสิทธิ์ให้ในหน้าพนักงาน`, 403) };
+  const o = r.me.owner;
+  if (!(access === "read" ? o?.see.analytics : o?.analytics)) {
+    return { res: fail(o?.see.analytics ? READ_ONLY : `${denied} ให้ Owner ที่มีสิทธิ์ทั้ง Mc และ Admin ติ๊กสิทธิ์ให้ในหน้าพนักงาน`, 403) };
+  }
   return { me: r.me };
 }
 
 /**
  * Owner ที่ติ๊กสิทธิ์ "Plan Slot Live" (แพลน slot ทั้งเดือน เขียนทั้งแท็บ Deal Mc + Admin เสริม)
- *   ไม่ต้องมีสิทธิ์จัดการ Mc / Admin · ติ๊กให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
+ *   ไม่ต้องมีสิทธิ์จัดการ Mc / Admin · ติ๊กให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้ · write = บันทึกแพลน
  */
-export async function requirePlanner(denied = "บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Plan Slot Live") {
+export async function requirePlanner(denied = "บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Plan Slot Live", access: Access = "write") {
   const r = await requireMe();
   if ("res" in r) return r;
-  if (!r.me.owner?.plan) return { res: fail(`${denied} ให้คนที่มีสิทธิ์ Plan Slot Live ติ๊กสิทธิ์ให้ในหน้าพนักงาน`, 403) };
+  const o = r.me.owner;
+  if (!(access === "read" ? o?.see.plan : o?.plan)) {
+    return { res: fail(o?.see.plan ? READ_ONLY : `${denied} ให้คนที่มีสิทธิ์ Plan Slot Live ติ๊กสิทธิ์ให้ในหน้าพนักงาน`, 403) };
+  }
   return { me: r.me };
 }
 

@@ -52,6 +52,30 @@ export function normalizeCampaign(raw: unknown): Norm | null {
   return { label, nameKey: label.toLowerCase(), family: "other", big: false, isCeo };
 }
 
+/**
+ * ชื่อแคมเปญที่จะบันทึก (DB / ชีต): แก้ตัวเลขเพี้ยน + สะกดชื่อหลักให้ตรงกัน แต่ไม่ตัดชื่อประกอบ (เช่น "3.3 x CEO LIVE" คงไว้)
+ *   "10.1" -> "10.10" · "3.30000000000001" -> "3.3" · "payday" -> "Pay Day" · "prime days" -> "Prime Day" · "midmonth" -> "Mid Month"
+ */
+export function canonicalCampaign(raw: unknown): string {
+  let s = clean(String(raw ?? "")).replace(/^'/, "");
+  if (!s) return "";
+  if (/^\d{1,2}\.\d+$/.test(s)) {
+    s = String(Math.round(Number(s) * 100) / 100);
+    return s === "10.1" ? "10.10" : s;
+  }
+  if (/^pay\s*day$/i.test(s)) return "Pay Day";
+  if (/^prime\s*days?$/i.test(s)) return "Prime Day";
+  if (/^mid\s*month$/i.test(s)) return "Mid Month";
+  if (/^ceo\s*live$/i.test(s)) return "CEO Live";
+  return s;
+}
+
+/** ชื่อแคมเปญมาตรฐานให้เลือก (หน้า Plan Slot Live) — วันเลขเบิ้ลของเดือนนั้น + แคมเปญที่เกิดทุกเดือน */
+export function standardCampaigns(month: string): string[] {
+  const m = Number(month.slice(5, 7));
+  return [`${m}.${m}`, "Pay Day", "Mid Month", "Prime Day", "CEO Live"];
+}
+
 const dayMs = (d: string) => Date.parse(`${d}T00:00:00Z`);
 
 /** วันที่ (เรียงแล้ว) -> ช่วงต่อเนื่อง (ห่างกันเกิน GAP_DAYS = คนละช่วง) */

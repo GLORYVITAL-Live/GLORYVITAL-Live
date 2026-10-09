@@ -20,7 +20,7 @@ async function people(role: Role) {
 }
 
 export async function GET() {
-  const r = await requireOwner();
+  const r = await requireOwner(undefined, "read");
   if ("res" in r) return r.res;
   const s = await getSettings();
   const [mcPeople, adminPeople] = await Promise.all([
@@ -32,6 +32,8 @@ export async function GET() {
     cutoffMonth: s.schedule_cutoff_month ?? "",
     cutoffDate: cutoffDate(s),
     canCutoff: r.scope.full,
+    // ฝั่งที่แก้ช่วงเปิดจองได้ (ดูได้อย่างเดียว = เห็นแต่แก้ไม่ได้)
+    canEdit: r.scope.edit,
     mc: r.scope.mc ? bookWindow(s, "mc") : undefined,
     admin: r.scope.admin ? bookWindow(s, "admin") : undefined,
     people: { mc: mcPeople, admin: adminPeople },

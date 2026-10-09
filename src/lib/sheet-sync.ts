@@ -1,6 +1,7 @@
 import "server-only";
 import type { sheets_v4 } from "googleapis";
 import { deleteCalendarEvent } from "@/lib/calendar";
+import { canonicalCampaign } from "@/lib/campaign";
 import { bkkToday } from "@/lib/data";
 import { withSyncLock } from "@/lib/lock";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -120,7 +121,11 @@ function desiredCells(tab: TabKey, s: DbSlot): Map<number, Cell> {
     [c.status, s.status],
     [c.remark, s.remark],
   ]);
-  if (tab === "mc") m.set(COLS.mc.campaign, s.campaign ?? "");
+  if (tab === "mc") {
+    // ชื่อที่เป็นตัวเลข (10.10 / 3.3) ใส่ ' นำหน้า ให้ชีตเก็บเป็นข้อความ ไม่แปลงเป็นเลข 10.1
+    const camp = canonicalCampaign(s.campaign);
+    m.set(COLS.mc.campaign, /^\d+(\.\d+)?$/.test(camp) ? `'${camp}` : camp);
+  }
   return m;
 }
 
@@ -133,6 +138,11 @@ function sameCell(tab: TabKey, col: number, have: Cell, want: Cell) {
     return norm(have) === norm(want);
   }
   if (col === c.person && tab === "mc") return normalizeMcName(have) === normalizeMcName(want);
+  if (tab === "mc" && col === COLS.mc.campaign) {
+    // ช่องที่ชีตเก็บเป็นตัวเลข (10.1) ต้องเขียนใหม่เป็นข้อความ / ข้อความ "10.10" = ตรงกับ '10.10
+    if (typeof have === "number" && typeof want === "string" && want.startsWith("'")) return false;
+    return canonicalCampaign(have) === canonicalCampaign(want);
+  }
   return str(have) === str(want);
 }
 

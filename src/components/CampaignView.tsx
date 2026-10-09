@@ -10,7 +10,7 @@ import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { bkkStamp } from "@/lib/live-export";
 import { MonthPicker, rangeLabel, type MonthRange } from "@/components/MonthPicker";
 import { LoadError, LoadingBlock, Notice, api } from "@/components/shared";
-import { SortHead, sortRows, type SortState } from "@/components/SortHead";
+import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableFooter, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
@@ -187,8 +187,8 @@ function Loaded({ report, picker }: { report: CampaignReport; picker: React.Reac
           <Table className="min-w-[860px]">
             <TableHeader className="bg-secondary">
               <TableRow className="hover:bg-transparent">
-                {[["แคมเปญ", true], ["ช่วงวัน", true], ["slot / ชม.", false], ["GMV", false], ["GMV/ชม.", false], ["ดันยอด", false], ["เทียบรอบก่อน", false]].map(([h, left]) => (
-                  <th key={String(h)} className={cn("px-3 py-2 text-xs font-semibold text-muted-foreground", left ? "text-left" : "text-right")}>{h as string}</th>
+                {[["แคมเปญ", true], ["ช่วงวัน", true], ["slot / ชม.", false], ["GMV", false], ["GMV/ชม.", false], ["ดันยอด", false], ["เทียบรอบก่อน", false]].map(([h, left], i) => (
+                  <th key={String(h)} className={cn("px-3 py-2 text-xs font-semibold text-muted-foreground", left ? "text-left" : "text-right", i === 0 && STICKY_HEAD)}>{h as string}</th>
                 ))}
               </TableRow>
             </TableHeader>
@@ -206,7 +206,7 @@ function Loaded({ report, picker }: { report: CampaignReport; picker: React.Reac
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(isOpen ? null : i.key); } }}
                       className={cn("cursor-pointer data-[state=selected]:bg-secondary", i.status === "upcoming" && "text-muted-foreground")}
                     >
-                      <TableCell className="px-3">
+                      <TableCell className={cn("px-3", STICKY_CELL)}>
                         <ChevronRightIcon className={cn("mr-0.5 inline size-4 text-muted-foreground transition-transform", isOpen && "rotate-90 text-primary")} />
                         <b className="font-semibold">{instLabel(i)}</b>
                         {!i.big ? <Badge variant="outline" className="ml-1.5 text-[11px] text-muted-foreground" title="ไม่อยู่ในช่วงแคมเปญหลัก จึง track แยก">แยก</Badge> : null}
@@ -291,7 +291,7 @@ function Loaded({ report, picker }: { report: CampaignReport; picker: React.Reac
           <Table className="min-w-[900px]">
             <TableHeader className="bg-secondary">
               <TableRow className="hover:bg-transparent">
-                <SortHead k="name" label="Mc" text sort={sort} setSort={setSort} />
+                <SortHead k="name" label="Mc" text sort={sort} setSort={setSort} className={STICKY_HEAD} />
                 {cols.map((c) => <SortHead key={c.key} k={`i:${c.key}`} label={instLabel(c)} sort={sort} setSort={setSort} />)}
                 <SortHead k="hours" label="ชม. แคมเปญ" sort={sort} setSort={setSort} />
                 <SortHead k="camp" label="แคมเปญรวม" sort={sort} setSort={setSort} />
@@ -304,7 +304,7 @@ function Loaded({ report, picker }: { report: CampaignReport; picker: React.Reac
             <TableBody>
               {rows.map((m) => (
                 <TableRow key={m.mc}>
-                  <TableCell className="px-3 font-semibold whitespace-nowrap">{m.mc}</TableCell>
+                  <TableCell className={cn("px-3 font-semibold whitespace-nowrap", STICKY_CELL)}>{m.mc}</TableCell>
                   {cols.map((c) => {
                     const a = m.perKey.get(c.key);
                     return (

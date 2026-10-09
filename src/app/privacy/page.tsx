@@ -17,7 +17,7 @@ export default function PrivacyPage() {
           GL<span className="tracking-normal text-brand-glow">✦</span>RY VITAL
         </Link>
         <h1 className="mt-4 text-2xl font-bold">นโยบายความเป็นส่วนตัว</h1>
-        <p className="text-muted-foreground">Privacy Policy · ปรับปรุงล่าสุด 7 ตุลาคม 2026</p>
+        <p className="text-muted-foreground">Privacy Policy · ปรับปรุงล่าสุด 9 ตุลาคม 2026</p>
       </header>
 
       <section className="space-y-2">
@@ -32,6 +32,10 @@ export default function PrivacyPage() {
           <li>
             <strong>Google Calendar / Sheets / Drive:</strong> บัญชีระบบของบริษัทใช้สิทธิ์เหล่านี้เพื่อลงนัดคิวไลฟ์ในปฏิทินที่พนักงานแชร์ให้
             ซิงค์ตารางงานกับ Google Sheet ของบริษัท และเก็บสำเนารูปหลักฐานในโฟลเดอร์ Drive ที่ระบบสร้างเอง (มองไม่เห็นไฟล์อื่นในไดรฟ์)
+          </li>
+          <li>
+            <strong>Gmail (ส่งอย่างเดียว):</strong> บัญชีระบบส่งอีเมลแจ้งเตือนภายใน (เช่น มีคนยกเลิกคิว) เข้ากล่องเมลของบริษัทเอง
+            ไม่อ่านอีเมล และไม่ส่งอีเมลหาพนักงานหรือบุคคลภายนอก
           </li>
           <li><strong>การเก็บรักษา:</strong> ข้อมูลเก็บในฐานข้อมูลของระบบ ใช้เพื่อจัดตารางงานและคำนวณค่าจ้างเท่านั้น ไม่ขาย ไม่ส่งต่อให้บุคคลภายนอก</li>
           <li><strong>การลบข้อมูล:</strong> ติดต่อทีมงานเพื่อขอดูหรือลบข้อมูลของคุณ และยกเลิกการแชร์ปฏิทินกับบัญชีระบบได้ทุกเมื่อ</li>
@@ -52,6 +56,10 @@ export default function PrivacyPage() {
             <strong>Google Calendar, Sheets and Drive:</strong> the company&apos;s system account uses these scopes to add booked slots to calendars
             that staff have shared with it, keep the company&apos;s schedule spreadsheet in sync, and store copies of proof images in a Drive folder
             the app creates itself (it cannot see any other Drive files).
+          </li>
+          <li>
+            <strong>Gmail (send only):</strong> the system account sends internal notification emails (for example, when someone cancels a slot)
+            to the company&apos;s own mailbox. It does not read email and does not email staff or third parties.
           </li>
           <li><strong>Storage and sharing:</strong> data is stored in the app&apos;s database and used only for scheduling and payroll. We do not sell or share it with third parties.</li>
           <li><strong>Deletion:</strong> contact the team to view or delete your data. You can stop sharing your calendar with the system account at any time.</li>

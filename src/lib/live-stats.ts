@@ -34,7 +34,8 @@ export type LiveSession = {
   raw?: Record<string, string>;
 };
 
-export type Campaign = { id: number; name: string; startsAt: string; endsAt: string; compareId: number | null };
+/** auto = อ่านจากชื่อ Campaign ใน slot (Plan Slot Live / ชีต) แก้/ลบในหน้านี้ไม่ได้ (id ติดลบ) */
+export type Campaign = { id: number; name: string; startsAt: string; endsAt: string; compareId: number | null; auto?: boolean };
 
 // ---------- เวลาไทย ----------
 

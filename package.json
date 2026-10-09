@@ -10,6 +10,7 @@
     "db:push": "supabase db push",
     "import:sheet": "bun scripts/import-sheet.ts",
     "google:auth": "bun scripts/google-auth.ts",
+    "mail:test": "bun --conditions=react-server scripts/mail-test.ts",
     "sheet:link": "bun scripts/sheet-link.ts"
   },
   "dependencies": {

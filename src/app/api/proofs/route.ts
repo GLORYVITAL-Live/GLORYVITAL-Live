@@ -3,7 +3,7 @@ import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
 import { syncProofsToDrive, trashUnusedDriveFiles } from "@/lib/drive";
 import {
-  PROOF_BUCKET, canSeeAll, canUseProofs, parseGmvEntries, proofSlots, removeOrphanProofs, resolveGmv, saveGmv,
+  PROOF_BUCKET, asEditor, canEditAll, canEditProofs, canSeeAll, canUseProofs, parseGmvEntries, proofSlots, removeOrphanProofs, resolveGmv, saveGmv,
 } from "@/lib/proofs";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -28,6 +28,17 @@ async function requireProofUser() {
   return r;
 }
 
+/**
+ * แนบ / ลบ / กรอก GMV: ต้องจัดการได้ (Owner ฝั่ง Mc / หลักฐานไลฟ์) หรือเป็น Admin (เฉพาะ slot ของตัวเอง)
+ *   คืน me ที่ใช้ตรวจ slot แบบผู้แก้ไข (ดูได้อย่างเดียว = เห็นทุก slot แต่แก้ได้แค่ของตัวเองถ้าเป็น Admin)
+ */
+async function requireProofEditor() {
+  const r = await requireProofUser();
+  if ("res" in r) return r;
+  if (!canEditProofs(r.me)) return { res: fail("บัญชีนี้ดูหลักฐานได้อย่างเดียว แนบ / ลบ / กรอก GMV ไม่ได้", 403) };
+  return { me: asEditor(r.me) };
+}
+
 export async function GET(request: Request) {
   const r = await requireProofUser();
   if ("res" in r) return r.res;
@@ -35,7 +46,11 @@ export async function GET(request: Request) {
   const date = sp.get("date");
   if (date) {
     if (!DATE_RE.test(date)) return fail("วันที่ไม่ถูกต้อง");
-    return ok({ date, all: canSeeAll(r.me), slots: await proofSlots(r.me, date, date) });
+    const slots = await proofSlots(r.me, date, date);
+    // slot ที่แก้ได้: จัดการได้ = ทุก slot / Admin = slot ของตัวเอง / ดูได้อย่างเดียว = ไม่มี
+    const editAll = canEditAll(r.me);
+    const editable = editAll ? null : canEditProofs(r.me) ? (await proofSlots(asEditor(r.me), date, date)).map((s) => s.mcSlotId) : [];
+    return ok({ date, all: canSeeAll(r.me), canEdit: canEditProofs(r.me), editable, slots });
   }
 
   const { key, first, last } = monthRange(sp.get("month"));
@@ -58,7 +73,7 @@ export async function GET(request: Request) {
 const bkkTime = (s: string) => new Date(`${s.length === 16 ? `${s}:00` : s}+07:00`);
 
 export async function POST(request: Request) {
-  const r = await requireProofUser();
+  const r = await requireProofEditor();
   if ("res" in r) return r.res;
   const form = await request.formData().catch(() => null);
   if (!form) return fail("ข้อมูลไม่ครบ ลองใหม่อีกครั้ง");
@@ -153,7 +168,7 @@ export async function POST(request: Request) {
 
 /** กรอก / แก้ยอด GMV ของ slot (ไม่ต้องอัปรูป) body: { items: [{ id, input, auto }] } */
 export async function PATCH(request: Request) {
-  const r = await requireProofUser();
+  const r = await requireProofEditor();
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
   const entries = parseGmvEntries(body?.items).slice(0, MAX_SLOTS);
@@ -181,7 +196,7 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const r = await requireProofUser();
+  const r = await requireProofEditor();
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
   const id = Number(body?.id);

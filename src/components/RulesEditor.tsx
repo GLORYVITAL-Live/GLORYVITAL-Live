@@ -11,13 +11,16 @@ import type { OwnerScope } from "@/lib/types";
 
 type Rules = { items: string[]; custom: boolean; defaults: string[] };
 
-/** หน้าเจ้าของ > กฎการทำงาน: แก้ข้อความส่วน "อื่นๆ" ของหน้ากฎ (เฉพาะฝั่งที่มีสิทธิ์) */
-export function RulesEditor({ scope }: { scope: OwnerScope }) {
+/** หน้าเจ้าของ > กฎการทำงาน: แก้ข้อความส่วน "อื่นๆ" ของหน้ากฎ (เฉพาะฝั่งที่มีสิทธิ์ · ดูได้อย่างเดียว = อ่านอย่างเดียว) */
+export function RulesEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerScope }) {
   const roles = (["mc", "admin"] as const).filter((r) => scope[r]);
   return (
     <div className="space-y-5 pb-10">
-      <Notice>แก้ข้อความที่ Mc / Admin เห็นในหน้า &quot;กฎการทำงาน&quot; (เด้งวันละครั้งหลัง login) หนึ่งบรรทัด = หนึ่งข้อ</Notice>
-      {roles.map((r) => <RoleRules key={r} role={r} />)}
+      <Notice>
+        {roles.some((r) => edit[r]) ? "แก้ข้อความที่ Mc / Admin เห็นในหน้า \"กฎการทำงาน\" (เด้งวันละครั้งหลัง login) หนึ่งบรรทัด = หนึ่งข้อ"
+          : "ข้อความที่ Mc / Admin เห็นในหน้า \"กฎการทำงาน\" (บัญชีนี้ดูได้อย่างเดียว)"}
+      </Notice>
+      {roles.map((r) => <RoleRules key={r} role={r} readOnly={!edit[r]} />)}
       <Card size="sm">
         <CardHeader>
           <CardTitle className="font-bold">การมาสาย / ไลฟ์ชดเชย (แก้ที่นี่ไม่ได้)</CardTitle>
@@ -45,7 +48,7 @@ export function RulesEditor({ scope }: { scope: OwnerScope }) {
   );
 }
 
-function RoleRules({ role }: { role: "mc" | "admin" }) {
+function RoleRules({ role, readOnly }: { role: "mc" | "admin"; readOnly: boolean }) {
   const toast = useToast();
   const confirm = useConfirm();
   const [data, setData] = useState<Rules | null>(null);
@@ -99,20 +102,22 @@ function RoleRules({ role }: { role: "mc" | "admin" }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <Textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={Math.max(5, lines.length + 2)}
-          disabled={saving}
-          aria-label={`กฎการทำงานของ ${label}`}
-          className="leading-relaxed"
-          placeholder="หนึ่งบรรทัด = หนึ่งข้อ"
-        />
-        <div className="mt-2 text-xs text-muted-foreground">ตัวอย่างที่ {label} จะเห็น ({lines.length} ข้อ):</div>
+        {readOnly ? null : (
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={Math.max(5, lines.length + 2)}
+            disabled={saving}
+            aria-label={`กฎการทำงานของ ${label}`}
+            className="leading-relaxed"
+            placeholder="หนึ่งบรรทัด = หนึ่งข้อ"
+          />
+        )}
+        <div className="mt-2 text-xs text-muted-foreground">{readOnly ? `ที่ ${label} เห็น` : `ตัวอย่างที่ ${label} จะเห็น`} ({lines.length} ข้อ):</div>
         <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-muted-foreground">
           {lines.map((l, i) => <li key={i}>{l}</li>)}
         </ul>
-        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        <div className={readOnly ? "hidden" : "mt-3 flex flex-wrap items-center justify-end gap-2"}>
           {data.custom ? (
             <Button
               variant="ghost"

@@ -16,7 +16,8 @@ import { computeGmv, fmtGmv, type GmvSlot } from "@/lib/gmv";
 import { cn } from "@/lib/utils";
 import type { ProofSlot, SlotGmv } from "@/lib/types";
 
-type DayData = { date: string; all: boolean; slots: ProofSlot[] };
+/** canEdit = แนบ / กรอก GMV ได้ · editable = slot ที่แก้ได้ (null = ทุก slot / [] = ดูได้อย่างเดียว) */
+type DayData = { date: string; all: boolean; canEdit?: boolean; editable?: number[] | null; slots: ProofSlot[] };
 type MonthDay = { date: string; total: number; done: number };
 
 const addDays = (k: string, n: number) => new Date(parseKey(k).getTime() + n * 86400_000).toISOString().slice(0, 10);
@@ -180,6 +181,9 @@ export function ProofPage() {
 
   const day = data?.date === date ? data : null;
   const error = failed?.date === date ? failed.message : "";
+  // แก้ slot นี้ได้หรือไม่ (เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง editable = แก้ได้ทุก slot ที่เห็น)
+  const canEditSlot = (s: ProofSlot) => day?.canEdit !== false && (day?.editable == null || day.editable.includes(s.mcSlotId));
+  const viewOnly = !!day && (day.canEdit === false || (day.editable != null && !day.editable.length));
   const missingDays = month?.key === monthOf ? month.days.filter((d) => d.done < d.total) : [];
   // Mc ประจำ ไม่ต้องแนบหลักฐาน: ไม่นับในจำนวน "มีหลักฐาน" และไม่อยู่ใน "เฉพาะที่ยังไม่มีหลักฐาน"
   const need = day ? day.slots.filter((s) => !s.salaried) : [];
@@ -198,7 +202,7 @@ export function ProofPage() {
   }
 
   function toggle(s: ProofSlot) {
-    if (s.salaried) return; // Mc ประจำ ไม่ต้องแนบหลักฐาน
+    if (s.salaried || !canEditSlot(s)) return; // Mc ประจำ ไม่ต้องแนบหลักฐาน / ดูได้อย่างเดียว
     if (selected.includes(s.mcSlotId)) return setSelected(selected.filter((x) => x !== s.mcSlotId));
     // ไลฟ์ 1 ครั้ง = 1 แพลตฟอร์ม เลือกคนละแพลตฟอร์ม = เริ่มเลือกใหม่
     if (picked.length && picked[0].platform !== s.platform) {
@@ -233,11 +237,13 @@ export function ProofPage() {
   return (
     <div className="pb-28">
       <Notice>
-        แนบรูปแดชบอร์ด TikTok LIVE (หน้าที่มีวันที่และเวลาเริ่ม–จบไลฟ์) เป็นหลักฐานทำเบิก · ไลฟ์ครั้งเดียวคลุมหลาย slot ให้ติ๊กทุก slot แล้วแนบรูปเดียว
+        {viewOnly ? "หลักฐานไลฟ์ของแต่ละ slot — บัญชีนี้ดูได้อย่างเดียว (เปิดดูรูป / ยอด GMV ได้ แต่แนบ / ลบ / กรอก GMV ไม่ได้)"
+          : "แนบรูปแดชบอร์ด TikTok LIVE (หน้าที่มีวันที่และเวลาเริ่ม–จบไลฟ์) เป็นหลักฐานทำเบิก · ไลฟ์ครั้งเดียวคลุมหลาย slot ให้ติ๊กทุก slot แล้วแนบรูปเดียว"}
         {day && !day.all ? " · เห็นเฉพาะ slot ที่คุณเป็น Admin" : ""}
+        {day?.all && !viewOnly && day.editable ? " · แก้ได้เฉพาะ slot ที่คุณเป็น Admin" : ""}
       </Notice>
 
-      {day?.all ? <DriveBox tick={tick} /> : null}
+      {day?.all ? <DriveBox tick={tick} canRun={day.editable == null && day.canEdit !== false} /> : null}
 
       <div className="my-2 flex flex-wrap items-center gap-2">
         <IconButton label="วันก่อนหน้า" onClick={() => goTo(addDays(date, -1))}><ChevronLeftIcon /></IconButton>
@@ -301,12 +307,13 @@ export function ProofPage() {
               <div className="space-y-1.5">
                 {g.slots.map((s) => {
                   const on = selected.includes(s.mcSlotId);
+                  const canEdit = canEditSlot(s);
                   return (
                     <div
                       key={s.mcSlotId}
                       className={cn("flex items-start gap-3 rounded-xl border bg-card p-3 shadow-card", on && "border-primary ring-1 ring-primary")}
                     >
-                      {s.salaried ? <span aria-hidden className="mt-0.5 size-5 shrink-0" /> : (
+                      {s.salaried || !canEdit ? <span aria-hidden className="mt-0.5 size-5 shrink-0" /> : (
                         <Checkbox
                           checked={on}
                           onCheckedChange={() => toggle(s)}
@@ -315,7 +322,7 @@ export function ProofPage() {
                         />
                       )}
                       <div className="min-w-0 flex-1 text-sm">
-                        <button type="button" onClick={() => toggle(s)} disabled={s.salaried} className="text-left disabled:cursor-default">
+                        <button type="button" onClick={() => toggle(s)} disabled={s.salaried || !canEdit} className="text-left disabled:cursor-default">
                           <span className="font-bold tabular-nums">{s.start}–{s.end}</span>
                           <span className="ml-2">{s.mcName || "—"}</span>
                           {day.all && s.adminName ? <span className="ml-2 text-muted-foreground">Admin {s.adminName}</span> : null}
@@ -350,9 +357,11 @@ export function ProofPage() {
                           ) : s.gmvCoveredBy ? (
                             <span className="font-semibold text-success">✓ GMV รวมอยู่ในช่วง {s.gmvCoveredBy} (ไลฟ์ต่อเนื่อง {s.mcName})</span>
                           ) : <span className="font-semibold text-warning-foreground">ยังไม่ได้กรอก GMV</span>}
-                          <Button variant="link" size="xs" disabled={busy} onClick={() => setGmvSlot(s)} className="h-auto p-0">
-                            {s.gmv ? "แก้ GMV" : s.gmvCoveredBy ? "กรอกแยก" : "กรอก GMV"}
-                          </Button>
+                          {canEdit ? (
+                            <Button variant="link" size="xs" disabled={busy} onClick={() => setGmvSlot(s)} className="h-auto p-0">
+                              {s.gmv ? "แก้ GMV" : s.gmvCoveredBy ? "กรอกแยก" : "กรอก GMV"}
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -405,7 +414,7 @@ export function ProofPage() {
 type DriveInfo = { pending: number; error: string | null; folderUrl: string | null };
 
 /** Owner: สถานะสำเนารูปใน Google Drive + ปุ่มอัปที่ค้าง + ลิงก์โฟลเดอร์ (ปี > เดือน > Mc) */
-function DriveBox({ tick }: { tick: number }) {
+function DriveBox({ tick, canRun }: { tick: number; canRun: boolean }) {
   const toast = useToast();
   const [info, setInfo] = useState<DriveInfo | null>(null);
   const [busy, setBusy] = useState(false);
@@ -453,7 +462,7 @@ function DriveBox({ tick }: { tick: number }) {
             <a href={info.folderUrl} target="_blank" rel="noopener noreferrer">เปิดโฟลเดอร์</a>
           </Button>
         ) : null}
-        {info.pending ? (
+        {info.pending && canRun ? (
           <Button size="sm" disabled={busy} onClick={run}>{busy ? "กำลังอัป..." : "ส่งรูปขึ้น Google Drive"}</Button>
         ) : null}
       </span>

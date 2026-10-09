@@ -10,12 +10,14 @@ import { google } from "googleapis";
  *   ใช้ได้เมื่อองค์กรอนุญาตให้สร้าง key
  */
 
-export const GOOGLE_SCOPES = [
+const BASE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/spreadsheets", // อ่าน + เขียนชีต (ซิงค์สองทาง)
   // Google Drive: เฉพาะไฟล์/โฟลเดอร์ที่ระบบสร้างเอง (สำเนารูปหลักฐานไลฟ์) มองไม่เห็นไฟล์อื่นในไดรฟ์
   "https://www.googleapis.com/auth/drive.file",
 ];
+/** สิทธิ์ที่ขอตอนเชื่อมบัญชี (bun run google:auth) = ข้างบน + ส่งอีเมลแจ้งเตือน (ส่งได้อย่างเดียว อ่านอีเมลไม่ได้) */
+export const GOOGLE_SCOPES = [...BASE_SCOPES, "https://www.googleapis.com/auth/gmail.send"];
 
 // Client ID ของ "GLORY VITAL Web Client" (ไม่ใช่ความลับ)
 export const DEFAULT_OAUTH_CLIENT_ID = "1061582080754-eblmgn19o2cvds5sg22d7p70me7qitbs.apps.googleusercontent.com";
@@ -31,7 +33,8 @@ export function googleAuth() {
 
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const key = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n");
-  if (email && key) return new google.auth.JWT({ email, key, scopes: GOOGLE_SCOPES });
+  // Service Account ส่งอีเมลไม่ได้ (ไม่มีกล่องเมล) จึงไม่ขอ gmail.send
+  if (email && key) return new google.auth.JWT({ email, key, scopes: BASE_SCOPES });
 
   return null;
 }

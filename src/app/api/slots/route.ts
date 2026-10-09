@@ -11,11 +11,12 @@ export async function GET(request: Request) {
   const settings = await getSettings();
   const owner = r.me.owner;
 
+  // Owner ที่ดูฝั่งนั้นได้ (จัดการได้ หรือ ดูได้อย่างเดียว) เปิดดูหน้าจองได้ — จองจริงต้องเป็น Mc / Admin เอง
   if (role === "mc") {
-    if (!r.me.mc && !owner?.mc) return fail("บัญชีนี้ไม่มีสิทธิ์จองคิว Mc", 403);
+    if (!r.me.mc && !owner?.see.mc) return fail("บัญชีนี้ไม่มีสิทธิ์จองคิว Mc", 403);
   } else {
-    if (!r.me.admin && !owner?.admin) return fail("บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Admin", 403);
-    if (r.me.admin && !r.me.admin.isExtra && !owner?.admin) {
+    if (!r.me.admin && !owner?.see.admin) return fail("บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Admin", 403);
+    if (r.me.admin && !r.me.admin.isExtra && !owner?.see.admin) {
       return ok({
         siteNotice: "",
         scheduleNotice: `${r.me.admin.name} เป็น Admin ประจำ คิวของคุณจัดโดยทีมงาน กดที่ชื่อมุมขวาบนเพื่อดู "ตารางของฉัน"`,

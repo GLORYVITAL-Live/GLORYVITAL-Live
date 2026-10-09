@@ -10,10 +10,38 @@ export type Me = {
   /** proofs = จัดการหลักฐานไลฟ์ทุก slot (Owner ที่ติ๊ก Mc มีสิทธิ์นี้อยู่แล้ว) */
   /** analytics = เข้าหน้า Data analytics (สถิติไลฟ์) ได้ */
   /** plan = หน้า Plan Slot Live (แพลน slot ทั้งเดือน) */
-  owner: { id: number; name: string; mc: boolean; admin: boolean; proofs: boolean; analytics: boolean; plan: boolean } | null;
+  /** mc / admin / proofs / analytics / plan = "จัดการได้" · see = เปิดดูได้ (จัดการได้ หรือ ดูได้อย่างเดียว) */
+  owner: {
+    id: number; name: string; mc: boolean; admin: boolean; proofs: boolean; analytics: boolean; plan: boolean;
+    see: { mc: boolean; admin: boolean; proofs: boolean; analytics: boolean; plan: boolean };
+  } | null;
 };
 
 export type OwnerScope = { mc: boolean; admin: boolean };
+
+/** หน้าแรกของเจ้าของ (งานค้าง) — slot หนึ่งรายการ */
+export type HomeSlot = { id: number; date: string; platform: string; start: string; end: string; mc: string | null; admin: string | null };
+export type HomeData = {
+  today: string;
+  scope: { mc: boolean; admin: boolean; proofs: boolean };
+  /** slot ของ Mc วันนี้ (รวมช่วงหลังเที่ยงคืนของเมื่อวานที่ยังไม่จบ) */
+  live: (HomeSlot & { status: "done" | "live" | "next"; proof: boolean; noProof: boolean; gmv: boolean })[];
+  /** 7 วันข้างหน้า (รวมวันนี้) slot ที่ยังไม่มี Mc / ยังไม่มี Admin */
+  noMc: HomeSlot[];
+  noAdmin: HomeSlot[];
+  /** 7 วันล่าสุด slot ที่จบแล้วแต่ยังไม่แนบหลักฐาน (ไม่นับ Mc ประจำ) / ยังไม่กรอก GMV */
+  missingProof: HomeSlot[];
+  missingGmv: HomeSlot[];
+  /** แคมเปญที่กำลังดำเนินอยู่ + ภายใน 30 วันข้างหน้า */
+  campaigns: { key: string; label: string; start: string; end: string; status: "live" | "upcoming"; daysUntil: number; slots: number; noMc: number }[];
+  issues: {
+    /** มีคิวข้างหน้าแต่ไม่มีอีเมล (login ไม่ได้ คิวไม่ลงปฏิทิน) */
+    noEmail: { role: "mc" | "admin"; name: string; upcoming: number }[];
+    noEmailTotal: number;
+    /** เบอร์โทรเดียวกันหลายรายชื่อ (อาจเป็นคนเดียวกันที่ลงชื่อซ้ำ) */
+    samePhone: { role: "mc" | "admin"; phone: string; names: string[] }[];
+  };
+};
 
 /** slot ที่ยังว่าง (หน้าแรกของ Mc / Admin) */
 export type OpenSlot = {
@@ -80,6 +108,8 @@ export type OwnerDetail = {
   startMs: number;
   status: string;
   cancelled: boolean;
+  /** ยกเลิกผ่านเว็บ (Mc / Admin เสริมกดเอง) เมื่อไร (ISO) · null = ไม่ได้ยกเลิกผ่านเว็บ (เช่น "แคน" ในชีต) */
+  cancelledAt?: string | null;
   pair: string;
   lateMinutes: number | null;
   bonusMinutes: number | null;
@@ -143,6 +173,8 @@ export type OwnerSummary = {
   ok: true;
   month: string;
   scope: OwnerScope; // ฝั่งที่ Owner คนนี้เห็นได้ (ฝั่งที่ไม่มีสิทธิ์ส่งมาเป็นรายการว่าง)
+  /** ฝั่งที่ดูได้อย่างเดียว = ไม่ส่งค่าจ้างมา (ซ่อนคอลัมน์ยอดเงิน) */
+  payHidden?: { mc: boolean; admin: boolean };
   rates: { mc: Record<string, number>; admin: Record<string, number>; defaultMc: number; defaultAdmin: number };
   mc: OwnerPerson[];
   admin: OwnerPerson[];

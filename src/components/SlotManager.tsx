@@ -42,8 +42,12 @@ const HIDE_PLATFORMS_KEY = "glory_slot_hide_platforms";
 
 const addDays = (k: string, n: number) => new Date(parseKey(k).getTime() + n * 86400_000).toISOString().slice(0, 10);
 
-/** หน้าจัดการ slot สำหรับเจ้าของ: ดูรายวัน / เพิ่ม / กำหนดคน / เปลี่ยนสถานะ / ลบ (เฉพาะฝั่งที่มีสิทธิ์) */
-export function SlotManager({ scope }: { scope: OwnerScope }) {
+/**
+ * หน้าจัดการ slot สำหรับเจ้าของ: ดูรายวัน / เพิ่ม / กำหนดคน / เปลี่ยนสถานะ / ลบ
+ * scope = ฝั่งที่เห็น / edit = ฝั่งที่แก้ได้ (ฝั่งที่ดูได้อย่างเดียว = เห็นชื่อ + สถานะ ไม่มีปุ่มแก้)
+ */
+export function SlotManager({ scope, edit }: { scope: OwnerScope; edit: OwnerScope }) {
+  const canEdit = edit.mc || edit.admin;
   const toast = useToast();
   const confirm = useConfirm();
   const [date, setDate] = useState(() => todayKey());
@@ -165,8 +169,8 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
         <DatePicker value={date} onChange={(v) => v && setDate(v)} aria-label="เลือกวันที่" className="w-auto rounded-full" />
         <IconButton label="วันถัดไป" onClick={() => setDate(addDays(date, 1))}><ChevronRightIcon /></IconButton>
         <Button variant="outline" size="lg" className="rounded-full bg-card" onClick={() => setDate(todayKey())}>วันนี้</Button>
-        <div className="ml-auto flex flex-wrap justify-end gap-2">
-          {scope.mc && scope.admin ? (
+        <div className={cn("ml-auto flex flex-wrap justify-end gap-2", !canEdit && "hidden")}>
+          {edit.mc && edit.admin ? (
             <>
               <Button variant="outline" size="lg" className="bg-card" onClick={() => setResyncOpen(true)} title="เช็กทุกคิวตั้งแต่วันนี้กับปฏิทินจริง สร้าง event ที่หาย / แก้ที่ไม่ตรง">
                 <CalendarSyncIcon />ซิงค์ปฏิทินใหม่ทั้งหมด
@@ -215,7 +219,7 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
       ) : !day ? (
         <LoadingBlock />
       ) : !day.slots.length ? (
-        <StateBox title="วันนี้ยังไม่มี slot">กด &quot;เพิ่ม slot&quot; เพื่อสร้าง slot ใหม่</StateBox>
+        <StateBox title="วันนี้ยังไม่มี slot">{canEdit ? <>กด &quot;เพิ่ม slot&quot; เพื่อสร้าง slot ใหม่</> : null}</StateBox>
       ) : !shown.length ? (
         <StateBox title="ไม่มี slot ของแพลตฟอร์มที่ติ๊กไว้">ติ๊กแพลตฟอร์มด้านบนเพื่อแสดง slot</StateBox>
       ) : (
@@ -225,6 +229,7 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
               key={s.key}
               slot={s}
               scope={scope}
+              edit={edit}
               staff={day.staff}
               tagIndex={platformIndex[s.platform] ?? 0}
               busy={busy === s.key}
@@ -240,7 +245,7 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
 
       {createOpen ? (
         <CreateDialog
-          scope={scope}
+          scope={edit}
           defaultDate={date}
           platforms={day?.platforms ?? []}
           onClose={(created) => { setCreateOpen(false); if (created) reload(); }}
@@ -253,9 +258,10 @@ export function SlotManager({ scope }: { scope: OwnerScope }) {
 // Radix Select ใช้ค่าว่างเป็น value ไม่ได้ จึงแทน "ไม่มีสถานะ" ด้วยค่านี้
 const NO_STATUS = "__none";
 
-function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
+function SlotRow({ slot, scope, edit, staff, tagIndex, busy, onPatch, onDelete }: {
   slot: Slot;
   scope: OwnerScope;
+  edit: OwnerScope;
   staff: DayData["staff"];
   tagIndex: number;
   busy: boolean;
@@ -271,7 +277,7 @@ function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
         <span className="font-semibold tabular-nums">{slot.start} – {slot.end}</span>
         <PlatformBadge name={slot.platform || "Live"} index={tagIndex} />
         {busy ? <Spinner className="text-muted-foreground" /> : null}
-        {empty ? (
+        {empty && (edit.mc || edit.admin) ? (
           <Button variant="destructive" size="xs" disabled={busy} onClick={onDelete} className="ml-auto">
             <Trash2Icon />ลบ slot
           </Button>
@@ -284,6 +290,7 @@ function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
           side={slot.mc}
           people={staff.mc}
           busy={busy}
+          readOnly={!edit.mc}
           onPerson={(pid) => onPatch("mc_slots", slot.mc!.id, { personId: pid })}
           onStatus={(st) => onPatch("mc_slots", slot.mc!.id, { status: st })}
         />
@@ -296,10 +303,11 @@ function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
             side={slot.admin}
             people={staff.admin}
             busy={busy}
+            readOnly={!edit.admin}
             onPerson={(pid) => onPatch("admin_slots", slot.admin!.id, { personId: pid })}
             onStatus={(st) => onPatch("admin_slots", slot.admin!.id, { status: st })}
           />
-          <Label className="mt-2 pl-14 text-xs font-normal text-muted-foreground">
+          <Label className={cn("mt-2 pl-14 text-xs font-normal text-muted-foreground", !edit.admin && "hidden")}>
             <Checkbox
               checked={slot.admin.extra}
               disabled={busy}
@@ -313,15 +321,28 @@ function SlotRow({ slot, scope, staff, tagIndex, busy, onPatch, onDelete }: {
   );
 }
 
-function SideRow({ label, side, people, busy, onPerson, onStatus }: {
+function SideRow({ label, side, people, busy, readOnly, onPerson, onStatus }: {
   label: string;
   side: Side;
   people: Person[];
   busy: boolean;
+  readOnly: boolean; // ดูได้อย่างเดียว: แสดงชื่อ + สถานะเป็นข้อความ
   onPerson: (personId: number | null) => void;
   onStatus: (status: string) => void;
 }) {
   const statuses = STATUSES.includes(side.status) ? STATUSES : [...STATUSES, side.status];
+  if (readOnly) {
+    const p = people.find((x) => x.id === side.personId);
+    return (
+      <div className="mt-1.5 flex items-center gap-2 text-sm">
+        <span className="w-12 shrink-0 text-xs font-semibold text-muted-foreground">{label}</span>
+        <span className={cn("min-w-0 flex-1 truncate", !side.name && !p && "text-muted-foreground")}>
+          {p ? `${label === "Mc" ? `Mc ${p.name}` : p.name}${p.extra ? " (เสริม)" : ""}` : side.name || "— ว่าง —"}
+        </span>
+        <span className={cn("shrink-0 text-xs", side.cancelled ? "text-destructive" : "text-muted-foreground")}>{side.status || "สถานะ —"}</span>
+      </div>
+    );
+  }
   return (
     <div className="mt-1.5 flex items-center gap-2">
       <span className="w-12 shrink-0 text-xs font-semibold text-muted-foreground">{label}</span>

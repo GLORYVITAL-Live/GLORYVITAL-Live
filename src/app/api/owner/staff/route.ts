@@ -1,5 +1,6 @@
 import { after } from "next/server";
-import { fail, ok, requireOwner as requireOwnerScope } from "@/lib/api";
+import { fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
+import { VIEW_COL_RE, VIEW_COLS } from "@/lib/auth";
 import { bkkToday } from "@/lib/data";
 import { parseTierHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -23,7 +24,9 @@ const TABLE: Record<"mc" | "admin", { table: "mc_slots" | "admin_slots"; col: st
 };
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
 
-const requireOwner = () => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน");
+const requireOwner = (access: Access = "write") => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน", access);
+/** สิทธิ์ "ดูได้อย่างเดียว" ของ Owner (บันทึกเฉพาะตอนส่งมา ยังไม่ได้รัน SQL = ไม่แตะ) */
+const VIEW_FIELDS = ["can_view_mc", "can_view_admin", "can_view_proofs", "can_view_plan", "analytics_readonly"] as const;
 type Scope = { mc: boolean; admin: boolean; full: boolean };
 const canRole = (scope: Scope, role: Role) => (role === "owner" ? scope.full : scope[role]);
 const noRole = (role: Role) =>
@@ -90,15 +93,28 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     if (!partial || "can_view_analytics" in body) out.can_view_analytics = body.can_view_analytics === true;
     // หน้า Plan Slot Live: บันทึกเฉพาะตอนส่งมา (ยังไม่ได้รัน SQL = ไม่แตะคอลัมน์นี้)
     if ("can_plan_slots" in body) out.can_plan_slots = body.can_plan_slots === true;
+    // ดูได้อย่างเดียว (SQL 20261018000000_view_only)
+    for (const k of VIEW_FIELDS) if (k in body) out[k] = body[k] === true;
   }
   return { data: out };
 }
 
-/** select + คอลัมน์ can_plan_slots (ยังไม่ได้รัน SQL 20261017000000_plan_slots = ไม่มีคอลัมน์นี้ ใช้แบบเดิม) */
+/** มีสิทธิ์อย่างน้อย 1 อย่าง (จัดการได้ หรือ ดูได้) */
+const hasAnyPerm = (pick: (k: string) => unknown) =>
+  ["can_manage_mc", "can_manage_admin", "can_manage_proofs", "can_view_analytics", "can_plan_slots", "can_view_mc", "can_view_admin", "can_view_proofs", "can_view_plan"]
+    .some((k) => pick(k) === true);
+
+/**
+ * select + คอลัมน์สิทธิ์ใหม่ (ยังไม่ได้รัน SQL = ไม่มีคอลัมน์นั้น ใช้แบบเดิม)
+ *   20261018000000_view_only = สิทธิ์ดูได้อย่างเดียว / 20261017000000_plan_slots = can_plan_slots
+ */
 async function withPlanCol<T>(run: (extra: string) => PromiseLike<{ data: T; error: { message: string } | null }>) {
-  const res = await run(", can_plan_slots");
+  let res = await run(`, can_plan_slots, ${VIEW_COLS}`);
+  if (res.error && VIEW_COL_RE.test(res.error.message)) res = await run(", can_plan_slots");
   return res.error && /can_plan_slots/.test(res.error.message) ? run("") : res;
 }
+const needViewSql = (msg: string) =>
+  VIEW_COL_RE.test(msg) ? "ต้องรัน SQL 20261018000000_view_only ใน Supabase ก่อน ถึงจะตั้งสิทธิ์แบบดูได้อย่างเดียวได้" : msg;
 const noPlanGrant = () => fail("ติ๊ก / เอาสิทธิ์ Plan Slot Live ออกได้เฉพาะคนที่มีสิทธิ์นี้", 403);
 
 const dupMessage = (msg: string) =>
@@ -108,7 +124,8 @@ const dupMessage = (msg: string) =>
 // ---------- GET ----------
 
 export async function GET() {
-  const r = await requireOwner();
+  // ดูได้อย่างเดียวก็เห็นรายชื่อ (ไม่เห็นค่าจ้าง) / เพิ่ม แก้ ลบ รวม = ต้องจัดการได้
+  const r = await requireOwner("read");
   if ("res" in r) return r.res;
   const db = createAdminClient();
   type Row = { id: number; role: string } & Record<string, unknown>;
@@ -116,7 +133,11 @@ export async function GET() {
     .select(`id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, is_salaried, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics${extra}`)
     .order("name").overrideTypes<Row[], { merge: false }>());
   if (error) return fail(error.message, 500);
-  const staff = (rows ?? []).filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id);
+  const edit = { mc: r.scope.edit.mc, admin: r.scope.edit.admin, owner: r.scope.full };
+  const staff = (rows ?? [])
+    .filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id)
+    // ฝั่งที่ดูได้อย่างเดียว: ไม่ส่งค่าจ้าง / Commit
+    .map((s) => (s.role !== "owner" && !edit[s.role as "mc" | "admin"] ? { ...s, hourly_rate: null, commit_tiers: null } : s));
 
   // จำนวนคิวตั้งแต่วันนี้ (ไม่นับที่ยกเลิก)
   const upcoming = new Map<number, number>();
@@ -133,6 +154,8 @@ export async function GET() {
   return ok({
     staff: (staff ?? []).map((s) => ({ ...s, upcoming: upcoming.get(s.id) ?? 0 })),
     meId: r.me.owner?.id ?? null,
+    // บทบาทที่แก้รายชื่อได้ (ดูได้อย่างเดียว = false)
+    canEdit: edit,
   });
 }
 
@@ -146,14 +169,13 @@ export async function POST(request: Request) {
   if (!ROLES.includes(role)) return fail("กรุณาเลือกบทบาท");
   if (!canRole(r.scope, role)) return noRole(role);
   const c = clean(role, body, false);
-  if (role === "owner" && !c.data?.can_manage_mc && !c.data?.can_manage_admin && !c.data?.can_manage_proofs && !c.data?.can_view_analytics && !c.data?.can_plan_slots) {
-    return fail("ติ๊กสิทธิ์อย่างน้อย 1 อย่าง");
-  }
   if (c.error) return fail(c.error);
-  if (c.data?.can_plan_slots && !r.me.owner?.plan) return noPlanGrant();
+  if (role === "owner" && !hasAnyPerm((k) => c.data?.[k])) return fail("ตั้งสิทธิ์อย่างน้อย 1 อย่าง");
+  // ให้สิทธิ์ Plan Slot Live (จัดการ / ดู) ได้เฉพาะคนที่มีสิทธิ์นี้
+  if ((c.data?.can_plan_slots || c.data?.can_view_plan) && !r.me.owner?.plan) return noPlanGrant();
 
   const { data, error } = await createAdminClient().from("staff").insert({ role, ...c.data }).select("id").single();
-  if (error) return fail(dupMessage(error.message));
+  if (error) return fail(needViewSql(dupMessage(error.message)));
   after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"`));
   return ok({ id: data.id });
 }
@@ -171,6 +193,7 @@ export async function PATCH(request: Request) {
   type Cur = {
     id: number; role: string; name: string; email: string | null; phone: string | null; can_manage_mc: boolean;
     can_manage_admin: boolean; can_manage_proofs: boolean; can_view_analytics: boolean; can_plan_slots?: boolean;
+    can_view_mc?: boolean; can_view_admin?: boolean; can_view_proofs?: boolean; can_view_plan?: boolean; analytics_readonly?: boolean;
   };
   const { data: cur, error: curErr } = await withPlanCol((extra) => db.from("staff")
     .select(`id, role, name, email, phone, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics${extra}`)
@@ -187,28 +210,22 @@ export async function PATCH(request: Request) {
     return fail("เปลี่ยนอีเมลของตัวเองไม่ได้ (จะเข้าหน้าเจ้าของไม่ได้อีก) ให้ Owner คนอื่นเปลี่ยนให้");
   }
   if (role === "owner") {
-    const scopeChanged = ("can_manage_mc" in changes && changes.can_manage_mc !== cur.can_manage_mc)
-      || ("can_manage_admin" in changes && changes.can_manage_admin !== cur.can_manage_admin)
-      || ("can_manage_proofs" in changes && changes.can_manage_proofs !== cur.can_manage_proofs)
-      || ("can_view_analytics" in changes && changes.can_view_analytics !== cur.can_view_analytics);
-    const planChanged = "can_plan_slots" in changes && changes.can_plan_slots !== (cur.can_plan_slots ?? false);
+    const curOf = (k: string) => (cur as Record<string, unknown>)[k] ?? false;
+    const changed = (k: string) => k in changes && changes[k] !== curOf(k);
+    const scopeChanged = ["can_manage_mc", "can_manage_admin", "can_manage_proofs", "can_view_analytics", ...VIEW_FIELDS].some(changed);
+    const planChanged = changed("can_plan_slots") || changed("can_view_plan");
     if ((scopeChanged || planChanged) && isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้ง Mc และ Admin แก้ให้");
     if ((scopeChanged || planChanged) && !r.scope.full) return noRole("owner");
     if (planChanged && !r.me.owner?.plan) return noPlanGrant();
-    // ต้องมีสิทธิ์อย่างน้อย 1 อย่าง (เช่น ติ๊กแค่ Data analytics อย่างเดียวได้)
-    const pick = (k: "can_manage_mc" | "can_manage_admin" | "can_manage_proofs" | "can_view_analytics" | "can_plan_slots") =>
-      (k in changes ? changes[k] : cur[k]);
-    if (!pick("can_manage_mc") && !pick("can_manage_admin") && !pick("can_manage_proofs") && !pick("can_view_analytics") && !pick("can_plan_slots")) {
-      return fail("ติ๊กสิทธิ์อย่างน้อย 1 อย่าง");
-    }
+    // ต้องมีสิทธิ์อย่างน้อย 1 อย่าง (จัดการได้ หรือ ดูได้ เช่น ดู Data analytics อย่างเดียวได้)
+    if (!hasAnyPerm((k) => (k in changes ? changes[k] : curOf(k)))) return fail("ตั้งสิทธิ์อย่างน้อย 1 อย่าง");
     if (isMe) {
-      delete changes.can_manage_mc; delete changes.can_manage_admin; delete changes.can_manage_proofs;
-      delete changes.can_view_analytics; delete changes.can_plan_slots;
+      for (const k of ["can_manage_mc", "can_manage_admin", "can_manage_proofs", "can_view_analytics", "can_plan_slots", ...VIEW_FIELDS]) delete changes[k];
     }
   }
 
   const { error } = await db.from("staff").update(changes).eq("id", id);
-  if (error) return fail(dupMessage(error.message));
+  if (error) return fail(needViewSql(dupMessage(error.message)));
 
   // ผลต่อปฏิทิน / ชีต
   if (role !== "owner") {

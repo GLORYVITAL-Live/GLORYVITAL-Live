@@ -1,5 +1,5 @@
 import { after } from "next/server";
-import { canTable, fail, ok, requireOwner as requireOwnerScope } from "@/lib/api";
+import { canTable, fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -18,7 +18,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const MAX_CREATE = 500;
 
-const requireOwner = () => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการ slot");
+const requireOwner = (access: Access = "write") => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการ slot", access);
 const noScope = (table: Table) => fail(`บัญชีนี้ไม่มีสิทธิ์จัดการฝั่ง ${table === "mc_slots" ? "Mc" : "Admin"}`, 403);
 
 const hm = (t: string) => t.slice(0, 5);
@@ -41,7 +41,8 @@ const syncLater = () => after(() => processSyncJobs().then(() => undefined));
 // ---------- GET ----------
 
 export async function GET(request: Request) {
-  const r = await requireOwner();
+  // ดูได้อย่างเดียวก็เปิดดู slot ได้ (แก้ / เพิ่ม / ลบ = ต้องจัดการได้)
+  const r = await requireOwner("read");
   if ("res" in r) return r.res;
   const date = new URL(request.url).searchParams.get("date") ?? "";
   if (!DATE_RE.test(date)) return fail("วันที่ไม่ถูกต้อง");

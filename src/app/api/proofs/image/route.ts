@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   const date = String(p.live_date);
   // Owner ที่ติ๊กแค่ Data analytics ไม่นับ (ต้องมีสิทธิ์จัดการ Mc / Admin / หลักฐานไลฟ์)
   const o = r.me.owner;
-  const allowed = !!(o && (o.mc || o.admin || o.proofs)) || canSeeAll(r.me) || p.uploaded_by_email === r.me.email
+  const allowed = !!(o && (o.see.mc || o.see.admin || o.see.proofs)) || canSeeAll(r.me) || p.uploaded_by_email === r.me.email
     || (!!r.me.admin && (await proofSlots(r.me, date, addDays(date, 1))).some((s) => s.proof?.id === id));
   if (!allowed) return fail("บัญชีนี้ไม่มีสิทธิ์ดูหลักฐานนี้", 403);
 

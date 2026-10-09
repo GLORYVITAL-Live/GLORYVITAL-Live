@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
+import { canonicalCampaign } from "@/lib/campaign";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -32,7 +33,8 @@ const cleanAgency = (v: unknown) => {
 };
 /** ยังไม่ได้รัน SQL 20261017000000_plan_slots (ไม่มีตาราง agency_slots) */
 const noAgencyTable = (msg: string) => /agency_slots/.test(msg);
-const cleanCampaign = (v: unknown) => String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 100);
+// ชื่อมาตรฐาน (10.1 -> 10.10, payday -> Pay Day ฯลฯ) ให้ทุก slot ใช้ชื่อเดียวกัน
+const cleanCampaign = (v: unknown) => canonicalCampaign(v).slice(0, 100);
 
 async function log(me: Me, action: string, table: Table, ids: number[]) {
   const db = createAdminClient();
@@ -63,7 +65,8 @@ type SlotRow = {
 };
 
 export async function GET(request: Request) {
-  const r = await requirePlanner();
+  // ดูแพลนได้ทั้งคนที่จัดการได้และดูได้อย่างเดียว (บันทึก = POST ต้องจัดการได้)
+  const r = await requirePlanner(undefined, "read");
   if ("res" in r) return r.res;
   const { key: month, first, last } = monthRange(new URL(request.url).searchParams.get("month"));
   const db = createAdminClient();

@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -81,9 +81,10 @@ async function fetchCampaigns() {
   return res.campaigns;
 }
 
-export function LiveStats() {
+/** หน้า Data analytics · readOnly = ดูได้อย่างเดียว (ไม่มีแท็บอัปโหลด / แก้แคมเปญไม่ได้ แต่ส่งออกได้) */
+export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
   const saved = useLocal(TAB_KEY);
-  const tab = saved === "compare" || saved === "campaign" || saved === "upload" ? saved : "overview";
+  const tab = saved === "compare" || saved === "campaign" || (saved === "upload" && !readOnly) ? saved : "overview";
   const [months, setMonths] = useState<MonthRow[] | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [error, setError] = useState("");
@@ -101,8 +102,9 @@ export function LiveStats() {
   if (error) return <LoadError title="โหลดสถิติไลฟ์ไม่สำเร็จ" message={error} onRetry={() => setAttempt((n) => n + 1)} />;
   if (!months || !campaigns) return <LoadingBlock />;
 
-  const tabs = [["overview", "ภาพรวม"], ["compare", "เทียบช่วง"], ["campaign", "แคมเปญ"], ["upload", "อัปโหลด"]] as const;
+  const tabs = [["overview", "ภาพรวม"], ["compare", "เทียบช่วง"], ["campaign", "แคมเปญ"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const])] as const;
   const dataMonths = [...new Set(months.map((m) => m.month))];
+  const empty = <EmptyData readOnly={readOnly} />;
   return (
     <Tabs value={tab} onValueChange={(v) => writeLocal(TAB_KEY, v)} className="gap-0 pb-10">
       <TabsList aria-label="เมนูสถิติไลฟ์" className="my-3 h-auto! w-full rounded-full border bg-card p-1">
@@ -113,28 +115,30 @@ export function LiveStats() {
         ))}
       </TabsList>
       <TabsContent value="overview">
-        {months.length ? <Overview latest={months[0].month} dataMonths={dataMonths} version={version} /> : <NoData />}
+        {months.length ? <Overview latest={months[0].month} dataMonths={dataMonths} version={version} /> : empty}
       </TabsContent>
       <TabsContent value="compare">
-        {months.length ? <CompareView dataMonths={dataMonths} version={version} /> : <NoData />}
+        {months.length ? <CompareView dataMonths={dataMonths} version={version} /> : empty}
       </TabsContent>
       <TabsContent value="campaign">
-        <CampaignView campaigns={campaigns} dataMonths={dataMonths} version={version} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />
+        <CampaignView campaigns={campaigns} dataMonths={dataMonths} version={version} readOnly={readOnly} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />
       </TabsContent>
-      <TabsContent value="upload">
-        <UploadView months={months} onChanged={() => { setVersion((v) => v + 1); fetchMonths().then(setMonths, onError); }} />
-      </TabsContent>
+      {readOnly ? null : (
+        <TabsContent value="upload">
+          <UploadView months={months} onChanged={() => { setVersion((v) => v + 1); fetchMonths().then(setMonths, onError); }} />
+        </TabsContent>
+      )}
     </Tabs>
   );
 }
 
-function NoData() {
+function EmptyData({ readOnly }: { readOnly: boolean }) {
   return (
     <StateBox
       title="ยังไม่มีข้อมูลไลฟ์"
-      action={<Button onClick={() => writeLocal(TAB_KEY, "upload")}><UploadIcon />ไปที่อัปโหลดข้อมูล</Button>}
+      action={readOnly ? undefined : <Button onClick={() => writeLocal(TAB_KEY, "upload")}><UploadIcon />ไปที่อัปโหลดข้อมูล</Button>}
     >
-      อัปโหลดไฟล์ Export จาก TikTok LIVE / Shopee Live ก่อน แล้วกลับมาดูสรุปที่นี่
+      {readOnly ? "ยังไม่มีคนอัปโหลดไฟล์ Export จาก TikTok LIVE / Shopee Live" : "อัปโหลดไฟล์ Export จาก TikTok LIVE / Shopee Live ก่อน แล้วกลับมาดูสรุปที่นี่"}
     </StateBox>
   );
 }
@@ -969,10 +973,11 @@ function compareOf(c: Campaign, all: Campaign[]) {
   return { from: w.from, to: w.to, name: "เดือนก่อน", auto: w.doubleDay ? "วันเลขเบิ้ลของเดือนก่อน" : "ช่วงเดียวกันของเดือนก่อน" };
 }
 
-function CampaignView({ campaigns, dataMonths, version, onChanged }: {
+function CampaignView({ campaigns, dataMonths, version, readOnly, onChanged }: {
   campaigns: Campaign[];
   dataMonths: string[];
   version: number;
+  readOnly: boolean;
   onChanged: () => void;
 }) {
   const saved = Number(useLocal(CAMPAIGN_KEY));
@@ -997,21 +1002,37 @@ function CampaignView({ campaigns, dataMonths, version, onChanged }: {
         {campaigns.length ? (
           <Select value={c ? String(c.id) : ""} onValueChange={(v) => writeLocal(CAMPAIGN_KEY, v)}>
             <SelectTrigger aria-label="เลือกแคมเปญ" className="h-9 min-w-52 flex-1 rounded-full bg-card font-semibold sm:flex-none"><SelectValue /></SelectTrigger>
-            <SelectContent position="popper">
-              {campaigns.map((x) => <SelectItem key={x.id} value={String(x.id)}>{x.name}</SelectItem>)}
+            <SelectContent position="popper" className="max-h-80">
+              {/* จากตาราง slot (ชื่อ Campaign ที่ตั้งในหน้า Plan Slot Live) ก่อน แล้วตามด้วยที่ตั้งเอง */}
+              {[["auto", "จากตาราง slot (อัตโนมัติ)"], ["manual", "ตั้งเองในหน้านี้"]].map(([g, title]) => {
+                const list = campaigns.filter((x) => (g === "auto") === !!x.auto);
+                return list.length ? (
+                  <SelectGroup key={g}>
+                    <SelectLabel className="text-xs text-muted-foreground">{title}</SelectLabel>
+                    {list.map((x) => (
+                      <SelectItem key={x.id} value={String(x.id)}>{x.name} <span className="text-muted-foreground">· {bkkDate.format(new Date(x.startsAt))}</span></SelectItem>
+                    ))}
+                  </SelectGroup>
+                ) : null;
+              })}
             </SelectContent>
           </Select>
         ) : null}
-        {c ? (
+        {c && !c.auto && !readOnly ? (
           <>
             <Button variant="outline" size="sm" className="rounded-full" onClick={() => setEditing(c)}><PencilIcon />แก้ไข</Button>
             <Button variant="outline" size="sm" className="rounded-full text-destructive" onClick={() => remove(c)}><Trash2Icon />ลบ</Button>
           </>
         ) : null}
-        <Button size="sm" className="rounded-full" onClick={() => setEditing("new")}><PlusIcon />เพิ่มแคมเปญ</Button>
+        {readOnly ? null : <Button size="sm" className="rounded-full" onClick={() => setEditing("new")}><PlusIcon />เพิ่มแคมเปญเอง</Button>}
       </div>
+      {c?.auto ? (
+        <p className="mb-1 text-xs text-muted-foreground">
+          แคมเปญนี้อ่านจากชื่อ Campaign ใน slot (หน้า Plan Slot Live) ช่วงวัน = วันแรกถึงวันสุดท้ายที่ตั้งชื่อนี้ · เทียบกับรอบก่อนของประเภทเดียวกัน · ข้อมูลชุดเดียวกับหน้าเจ้าของ &gt; ผลงาน Mc
+        </p>
+      ) : null}
       {c ? <CampaignCompare key={c.id} c={c} all={campaigns} dataMonths={dataMonths} version={version} /> : (
-        <StateBox title="ยังไม่มีแคมเปญ" action={<Button onClick={() => setEditing("new")}><PlusIcon />เพิ่มแคมเปญ</Button>}>
+        <StateBox title="ยังไม่มีแคมเปญ" action={readOnly ? undefined : <Button onClick={() => setEditing("new")}><PlusIcon />เพิ่มแคมเปญ</Button>}>
           ตั้งชื่อและช่วงวันเวลา เช่น 10.10 = 10 ต.ค. 00:00 ถึง 11 ต.ค. 00:00 ระบบจะเทียบกับ 9.9 ให้เอง
         </StateBox>
       )}
@@ -1326,7 +1347,7 @@ function CampaignDialog({ campaign, all, dataMonths, onClose, onSaved }: {
             <SelectTrigger aria-label="เทียบกับ" className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent position="popper">
               <SelectItem value="auto">ช่วงเดียวกันของเดือนก่อน (อัตโนมัติ)</SelectItem>
-              {all.filter((x) => x.id !== campaign?.id).map((x) => <SelectItem key={x.id} value={String(x.id)}>แคมเปญ {x.name}</SelectItem>)}
+              {all.filter((x) => x.id !== campaign?.id && !x.auto).map((x) => <SelectItem key={x.id} value={String(x.id)}>แคมเปญ {x.name}</SelectItem>)}
             </SelectContent>
           </Select>
           {compareId === "auto" && auto ? (

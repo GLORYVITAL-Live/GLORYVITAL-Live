@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 import {
-  CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, MinusIcon, PlusIcon, TagIcon, Trash2Icon, Undo2Icon, UserIcon,
+  CheckIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CopyIcon, MinusIcon, PlusIcon, TagIcon, Trash2Icon, Undo2Icon, UserIcon,
   UserXIcon, WandSparklesIcon, XIcon,
 } from "lucide-react";
 import {
@@ -22,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { fmtDayLong, fmtDayMonth, fmtWeekShort, monthKey, monthLabel, num, parseKey, todayKey } from "@/lib/format";
 import { readLocal, useLocal, writeLocal } from "@/lib/hooks";
+import { canonicalCampaign, standardCampaigns } from "@/lib/campaign";
 import { cn } from "@/lib/utils";
 
 // ---------- ข้อมูล ----------
@@ -338,8 +339,11 @@ function planBook(month: string, columns: Column[], items: Item[], mode: Mode = 
 
 // ---------- หน้า ----------
 
-/** หน้า Plan Slot Live: แพลน slot ทั้งเดือน (ร่างก่อน) แล้วกดบันทึกลงชีตทั้ง Deal Mc + Admin เสริม */
-export function PlanSlots() {
+/**
+ * หน้า Plan Slot Live: แพลน slot ทั้งเดือน (ร่างก่อน) แล้วกดบันทึกลงชีตทั้ง Deal Mc + Admin เสริม
+ * readOnly = สิทธิ์ดูได้อย่างเดียว: เห็นแพลน / สรุปชั่วโมง / ส่งออกได้ แต่ติ๊ก / ตั้ง Campaign / บันทึกไม่ได้
+ */
+export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
   const toast = useToast();
   const confirm = useConfirm();
   const savedMonth = useLocal(MONTH_KEY);
@@ -350,7 +354,11 @@ export function PlanSlots() {
   const [data, setData] = useState<PlanData | null>(null);
   const [error, setError] = useState<{ month: string; message: string } | null>(null);
   const [tick, setTick] = useState(0);
-  const [draft, update] = useDraft(month);
+  const [savedDraft, updateDraft] = useDraft(month);
+  // ดูได้อย่างเดียว: ไม่ใช้ร่างในเครื่อง (เห็นเฉพาะที่บันทึกแล้ว) และแก้ร่างไม่ได้
+  const draft = readOnly ? EMPTY : savedDraft;
+  const viewOnly = () => toast("บัญชีนี้ดูแพลนได้อย่างเดียว แก้ไม่ได้", "error");
+  const update: typeof updateDraft = readOnly ? viewOnly : updateDraft;
   const [openDay, setOpenDay] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const reload = () => setTick((n) => n + 1);
@@ -367,6 +375,8 @@ export function PlanSlots() {
   }, [month, tick]);
 
   const plan = data?.month === month ? data : null;
+  // ชื่อ Campaign ให้เลือก: ชื่อมาตรฐานของเดือนนี้ก่อน (เช่น 10.10 / Pay Day / Mid Month) แล้วตามด้วยที่ใช้บ่อย (แปลงเป็นชื่อมาตรฐาน ไม่ซ้ำ)
+  const campaignChoices = [...new Set([...standardCampaigns(month), ...(plan?.campaigns ?? []).map(canonicalCampaign)].filter(Boolean))];
   // "ติ๊กเป็น": null = slot ว่าง (เปิดให้ Mc จอง) / รหัส Mc ประจำ = ลงชื่อ Mc คนนั้นในช่องที่ติ๊ก (เฉพาะ TikTok ช่องของเรา)
   const [brush, setBrush] = useState<number | null>(null);
   const regulars = plan?.regulars ?? [];
@@ -581,6 +591,7 @@ export function PlanSlots() {
 
   /** ติ๊ก / เอาติ๊กออก 1 ช่อง ถ้าอีกฝั่งติ๊กเวลานี้อยู่ = ย้ายมาฝั่งนี้ (เอาออกจากอีกฝั่ง) */
   function toggleCell(date: string, platform: string, t: { start: string; end: string }, agency: string | null = null) {
+    if (readOnly) { viewOnly(); return; }
     const slot = { date, platform, start: t.start, end: t.end };
     const k = keyOf(slot);
     if (!agency && brushId) { brushCell(slot, brushId); return; }
@@ -601,6 +612,7 @@ export function PlanSlots() {
 
   /** กดหัวคอลัมน์: ติ๊กเวลานี้ทุกวัน (ตั้งแต่วันนี้) ถ้าติ๊กครบแล้ว = เอาติ๊กออกทั้งหมด (slot ที่มีคนจอง / เป็นของอีกฝั่ง คงไว้) */
   function toggleColumn(platform: string, t: { start: string; end: string }, agency: string | null = null) {
+    if (readOnly) { viewOnly(); return; }
     if (!agency && brushId) { brushColumn(platform, t, brushId); return; }
     const today = todayKey();
     const slots = daysOf(month).filter((d) => d >= today).map((date) => ({ date, platform, start: t.start, end: t.end }));
@@ -648,7 +660,9 @@ export function PlanSlots() {
 
   /** ตั้ง Campaign ให้หลาย slot ของเรา (ร่างใหม่ = แก้ในร่าง / slot เดิม = จดว่าจะแก้) */
   const setCampaign = (keys: string[], campaign: string) => update(withCampaign(keys, campaign));
-  function withCampaign(keys: string[], campaign: string) {
+  function withCampaign(keys: string[], raw: string) {
+    // ชื่อมาตรฐาน: payday -> Pay Day, 10.1 -> 10.10 (ทุก slot ใช้ชื่อเดียวกัน หน้าผลงาน Mc / แคมเปญ จับกลุ่มได้ถูก)
+    const campaign = canonicalCampaign(raw);
     const want = new Set(keys);
     return (d: Draft): Draft => {
       const next = { ...d.campaign };
@@ -666,10 +680,11 @@ export function PlanSlots() {
   function applyRange(r: CampaignRange) {
     const keys = ours.filter((x) => x.date >= r.from && x.date <= r.to && (r.platform === ALL || x.platform === r.platform)
       && !x.deleting && (!x.existing || x.existing.mc)).map((x) => x.key);
+    const named = { ...r, campaign: canonicalCampaign(r.campaign) };
     update((d) => {
-      const n = withCampaign(keys, r.campaign)(d);
-      const others = n.ranges.filter((x) => !(x.from === r.from && x.to === r.to && x.platform === r.platform));
-      return { ...n, ranges: r.campaign ? [...others, r] : others };
+      const n = withCampaign(keys, named.campaign)(d);
+      const others = n.ranges.filter((x) => !(x.from === named.from && x.to === named.to && x.platform === named.platform));
+      return { ...n, ranges: named.campaign ? [...others, named] : others };
     });
     toast(`ตั้ง Campaign ${keys.length} slot ในร่างแล้ว${r.campaign ? " — slot ที่ติ๊กเพิ่มในช่วงนี้จะได้ Campaign นี้ด้วย" : ""}`);
   }
@@ -846,26 +861,28 @@ export function PlanSlots() {
         <LoadingBlock />
       ) : (
         <>
-          <PatternPanel
+          {readOnly ? <Notice>ดูแพลนได้อย่างเดียว — ติ๊ก / ตั้ง Campaign / บันทึกไม่ได้ (ดูสรุปชั่วโมงและส่งออกได้)</Notice> : null}
+          {readOnly ? null : <PatternPanel
             key={`${month}-${mode}`}
             month={month}
             platforms={mode === "shopee" ? shownPlatforms : [...new Set([...shownPlatforms, ...plan.platforms.filter((p) => modeOf(p) === mode)])]}
-            campaigns={plan.campaigns}
+            campaigns={campaignChoices}
             onAdd={(list) => report(addSlots(list))}
             onCopyPrev={copyPrevMonth}
-          />
-          {mode === "tiktok" ? (
+          />}
+          {mode === "tiktok" && !readOnly ? (
             <CampaignPanel
               key={`c-${month}`}
               month={month}
               items={ours.filter((x) => modeOf(x.platform) === "tiktok")}
               platforms={shownPlatforms}
               ranges={draft.ranges}
+              choices={campaignChoices}
               onApply={applyRange}
               onRemove={removeRange}
             />
           ) : null}
-          <datalist id="plan-campaigns">{plan.campaigns.map((c) => <option key={c} value={c} />)}</datalist>
+          <datalist id="plan-campaigns">{campaignChoices.map((c) => <option key={c} value={c} />)}</datalist>
           <datalist id="plan-platforms">{[...new Set([...platforms, ...plan.platforms])].map((p) => <option key={p} value={p} />)}</datalist>
 
           <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
@@ -891,10 +908,19 @@ export function PlanSlots() {
               );
             })}
           </div>
-          {!plan.agencyReady ? (
+          <RangeSummary key={`r-${month}-${mode}`} month={month} items={shownItems} tagIndex={tagIndex} />
+          {!plan.agencyReady && !readOnly ? (
             <Notice variant="warning">ยังบันทึกแพลนของ Agency ไม่ได้ ต้องรัน SQL 20261017000000_plan_slots ใน Supabase ก่อน (ติ๊กดูในร่างได้)</Notice>
           ) : null}
-          {mode === "tiktok" && regulars.length ? (
+          {mode === "tiktok" && regulars.length && readOnly ? (
+            <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 rounded-xl border bg-card px-3 py-2 text-xs">
+              {regularHours.map((m) => (
+                <span key={m.id} className="tabular-nums">
+                  <strong>Mc {m.name}</strong> (ประจำ) {monthLabel(month)}: <strong className="text-p2">{num(m.saved)} ชม.</strong> ({m.slots} slot)
+                </span>
+              ))}
+            </div>
+          ) : mode === "tiktok" && regulars.length ? (
             <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm">
               <span className="font-semibold">ติ๊กเป็น</span>
               <ToggleGroup
@@ -938,7 +964,7 @@ export function PlanSlots() {
           {view === "tick" || mode === "shopee" ? (
             <>
               <p className="mb-2 text-xs text-muted-foreground">
-                {mode === "shopee"
+                {readOnly ? "ชี้ที่ช่องเพื่อดูรายละเอียด · กดวันที่ = ดู slot + Campaign ของวันนั้น" : mode === "shopee"
                   ? "แพลน Shopee (In house / Agency Infinite / MCN) เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · ช่วงเวลาเดียวกันเป็นของกลุ่มใดกลุ่มหนึ่ง กดช่องของอีกกลุ่ม = ย้ายมา · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้"
                   : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต"}
               </p>
@@ -967,6 +993,7 @@ export function PlanSlots() {
           items={ours.filter((x) => x.date === openDay)}
           platforms={platforms}
           tagIndex={tagIndex}
+          readOnly={readOnly}
           onAdd={(s) => addSlots([s])}
           onRemoveNew={removeNew}
           onToggleDelete={toggleDelete}
@@ -976,7 +1003,7 @@ export function PlanSlots() {
         />
       ) : null}
 
-      {changes.total ? (
+      {changes.total && !readOnly ? (
         <div className="slot-bar-open fixed inset-x-0 bottom-0 z-20 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
           <div className="mx-auto flex max-w-[1200px] items-center gap-2">
             <div className="min-w-0 flex-1 text-sm">
@@ -1469,13 +1496,137 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
   );
 }
 
+// ---------- สรุปชั่วโมงตามช่วงวัน ----------
+
+/** ช่วงละ 7 วันของเดือน: 1–7 / 8–14 / 15–21 / 22–28 / 29–สิ้นเดือน */
+function weekBlocks(month: string) {
+  const days = daysOf(month);
+  const out: { from: string; to: string }[] = [];
+  for (let i = 0; i < days.length; i += 7) out.push({ from: days[i], to: days[Math.min(i + 6, days.length - 1)] });
+  return out;
+}
+
+/**
+ * สรุปชั่วโมงของช่วงวันที่เลือก (ทุกช่องรวมกัน + แยกช่อง) รวมทั้งที่ลงชีตแล้วและร่างที่ยังไม่บันทึก
+ *   ค่าเริ่มต้น = ช่วง 7 วันที่มีวันนี้ (เช่น วันที่ 9 = 8–14) ถ้าไม่ใช่เดือนนี้ = 1–7
+ */
+function RangeSummary({ month, items, tagIndex }: { month: string; items: Item[]; tagIndex: (p: string) => number }) {
+  const blocks = weekBlocks(month);
+  const [range, setRange] = useState(() => {
+    const today = todayKey();
+    return blocks.find((b) => today >= b.from && today <= b.to) ?? blocks[0];
+  });
+  const whole = { from: blocks[0].from, to: blocks[blocks.length - 1].to };
+  const inRange = items.filter((x) => !x.deleting && !x.existing?.mc?.cancelled && x.date >= range.from && x.date <= range.to);
+  const hoursOf = (list: Item[]) => list.reduce((h, x) => h + lenOf(x) / 60, 0);
+  const hasMc = (x: Item) => !!(x.existing?.mc?.name || x.assign);
+
+  // แยกช่อง: ของเราแยกตามแพลตฟอร์ม / Agency แยกเป็นอีกแถว (Agency หาคนไลฟ์เอง ไม่นับช่อง Mc)
+  const groups = new Map<string, { label: string; platform: string; agency: string | null; list: Item[] }>();
+  for (const x of inRange) {
+    const k = `${x.platform}|${x.agency ?? ""}`;
+    const g = groups.get(k) ?? { label: x.agency ? `${x.platform} › ${ownerLabel(x.agency)}` : x.platform, platform: x.platform, agency: x.agency, list: [] };
+    g.list.push(x);
+    groups.set(k, g);
+  }
+  const rows = [...groups.values()].sort((a, b) => Number(!!a.agency) - Number(!!b.agency) || a.platform.localeCompare(b.platform));
+  const ours = inRange.filter((x) => !x.agency);
+  const dayCount = daysOf(month).filter((d) => d >= range.from && d <= range.to).length;
+  const total = hoursOf(inRange);
+  const sameRange = (r: { from: string; to: string }) => r.from === range.from && r.to === range.to;
+
+  return (
+    <Card className="mb-3 shadow-card">
+      <CardContent className="space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <strong className="flex items-center gap-1.5 text-base"><ClockIcon className="size-4 text-primary" />สรุปชั่วโมงตามช่วงวัน</strong>
+          <DateRangePicker value={range} onChange={setRange} defaultMonth={month} aria-label="ช่วงวันที่สรุป" className="w-auto min-w-56" />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {blocks.map((b) => (
+            <Button key={b.from} size="xs" variant={sameRange(b) ? "default" : "outline"} className="rounded-full" onClick={() => setRange(b)}>
+              {Number(b.from.slice(8))}–{Number(b.to.slice(8))}
+            </Button>
+          ))}
+          <Button size="xs" variant={sameRange(whole) ? "default" : "outline"} className="rounded-full" onClick={() => setRange(whole)}>ทั้งเดือน</Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          {([
+            [`${num(Math.round(total * 100) / 100)} ชม.`, `รวมทุกช่อง (${inRange.length} slot)`],
+            [dayCount ? `${num(Math.round((total / dayCount) * 10) / 10)} ชม.` : "–", `เฉลี่ยต่อวัน (${dayCount} วัน)`],
+            [`${num(hoursOf(ours.filter((x) => !hasMc(x))))} ชม.`, `ของเราที่ยังไม่มี Mc (${ours.filter((x) => !hasMc(x)).length} slot)`],
+          ] as const).map(([v, l]) => (
+            <div key={l} className="rounded-lg bg-secondary px-2 py-2">
+              <span className="block text-lg font-bold text-primary tabular-nums">{v}</span>
+              <span className="text-xs text-muted-foreground">{l}</span>
+            </div>
+          ))}
+        </div>
+
+        {rows.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[520px] text-sm">
+              <thead className="text-xs text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1.5 pr-2 text-left font-semibold">ช่อง</th>
+                  {["slot", "ชม. รวม", "ลงชีตแล้ว", "ร่างใหม่", "มี Mc", "ยังไม่มี Mc"].map((h) => <th key={h} className="py-1.5 pl-2 text-right font-semibold">{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((g) => {
+                  const saved = g.list.filter((x) => x.existing || x.agencyId), fresh = g.list.filter((x) => !x.existing && !x.agencyId);
+                  return (
+                    <tr key={g.label} className="border-b last:border-0">
+                      <td className="py-1.5 pr-2">
+                        {g.agency ? <Badge className="bg-foreground text-[11px] font-semibold text-background">{g.label}</Badge> : <PlatformBadge name={g.platform} index={tagIndex(g.platform)} />}
+                      </td>
+                      <td className="py-1.5 pl-2 text-right tabular-nums">{g.list.length}</td>
+                      <td className="py-1.5 pl-2 text-right font-semibold tabular-nums">{num(hoursOf(g.list))}</td>
+                      <td className="py-1.5 pl-2 text-right tabular-nums">{num(hoursOf(saved))}</td>
+                      <td className="py-1.5 pl-2 text-right tabular-nums">{fresh.length ? <span className="text-primary">+{num(hoursOf(fresh))}</span> : "–"}</td>
+                      <td className="py-1.5 pl-2 text-right tabular-nums">{g.agency ? "–" : num(hoursOf(g.list.filter(hasMc)))}</td>
+                      <td className="py-1.5 pl-2 text-right tabular-nums">
+                        {g.agency ? "–" : (() => {
+                          const h = hoursOf(g.list.filter((x) => !hasMc(x)));
+                          return h ? <span className="font-semibold text-warning-foreground">{num(h)}</span> : <span className="text-success">0</span>;
+                        })()}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="font-bold">
+                  <td className="py-1.5 pr-2">รวม</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums">{inRange.length}</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums">{num(total)}</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums">{num(hoursOf(inRange.filter((x) => x.existing || x.agencyId)))}</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums">{(() => { const h = hoursOf(inRange.filter((x) => !x.existing && !x.agencyId)); return h ? `+${num(h)}` : "–"; })()}</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums">{num(hoursOf(ours.filter(hasMc)))}</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums">{num(hoursOf(ours.filter((x) => !hasMc(x))))}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              นับทั้ง slot ที่ลงชีตแล้วและร่างที่ยังไม่บันทึก (ไม่นับ slot ที่จะลบ / แคน) · slot หลังเที่ยงคืนนับเป็นวันไลฟ์เดิม · Agency หาคนไลฟ์เอง ไม่นับช่อง Mc
+            </p>
+          </div>
+        ) : <p className="text-muted-foreground">ช่วงนี้ยังไม่มี slot</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ---------- Campaign ตามช่วงวัน ----------
 
-function CampaignPanel({ month, items, platforms, ranges, onApply, onRemove }: {
+function CampaignPanel({ month, items, platforms, ranges, choices, onApply, onRemove }: {
   month: string;
   items: Item[];
   platforms: string[];
   ranges: CampaignRange[];
+  /** ชื่อมาตรฐานของเดือนนี้ + ที่ใช้บ่อย */
+  choices: string[];
   onApply: (r: CampaignRange) => void;
   onRemove: (i: number) => void;
 }) {
@@ -1517,6 +1668,13 @@ function CampaignPanel({ month, items, platforms, ranges, onApply, onRemove }: {
             ตั้ง Campaign{targets.length ? ` (${targets.length} slot)` : ""}
           </Button>
         </div>
+        {/* ชื่อมาตรฐานกดเลือกได้เลย (พิมพ์เองได้ ระบบแปลงเป็นชื่อมาตรฐาน เช่น payday -> Pay Day) */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">เลือกชื่อ:</span>
+          {choices.slice(0, 8).map((c) => (
+            <Button key={c} size="xs" variant={c === canonicalCampaign(campaign) ? "default" : "outline"} onClick={() => setCampaign(c === canonicalCampaign(campaign) ? "" : c)}>{c}</Button>
+          ))}
+        </div>
         {ranges.length ? (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs text-muted-foreground">ช่วงที่ตั้งไว้:</span>
@@ -1540,11 +1698,12 @@ function CampaignPanel({ month, items, platforms, ranges, onApply, onRemove }: {
 
 // ---------- แก้รายวัน ----------
 
-function DayDialog({ date, items, platforms, tagIndex, onAdd, onRemoveNew, onToggleDelete, onCampaign, onMove, onClose }: {
+function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemoveNew, onToggleDelete, onCampaign, onMove, onClose }: {
   date: string;
   items: Item[];
   platforms: string[];
   tagIndex: (p: string) => number;
+  readOnly: boolean; // ดูได้อย่างเดียว: เห็นรายการ + Campaign แต่แก้ / เพิ่ม / ลบไม่ได้
   onAdd: (s: NewSlot) => { added: number; skipped: number };
   onRemoveNew: (key: string) => void;
   onToggleDelete: (key: string) => void;
@@ -1574,7 +1733,10 @@ function DayDialog({ date, items, platforms, tagIndex, onAdd, onRemoveNew, onTog
   }
 
   return (
-    <AppDialog open onClose={onClose} title={fmtDayLong.format(parseKey(date))} description={'แก้ในร่าง ยังไม่ลงชีตจนกว่าจะกด "บันทึกลงชีต"'} className="sm:max-w-xl">
+    <AppDialog
+      open onClose={onClose} title={fmtDayLong.format(parseKey(date))} className="sm:max-w-xl"
+      description={readOnly ? "ดูได้อย่างเดียว" : 'แก้ในร่าง ยังไม่ลงชีตจนกว่าจะกด "บันทึกลงชีต"'}
+    >
       <DialogBody className="space-y-4 text-sm">
         {!items.length ? <p className="text-muted-foreground">วันนี้ยังไม่มี slot</p> : groups.map((p) => (
           <section key={p}>
@@ -1590,7 +1752,9 @@ function DayDialog({ date, items, platforms, tagIndex, onAdd, onRemoveNew, onTog
                       {!ex ? `ร่างใหม่${x.agency ? ` · ${ownerLabel(x.agency)}` : ""}`
                         : `${mcText(x)} · Admin ${ex.admin?.name || "ว่าง"}${ex.mc?.cancelled ? " · แคน" : ""}${x.deleting ? " · จะลบ" : ""}`}
                     </span>
-                    {!x.deleting && (!ex || ex.mc) ? (
+                    {readOnly ? (
+                      x.campaign ? <Badge variant="outline" className="font-medium">{x.campaign}</Badge> : null
+                    ) : !x.deleting && (!ex || ex.mc) ? (
                       <Input
                         list="plan-campaigns"
                         value={x.campaign}
@@ -1600,7 +1764,7 @@ function DayDialog({ date, items, platforms, tagIndex, onAdd, onRemoveNew, onTog
                         className={cn("h-8 w-36", x.campaignChanged && "border-primary")}
                       />
                     ) : null}
-                    {!ex ? (
+                    {readOnly ? null : !ex ? (
                       <IconButton label="เอาออกจากร่าง" variant="ghost" className="text-muted-foreground" onClick={() => onRemoveNew(x.key)}><XIcon /></IconButton>
                     ) : x.deleting ? (
                       <IconButton label="ยกเลิกการลบ" variant="ghost" onClick={() => onToggleDelete(x.key)}><Undo2Icon /></IconButton>
@@ -1622,7 +1786,7 @@ function DayDialog({ date, items, platforms, tagIndex, onAdd, onRemoveNew, onTog
           </section>
         ))}
 
-        {editable.length > 1 ? (
+        {readOnly ? null : editable.length > 1 ? (
           <div className="flex items-center gap-2">
             <Input id={ids.dayCampaign} list="plan-campaigns" value={allCampaign} onChange={(e) => setAllCampaign(e.target.value)} placeholder="Campaign ทั้งวัน" aria-label="Campaign ทั้งวัน" />
             <Button variant="outline" className="shrink-0" onClick={() => onCampaign(editable.map((x) => x.key), allCampaign.trim())}>
@@ -1631,7 +1795,7 @@ function DayDialog({ date, items, platforms, tagIndex, onAdd, onRemoveNew, onTog
           </div>
         ) : null}
 
-        <div className="rounded-lg border border-dashed p-3">
+        <div className={readOnly ? "hidden" : "rounded-lg border border-dashed p-3"}>
           <span className="mb-2 block font-semibold">เพิ่ม slot</span>
           <div className="grid gap-2 sm:grid-cols-2">
             <Input id={ids.platform} list="plan-platforms" value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="แพลตฟอร์ม" aria-label="แพลตฟอร์ม" />

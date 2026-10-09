@@ -3,19 +3,25 @@ import { monthRange, requireOwner } from "@/lib/api";
 import { ownerSummary } from "@/lib/data";
 
 // สรุปรายเดือนสำหรับเจ้าของ (?month=YYYY-MM) — แทน action "ownerSummary"
-// ส่งเฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (Mc / Admin)
+// ส่งเฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (Mc / Admin) · ฝั่งที่ดูได้อย่างเดียว = ไม่ส่งค่าจ้าง (อัตรา / Commit)
 export async function GET(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูหน้าสรุป");
+  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูหน้าสรุป", "read");
   if ("res" in r) return r.res;
   const { key, first, last } = monthRange(new URL(request.url).searchParams.get("month"));
   const s = await ownerSummary(key, first, last);
-  const { mc, admin } = r.scope;
+  const { mc, admin, edit } = r.scope;
+  const hide = { mc: !edit.mc, admin: !edit.admin };
+  const people = (list: typeof s.mc, hidden: boolean) => (hidden ? list.map((p) => ({ ...p, commit: null })) : list);
   return NextResponse.json({
     ...s,
     scope: { mc, admin },
-    mc: mc ? s.mc : [],
-    admin: admin ? s.admin : [],
+    payHidden: hide,
+    mc: mc ? people(s.mc, hide.mc) : [],
+    admin: admin ? people(s.admin, hide.admin) : [],
     details: s.details.filter((d) => (d.type === "Mc" ? mc : admin)),
-    rates: { ...s.rates, mc: mc ? s.rates.mc : {}, admin: admin ? s.rates.admin : {} },
+    rates: {
+      mc: mc && !hide.mc ? s.rates.mc : {}, admin: admin && !hide.admin ? s.rates.admin : {},
+      defaultMc: hide.mc ? 0 : s.rates.defaultMc, defaultAdmin: hide.admin ? 0 : s.rates.defaultAdmin,
+    },
   });
 }

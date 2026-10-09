@@ -254,6 +254,73 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
   });
 }
 
+/**
+ * คิวที่ยกเลิกผ่านเว็บในช่วงวันที่ (Mc / Admin เสริมกดยกเลิกเอง)
+ *   ตอนยกเลิก ระบบเอาชื่อออกจาก slot (slot กลับไปว่างให้คนอื่นจอง) จึงไม่เหลือร่องรอยใน slot -> อ่านจากประวัติ booking_logs
+ *   นับ 1 ครั้งต่อคนต่อ slot (ยกเลิกล่าสุด) · จองกลับมาเองหรือถูกใส่ชื่อกลับแล้ว = ไม่นับ
+ */
+async function webCancels(db: Db, first: string, last: string) {
+  type Log = {
+    at: string; email: string; name: string; action: string; slot_table: string; slot_id: number;
+    platform: string | null; live_date: string | null; time_range: string | null;
+  };
+  const [logs, staff] = await Promise.all([
+    fetchAll<Log>((from, to) =>
+      db.from("booking_logs")
+        .select("at, email, name, action, slot_table, slot_id, platform, live_date, time_range")
+        .in("action", ["ยกเลิกคิว", "ยกเลิกคิว Admin"]).eq("result", "สำเร็จ")
+        .gte("live_date", first).lte("live_date", last)
+        .order("at", { ascending: false }).range(from, to) as unknown as PromiseLike<{ data: Log[] | null; error: unknown }>),
+    fetchAll<{ id: number; role: string; name: string; email: string | null }>((from, to) =>
+      db.from("staff").select("id, role, name, email").in("role", ["mc", "admin"]).range(from, to)),
+  ]);
+  if (!logs.length) return [];
+  const byEmail = new Map(staff.filter((s) => s.email).map((s) => [`${s.role}|${s.email!.toLowerCase()}`, s]));
+  const byName = new Map(staff.map((s) => [`${s.role}|${s.name}`, s]));
+
+  // slot ตอนนี้: เวลาจริง + ใครอยู่ใน slot (ไว้ดูว่าจองกลับมาแล้วหรือยัง)
+  type Cur = { id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string; who: number | null; is_cancelled: boolean };
+  const slots = new Map<string, Cur>();
+  for (const [table, col] of [["mc_slots", "mc_id"], ["admin_slots", "admin_id"]] as const) {
+    const ids = [...new Set(logs.filter((l) => l.slot_table === table).map((l) => Number(l.slot_id)))];
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data } = await db.from(table)
+        .select(`id, platform, live_date, start_time, end_time, starts_at, ends_at, who:${col}, is_cancelled`)
+        .in("id", ids.slice(i, i + 200)).overrideTypes<Cur[], { merge: false }>();
+      for (const s of data ?? []) slots.set(`${table}|${s.id}`, s);
+    }
+  }
+
+  const out: { type: "Mc" | "Admin"; name: string; at: string; platform: string; date: string; start: string; end: string; startMs: number; endMs: number }[] = [];
+  const seen = new Set<string>();
+  for (const l of logs) {
+    const type = l.slot_table === "admin_slots" ? "Admin" : "Mc";
+    const role = type === "Mc" ? "mc" : "admin";
+    // คนที่ยกเลิก: จากอีเมล (ชื่อปัจจุบัน) ไม่เจอ = จากชื่อในประวัติ / ลบรายชื่อออกไปแล้ว = ไม่นับ
+    const p = byEmail.get(`${role}|${String(l.email).toLowerCase()}`) ?? byName.get(`${role}|${String(l.name ?? "").replace(/^mc\s*/i, "").trim()}`);
+    if (!p) continue;
+    const s = slots.get(`${l.slot_table}|${l.slot_id}`);
+    if (s && s.who === p.id && !s.is_cancelled) continue; // จองกลับมาแล้ว
+    // slot ถูกลบไปแล้ว: ใช้เวลาที่จดไว้ในประวัติ
+    const [a, b] = String(l.time_range ?? "").split("-").map((x) => x.trim().slice(0, 5));
+    const date = s?.live_date ?? l.live_date;
+    if (!date || (!s && !(a && b))) continue;
+    const start = s ? hm(s.start_time) : a, end = s ? hm(s.end_time) : b;
+    const startMs = s ? ms(s.starts_at) : Date.parse(`${date}T${start}:00+07:00`);
+    let endMs = s ? ms(s.ends_at) : Date.parse(`${date}T${end}:00+07:00`);
+    if (endMs <= startMs) endMs += 86400_000;
+    const platform = s?.platform ?? l.platform ?? "";
+    // ยกเลิกซ้ำ slot เดิม (หรือ slot เวลาเดียวกันที่ถูกสร้างใหม่) นับครั้งล่าสุดครั้งเดียว
+    const once = `${role}|${p.id}|${platform}|${startMs}|${endMs}`;
+    if (seen.has(once)) continue;
+    seen.add(once);
+    out.push({
+      type, name: type === "Mc" ? `Mc ${p.name}` : p.name, at: l.at, platform, date, start, end, startMs, endMs,
+    });
+  }
+  return out;
+}
+
 /** สรุปรายเดือนสำหรับเจ้าของ (ชั่วโมง/slot/วัน/ค่าจ้าง ของ Mc และ Admin) */
 export async function ownerSummary(key: string, first: string, last: string): Promise<Omit<OwnerSummary, "scope">> {
   const db = createAdminClient();
@@ -271,8 +338,9 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         .or("confirmed.is.null,confirmed.eq.true")
         .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
     );
-  const [mcRows, adminRows, proofs, gmvs] = await Promise.all([
+  const [mcRows, adminRows, proofs, gmvs, cancels] = await Promise.all([
     load("mc_slots", "mc_id"), load("admin_slots", "admin_id"), proofsBySlot(db, first, last), gmvBySlot(db, first, last),
+    webCancels(db, first, last),
   ]);
   // หลักฐานไลฟ์ผูกกับ slot ของ Mc -> ฝั่ง Admin ของ slot เดียวกันใช้หลักฐานเดียวกัน
   const proofOf = new Map<string, ProofInfo>();
@@ -328,6 +396,16 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   };
   collect(mcRows, "Mc");
   collect(adminRows, "Admin");
+  // ยกเลิกผ่านเว็บ: นับในช่อง "ยกเลิก" ของคนที่กดยกเลิก (ไม่มีชั่วโมง / ไม่มีเงิน)
+  for (const c of cancels) {
+    details.push({
+      type: c.type, name: c.name, date: c.date, start: c.start, end: c.end, platform: c.platform,
+      hours: (c.endMs - c.startMs) / 3600_000, startMs: c.startMs, status: "ยกเลิกผ่านเว็บ", cancelled: true, cancelledAt: c.at,
+      pair: "", key: `${c.platform}|${c.startMs}|${c.endMs}`,
+      lateMinutes: null, bonusMinutes: null, lateFromProof: false, bonusFromProof: false,
+      proof: null, noProof: false, gmv: null, gmvCoveredBy: null, campaign: campaignOf.get(`${c.platform}|${c.startMs}|${c.endMs}`) ?? "",
+    });
+  }
 
   // จับคู่ Mc <-> Admin ของ slot เดียวกัน
   const byKey = new Map<string, { Mc?: string; Admin?: string }>();

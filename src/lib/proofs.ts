@@ -19,9 +19,19 @@ const hm = (t: string) => t.slice(0, 5);
 const keyOf = (r: { platform: string; starts_at: string; ends_at: string }) =>
   `${r.platform}|${Date.parse(r.starts_at)}|${Date.parse(r.ends_at)}`;
 
-/** แนบ / ลบหลักฐานได้ทุก slot: Owner ที่ติ๊กจัดการ Mc หรือติ๊ก "จัดการหลักฐานไลฟ์" */
-export const canSeeAll = (me: Me) => !!(me.owner?.mc || me.owner?.proofs);
+/** เห็นหลักฐานทุก slot: Owner ฝั่ง Mc / หลักฐานไลฟ์ (จัดการได้ หรือ ดูได้อย่างเดียว) */
+export const canSeeAll = (me: Me) => !!(me.owner?.see.mc || me.owner?.see.proofs);
+/** แนบ / ลบ / กรอก GMV ได้ทุก slot: Owner ที่จัดการฝั่ง Mc หรือจัดการหลักฐานไลฟ์ได้ */
+export const canEditAll = (me: Me) => !!(me.owner?.mc || me.owner?.proofs);
 export const canUseProofs = (me: Me) => canSeeAll(me) || !!me.admin;
+/** แก้ไขหลักฐาน / GMV ได้: จัดการได้ทุก slot หรือเป็น Admin (เฉพาะ slot ของตัวเอง) */
+export const canEditProofs = (me: Me) => canEditAll(me) || !!me.admin;
+/**
+ * ตัวตนที่ใช้ตอนแก้ไข: Owner ที่ดูได้อย่างเดียว (และเป็น Admin ด้วย) แก้ได้เฉพาะ slot ของตัวเองแบบ Admin
+ *   ใช้กับ proofSlots / canSeeAll ในขั้นแก้ไข ไม่ให้สิทธิ์ดูทุก slot กลายเป็นแก้ได้ทุก slot
+ */
+export const asEditor = (me: Me): Me =>
+  canEditAll(me) || !me.owner ? me : { ...me, owner: { ...me.owner, see: { ...me.owner.see, mc: false, proofs: false } } };
 
 /** slot ที่คนนี้เห็นในหน้าหลักฐาน (slot ของ Mc ที่มีคนไลฟ์ ไม่ถูกยกเลิก) ในช่วงวันที่ */
 export async function proofSlots(me: Me, first: string, last: string): Promise<ProofSlot[]> {
@@ -64,6 +74,8 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
   const hmOf = new Map(mcRows.map((r) => [Number(r.id), `${hm(r.start_time)}–${hm(r.end_time)}`]));
 
   const all = canSeeAll(me);
+  // ลบได้: จัดการได้ทุก slot / คนที่แนบเอง (ถ้ายังมีสิทธิ์แก้ไข) — ดูได้อย่างเดียว = ลบไม่ได้
+  const delAll = canEditAll(me), delOwn = canEditProofs(me);
   const out: ProofSlot[] = [];
   for (const r of mcRows) {
     if (r.live_date < first || r.live_date > last) continue; // วันก่อน/หลัง โหลดมาใช้คิด GMV เท่านั้น
@@ -76,7 +88,7 @@ export async function proofSlots(me: Me, first: string, last: string): Promise<P
       startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at),
       mcName: r.person?.name ? `Mc ${r.person.name}` : "", adminName: admin?.name ?? "",
       proof: p
-        ? { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, driveFolderUrl: p.driveFolderUrl, canDelete: all || p.email === me.email }
+        ? { id: p.id, startedAt: p.startedAt, endedAt: p.endedAt, by: p.by, driveUrl: p.driveUrl, driveFolderUrl: p.driveFolderUrl, canDelete: delAll || (delOwn && p.email === me.email) }
         : null,
       salaried: !!r.person?.is_salaried,
       gmv: gmvs.get(Number(r.id)) ?? null,

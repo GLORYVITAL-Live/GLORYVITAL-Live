@@ -3,7 +3,7 @@ import { campaignReport } from "@/lib/campaign-report";
 
 // รายงานแคมเปญทีละรอบ (?from=YYYY-MM&to=YYYY-MM ไม่เกิน 12 เดือน) — Owner ฝั่ง Mc
 export async function GET(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูหน้า Campaign");
+  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูหน้า Campaign", "read");
   if ("res" in r) return r.res;
   if (!r.scope.mc) return fail("หน้า Campaign ใช้ข้อมูลฝั่ง Mc ต้องติ๊กสิทธิ์จัดการ Mc", 403);
   const sp = new URL(request.url).searchParams;

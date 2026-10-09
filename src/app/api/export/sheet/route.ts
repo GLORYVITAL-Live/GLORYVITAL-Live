@@ -55,7 +55,8 @@ export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
   const o = r.me.owner;
-  if (!o || !(o.mc || o.admin || o.analytics || o.plan)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
+  // ดูได้อย่างเดียวก็ส่งออกได้ (เป็นข้อมูลที่เห็นในหน้าอยู่แล้ว)
+  if (!o || !(o.see.mc || o.see.admin || o.see.analytics || o.see.plan || o.see.proofs)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
   const book = cleanBook(await request.json().catch(() => null));
   if (!book) return fail("ข้อมูลที่ส่งออกไม่ถูกต้อง หรือใหญ่เกินไป");
   const auth = googleAuth();
