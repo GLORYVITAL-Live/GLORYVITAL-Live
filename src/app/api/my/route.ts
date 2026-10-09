@@ -1,4 +1,5 @@
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
+import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, mySlots } from "@/lib/data";
 import { cleanTiers } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -28,7 +29,7 @@ export async function GET(request: Request) {
     cancelMinHours: Number(settings.cancel_min_hours),
     adminChatUrl: settings.admin_chat_url,
     canCancel: role === "mc" || !!r.me.admin?.isExtra,
-    items,
+    items: withPlatformLabels(items), // ชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
     profile: {
       name: role === "mc" ? `Mc ${staff.data.name}` : staff.data.name,
       email: staff.data.email ?? r.me.email,

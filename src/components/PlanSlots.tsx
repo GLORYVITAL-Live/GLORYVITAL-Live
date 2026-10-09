@@ -23,6 +23,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { fmtDayLong, fmtDayMonth, fmtWeekShort, monthKey, monthLabel, num, parseKey, todayKey } from "@/lib/format";
 import { readLocal, useLocal, writeLocal } from "@/lib/hooks";
 import { canonicalCampaign, standardCampaigns } from "@/lib/campaign";
+import { platformLabel, platformRaw } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 // ---------- ข้อมูล ----------
@@ -209,7 +210,9 @@ function shopeeTeamSheet(name: string, groups: { agency: string; items: Item[] }
   return { name, rows, rowStyles };
 }
 
-const groupName = (c: Pick<Column, "platform" | "agency">) => (c.agency ? `${c.platform} › ${ownerLabel(c.agency)}` : c.platform);
+// ชื่อช่องที่แสดง / ส่งออก ใช้ platformLabel (เช่น GLORY MALL -> GLORY VITAL) ข้างในยังใช้ชื่อในชีต
+const groupName = (c: Pick<Column, "platform" | "agency">) =>
+  (c.agency ? `${platformLabel(c.platform)} › ${ownerLabel(c.agency)}` : platformLabel(c.platform));
 const hoursCell = (h: number): Cell => (h ? { v: h, f: "dec" } : null);
 
 /**
@@ -273,7 +276,7 @@ function planBook(month: string, columns: Column[], items: Item[], mode: Mode = 
     || Number(!!a.agency) - Number(!!b.agency) || (a.agency ?? "").localeCompare(b.agency ?? "") || dayOrder(a.start, a.platform) - dayOrder(b.start, b.platform));
   const listHead: Cell[] = ["Platform", "วันที่", "วัน", "เวลาเริ่ม", "เวลาจบ", "ชม.", "ผู้ไลฟ์", "Campaign", "Mc", "Admin", "สถานะ"];
   const listRow = (x: Item): Cell[] => [
-    x.platform, dayText(x.date), weekday(x.date), x.start, x.end, hoursCell(lenOf(x) / 60),
+    platformLabel(x.platform), dayText(x.date), weekday(x.date), x.start, x.end, hoursCell(lenOf(x) / 60),
     ownerLabel(x.agency), x.campaign,
     x.assign ? `Mc ${x.assign.name} (ร่าง)` : x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : "", x.existing?.admin?.name ?? "",
     x.agency ? (x.agencyId ? "แพลนในเว็บ (ไม่ลงชีต)" : "ร่าง (แพลนในเว็บ)") : x.existing ? "มีในชีตแล้ว" : "ร่าง (ยังไม่บันทึก)",
@@ -297,10 +300,10 @@ function planBook(month: string, columns: Column[], items: Item[], mode: Mode = 
   const agencyLive = live.filter((x) => x.agency);
   const byChannel: Cell[][] = [
     ["ช่อง", "จำนวน slot", "ชั่วโมงรวม", "วันที่มีไลฟ์", "เฉลี่ย ชม./วัน", "Mc จองแล้ว (slot)", "Mc ยังว่าง (slot)", "ร่างยังไม่บันทึก (slot)"],
-    ...used.filter((c) => !c.agency).map((c) => stat(c.platform, live.filter((x) => own(c, x)))),
+    ...used.filter((c) => !c.agency).map((c) => stat(platformLabel(c.platform), live.filter((x) => own(c, x)))),
     stat("รวมของเรา (ลงชีต)", ourLive),
     [],
-    ...used.filter((c) => c.agency).map((c) => stat(`${ownerLabel(c.agency)} (${c.platform} ไม่ลงชีต)`, live.filter((x) => own(c, x)))),
+    ...used.filter((c) => c.agency).map((c) => stat(`${ownerLabel(c.agency)} (${platformLabel(c.platform)} ไม่ลงชีต)`, live.filter((x) => own(c, x)))),
     ...(agencyLive.length ? [stat("รวมแพลนในเว็บ (ไม่ลงชีต)", agencyLive), []] : []),
     stat("รวมทั้งหมด", live),
   ];
@@ -539,7 +542,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     ];
     const hit = mine.find((s) => s.date === slot.date && keyOf(s) !== k
       && dayOrder(s.start, s.platform) < to && from < dayOrder(s.start, s.platform) + lenOf(s));
-    return hit ? `Mc ${regulars.find((m) => m.id === mcId)?.name ?? ""} มีไลฟ์ ${hit.platform} ${hit.start}–${hit.end} วันนี้อยู่แล้ว (เวลาทับกัน)` : null;
+    return hit ? `Mc ${regulars.find((m) => m.id === mcId)?.name ?? ""} มีไลฟ์ ${platformLabel(hit.platform)} ${hit.start}–${hit.end} วันนี้อยู่แล้ว (เวลาทับกัน)` : null;
   }
   /** ติ๊กด้วย Mc ประจำ: ช่องว่าง = สร้างพร้อมชื่อ / slot ว่าง = ลงชื่อ / ช่องที่ลงชื่อ Mc นี้ในร่างแล้ว = ยกเลิก */
   function brushCell(slot: { date: string; platform: string; start: string; end: string }, mcId: number) {
@@ -559,7 +562,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     if (other !== undefined) {
       if (locked(k, other)) { toast(`เวลานี้มี slot ${ownerName(other)}ที่มีคนจองแล้ว ย้ายไม่ได้`, "error"); return; }
       update((d) => withMc(withOn(withOff(d, k, other), slot, null), k, mcId));
-      toast(`ย้าย ${slot.platform} ${slot.start}–${slot.end} จาก ${ownerName(other)} เป็น ${name}`);
+      toast(`ย้าย ${platformLabel(slot.platform)} ${slot.start}–${slot.end} จาก ${ownerName(other)} เป็น ${name}`);
       return;
     }
     update((d) => withMc(on ? d : withOn(d, slot, null), k, mcId));
@@ -585,7 +588,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     const result = next;
     update(() => result);
     const name = `Mc ${regulars.find((m) => m.id === mcId)?.name ?? ""}`;
-    toast(`${allOn ? `ยกเลิก ${name}` : `ลงชื่อ ${name}`} ${platform} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
+    toast(`${allOn ? `ยกเลิก ${name}` : `ลงชื่อ ${name}`} ${platformLabel(platform)} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
       + (kept ? ` (ข้าม ${kept} slot ที่มีคนจอง / เป็นของ Agency / เวลาทับ)` : ""));
   }
 
@@ -604,7 +607,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     if (other !== undefined) {
       if (locked(k, other)) { toast(`เวลานี้มี slot ${ownerName(other)}ที่มีคนจองแล้ว ย้ายไม่ได้`, "error"); return; }
       update((d) => withOn(withOff(d, k, other), slot, agency));
-      toast(`ย้าย ${platform} ${t.start}–${t.end} จาก ${ownerName(other)} เป็น ${ownerName(agency)}`);
+      toast(`ย้าย ${platformLabel(platform)} ${t.start}–${t.end} จาก ${ownerName(other)} เป็น ${ownerName(agency)}`);
       return;
     }
     update((d) => withOn(d, slot, agency));
@@ -632,7 +635,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     }
     const result = next;
     update(() => result);
-    toast(`${allOn ? "เอาติ๊กออก" : "ติ๊ก"} ${agency ? `${ownerLabel(agency)} ` : ""}${platform} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
+    toast(`${allOn ? "เอาติ๊กออก" : "ติ๊ก"} ${agency ? `${ownerLabel(agency)} ` : ""}${platformLabel(platform)} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
       + (kept ? ` (คงไว้ ${kept} slot ที่มีคนจองแล้ว / เป็นของอีกฝั่ง)` : ""));
   }
 
@@ -883,7 +886,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
             />
           ) : null}
           <datalist id="plan-campaigns">{campaignChoices.map((c) => <option key={c} value={c} />)}</datalist>
-          <datalist id="plan-platforms">{[...new Set([...platforms, ...plan.platforms])].map((p) => <option key={p} value={p} />)}</datalist>
+          <datalist id="plan-platforms">{[...new Set([...platforms, ...plan.platforms])].map((p) => <option key={p} value={platformLabel(p)} />)}</datalist>
 
           <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
             <strong className="text-base">{mode === "shopee" ? "Shopee " : ""}{monthLabel(month)}</strong>
@@ -1049,7 +1052,7 @@ const mcText = (x: Item) => (x.agency ? ownerLabel(x.agency)
   : x.assign ? `Mc ${x.assign.name} (ร่าง)` : x.existing?.mc?.name ? `Mc ${x.existing.mc.name}` : "Mc ว่าง");
 
 const chipTitle = (x: Item) => [
-  `${x.agency ? `${ownerLabel(x.agency)} · ` : ""}${x.platform} ${x.start}–${x.end}`,
+  `${x.agency ? `${ownerLabel(x.agency)} · ` : ""}${platformLabel(x.platform)} ${x.start}–${x.end}`,
   x.campaign ? `Campaign: ${x.campaign}` : "",
   x.agency ? `แพลนในเว็บ (ไม่ลงชีต)${x.agencyId ? "" : " · ร่างใหม่"}`
     : !x.existing ? "ร่างใหม่ (ยังไม่ลงชีต)"
@@ -1193,7 +1196,7 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
               <th key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("sticky top-8 z-20 border-b bg-muted px-0.5 py-1 font-medium", i === 0 && "border-l", night(c, t) && "text-p3")}>
                 <button
                   type="button"
-                  title={`ติ๊ก / เอาติ๊กออก ${c.agency ? `${ownerLabel(c.agency)} ` : ""}${c.platform} ${t.start}–${t.end} ทุกวันตั้งแต่วันนี้${night(c, t) ? " (หลังเที่ยงคืน นับเป็นวันเดิม)" : ""}`}
+                  title={`ติ๊ก / เอาติ๊กออก ${c.agency ? `${ownerLabel(c.agency)} ` : ""}${platformLabel(c.platform)} ${t.start}–${t.end} ทุกวันตั้งแต่วันนี้${night(c, t) ? " (หลังเที่ยงคืน นับเป็นวันเดิม)" : ""}`}
                   onClick={() => onColumn(c.platform, t, c.agency ?? null)}
                   className="rounded px-1 text-[11px] leading-tight tabular-nums outline-none hover:bg-primary/10 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
                 >
@@ -1241,7 +1244,7 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
                         item={itemMap.get(ownKey(k, agency))}
                         other={liveAt.get(k)?.find((x) => x.agency !== agency)}
                         agency={agency}
-                        label={`${fmtDayNum(d)} ${c.agency ? `${ownerLabel(c.agency)} ` : ""}${c.platform} ${t.start}–${t.end}`}
+                        label={`${fmtDayNum(d)} ${c.agency ? `${ownerLabel(c.agency)} ` : ""}${platformLabel(c.platform)} ${t.start}–${t.end}`}
                         onClick={() => onToggle(d, c.platform, t, agency)}
                       />
                     </td>
@@ -1388,11 +1391,17 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
           <div className="space-y-4">
             <div>
               <Label htmlFor={ids.platform} className="mb-1.5 font-semibold">แพลตฟอร์ม</Label>
-              <Input id={ids.platform} list="plan-platforms" value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="เช่น Shopee, TikTok" />
+              <Input
+                id={ids.platform}
+                list="plan-platforms"
+                value={platformLabel(platform)}
+                onChange={(e) => setPlatform(platformRaw(e.target.value))}
+                placeholder="เช่น Shopee, TikTok"
+              />
               {platforms.length > 1 ? (
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {platforms.slice(0, 6).map((p) => (
-                    <Button key={p} size="xs" variant={p === platform ? "default" : "outline"} onClick={() => setPlatform(p)}>{p}</Button>
+                    <Button key={p} size="xs" variant={p === platform ? "default" : "outline"} onClick={() => setPlatform(p)}>{platformLabel(p)}</Button>
                   ))}
                 </div>
               ) : null}
@@ -1525,7 +1534,9 @@ function RangeSummary({ month, items, tagIndex }: { month: string; items: Item[]
   const groups = new Map<string, { label: string; platform: string; agency: string | null; list: Item[] }>();
   for (const x of inRange) {
     const k = `${x.platform}|${x.agency ?? ""}`;
-    const g = groups.get(k) ?? { label: x.agency ? `${x.platform} › ${ownerLabel(x.agency)}` : x.platform, platform: x.platform, agency: x.agency, list: [] };
+    const g = groups.get(k) ?? {
+      label: x.agency ? `${platformLabel(x.platform)} › ${ownerLabel(x.agency)}` : platformLabel(x.platform), platform: x.platform, agency: x.agency, list: [],
+    };
     g.list.push(x);
     groups.set(k, g);
   }
@@ -1652,7 +1663,7 @@ function CampaignPanel({ month, items, platforms, ranges, choices, onApply, onRe
             <SelectTrigger aria-label="แพลตฟอร์ม" className="w-auto min-w-36"><SelectValue /></SelectTrigger>
             <SelectContent position="popper">
               <SelectItem value={ALL}>ทุกแพลตฟอร์ม</SelectItem>
-              {platforms.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+              {platforms.map((p) => <SelectItem key={p} value={p}>{platformLabel(p)}</SelectItem>)}
             </SelectContent>
           </Select>
           <Input
@@ -1680,7 +1691,7 @@ function CampaignPanel({ month, items, platforms, ranges, choices, onApply, onRe
             <span className="text-xs text-muted-foreground">ช่วงที่ตั้งไว้:</span>
             {ranges.map((r, i) => (
               <Badge key={i} variant="secondary" className="gap-1 pr-1 text-xs">
-                {r.campaign} · {fmtRange(r)}{r.platform !== ALL ? ` · ${r.platform}` : ""}
+                {r.campaign} · {fmtRange(r)}{r.platform !== ALL ? ` · ${platformLabel(r.platform)}` : ""}
                 <button type="button" aria-label={`เลิกใช้ช่วง ${r.campaign}`} onClick={() => onRemove(i)} className="rounded-full p-0.5 hover:bg-foreground/10">
                   <XIcon className="size-3" />
                 </button>
@@ -1798,7 +1809,14 @@ function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemove
         <div className={readOnly ? "hidden" : "rounded-lg border border-dashed p-3"}>
           <span className="mb-2 block font-semibold">เพิ่ม slot</span>
           <div className="grid gap-2 sm:grid-cols-2">
-            <Input id={ids.platform} list="plan-platforms" value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="แพลตฟอร์ม" aria-label="แพลตฟอร์ม" />
+            <Input
+              id={ids.platform}
+              list="plan-platforms"
+              value={platformLabel(platform)}
+              onChange={(e) => setPlatform(platformRaw(e.target.value))}
+              placeholder="แพลตฟอร์ม"
+              aria-label="แพลตฟอร์ม"
+            />
             <Input id={ids.campaign} list="plan-campaigns" value={campaign} onChange={(e) => setCampaign(e.target.value)} placeholder="Campaign (ไม่บังคับ)" aria-label="Campaign" />
             <div className="flex items-center gap-2 sm:col-span-2">
               <TimePicker value={start} onChange={setStart} aria-label="เวลาเริ่ม" className="flex-1" />

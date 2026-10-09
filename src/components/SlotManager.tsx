@@ -23,6 +23,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import type { OwnerScope } from "@/lib/types";
+import { platformLabel, platformRaw } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 type Side = {
@@ -121,7 +122,7 @@ export function SlotManager({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
 
   async function remove(slot: Slot) {
     const ok = await confirm({
-      title: `ลบ slot ${slot.platform} ${slot.start}–${slot.end} ?`,
+      title: `ลบ slot ${platformLabel(slot.platform)} ${slot.start}–${slot.end} ?`,
       description: "ลบทั้งในเว็บและแถวในชีต",
       confirmText: "ลบ slot",
       destructive: true,
@@ -201,7 +202,7 @@ export function SlotManager({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
                 )}
               >
                 <Checkbox checked={!hidden.includes(p)} onCheckedChange={() => togglePlatform(p)} className="size-3.5 bg-card" />
-                {p}
+                {platformLabel(p)}
               </Label>
             ))}
           </span>
@@ -615,7 +616,7 @@ function CreateDialog({ scope, defaultDate, platforms, onClose }: {
   onClose: (created: boolean) => void;
 }) {
   const toast = useToast();
-  const [platform, setPlatform] = useState(platforms[0] ?? "");
+  const [platform, setPlatform] = useState(platforms[0] ?? ""); // ชื่อในชีต (แสดงเป็นชื่อที่แสดง)
   const [from, setFrom] = useState(defaultDate);
   const [to, setTo] = useState(defaultDate);
   const [weekdays, setWeekdays] = useState<Set<number>>(new Set([0, 1, 2, 3, 4, 5, 6]));
@@ -675,8 +676,8 @@ function CreateDialog({ scope, defaultDate, platforms, onClose }: {
       <DialogBody className="space-y-4 text-sm">
         <div>
           <Label htmlFor={platformId} className="mb-1.5 font-semibold">แพลตฟอร์ม</Label>
-          <Input id={platformId} list="platform-list" value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="เช่น Shopee, TikTok" />
-          <datalist id="platform-list">{platforms.map((p) => <option key={p} value={p} />)}</datalist>
+          <Input id={platformId} list="platform-list" value={platformLabel(platform)} onChange={(e) => setPlatform(platformRaw(e.target.value))} placeholder="เช่น Shopee, TikTok" />
+          <datalist id="platform-list">{platforms.map((p) => <option key={p} value={platformLabel(p)} />)}</datalist>
         </div>
 
         <div>

@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
 import { syncProofsToDrive, trashUnusedDriveFiles } from "@/lib/drive";
+import { withPlatformLabels } from "@/lib/platform";
 import {
   PROOF_BUCKET, asEditor, canEditAll, canEditProofs, canSeeAll, canUseProofs, parseGmvEntries, proofSlots, removeOrphanProofs, resolveGmv, saveGmv,
 } from "@/lib/proofs";
@@ -50,7 +51,8 @@ export async function GET(request: Request) {
     // slot ที่แก้ได้: จัดการได้ = ทุก slot / Admin = slot ของตัวเอง / ดูได้อย่างเดียว = ไม่มี
     const editAll = canEditAll(r.me);
     const editable = editAll ? null : canEditProofs(r.me) ? (await proofSlots(asEditor(r.me), date, date)).map((s) => s.mcSlotId) : [];
-    return ok({ date, all: canSeeAll(r.me), canEdit: canEditProofs(r.me), editable, slots });
+    // ชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
+    return ok({ date, all: canSeeAll(r.me), canEdit: canEditProofs(r.me), editable, slots: withPlatformLabels(slots) });
   }
 
   const { key, first, last } = monthRange(sp.get("month"));

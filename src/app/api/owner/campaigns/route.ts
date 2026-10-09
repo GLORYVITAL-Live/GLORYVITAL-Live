@@ -1,5 +1,6 @@
 import { fail, ok, requireOwner } from "@/lib/api";
 import { campaignReport } from "@/lib/campaign-report";
+import { withPlatformLabels } from "@/lib/platform";
 
 // รายงานแคมเปญทีละรอบ (?from=YYYY-MM&to=YYYY-MM ไม่เกิน 12 เดือน) — Owner ฝั่ง Mc
 export async function GET(request: Request) {
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
   const months = (+to.slice(0, 4) - +from.slice(0, 4)) * 12 + (+to.slice(5, 7) - +from.slice(5, 7)) + 1;
   if (months > 12) return fail("เลือกได้ไม่เกิน 12 เดือน");
   try {
-    return ok({ report: await campaignReport(from, to) });
+    return ok({ report: withPlatformLabels(await campaignReport(from, to)) });
   } catch (err) {
     return fail((err as Error).message, 500);
   }

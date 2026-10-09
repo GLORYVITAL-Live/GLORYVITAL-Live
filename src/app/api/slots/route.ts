@@ -1,4 +1,5 @@
 import { fail, ok, requireMe } from "@/lib/api";
+import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, openAdminSlots, openMcSlots, scheduleNotice } from "@/lib/data";
 
 // หน้าแรก: ประกาศ + slot ที่ว่าง (?role=mc | admin) — แทน action "init" / "adminInit"
@@ -31,6 +32,7 @@ export async function GET(request: Request) {
   return ok({
     siteNotice: settings.site_notice,
     scheduleNotice: scheduleNotice(settings, role, personId),
-    slots: role === "mc" ? await openMcSlots(settings, personId) : await openAdminSlots(settings, personId),
+    // ชื่อช่องที่แสดง (เช่น GLORY MALL -> GLORY VITAL) ชีตยังใช้ชื่อเดิม
+    slots: withPlatformLabels(role === "mc" ? await openMcSlots(settings, personId) : await openAdminSlots(settings, personId)),
   });
 }

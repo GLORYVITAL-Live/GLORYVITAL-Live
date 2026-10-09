@@ -1,6 +1,7 @@
 import "server-only";
 import { slotPlatformOf } from "@/lib/campaign-data";
 import { fetchAll } from "@/lib/data";
+import { platformLabel } from "@/lib/platform";
 import { crewKey, type LiveCrew } from "@/lib/live-stats";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -97,7 +98,7 @@ export async function liveCrew(fromMs: number, toMs: number): Promise<Record<str
     if (!hits.length) {
       out[key] = empty(platform === "Shopee"
         ? "ไม่พบ slot Shopee ในเวลานี้ (Shopee ลงตารางในแท็บ MC Shopee / แพลน Shopee ในหน้า Plan Slot Live)"
-        : `ไม่พบ slot ${platform} ในเวลานี้`);
+        : `ไม่พบ slot ${platformLabel(platform)} ในเวลานี้`);
       continue;
     }
     const ours = hits.filter((h) => h.admin !== null);

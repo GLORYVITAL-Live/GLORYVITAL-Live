@@ -2,6 +2,7 @@ import "server-only";
 import { google } from "googleapis";
 import { fmtDayLong, parseKey } from "@/lib/format";
 import { googleAuth } from "@/lib/google";
+import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -131,14 +132,14 @@ export async function cancelMail(c: CancelInfo) {
     day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok",
   }).format(at);
 
-  const subject = `${urgent ? "[ด่วน] " : ""}ยกเลิกคิว ${who} · ${day} ${time} ${s.platform}`;
+  const subject = `${urgent ? "[ด่วน] " : ""}ยกเลิกคิว ${who} · ${day} ${time} ${platformLabel(s.platform)}`;
   const row = (k: string, v: string, strong = false) =>
     `<tr><td style="padding:4px 12px 4px 0;color:#6b5560;white-space:nowrap">${esc(k)}</td><td style="padding:4px 0;${strong ? "font-weight:700" : ""}">${esc(v)}</td></tr>`;
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#2a1a22;line-height:1.5">
 <p style="margin:0 0 12px"><b>${esc(who)}</b> (${roleLabel}) กดยกเลิกคิวผ่านเว็บ${urgent ? ` <span style="color:#c0262d;font-weight:700">— เหลือเวลาก่อนไลฟ์ไม่ถึง ${URGENT_HOURS} ชม.</span>` : ""}</p>
 <table style="border-collapse:collapse;margin:0 0 12px">
 ${row("คิว", `${day} ${time}`, true)}
-${row("แพลตฟอร์ม", s.platform, true)}
+${row("แพลตฟอร์ม", platformLabel(s.platform), true)}
 ${row("ยกเลิกเมื่อ", `${stamp} (ก่อนไลฟ์ ${leadText(before)})`)}
 ${row("คู่ไลฟ์", pairText)}
 ${row("อีเมลผู้ยกเลิก", c.email)}

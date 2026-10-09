@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { canTable, fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
+import { platformRaw } from "@/lib/platform";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -119,7 +120,8 @@ export async function POST(request: Request) {
   const r = await requireOwner();
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
-  const platform = String(body?.platform ?? "").trim();
+  // พิมพ์ชื่อที่แสดง (เช่น GLORY VITAL) = บันทึกเป็นชื่อในชีต (GLORY MALL)
+  const platform = platformRaw(String(body?.platform ?? "").trim());
   const dates: string[] = Array.isArray(body?.dates) ? [...new Set<string>(body.dates.map(String))] : [];
   const times: { start: string; end: string }[] = Array.isArray(body?.times) ? body.times : [];
   const extraAdmin = !!body?.extraAdmin;

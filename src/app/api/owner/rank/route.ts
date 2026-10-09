@@ -1,5 +1,6 @@
 import { fail, ok, requireOwner } from "@/lib/api";
 import { rankReport } from "@/lib/campaign-report";
+import { withPlatformLabels } from "@/lib/platform";
 import type { RankPeriod } from "@/lib/mc-rank";
 
 // อันดับ Mc ตามช่วง (?period=month|30|90&month=YYYY-MM) — Owner ฝั่ง Mc
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
   const month = sp.get("month") ?? new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 7);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail("เดือนไม่ถูกต้อง");
   try {
-    return ok({ report: await rankReport(period, month) });
+    return ok({ report: withPlatformLabels(await rankReport(period, month)) });
   } catch (err) {
     return fail((err as Error).message, 500);
   }

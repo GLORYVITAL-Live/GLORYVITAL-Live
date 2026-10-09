@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { platformRaw } from "@/lib/platform";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
 import { canonicalCampaign } from "@/lib/campaign";
 import { deleteSheetRows } from "@/lib/sheet-sync";
@@ -157,7 +158,8 @@ export async function POST(request: Request) {
   // mcId = ลงชื่อ Mc ไว้เลยตอนสร้าง (Mc ประจำ) ไม่ระบุ = slot ว่างเปิดให้ Mc จอง
   const create: { date: string; platform: string; start: string; end: string; campaign: string; mcId: number | null }[] = [];
   for (const x of Array.isArray(body?.create) ? body.create : []) {
-    const platform = String(x?.platform ?? "").trim().slice(0, 60);
+    // พิมพ์ชื่อที่แสดง (เช่น GLORY VITAL) = บันทึกเป็นชื่อในชีต (GLORY MALL)
+    const platform = platformRaw(String(x?.platform ?? "").trim().slice(0, 60));
     const date = String(x?.date ?? "");
     const start = String(x?.start ?? "");
     const end = String(x?.end ?? "");
@@ -174,7 +176,7 @@ export async function POST(request: Request) {
   const agencyCreate: { agency: string; platform: string; live_date: string; start_time: string; end_time: string; created_by: string }[] = [];
   for (const x of Array.isArray(body?.agencyCreate) ? body.agencyCreate : []) {
     const agency = cleanAgency(x?.agency);
-    const platform = String(x?.platform ?? "").trim().slice(0, 60);
+    const platform = platformRaw(String(x?.platform ?? "").trim().slice(0, 60));
     const start = String(x?.start ?? "");
     const end = String(x?.end ?? "");
     if (!agency || !platform || !DATE_RE.test(String(x?.date ?? "")) || !TIME_RE.test(start) || !TIME_RE.test(end) || start === end) {

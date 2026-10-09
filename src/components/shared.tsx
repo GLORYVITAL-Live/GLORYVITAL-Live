@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useState, type ComponentProps, type ReactNode } from "react";
 import { toast as sonner } from "sonner";
 import { ChevronLeftIcon, ChevronRightIcon, InfoIcon, TriangleAlertIcon } from "lucide-react";
+import { platformLabel } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -153,7 +154,8 @@ export const TAG_COLORS = [
 ];
 
 export function PlatformBadge({ name, index, className }: { name: string; index: number; className?: string }) {
-  return <Badge className={cn("font-semibold", TAG_COLORS[index % 4], className)}>{name}</Badge>;
+  // ชื่อช่องที่แสดง (เช่น GLORY MALL -> GLORY VITAL) ชีตยังใช้ชื่อเดิม
+  return <Badge className={cn("font-semibold", TAG_COLORS[index % 4], className)}>{platformLabel(name)}</Badge>;
 }
 
 /** กล่องว่าง / ข้อความแจ้ง (เช่น ยังไม่มีข้อมูล) */

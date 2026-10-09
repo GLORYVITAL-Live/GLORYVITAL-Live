@@ -1,5 +1,6 @@
 import { fail, ok, requireOwner } from "@/lib/api";
 import { ownerHome } from "@/lib/home";
+import { withPlatformLabels } from "@/lib/platform";
 
 // หน้าแรกของเจ้าของ (งานค้าง) — เฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์
 export async function GET() {
@@ -7,7 +8,7 @@ export async function GET() {
   if ("res" in r) return r.res;
   const see = r.me.owner!.see;
   try {
-    return ok({ home: await ownerHome({ mc: see.mc, admin: see.admin, proofs: see.mc || see.proofs }) });
+    return ok({ home: withPlatformLabels(await ownerHome({ mc: see.mc, admin: see.admin, proofs: see.mc || see.proofs })) });
   } catch (err) {
     return fail((err as Error).message, 500);
   }
