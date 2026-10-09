@@ -85,8 +85,8 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     out.commit_tiers = tiers;
   }
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
-  // Mc ประจำ (เงินเดือน) = ไม่ต้องแนบหลักฐานไลฟ์
-  if (role === "mc" && (!partial || "is_salaried" in body)) out.is_salaried = !!body.is_salaried;
+  // Mc ประจำ / Admin ประจำ (เงินเดือน) = ไม่คิดค่าจ้างรายชั่วโมง (Mc ประจำ ไม่ต้องแนบหลักฐานไลฟ์ด้วย)
+  if (role !== "owner" && (!partial || "is_salaried" in body)) out.is_salaried = !!body.is_salaried;
   if (role === "owner") {
     if (!partial || "can_manage_mc" in body) out.can_manage_mc = body.can_manage_mc !== false;
     if (!partial || "can_manage_admin" in body) out.can_manage_admin = body.can_manage_admin !== false;

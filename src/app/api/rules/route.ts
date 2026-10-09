@@ -23,9 +23,10 @@ export async function GET(request: Request) {
   let rate = 0, hasCommit = false;
   const person = role === "mc" ? r.me.mc : r.me.admin;
   if (person) {
-    const { data } = await createAdminClient().from("staff").select("hourly_rate, commit_tiers").eq("id", person.id).maybeSingle();
-    rate = Number(data?.hourly_rate) || Number(role === "mc" ? s.default_mc_rate : s.default_admin_rate) || 0;
-    hasCommit = cleanTiers(data?.commit_tiers).length > 0;
+    const { data } = await createAdminClient().from("staff").select("hourly_rate, commit_tiers, is_salaried").eq("id", person.id).maybeSingle();
+    // Mc ประจำ / Admin ประจำ (เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง
+    rate = data?.is_salaried ? 0 : Number(data?.hourly_rate) || Number(role === "mc" ? s.default_mc_rate : s.default_admin_rate) || 0;
+    hasCommit = !data?.is_salaried && cleanTiers(data?.commit_tiers).length > 0;
   }
 
   return ok({

@@ -164,6 +164,8 @@ export type ProofSlot = {
  */
 export type OwnerPerson = {
   name: string; slots: number; hours: number; paidHours: number; lateSlots: number; bonusMinutes: number; days: number; cancelled: number;
+  /** Mc ประจำ / Admin ประจำ (ได้เงินเดือน) = ไม่คิดค่าจ้างรายชั่วโมง และไม่อยู่ในไฟล์เบิก */
+  salaried?: boolean;
   /** Commit แบบเทียร์ (null = ไม่มี) tier = เทียร์ที่เดือนนี้จองถึง (null = ยังไม่ถึงเทียร์แรก ใช้ baseRate) */
   commit: { tiers: CommitTier[]; baseRate: number; tier: CommitTier | null; next: CommitTier | null } | null;
 };

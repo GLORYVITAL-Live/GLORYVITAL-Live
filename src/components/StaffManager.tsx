@@ -189,7 +189,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                 <span className="flex flex-wrap items-center gap-1.5 font-semibold">
                   {displayName(p)}
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
-                  {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">Mc ประจำ</Badge> : null}
+                  {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">{p.role === "mc" ? "Mc" : "Admin"} ประจำ</Badge> : null}
                   {p.role === "owner" ? permBadges(p).map((b) => (
                     <Badge key={b} className={cn("text-[11px]", b.startsWith("ดู") ? "bg-muted text-muted-foreground" : "bg-p2/15 text-p2")}>{b}</Badge>
                   )) : null}
@@ -436,8 +436,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
             <Field label="เบอร์โทร" hint="แสดงในปฏิทินของคู่ไลฟ์ (Mc เห็นเบอร์ Admin / Admin เห็นเบอร์ Mc)">
               {(id) => <Input id={id} type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />}
             </Field>
-            <Field label="ค่าจ้างต่อชั่วโมง (บาท)">
-              {(id) => <Input id={id} inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="ว่าง = ใช้ค่าเริ่มต้น" />}
+            <Field label="ค่าจ้างต่อชั่วโมง (บาท)" hint={salaried ? `${role === "mc" ? "Mc" : "Admin"} ประจำ (เงินเดือน) ไม่ต้องใส่ ระบบไม่คิดค่าจ้างรายชั่วโมง` : null}>
+              {(id) => <Input id={id} inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder={salaried ? "ไม่ต้องใส่" : "ว่าง = ใช้ค่าเริ่มต้น"} />}
             </Field>
             <div>
               <span className="mb-1.5 block font-semibold">Commit แบบขั้น (ไม่บังคับ)</span>
@@ -473,20 +473,26 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           </>
         ) : null}
 
+        {/* Admin เสริม กับ Admin ประจำ เลือกได้อย่างเดียว */}
         {role === "admin" ? (
           <Label className="leading-snug font-normal">
-            <Checkbox checked={extra} onCheckedChange={(v) => setExtra(v === true)} />
+            <Checkbox checked={extra} onCheckedChange={(v) => { setExtra(v === true); if (v === true) setSalaried(false); }} />
             Admin เสริม (รับคิวและยกเลิกคิวผ่านเว็บได้เอง)
           </Label>
         ) : null}
 
-        {role === "mc" ? (
+        {role !== "owner" ? (
           <Label className="items-start leading-snug font-normal">
-            <Checkbox checked={salaried} onCheckedChange={(v) => setSalaried(v === true)} className="mt-0.5" />
+            <Checkbox
+              checked={salaried}
+              onCheckedChange={(v) => { setSalaried(v === true); if (v === true) setExtra(false); }}
+              className="mt-0.5"
+            />
             <span>
-              Mc ประจำ (พนักงานประจำ ได้เงินเดือน)
+              {role === "mc" ? "Mc" : "Admin"} ประจำ (พนักงานประจำ ได้เงินเดือน)
               <span className="block text-xs text-muted-foreground">
-                ไม่ต้องแนบหลักฐานไลฟ์ — slot ของคนนี้จะไม่ขึ้นในหน้าหลักฐานไลฟ์ และสรุปรายเดือนแสดง &quot;ไม่ต้องแนบ&quot;
+                ไม่ต้องใส่ค่าจ้าง — ไม่คิดค่าจ้างรายชั่วโมงในสรุปรายเดือน และไม่อยู่ในไฟล์เบิก
+                {role === "mc" ? <> · ไม่ต้องแนบหลักฐานไลฟ์ (slot ของคนนี้ไม่ขึ้นในหน้าหลักฐานไลฟ์)</> : null}
               </span>
             </span>
           </Label>

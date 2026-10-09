@@ -16,8 +16,13 @@ import { cn } from "@/lib/utils";
 
 type Type = "Mc" | "Admin";
 
-/** อัตราค่าจ้างต่อชั่วโมง: รายคน ถ้าไม่มีใช้ค่าเริ่มต้น */
+/** คนนี้เป็น Mc ประจำ / Admin ประจำ (ได้เงินเดือน) */
+const salariedOf = (data: OwnerSummary, type: Type, name: string) =>
+  !!(type === "Mc" ? data.mc : data.admin).find((p) => p.name === name)?.salaried;
+
+/** อัตราค่าจ้างต่อชั่วโมง: รายคน ถ้าไม่มีใช้ค่าเริ่มต้น / พนักงานประจำ (เงินเดือน) = 0 */
 function rateOf(data: OwnerSummary, type: Type, name: string) {
+  if (salariedOf(data, type, name)) return 0;
   const own = type === "Mc" ? data.rates.mc : data.rates.admin;
   return own[name] || (type === "Mc" ? data.rates.defaultMc : data.rates.defaultAdmin) || 0;
 }
@@ -117,7 +122,7 @@ function summaryBook(data: OwnerSummary) {
       need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "ไม่ต้องแนบ",
       gmv.count ? round2(gmv.total) : "", gmvPerHour(items),
       round2(items.filter((d) => d.campaign).reduce((a, d) => a + d.hours, 0)) || "",
-      r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : "",
+      r.paidHours, commit, rate || (r.salaried ? "เงินเดือน" : ""), rate ? Math.round(r.paidHours * rate) : "",
     ]);
   }
   return book(`GLORY สรุป ${data.month}`, "สรุป", payHiddenAll(data) ? dropCols(rows, [13, 14, 15]) : rows);
@@ -205,7 +210,7 @@ const claimRemark = (d: OwnerDetail) => [
 
 /**
  * สรุปรายละเอียดชั่วโมงทำงาน (รายคน): หัวเรื่องแถบดำ / แถวละคิว ช่อง channel ใส่สีตามช่อง / แถวสุดท้ายของแต่ละคน = Total + GMV
- *   เฉพาะคนที่มีค่าจ้างรายชั่วโมง (Mc ประจำที่ได้เงินเดือนไม่อยู่ในไฟล์เบิก)
+ *   เฉพาะคนที่มีค่าจ้างรายชั่วโมง (Mc ประจำ / Admin ประจำ ที่ได้เงินเดือนไม่อยู่ในไฟล์เบิก)
  */
 function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
   const [y, m] = data.month.split("-").map(Number);
@@ -215,6 +220,7 @@ function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
     .filter((x) => x.items.length && x.rate > 0)
     .sort((a, b) => a.p.name.localeCompare(b.p.name, "th"));
   const skipped = (type === "Mc" ? data.mc : data.admin).filter((p) => !rateOf(data, type, p.name) && slotsOf(data, type, p.name).length);
+  const salaried = skipped.filter((p) => p.salaried), noRate = skipped.filter((p) => !p.salaried);
   if (!people.length) return null;
   const channels = new Set(people.flatMap((x) => x.items.map((d) => d.platform)));
   const where = channels.has("Shopee") && channels.size > 1 ? "Tiktok / Shopee" : channels.has("Shopee") ? "Shopee" : "Tiktok";
@@ -250,7 +256,9 @@ function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
   }
   rowStyles[rows.length] = { bg: "F3F3F3", bold: true, border: true };
   rows.push(["", `รวม ${type} ทั้งหมด`, `${people.length} คน`, "", "", "", "", round2(grandHours), "", "", { v: grand, f: "money" }, grandGmv ? { v: round2(grandGmv), f: "money" } : null, ""]);
-  if (skipped.length) rows.push([], ["", `ไม่อยู่ในไฟล์เบิก (ไม่มีค่าจ้างรายชั่วโมง เช่น Mc ประจำ): ${skipped.map((p) => p.name).join(", ")}`]);
+  if (skipped.length) rows.push([]);
+  if (salaried.length) rows.push(["", `ไม่อยู่ในไฟล์เบิก (${type} ประจำ ได้เงินเดือน): ${salaried.map((p) => p.name).join(", ")}`]);
+  if (noRate.length) rows.push(["", `ไม่อยู่ในไฟล์เบิก (ยังไม่ได้ตั้งค่าจ้างรายชั่วโมง): ${noRate.map((p) => p.name).join(", ")}`]);
   return {
     name: `รายคน ${type}`, rows, header: 1, rowStyles, cellStyles,
     colWidths: [12, 14, 14, 14, 10, 10, 12, 10, 12, 12, 13, 16, 26],
@@ -509,6 +517,11 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                   <TableCell className={cn("px-3", STICKY_CELL)}>
                     <ChevronRightIcon className={cn("mr-0.5 inline size-4 text-muted-foreground transition-transform", isOpen && "rotate-90 text-primary")} />
                     {r.name}
+                    {r.salaried ? (
+                      <Badge title={`${type} ประจำ (ได้เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง และไม่อยู่ในไฟล์เบิก`} className="ml-1.5 bg-p2/15 text-[11px] text-p2">
+                        ประจำ
+                      </Badge>
+                    ) : null}
                     {r.commit ? (
                       <Badge
                         title={`Commit: ${tiersLabel(r.commit.baseRate, r.commit.tiers)} (ทุกชั่วโมงของเดือนคิดราคาเทียร์ที่จองถึง)`}
@@ -552,7 +565,11 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                   >
                     {gmv.count ? fmtGmv(gmv.total) : "–"}
                   </TableCell>
-                  {showPay ? <TableCell className={cn(num_, "px-3")}>{rate ? money(r.paidHours * rate) : "–"}</TableCell> : null}
+                  {showPay ? (
+                    <TableCell className={cn(num_, "px-3", r.salaried && "text-xs text-muted-foreground")}>
+                      {r.salaried ? "เงินเดือน" : rate ? money(r.paidHours * rate) : "–"}
+                    </TableCell>
+                  ) : null}
                 </TableRow>
                 {isOpen ? (
                   <TableRow className="bg-secondary hover:bg-secondary">

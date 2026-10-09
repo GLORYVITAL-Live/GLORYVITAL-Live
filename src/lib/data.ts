@@ -435,13 +435,15 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
     return [...people.entries()]
       .map(([name, p]) => {
         // ค่าจ้าง/ชม. ของเดือนนี้: รายคน (ไม่ตั้ง = ค่าเริ่มต้น) แล้วดูเทียร์ Commit จากชั่วโมงที่จองทั้งเดือน
+        // Mc ประจำ / Admin ประจำ (เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง
         const info = persons.get(`${type}|${name}`);
-        const base = Number(info?.hourly_rate) || defaultRate;
-        const m = monthRate(base, cleanTiers(info?.commit_tiers), p.hours);
+        const salaried = !!info?.is_salaried;
+        const base = salaried ? 0 : Number(info?.hourly_rate) || defaultRate;
+        const m = monthRate(base, salaried ? [] : cleanTiers(info?.commit_tiers), p.hours);
         if (m.rate) (type === "Mc" ? rates.mc : rates.admin)[name] = m.rate;
         return {
           name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, bonusMinutes: p.bonus,
-          days: p.days.size, cancelled: p.cancelled,
+          days: p.days.size, cancelled: p.cancelled, salaried,
           commit: m.hasCommit ? { tiers: m.tiers, baseRate: base, tier: m.tier, next: m.next } : null,
         };
       })

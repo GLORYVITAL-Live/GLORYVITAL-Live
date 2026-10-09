@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   const [settings, items, staff] = await Promise.all([
     getSettings(),
     mySlots(role as "mc" | "admin", person.id, first, last),
-    createAdminClient().from("staff").select("name, email, phone, hourly_rate, commit_tiers").eq("id", person.id).single(),
+    createAdminClient().from("staff").select("name, email, phone, hourly_rate, commit_tiers, is_salaried").eq("id", person.id).single(),
   ]);
   if (staff.error) return fail(staff.error.message, 500);
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
@@ -34,8 +34,9 @@ export async function GET(request: Request) {
       name: role === "mc" ? `Mc ${staff.data.name}` : staff.data.name,
       email: staff.data.email ?? r.me.email,
       phone: staff.data.phone ?? "",
-      rate: Number(staff.data.hourly_rate) || defaultRate,
-      commitTiers: cleanTiers(staff.data.commit_tiers),
+      // Mc ประจำ / Admin ประจำ (เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง
+      rate: staff.data.is_salaried ? 0 : Number(staff.data.hourly_rate) || defaultRate,
+      commitTiers: staff.data.is_salaried ? [] : cleanTiers(staff.data.commit_tiers),
     },
   });
 }
