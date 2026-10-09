@@ -11,7 +11,10 @@ import { createAdminClient } from "@/lib/supabase/server";
  *   แล้วอัปเดต GOOGLE_REFRESH_TOKEN ใน Vercel — ยังไม่อนุญาต = ไม่ส่ง (งานอื่นทำงานปกติ)
  */
 
-/** กล่องเมลที่รับแจ้งเตือนยกเลิกคิว */
+/**
+ * กล่องเมลของบัญชีระบบ: ใช้ส่งเมลทดสอบ (bun run mail:test) และใช้แทนผู้รับเมื่อยังไม่ได้รัน SQL 20261020000000_notify_cancel
+ * ผู้รับจริงตั้งในหน้าพนักงาน > Owner > "รับอีเมลแจ้งยกเลิกคิว" (staff.notify_cancel_mc / notify_cancel_admin)
+ */
 export const NOTIFY_TO = "kunraroj.d@glorythailand.com";
 const SITE = "https://glory-vital-live.vercel.app";
 /** ยกเลิกก่อนไลฟ์ไม่ถึงกี่ชั่วโมง = ขึ้น [ด่วน] ที่หัวเรื่อง */
@@ -21,12 +24,13 @@ const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const hm = (t: string) => String(t).slice(0, 5);
 
-/** ส่งอีเมล HTML (หัวเรื่องภาษาไทยได้) จากบัญชีระบบ · ส่งไม่ได้ = คืน false ไม่ throw */
-export async function sendMail(to: string, subject: string, html: string) {
+/** ส่งอีเมล HTML (หัวเรื่องภาษาไทยได้) จากบัญชีระบบ ถึงผู้รับหลายคนในฉบับเดียว · ส่งไม่ได้ = คืน false ไม่ throw */
+export async function sendMail(to: string | string[], subject: string, html: string) {
   const auth = googleAuth();
-  if (!auth) return false;
+  const list = (Array.isArray(to) ? to : [to]).filter(Boolean);
+  if (!auth || !list.length) return false;
   const mime = [
-    `To: ${to}`,
+    `To: ${list.join(", ")}`,
     `Subject: =?UTF-8?B?${b64(subject)}?=`,
     "MIME-Version: 1.0",
     "Content-Type: text/html; charset=UTF-8",
@@ -63,12 +67,34 @@ type CancelInfo = { role: "mc" | "admin"; name: string; email: string; slotId: n
  */
 export async function notifyCancel(c: CancelInfo) {
   try {
+    const to = await cancelRecipients(c.role);
+    if (!to.length) return false; // ไม่มีใครตั้งรับเมลฝั่งนี้
     const mail = await cancelMail(c);
-    return mail ? await sendMail(NOTIFY_TO, mail.subject, mail.html) : false;
+    return mail ? await sendMail(to, mail.subject, mail.html) : false;
   } catch (err) {
     console.error("แจ้งเตือนยกเลิกคิวไม่สำเร็จ:", err);
     return false;
   }
+}
+
+/**
+ * ผู้รับเมลแจ้งยกเลิกของฝั่งนี้: Owner ที่ติ๊ก "รับอีเมลแจ้งยกเลิกคิว" ฝั่งนั้น มีอีเมล และยังมีสิทธิ์ฝั่งนั้น (ดูได้ / จัดการได้)
+ *   ยังไม่ได้รัน SQL 20261020000000_notify_cancel = ส่งเข้ากล่องเมลระบบ (NOTIFY_TO) เหมือนเดิม
+ */
+export async function cancelRecipients(role: "mc" | "admin") {
+  type Row = { email: string | null; can_manage: boolean | null; can_view: boolean | null };
+  const { data, error } = await createAdminClient().from("staff")
+    .select(`email, can_manage:can_manage_${role}, can_view:can_view_${role}`)
+    .eq("role", "owner").eq(`notify_cancel_${role}`, true)
+    .overrideTypes<Row[], { merge: false }>();
+  if (error) {
+    if (!/notify_cancel/.test(error.message)) console.error("อ่านผู้รับเมลแจ้งยกเลิกไม่สำเร็จ:", error.message);
+    return [NOTIFY_TO];
+  }
+  // สิทธิ์ฝั่งนี้: จัดการได้ (ค่าว่าง = จัดการได้ ตาม src/lib/auth.ts) หรือดูได้
+  const emails = (data ?? []).filter((r) => r.email && (r.can_manage !== false || r.can_view === true))
+    .map((r) => r.email!.trim().toLowerCase());
+  return [...new Set(emails)];
 }
 
 /** หัวเรื่อง + เนื้อหาอีเมลแจ้งยกเลิกคิว (null = ไม่พบ slot) */

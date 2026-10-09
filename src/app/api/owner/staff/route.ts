@@ -11,6 +11,7 @@ import type { Me } from "@/lib/types";
 //   GET     รายชื่อทั้งหมด + จำนวนคิวตั้งแต่วันนี้
 //   POST    เพิ่มคน
 //   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Commit / Admin เสริม / Mc ประจำ / สิทธิ์ Owner (Mc / Admin / หลักฐานไลฟ์ / Data analytics / Plan Slot Live)
+//           / รับอีเมลแจ้งยกเลิกคิว (Owner)
 //   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
 // สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
 //         รายชื่อและสิทธิ์ของ Owner จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
@@ -27,6 +28,8 @@ const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Own
 const requireOwner = (access: Access = "write") => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน", access);
 /** สิทธิ์ "ดูได้อย่างเดียว" ของ Owner (บันทึกเฉพาะตอนส่งมา ยังไม่ได้รัน SQL = ไม่แตะ) */
 const VIEW_FIELDS = ["can_view_mc", "can_view_admin", "can_view_proofs", "can_view_plan", "analytics_readonly"] as const;
+/** รับอีเมลแจ้งเมื่อ Mc / Admin เสริมกดยกเลิกคิว (SQL 20261020000000_notify_cancel) — ไม่ใช่สิทธิ์ ตั้งให้ตัวเองได้ */
+const NOTIFY_FIELDS = ["notify_cancel_mc", "notify_cancel_admin"] as const;
 type Scope = { mc: boolean; admin: boolean; full: boolean };
 const canRole = (scope: Scope, role: Role) => (role === "owner" ? scope.full : scope[role]);
 const noRole = (role: Role) =>
@@ -95,6 +98,7 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     if ("can_plan_slots" in body) out.can_plan_slots = body.can_plan_slots === true;
     // ดูได้อย่างเดียว (SQL 20261018000000_view_only)
     for (const k of VIEW_FIELDS) if (k in body) out[k] = body[k] === true;
+    for (const k of NOTIFY_FIELDS) if (k in body) out[k] = body[k] === true;
   }
   return { data: out };
 }
@@ -109,12 +113,14 @@ const hasAnyPerm = (pick: (k: string) => unknown) =>
  *   20261018000000_view_only = สิทธิ์ดูได้อย่างเดียว / 20261017000000_plan_slots = can_plan_slots
  */
 async function withPlanCol<T>(run: (extra: string) => PromiseLike<{ data: T; error: { message: string } | null }>) {
-  let res = await run(`, can_plan_slots, ${VIEW_COLS}`);
+  let res = await run(`, can_plan_slots, ${VIEW_COLS}, ${NOTIFY_FIELDS.join(", ")}`);
+  if (res.error && /notify_cancel/.test(res.error.message)) res = await run(`, can_plan_slots, ${VIEW_COLS}`);
   if (res.error && VIEW_COL_RE.test(res.error.message)) res = await run(", can_plan_slots");
   return res.error && /can_plan_slots/.test(res.error.message) ? run("") : res;
 }
 const needViewSql = (msg: string) =>
-  VIEW_COL_RE.test(msg) ? "ต้องรัน SQL 20261018000000_view_only ใน Supabase ก่อน ถึงจะตั้งสิทธิ์แบบดูได้อย่างเดียวได้" : msg;
+  /notify_cancel/.test(msg) ? "ต้องรัน SQL 20261020000000_notify_cancel ใน Supabase ก่อน ถึงจะตั้งรับอีเมลแจ้งยกเลิกได้"
+    : VIEW_COL_RE.test(msg) ? "ต้องรัน SQL 20261018000000_view_only ใน Supabase ก่อน ถึงจะตั้งสิทธิ์แบบดูได้อย่างเดียวได้" : msg;
 const noPlanGrant = () => fail("ติ๊ก / เอาสิทธิ์ Plan Slot Live ออกได้เฉพาะคนที่มีสิทธิ์นี้", 403);
 
 const dupMessage = (msg: string) =>

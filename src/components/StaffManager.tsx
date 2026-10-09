@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import { MailIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import {
   AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, StateBox, api, useConfirm, useToast,
 } from "@/components/shared";
@@ -27,6 +27,8 @@ type Person = {
   can_plan_slots?: boolean; // ไม่มี = ยังไม่ได้รัน SQL 20261017000000_plan_slots
   // ดูได้อย่างเดียว (ไม่มี = ยังไม่ได้รัน SQL 20261018000000_view_only)
   can_view_mc?: boolean; can_view_admin?: boolean; can_view_proofs?: boolean; can_view_plan?: boolean; analytics_readonly?: boolean;
+  // รับอีเมลแจ้งเมื่อ Mc / Admin เสริมกดยกเลิกคิว (ไม่มี = ยังไม่ได้รัน SQL 20261020000000_notify_cancel)
+  notify_cancel_mc?: boolean; notify_cancel_admin?: boolean;
 };
 type StaffData = { staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean> };
 
@@ -191,6 +193,11 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {p.role === "owner" ? permBadges(p).map((b) => (
                     <Badge key={b} className={cn("text-[11px]", b.startsWith("ดู") ? "bg-muted text-muted-foreground" : "bg-p2/15 text-p2")}>{b}</Badge>
                   )) : null}
+                  {p.role === "owner" && (p.notify_cancel_mc || p.notify_cancel_admin) ? (
+                    <Badge variant="outline" className="text-[11px] text-muted-foreground" title="รับอีเมลเมื่อมีคนกดยกเลิกคิวผ่านเว็บ">
+                      <MailIcon />แจ้งยกเลิก {[p.notify_cancel_mc ? "Mc" : "", p.notify_cancel_admin ? "Admin" : ""].filter(Boolean).join(" + ")}
+                    </Badge>
+                  ) : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
                   {samePhone.has(p.id) ? (
                     <Badge className="border-warning-border bg-warning text-[11px] text-warning-foreground" title="เบอร์เดียวกับรายชื่ออื่น อาจลงชื่อซ้ำ กดเพื่อรวมรายชื่อ">เบอร์ซ้ำ</Badge>
@@ -228,6 +235,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           isMe={editing !== "new" && editing.id === data.meId}
           canGrantPlan={canGrantPlan && data.staff.some((p) => p.can_plan_slots !== undefined)}
           viewReady={data.staff.some((p) => p.can_view_mc !== undefined)}
+          notifyReady={data.staff.some((p) => p.notify_cancel_mc !== undefined)}
           others={editing === "new" ? [] : data.staff.filter((p) => p.role === editing.role && p.id !== editing.id)}
           onClose={(changed) => {
             setEditing(null);
@@ -244,7 +252,7 @@ type MergeSummary = {
   moveEmail: string | null; movePhone: string | null;
 };
 
-function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, others, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, others, onClose }: {
   person: Person | null;
   roles: Role[];
   defaultRole: Role;
@@ -252,6 +260,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   canGrantPlan: boolean;
   /** รัน SQL 20261018000000_view_only แล้ว (มีคอลัมน์สิทธิ์ดูได้อย่างเดียว) */
   viewReady: boolean;
+  /** รัน SQL 20261020000000_notify_cancel แล้ว (มีคอลัมน์รับอีเมลแจ้งยกเลิก) */
+  notifyReady: boolean;
   /** รายชื่ออื่นในบทบาทเดียวกัน (ใช้รวมรายชื่อซ้ำ) */
   others: Person[];
   onClose: (message?: string) => void;
@@ -289,6 +299,10 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   const renamed = !!person && person.name !== name.trim().replace(/^mc\s*/i, "");
   const noScope = role === "owner" && Object.values(perm).every((l) => l === "none");
   const anyView = Object.values(perm).some((l) => l === "view");
+  // รับอีเมลแจ้งยกเลิกคิว: ได้เฉพาะฝั่งที่มีสิทธิ์ (ดูได้ / จัดการได้) และต้องมีอีเมล
+  const [notify, setNotify] = useState({ mc: person?.notify_cancel_mc ?? false, admin: person?.notify_cancel_admin ?? false });
+  const notifyOn = { mc: notify.mc && perm.mc !== "none", admin: notify.admin && perm.admin !== "none" };
+  const anyNotify = notifyOn.mc || notifyOn.admin;
 
   async function save() {
     setSaving(true);
@@ -311,6 +325,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         ...(role === "owner" && !isMe && canGrantPlan
           ? { can_plan_slots: perm.plan === "edit", ...(viewReady || perm.plan === "view" ? { can_view_plan: perm.plan === "view" } : {}) }
           : {}),
+        // รับอีเมลแจ้งยกเลิก (ตั้งให้ตัวเองได้) ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
+        ...(role === "owner" && (notifyReady || anyNotify) ? { notify_cancel_mc: notifyOn.mc, notify_cancel_admin: notifyOn.admin } : {}),
       };
       const res = person
         ? await api("/api/owner/staff", { id: person.id, ...fields }, "PATCH")
@@ -531,6 +547,38 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           </fieldset>
         ) : null}
 
+        {role === "owner" ? (
+          <fieldset className="rounded-lg border px-3 py-2">
+            <legend className="px-1 font-semibold">รับอีเมลแจ้งยกเลิกคิว</legend>
+            <p className="pb-1 text-xs text-muted-foreground">
+              ส่งเข้า {email.trim() || "อีเมลของคนนี้"} ทันทีที่มีคนกดยกเลิกคิวผ่านเว็บ (บอกคิว / คู่ไลฟ์ / ยกเลิกก่อนไลฟ์กี่วัน · เหลือไม่ถึง 48 ชม. ขึ้น [ด่วน])
+            </p>
+            {([
+              ["mc", "เมื่อ Mc ยกเลิกคิว"],
+              ["admin", "เมื่อ Admin เสริมยกเลิกคิว"],
+            ] as const).map(([side, label]) => {
+              const blocked = perm[side] === "none";
+              return (
+                <Label key={side} className="items-start py-1 leading-snug font-normal">
+                  <Checkbox
+                    checked={notifyOn[side]}
+                    disabled={blocked || !email.trim()}
+                    onCheckedChange={(v) => setNotify({ ...notify, [side]: v === true })}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    {label}
+                    {blocked ? <span className="block text-xs text-muted-foreground">ต้องมีสิทธิ์ฝั่ง {side === "mc" ? "Mc" : "Admin"} (ดูได้ หรือ จัดการได้) ก่อน</span> : null}
+                  </span>
+                </Label>
+              );
+            })}
+            {anyNotify && !notifyReady ? (
+              <span className="block text-xs text-destructive">ต้องรัน SQL 20261020000000_notify_cancel ใน Supabase ก่อน ถึงจะบันทึกได้</span>
+            ) : null}
+          </fieldset>
+        ) : null}
+
         {person && person.role !== "owner" && others.length ? (
           <fieldset className="space-y-2 rounded-xl border p-3">
             <legend className="px-1 font-semibold">รวมรายชื่อซ้ำ</legend>
@@ -567,7 +615,11 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           <Button variant="destructive" size="lg" onClick={remove} disabled={saving} className="mr-auto">ลบคนนี้</Button>
         ) : null}
         <Button variant="outline" size="lg" disabled={saving} onClick={() => onClose()}>ยกเลิก</Button>
-        <Button size="lg" disabled={saving || !name.trim() || noScope || (role === "owner" && !isMe && anyView && !viewReady)} onClick={save}>
+        <Button
+          size="lg"
+          disabled={saving || !name.trim() || noScope || (role === "owner" && ((!isMe && anyView && !viewReady) || (anyNotify && !notifyReady)))}
+          onClick={save}
+        >
           {saving ? "กำลังบันทึก..." : "บันทึก"}
         </Button>
       </DialogActions>

@@ -34,8 +34,8 @@ export default function PrivacyPage() {
             ซิงค์ตารางงานกับ Google Sheet ของบริษัท และเก็บสำเนารูปหลักฐานในโฟลเดอร์ Drive ที่ระบบสร้างเอง (มองไม่เห็นไฟล์อื่นในไดรฟ์)
           </li>
           <li>
-            <strong>Gmail (ส่งอย่างเดียว):</strong> บัญชีระบบส่งอีเมลแจ้งเตือนภายใน (เช่น มีคนยกเลิกคิว) เข้ากล่องเมลของบริษัทเอง
-            ไม่อ่านอีเมล และไม่ส่งอีเมลหาพนักงานหรือบุคคลภายนอก
+            <strong>Gmail (ส่งอย่างเดียว):</strong> บัญชีระบบส่งอีเมลแจ้งเตือนภายใน (เช่น มีคนยกเลิกคิว) ถึงทีมงานที่ตั้งให้รับแจ้งเตือนเท่านั้น
+            ไม่อ่านอีเมล และไม่ส่งอีเมลถึง Mc / Admin หรือบุคคลภายนอก
           </li>
           <li><strong>การเก็บรักษา:</strong> ข้อมูลเก็บในฐานข้อมูลของระบบ ใช้เพื่อจัดตารางงานและคำนวณค่าจ้างเท่านั้น ไม่ขาย ไม่ส่งต่อให้บุคคลภายนอก</li>
           <li><strong>การลบข้อมูล:</strong> ติดต่อทีมงานเพื่อขอดูหรือลบข้อมูลของคุณ และยกเลิกการแชร์ปฏิทินกับบัญชีระบบได้ทุกเมื่อ</li>
@@ -59,7 +59,7 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong>Gmail (send only):</strong> the system account sends internal notification emails (for example, when someone cancels a slot)
-            to the company&apos;s own mailbox. It does not read email and does not email staff or third parties.
+            only to team members who opted in to receive them. It does not read email and does not email hosts, admins or third parties.
           </li>
           <li><strong>Storage and sharing:</strong> data is stored in the app&apos;s database and used only for scheduling and payroll. We do not sell or share it with third parties.</li>
           <li><strong>Deletion:</strong> contact the team to view or delete your data. You can stop sharing your calendar with the system account at any time.</li>

@@ -241,7 +241,7 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
         )}
         {overCutoff && !invalid ? (
           <span className="mt-1 block text-xs">
-            วันสุดท้ายเกินเดือนที่เปิดจอง ระบบจะตัดที่สิ้นเดือน {monthLabel(data.cutoffMonth)} — ถ้าจะเปิดเกินนั้นให้แก้ &quot;เดือนสุดท้ายที่เปิดจอง&quot; ด้านล่าง
+            เปิดเกินเดือนสุดท้ายที่เปิดจอง ({monthLabel(data.cutoffMonth)}) — ใช้ได้ตามวันที่ตั้ง เพราะใส่วันสุดท้ายเอง
           </span>
         ) : null}
       </div>
@@ -295,7 +295,7 @@ function PeriodPicker({ label, value, onChange, today, disabled, withClosed = fa
         {value.mode === "off" ? "จองได้ตั้งแต่วันนี้ ถึงสิ้นเดือนสุดท้ายที่เปิดจอง (ด้านล่าง)"
           : value.mode === "week" ? "จองได้เฉพาะสัปดาห์ปัจจุบัน (จันทร์–อาทิตย์) ทุกวันจันทร์ระบบเปิดสัปดาห์ใหม่ให้เอง"
             : value.mode === "closed" ? "ไม่เห็น slot และจองไม่ได้ (หน้าจองขึ้นว่า \"ตอนนี้ยังไม่เปิดจอง\")"
-              : "จองได้เฉพาะวันในช่วงนี้ ไม่ใส่วันเริ่ม = ตั้งแต่วันนี้ / ไม่ใส่วันสุดท้าย = ถึงสิ้นเดือนที่เปิดจอง"}
+              : "จองได้เฉพาะวันในช่วงนี้ ไม่ใส่วันเริ่ม = ตั้งแต่วันนี้ / ไม่ใส่วันสุดท้าย = ถึงสิ้นเดือนที่เปิดจอง (ใส่วันสุดท้ายเอง = ใช้วันนั้น เกินเดือนที่เปิดจองได้)"}
       </p>
       {value.mode === "range" ? (
         <>
@@ -366,7 +366,8 @@ function CutoffMonth({ data, onSaved }: { data: Data; onSaved: () => void }) {
     <section className="border-t pt-3">
       <h3 className="text-sm font-bold">เดือนสุดท้ายที่เปิดจอง (ใช้ทั้ง Mc และ Admin)</h3>
       <p className="mb-2 text-xs text-muted-foreground">
-        ขอบนอกสุดของการจอง ช่วงด้านบนเปิดเกินเดือนนี้ไม่ได้ · ตอนนี้: <strong>{data.cutoffMonth ? `ถึงสิ้นเดือน ${monthLabel(data.cutoffMonth)}` : "ไม่จำกัด"}</strong>
+        จองได้ถึงสิ้นเดือนนี้ สำหรับช่วงที่เป็น &quot;ไม่จำกัด&quot; / &quot;สัปดาห์นี้&quot; / ไม่ได้ใส่วันสุดท้าย
+        (ช่วงที่ใส่วันสุดท้ายเองใช้วันที่ตั้งไว้ได้เลย) · ตอนนี้: <strong>{data.cutoffMonth ? `ถึงสิ้นเดือน ${monthLabel(data.cutoffMonth)}` : "ไม่จำกัด"}</strong>
       </p>
       {data.canCutoff ? (
         <div className="flex flex-wrap items-center gap-2">

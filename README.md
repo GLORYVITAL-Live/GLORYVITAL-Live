@@ -33,7 +33,7 @@
 | เดิม | ใหม่ |
 | --- | --- |
 | การตั้งค่าเว็บ B1 (ปิดรับจอง) | `settings.site_notice` |
-| B2 (เดือนสุดท้ายที่เปิดจอง) | `settings.schedule_cutoff_month` เช่น `2026-10` (แก้ในเว็บได้: หน้าเจ้าของ > จัดการ slot > ช่วงเปิดจอง) |
+| B2 (เดือนสุดท้ายที่เปิดจอง) | `settings.schedule_cutoff_month` เช่น `2026-10` (แก้ในเว็บได้: หน้าเจ้าของ > ตาราง slot > ช่วงเปิดจอง) ใช้กับช่วง "ไม่จำกัด" / "สัปดาห์นี้" / ไม่ใส่วันสุดท้าย — "กำหนดช่วงวัน" ที่ใส่วันสุดท้ายเองเปิดเกินเดือนนี้ได้ (เว็บส่งวันสุดท้ายให้ฐานข้อมูลเป็น `p_until` ของ `book_mc_slots` / `assign_admin_slots`) |
 | (ใหม่) ช่วงเปิดจองแยก Mc / Admin | `settings.book_window_mc` / `book_window_admin` — ไม่จำกัด / สัปดาห์นี้ (อัตโนมัติ) / ช่วงวันที่ / ปิดจอง + รายชื่อจองก่อนที่มีช่วงของตัวเอง (src/lib/window.ts) |
 | B3 / B4 / B5 / B6 | `schedule_notice` / `admin_chat_url` / `default_mc_rate` / `default_admin_rate` |
 | แท็บ Mc Email / Admin Email / Owner Email / เบอร์โทร MC | ตาราง `staff` (role, name, email, phone, hourly_rate, is_extra_admin) |
@@ -138,13 +138,16 @@
 
 ## อีเมลแจ้งเตือนยกเลิกคิว
 
-- Mc / Admin เสริมกดยกเลิกคิวผ่านเว็บ → ส่งอีเมลเข้า **kunraroj.d@glorythailand.com** (`NOTIFY_TO` ใน `src/lib/notify.ts`)
+- Mc / Admin เสริมกดยกเลิกคิวผ่านเว็บ → ส่งอีเมลถึง Owner ที่ติ๊ก **"รับอีเมลแจ้งยกเลิกคิว"** ฝั่งนั้น (หน้าพนักงาน > Owner)
+  (`staff.notify_cancel_mc` / `notify_cancel_admin` SQL `20261020000000_notify_cancel` · ต้องมีอีเมล + ยังมีสิทธิ์ฝั่งนั้น · ตั้งให้ตัวเองได้)
+  ค่าเริ่มต้น: Sam (kunraroj.d) ทั้งสองฝั่ง / Toey ฝั่ง Mc · ยังไม่ได้รัน SQL = ส่งเข้า kunraroj.d (`NOTIFY_TO` ใน `src/lib/notify.ts`)
   บอกใครยกเลิก คิวไหน ยกเลิกก่อนไลฟ์นานแค่ไหน คู่ไลฟ์ (+ เบอร์) · เหลือไม่ถึง 48 ชม. หัวเรื่องขึ้น **[ด่วน]**
 - ส่งด้วย Gmail API จากบัญชีระบบ (สิทธิ์ `gmail.send` = ส่งได้อย่างเดียว อ่านอีเมลไม่ได้) ส่งไม่ได้ก็ไม่กระทบการยกเลิก
 - ตั้งค่าครั้งแรก (หรือเมื่อเพิ่มสิทธิ์ Google ใหม่):
   1. `bun run google:auth` → login ด้วย kunraroj.d@glorythailand.com → กดอนุญาต (มีขอสิทธิ์ "ส่งอีเมล") → `GOOGLE_REFRESH_TOKEN` ใหม่ถูกบันทึกลง `.env.local`
   2. Vercel > Settings > Environment Variables: แก้ `GOOGLE_REFRESH_TOKEN` เป็นค่าใหม่ แล้ว Redeploy
-  3. `bun run mail:test` ตรวจสิทธิ์ + ดูตัวอย่าง / `bun run mail:test --send` ส่งอีเมลทดสอบ 1 ฉบับ
+  3. Google Cloud > APIs & Services: เปิด **Gmail API** ในโปรเจกต์ (GLORY VITAL Booking)
+  4. `bun run mail:test` ตรวจสิทธิ์ + ดูผู้รับ + ตัวอย่าง / `bun run mail:test --send` ส่งอีเมลทดสอบ 1 ฉบับ (เข้า kunraroj.d เท่านั้น)
 
 ## ค่าจ้าง / หักเงินมาสาย
 

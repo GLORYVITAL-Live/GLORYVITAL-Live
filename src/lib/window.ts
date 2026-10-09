@@ -6,7 +6,7 @@
  *   mode "range"  = ช่วงวันที่กำหนดเอง (from / to ว่างได้ข้างเดียว)
  *   mode "closed" = ปิดจอง (ไม่เห็น slot เลย)
  * BookWindow = ช่วงของคนทั่วไป + only (staff id ที่ให้จองก่อน) + early (ช่วงของคนใน only)
- * ช่วงที่จองได้จริง = ช่วงนี้ ตัดด้วย "วันนี้" และ "เดือนสุดท้ายที่เปิดจอง" อีกชั้น
+ * ช่วงที่จองได้จริง = ช่วงนี้ ตัดด้วย "วันนี้" และ "เดือนสุดท้ายที่เปิดจอง" อีกชั้น (ยกเว้นช่วงที่ใส่วันสุดท้ายเอง ดู bookRange)
  * วันที่ทั้งหมดเป็นข้อความ YYYY-MM-DD ตามเวลาไทย
  */
 export type WindowMode = "off" | "week" | "range" | "closed";
@@ -70,12 +70,16 @@ export function periodFor(w: BookWindow | null, personId?: number | null): Perio
   return { mode: w.mode, from: w.from, to: w.to };
 }
 
-/** ช่วงที่จองได้จริงวันนี้ (cutoff = วันสุดท้ายของเดือนที่เปิดจอง / null = ไม่จำกัด) */
+/**
+ * ช่วงที่จองได้จริงวันนี้ (cutoff = วันสุดท้ายของเดือนที่เปิดจอง / null = ไม่จำกัด)
+ *   "กำหนดช่วงวัน" ที่ใส่วันสุดท้ายเอง = ใช้วันนั้นเลย (เปิดเกินเดือนที่เปิดจองได้ เช่น ให้บางคนจองเดือนหน้าก่อน)
+ *   ไม่จำกัด / สัปดาห์นี้ / ไม่ใส่วันสุดท้าย = ถึงสิ้นเดือนที่เปิดจองอย่างมาก
+ */
 export function bookRange(p: Period | null, today: string, cutoff: string | null): BookRange {
   const d = !p || p.mode === "off" || p.mode === "closed" ? { from: null, to: null }
     : p.mode === "week" ? { from: weekStart(today), to: weekEnd(today) } : p;
   const from = d.from && d.from > today ? d.from : today;
-  const to = [d.to, cutoff].filter((x): x is string => !!x).sort()[0] ?? null;
+  const to = p?.mode === "range" && d.to ? d.to : [d.to, cutoff].filter((x): x is string => !!x).sort()[0] ?? null;
   return { from, to, empty: p?.mode === "closed" || (!!to && to < from) };
 }
 

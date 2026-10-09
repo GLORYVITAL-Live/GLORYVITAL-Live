@@ -3,9 +3,10 @@
  *
  *   bun run mail:test          ตรวจว่าบัญชีระบบอนุญาตสิทธิ์ส่งอีเมลแล้วหรือยัง + แสดงตัวอย่างอีเมล (ยังไม่ส่ง)
  *   bun run mail:test --send   ส่งอีเมลทดสอบ 1 ฉบับ (จากการยกเลิกล่าสุดจริง หัวเรื่องขึ้น [ทดสอบ])
+ *                              ส่งเข้ากล่องเมลระบบเท่านั้น ไม่ส่งถึงทีมงานที่ตั้งรับแจ้งเตือน
  */
 import { googleAuth } from "@/lib/google";
-import { NOTIFY_TO, cancelMail, sendMail } from "@/lib/notify";
+import { NOTIFY_TO, cancelMail, cancelRecipients, sendMail } from "@/lib/notify";
 import { createAdminClient } from "@/lib/supabase/server";
 
 const SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
@@ -19,6 +20,9 @@ const { token } = await auth.getAccessToken();
 const info = token ? await auth.getTokenInfo(token).catch(() => null) : null;
 const canSend = !!info?.scopes.includes(SEND_SCOPE);
 console.log(canSend ? "✓ อนุญาตสิทธิ์ส่งอีเมลแล้ว" : "✗ ยังไม่ได้อนุญาตสิทธิ์ส่งอีเมล — รัน bun run google:auth แล้ว login ด้วยบัญชีระบบ กดอนุญาต");
+// ผู้รับจริงตามที่ตั้งในหน้าพนักงาน
+console.log(`ผู้รับเมลเมื่อ Mc ยกเลิก: ${(await cancelRecipients("mc")).join(", ") || "(ไม่มี)"}`);
+console.log(`ผู้รับเมลเมื่อ Admin เสริมยกเลิก: ${(await cancelRecipients("admin")).join(", ") || "(ไม่มี)"}`);
 
 // ตัวอย่างจากการยกเลิกผ่านเว็บครั้งล่าสุด
 const { data: log } = await createAdminClient().from("booking_logs")
@@ -31,7 +35,7 @@ const mail = await cancelMail({
   role, name: String(log.name).replace(/^mc\s*/i, ""), email: log.email, slotId: Number(log.slot_id), at: new Date(log.at),
 });
 if (!mail) { console.log("ไม่พบ slot ของการยกเลิกล่าสุด (อาจถูกลบไปแล้ว)"); process.exit(0); }
-console.log(`\nถึง: ${NOTIFY_TO}\nหัวเรื่อง: ${mail.subject}\n`);
+console.log(`\nตัวอย่าง (ทดสอบส่งถึง ${NOTIFY_TO} เท่านั้น)\nหัวเรื่อง: ${mail.subject}\n`);
 console.log(mail.html.replace(/<[^>]+>/g, " ").replace(/[ \t]+/g, " ").replace(/\n\s*/g, "\n").trim());
 
 if (process.argv.includes("--send")) {

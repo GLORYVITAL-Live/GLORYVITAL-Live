@@ -33,11 +33,11 @@ export async function POST(request: Request) {
   const table = role === "mc" ? "mc_slots" : "admin_slots";
 
   // ช่วงเปิดจองของคนนี้ (เจ้าของตั้งไว้) slot นอกช่วงไม่ส่งไปจอง (กันหน้าเว็บที่ยังไม่รีเฟรช)
-  // ส่วนวันที่ผ่านไปแล้ว / เดือนที่เปิดจอง ฐานข้อมูลตรวจอีกชั้นอยู่แล้ว
+  // ส่วนวันที่ผ่านไปแล้ว / วันสุดท้ายที่จองได้ ฐานข้อมูลตรวจอีกชั้นอยู่แล้ว
   let blocked: ActionResult[] = [];
   const personId: number = role === "mc" ? r.me.mc!.id : r.me.admin!.id;
+  const range = bookingRange(settings, role, personId);
   if (personPeriod(settings, role, personId).mode !== "off") {
-    const range = bookingRange(settings, role, personId);
     const { data, error } = await db.from(table).select("id, live_date").in("id", ids);
     if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
     const message = range.empty ? "ตอนนี้ยังไม่เปิดจอง" : `ตอนนี้เปิดจองเฉพาะ ${rangeText(range)}`;
@@ -49,9 +49,13 @@ export async function POST(request: Request) {
 
   let results: ActionResult[] = [];
   if (allowed.length) {
-    const { data, error } = role === "mc"
-      ? await db.rpc("book_mc_slots", { p_mc_id: r.me.mc!.id, p_slot_ids: allowed })
-      : await db.rpc("assign_admin_slots", { p_admin_id: r.me.admin!.id, p_slot_ids: allowed });
+    // p_until = วันสุดท้ายที่คนนี้จองได้ (ช่วงที่ใส่วันสุดท้ายเองเปิดเกินเดือนที่เปิดจองได้) ว่าง = ฐานข้อมูลใช้เดือนที่เปิดจอง
+    const call = (until: boolean) => role === "mc"
+      ? db.rpc("book_mc_slots", { p_mc_id: r.me.mc!.id, p_slot_ids: allowed, ...(until ? { p_until: range.to } : {}) })
+      : db.rpc("assign_admin_slots", { p_admin_id: r.me.admin!.id, p_slot_ids: allowed, ...(until ? { p_until: range.to } : {}) });
+    let { data, error } = await call(true);
+    // ยังไม่ได้รัน SQL 20261019000000_book_until (ฟังก์ชันยังไม่มี p_until) = เรียกแบบเดิม
+    if (error && /p_until|could not find the function/i.test(error.message)) ({ data, error } = await call(false));
     if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
     results = data;
   }
