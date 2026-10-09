@@ -87,7 +87,8 @@ function download(blob: Blob, name: string) {
  */
 export function ExportMenu({ label, build, variant = "outline", size = "lg", className }: {
   label: string;
-  build: () => ExportBook;
+  /** สร้างข้อมูลตอนกด (รอโหลดข้อมูลเพิ่มได้ เช่น คนไลฟ์ของแต่ละไลฟ์) */
+  build: () => ExportBook | Promise<ExportBook>;
   variant?: ComponentProps<typeof Button>["variant"];
   size?: ComponentProps<typeof Button>["size"];
   className?: string;
@@ -95,17 +96,17 @@ export function ExportMenu({ label, build, variant = "outline", size = "lg", cla
   const toast = useToast();
   return (
     <Menu
-      label={label} icon={<DownloadIcon />} busyText="กำลังสร้าง Google Sheet…" variant={variant} size={size} className={className}
+      label={label} icon={<DownloadIcon />} busyText="กำลังสร้างไฟล์…" variant={variant} size={size} className={className}
       options={[
         {
           icon: <FileSpreadsheetIcon className="text-[#1d6f42]" />, title: "Microsoft Excel", desc: "ดาวน์โหลดไฟล์ .xlsx",
-          run: () => downloadXlsx(build()),
+          run: async () => downloadXlsx(await build()),
         },
         {
           icon: <SheetIcon className="text-[#188038]" />, title: "Google Sheet", desc: "สร้างชีตใหม่ เปิดในแท็บใหม่",
           run: async () => {
             await openWhenReady("Google Sheet", async () => {
-              const res = await api<{ url: string }>("/api/export/sheet", build());
+              const res = await api<{ url: string }>("/api/export/sheet", await build());
               if (!res.ok) throw new Error(res.message);
               return res.url;
             });

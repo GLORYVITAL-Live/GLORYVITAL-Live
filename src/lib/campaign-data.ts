@@ -24,7 +24,7 @@ const SLOT_PLATFORM_OF_ACCOUNT: Record<string, string> = {
   "TikTok|7081240278438429722": "Skin Expert",
   "TikTok|6723716820899365890": "Cherry Glory",
 };
-const slotPlatformOf = (platform: string, accountId: string) =>
+export const slotPlatformOf = (platform: string, accountId: string) =>
   platform === "Shopee" ? "Shopee" : SLOT_PLATFORM_OF_ACCOUNT[`${platform}|${accountId}`] ?? null;
 
 export type CtxSlot = {

@@ -2,7 +2,7 @@
 //   ทุกไฟล์มีแผ่น "ข้อมูล" (ช่วงเวลา ตัวกรอง นิยามตัวชี้วัด) ตัวเลขเป็นตัวเลขจริง คำนวณต่อใน Excel / Google Sheet ได้
 
 import type { Cell, ExportBook, ExportSheet } from "@/lib/export";
-import { accountLabel, accountsOf, bkkParts, changeOf, METRICS, totalsOf, type LiveSession, type Totals } from "@/lib/live-stats";
+import { accountLabel, accountsOf, bkkParts, changeOf, crewKey, METRICS, totalsOf, type LiveCrew, type LiveSession, type Totals } from "@/lib/live-stats";
 
 type Kind = (typeof METRICS)[number]["kind"];
 
@@ -23,6 +23,8 @@ export const bkkStamp = (iso: string) => {
 const keyOf = (s: LiveSession) => `${s.platform}|${s.accountId}`;
 
 export type ExportFilter = { platform: string; account: string; sessions: LiveSession[] };
+/** ใครไลฟ์ / แคมเปญ ของแต่ละไลฟ์ (key = crewKey) null = โหลดไม่สำเร็จ / ไม่ระบุ = ไม่ใส่คอลัมน์ */
+export type CrewMap = Record<string, LiveCrew> | null;
 
 /** ข้อความตัวกรองที่ใช้อยู่ (แพลตฟอร์ม / บัญชี) */
 export function filterText(f: ExportFilter) {
@@ -49,20 +51,34 @@ function infoSheet(lines: [string, string][], f: ExportFilter): ExportSheet {
       ["CTR", "Product Clicks ÷ Product Impressions (TikTok)"],
       ["CO", "TikTok = ออเดอร์ ÷ Product Clicks · Shopee = ออเดอร์ ÷ Viewers (รวมสองแพลตฟอร์มไม่คำนวณ)"],
       ["หมายเหตุ", "ไลฟ์นับตามเวลาเริ่มไลฟ์ (เวลาไทย) · ค่าที่เป็นอัตราคำนวณจากยอดรวม"],
+      ["Mc / Admin / Campaign (แผ่นไลฟ์)", "จับคู่ไลฟ์กับ slot ของช่องเดียวกันที่เวลาซ้อนกันอย่างน้อย 10 นาที · ไลฟ์ยาวหลาย slot = หลายชื่อพร้อมช่วงเวลา · ไลฟ์ที่นำเข้าจากชีตรายวันไม่มีเวลาเริ่มจริง จับคู่ไม่ได้"],
     ],
   };
 }
 
-/** รายการไลฟ์ทีละไลฟ์ */
-function sessionSheet(name: string, list: LiveSession[]): ExportSheet {
+/**
+ * รายการไลฟ์ทีละไลฟ์ + ใครไลฟ์ (Mc / Admin) / Campaign / slot ที่ตรงกัน (จับคู่กับ slot ตามเวลา)
+ *   crew = undefined: ไม่มีคอลัมน์คนไลฟ์ / null: โหลดไม่สำเร็จ (คอลัมน์ว่าง + หมายเหตุ)
+ */
+function sessionSheet(name: string, list: LiveSession[], crew?: CrewMap): ExportSheet {
+  const withCrew = crew !== undefined;
+  const crewCells = (s: LiveSession): Cell[] => {
+    if (!withCrew) return [];
+    const c = crew?.[crewKey(s)];
+    return [c?.mc ?? "", c?.admin ?? "", c?.campaign ?? "", c?.slots ?? "", crew === null ? "โหลดข้อมูล slot ไม่สำเร็จ" : c?.note ?? "ไม่พบ slot"];
+  };
   return {
     name,
     rows: [
-      ["เริ่มไลฟ์ (เวลาไทย)", "แพลตฟอร์ม", "บัญชี", "ชื่อไลฟ์", "ชั่วโมง", "GMV", "ออเดอร์", "ชิ้นที่ขาย", "Viewers", "Views", "Product Impressions", "Impressions / ชม.", "Product Clicks", "CTR", "CO"],
+      [
+        "เริ่มไลฟ์ (เวลาไทย)", "แพลตฟอร์ม", "บัญชี", "ชื่อไลฟ์",
+        ...(withCrew ? ["Mc", "Admin", "Campaign", "slot ที่ตรงกัน", "หมายเหตุ (จับคู่ slot)"] : []),
+        "ชั่วโมง", "GMV", "ออเดอร์", "ชิ้นที่ขาย", "Viewers", "Views", "Product Impressions", "Impressions / ชม.", "Product Clicks", "CTR", "CO",
+      ],
       ...list.map((s): Cell[] => {
         const coBase = s.platform === "TikTok" ? s.clicks : s.viewers;
         return [
-          bkkStamp(s.startedAt), s.platform, s.accountName, s.title,
+          bkkStamp(s.startedAt), s.platform, s.accountName, s.title, ...crewCells(s),
           { v: s.durationSec / 3600, f: "dec" }, { v: s.gmv, f: "money" }, s.orders, s.itemsSold, s.viewers, s.views, s.impressions,
           s.impressions !== null && s.durationSec ? { v: s.impressions / (s.durationSec / 3600), f: "int" } : null, s.clicks,
           s.impressions ? { v: (s.clicks ?? 0) / s.impressions, f: "pct" } : null,
@@ -149,6 +165,7 @@ function platformSheets(curLabel: string, cur: LiveSession[], compare: { label: 
 /** ภาพรวมรายเดือน: เดือนนี้ vs เดือนก่อน (MoM) vs ปีก่อน (YoY) + 13 เดือน + แยกบัญชี + รายการไลฟ์ */
 export function monthBook(o: {
   month: string; monthLabel: (k: string) => string; months13: string[]; byMonth: Map<string, LiveSession[]>; filter: ExportFilter;
+  crew?: CrewMap;
 }): ExportBook {
   const { month, monthLabel, months13, byMonth } = o;
   const prevKey = months13[11], yoyKey = months13[0];
@@ -169,7 +186,7 @@ export function monthBook(o: {
         ],
       },
       accountSheet(byMonth.get(month) ?? [], byMonth.get(prevKey) ?? [], monthLabel(prevKey)),
-      sessionSheet("ไลฟ์", byMonth.get(month) ?? []),
+      sessionSheet("ไลฟ์", byMonth.get(month) ?? [], o.crew),
     ],
   };
 }
@@ -180,6 +197,7 @@ export function yearBook(o: {
   /** ไลฟ์รายเดือน (มีเดือนก่อนช่วงด้วย ใช้คิด MoM ของเดือนแรก) */
   byMonth: Map<string, LiveSession[]>; curList: LiveSession[]; prevList: LiveSession[];
   quarters: { label: string; a: LiveSession[]; b: LiveSession[] }[]; filter: ExportFilter;
+  crew?: CrewMap;
 }): ExportBook {
   const { aName, bName, curKeys, prevKeys, byMonth, monthLabel } = o;
   const t = (k: string) => totalsOf(byMonth.get(k) ?? []);
@@ -199,7 +217,7 @@ export function yearBook(o: {
       },
       pairSheet("รายไตรมาส", "ไตรมาส", aName, bName, o.quarters),
       accountSheet(o.curList, o.prevList, bName),
-      sessionSheet("ไลฟ์", o.curList),
+      sessionSheet("ไลฟ์", o.curList, o.crew),
     ],
   };
 }
@@ -225,6 +243,7 @@ export function deltaOf(kind: Kind, a: number | null, b: number | null) {
 export function multiBook(o: {
   rangeText: string; monthLabel: (k: string) => string; shortLabel: (k: string) => string;
   keys: string[]; focus: string; byMonth: Map<string, LiveSession[]>; filter: ExportFilter;
+  crew?: CrewMap;
 }): ExportBook {
   const { keys, byMonth, monthLabel, shortLabel, focus } = o;
   const list = (k: string) => byMonth.get(k) ?? [];
@@ -262,7 +281,7 @@ export function multiBook(o: {
           ...accountsOf(keys.flatMap(list)).map((a) => row(accountLabel(a), gmv, (s) => keyOf(s) === a.key)),
         ],
       },
-      sessionSheet("ไลฟ์", keys.flatMap(list)),
+      sessionSheet("ไลฟ์", keys.flatMap(list), o.crew),
     ],
   };
 }
@@ -271,6 +290,7 @@ export function multiBook(o: {
 export function compareBook(o: {
   title: string; report: string; aName: string; bName: string; aRange: string; bRange: string;
   a: LiveSession[]; b: LiveSession[]; timeName: string; time: { label: string; a: LiveSession[]; b: LiveSession[] }[]; filter: ExportFilter;
+  crew?: CrewMap;
 }): ExportBook {
   const accounts = accountsOf([...o.a, ...o.b]);
   return {
@@ -284,8 +304,8 @@ export function compareBook(o: {
         { label: "รวม", a: o.a, b: o.b },
       ]),
       ...(o.time.length > 1 ? [pairSheet(o.timeName, o.timeName, o.aName, o.bName, o.time)] : []),
-      sessionSheet(`ไลฟ์ ${o.aName}`, o.a),
-      sessionSheet(`ไลฟ์ ${o.bName}`, o.b),
+      sessionSheet(`ไลฟ์ ${o.aName}`, o.a, o.crew),
+      sessionSheet(`ไลฟ์ ${o.bName}`, o.b, o.crew),
     ],
   };
 }

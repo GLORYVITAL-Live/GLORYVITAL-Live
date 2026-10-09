@@ -9,6 +9,15 @@ import { strFromU8, unzipSync } from "fflate";
 export const PLATFORMS = ["TikTok", "Shopee"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
+/**
+ * คนที่ไลฟ์ในไลฟ์นั้น (จับคู่ไลฟ์กับ slot ที่เวลาซ้อนกัน ใช้ตอนส่งออก) key = crewKey(session)
+ *   mc / admin = ชื่อ (หลายคน = แยกด้วย " · " พร้อมช่วงเวลา) campaign = Campaign ใน slot / slots = ช่วง slot ที่ตรงกัน
+ *   note = เหตุผลที่จับคู่ไม่ได้ (เช่น ไม่พบ slot / ไม่มีเวลาเริ่มจริง)
+ */
+export type LiveCrew = { mc: string; admin: string; campaign: string; slots: string; note: string };
+export const crewKey = (s: { platform: string; accountId: string; startedAt: string }) =>
+  `${s.platform}|${s.accountId}|${new Date(s.startedAt).toISOString()}`;
+
 export type LiveSession = {
   platform: Platform;
   accountId: string;

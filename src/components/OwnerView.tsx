@@ -91,21 +91,41 @@ const payHiddenOf = (data: OwnerSummary, type: Type) => !!data.payHidden?.[type 
 const payHiddenAll = (data: OwnerSummary) => groups(data).every(([t]) => payHiddenOf(data, t));
 const dropCols = (rows: unknown[][], cols: number[]) => rows.map((r) => r.filter((_, i) => !cols.includes(i)));
 
+/** GMV/ชม. ของคิวที่มียอด (กรอกเอง หรือรวมอยู่ในยอดของคิวถัดไป) */
+const gmvPerHour = (items: OwnerDetail[]) => {
+  const g = gmvOf(items);
+  const hours = items.filter((d) => d.gmv !== null || d.gmvCoveredBy).reduce((a, d) => a + d.hours, 0);
+  return g.count && hours ? round2(g.total / hours) : "";
+};
+
 function summaryBook(data: OwnerSummary) {
-  const rows: unknown[][] = [["ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ไลฟ์ชดเชย (นาที)", "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน"]];
+  const rows: unknown[][] = [[
+    "ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ไลฟ์ชดเชย (นาที)",
+    "หลักฐาน (แนบแล้ว/ต้องแนบ)", "GMV", "GMV/ชม.", "ชม. ช่วง Campaign",
+    "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน",
+  ]];
   for (const [type, people] of groups(data)) for (const r of people) {
     const rate = rateOf(data, type, r.name);
     const commit = r.commit
       ? `${tiersLabel(r.commit.baseRate, r.commit.tiers)} (${r.commit.tier ? `ถึง ${r.commit.tier.hours}+ ชม.` : "ยังไม่ถึงเทียร์แรก"})`
       : "";
-    rows.push([type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.bonusMinutes || "", r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : ""]);
+    const items = slotsOf(data, type, r.name);
+    const need = items.filter((d) => !d.noProof); // ไม่นับคิวของ Mc ประจำ (ไม่ต้องแนบ)
+    const gmv = gmvOf(items);
+    rows.push([
+      type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.bonusMinutes || "",
+      need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "ไม่ต้องแนบ",
+      gmv.count ? round2(gmv.total) : "", gmvPerHour(items),
+      round2(items.filter((d) => d.campaign).reduce((a, d) => a + d.hours, 0)) || "",
+      r.paidHours, commit, rate || "", rate ? Math.round(r.paidHours * rate) : "",
+    ]);
   }
-  return book(`GLORY สรุป ${data.month}`, "สรุป", payHiddenAll(data) ? dropCols(rows, [9, 10, 11]) : rows);
+  return book(`GLORY สรุป ${data.month}`, "สรุป", payHiddenAll(data) ? dropCols(rows, [13, 14, 15]) : rows);
 }
 
 // ใบสรุปค่าจ้างรายคน: ทุกคิวของแต่ละคน + แถวรวมต่อคน (ไม่นับคิวที่ยกเลิก หักมาสายตามกฎ + ไลฟ์ชดเชย)
 function payrollBook(data: OwnerSummary) {
-  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน", "GMV", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
+  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "Campaign", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน", "GMV", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
   for (const [type, people] of groups(data)) {
     let groupHours = 0, groupMoney = 0, groupGmv = 0, groupGmvCount = 0;
     for (const p of people) {
@@ -122,7 +142,7 @@ function payrollBook(data: OwnerSummary) {
         h += hrs;
         paid += slotPaid;
         rows.push([
-          p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), hrs,
+          p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), d.campaign, hrs,
           lateText(d), cut ? `${Math.round(cut * 100)}%` : "",
           bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
           d.gmv ?? (d.gmvCoveredBy ? `รวมในคิว ${d.gmvCoveredBy}` : ""),
@@ -133,7 +153,7 @@ function payrollBook(data: OwnerSummary) {
       }
       const m = rate ? Math.round(paid * rate) : 0;
       rows.push([
-        `รวม ${p.name}`, `${items.length} slot`, "", "", "", round2(h), "", "", "", "", rate ? m : "",
+        `รวม ${p.name}`, `${items.length} slot`, "", "", "", "", round2(h), "", "", "", "", rate ? m : "",
         gmv.count ? round2(gmv.total) : "", "", "",
         // คอลัมน์ O: โฟลเดอร์รวมหลักฐานทั้งเดือนของ Mc คนนี้ใน Google Drive
         type === "Mc" ? monthFolderText(items) : "",
@@ -144,11 +164,11 @@ function payrollBook(data: OwnerSummary) {
       groupGmvCount += gmv.count;
     }
     rows.push([
-      `รวม ${type} ทั้งหมด`, "", "", "", "", round2(groupHours), "", "", "", "", groupMoney || "", groupGmvCount ? round2(groupGmv) : "",
+      `รวม ${type} ทั้งหมด`, "", "", "", "", "", round2(groupHours), "", "", "", "", groupMoney || "", groupGmvCount ? round2(groupGmv) : "",
     ], []);
   }
   return payHiddenAll(data)
-    ? book(`GLORY ใบสรุปรายคน ${data.month}`, "สรุปรายคน", dropCols(rows, [9, 10]))
+    ? book(`GLORY ใบสรุปรายคน ${data.month}`, "สรุปรายคน", dropCols(rows, [10, 11]))
     : book(`GLORY ใบสรุปค่าจ้างรายคน ${data.month}`, "ค่าจ้างรายคน", rows);
 }
 
@@ -172,10 +192,12 @@ function dailyBook(data: OwnerSummary) {
 }
 
 function detailBook(data: OwnerSummary) {
-  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "ชั่วโมง", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)", "ยกเลิก"]];
+  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "Campaign", "ชั่วโมง", "GMV", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)", "ยกเลิก"]];
   for (const d of data.details) {
     rows.push([
-      d.type, d.name, d.date, d.start, d.end, d.platform, d.hours, d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
+      d.type, d.name, d.date, d.start, d.end, d.platform, d.campaign, d.hours,
+      d.gmv ?? (d.gmvCoveredBy ? `รวมในคิว ${d.gmvCoveredBy}` : ""),
+      d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
       lateText(d), d.bonusMinutes ? `+${d.bonusMinutes}${d.bonusFromProof ? " (จากหลักฐาน)" : ""}` : "", d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "", d.proof?.by ?? "", d.proof?.driveUrl ?? "",
       d.cancelled ? cancelText(d) : "",
     ]);

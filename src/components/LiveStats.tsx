@@ -9,7 +9,7 @@ import {
 import { fmtMonthShort, monthKey, monthLabel } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
-import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, yearBook } from "@/lib/live-export";
+import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, yearBook, type CrewMap } from "@/lib/live-export";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
@@ -46,6 +46,21 @@ const fmtDuration = (sec: number) => `${Math.floor(sec / 3600)}:${String(Math.fl
 
 /** โหลดไลฟ์ในช่วง [from, to) (เก็บไว้ในหน่วยความจำ เปลี่ยนกลับมาช่วงเดิมไม่โหลดซ้ำ) */
 const sessionCache = new Map<string, LiveSession[]>();
+/**
+ * ใครไลฟ์ / แคมเปญ ของไลฟ์ในรายการ (ใช้ตอนส่งออก) โหลดไม่สำเร็จ = null (ยังส่งออกได้ คอลัมน์คนไลฟ์ว่าง)
+ */
+async function loadCrew(list: LiveSession[]): Promise<CrewMap> {
+  if (!list.length) return {};
+  let lo = Infinity, hi = -Infinity;
+  for (const s of list) { const t = Date.parse(s.startedAt); if (t < lo) lo = t; if (t > hi) hi = t; }
+  try {
+    const res = await api<{ crew: CrewMap }>(`/api/live-stats/crew?from=${encodeURIComponent(new Date(lo).toISOString())}&to=${encodeURIComponent(new Date(hi + 1000).toISOString())}`);
+    return res.ok ? res.crew : null;
+  } catch {
+    return null;
+  }
+}
+
 function useSessions(from: string | null, to: string | null, version: number) {
   const key = from && to ? `${from}|${to}|${version}` : "";
   const [state, setState] = useState<{ key: string; data?: LiveSession[]; error?: string }>({ key: "" });
@@ -279,8 +294,9 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
     <>
       {nav}
       <FilterBar filter={filter} sessions={data}>
-        <ExportMenu size="sm" label="ส่งออก" build={() => monthBook({
+        <ExportMenu size="sm" label="ส่งออก" build={async () => monthBook({
           month, monthLabel, months13, byMonth, filter: { platform: filter.platform, account: filter.account, sessions: data },
+          crew: await loadCrew(byMonth.get(month) ?? []),
         })} />
       </FilterBar>
       {!cur.lives ? (
@@ -417,10 +433,11 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
       {nav}
       <FilterBar filter={filter} sessions={data}>
         <div className="flex flex-wrap gap-2">
-          <ExportMenu size="sm" label="ส่งออก" build={() => yearBook({
+          <ExportMenu size="sm" label="ส่งออก" build={async () => yearBook({
             aName, bName, rangeText, monthLabel, curKeys, prevKeys, byMonth, curList, prevList,
             quarters: quarters.map((q) => ({ label: q.partial ? `${q.label} (บางเดือน)` : q.label, a: q.a, b: q.b })),
             filter: { platform: filter.platform, account: filter.account, sessions: data },
+            crew: await loadCrew(curList),
           })} />
           <SlidesMenu label="สไลด์" title={`GLORY ภาพรวม ${aName}`} build={buildSlides} />
         </div>
@@ -688,8 +705,9 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
       {keys.includes(now) ? <Notice>{monthLabel(now)} ยังไม่จบเดือน (*) ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว และไม่นับเป็นเดือนสูงสุด/ต่ำสุด</Notice> : null}
       <FilterBar filter={filter} sessions={data}>
         <div className="flex flex-wrap gap-2">
-          <ExportMenu size="sm" label="ส่งออก" build={() => multiBook({
+          <ExportMenu size="sm" label="ส่งออก" build={async () => multiBook({
             rangeText: rangeLabel(range), monthLabel, shortLabel: short, keys, focus, byMonth, filter: exportFilter,
+            crew: await loadCrew(keys.flatMap((k) => byMonth.get(k) ?? [])),
           })} />
           <SlidesMenu label="สไลด์" title={`GLORY เทียบหลายเดือน ${rangeLabel(range)}`} build={(target) => buildMultiDeck({
             rangeText: rangeLabel(range), keys, focus, label: short, longLabel: monthLabel, byMonth, now,
@@ -1156,11 +1174,12 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
   const chartSeries = [{ name: curName, color: CUR, values: curVals }, { name: prevName, color: PREV, values: prevVals }];
   const missing = [...new Set([...missingMonths(pc.from, pc.to, dataMonths), ...missingMonths(pp.from, pp.to, dataMonths)])];
 
-  const exportBook = () => compareBook({
+  const exportBook = async () => compareBook({
     title: `GLORY ${report} ${curName} vs ${prevName}`, report, aName: curName, bName: prevName,
     aRange: windowText(pc.from, pc.to), bRange: windowText(pp.from, pp.to), a: cur, b: prev,
     timeName: timeText, time: timeGroups,
     filter: { platform: filter.platform, account: filter.account, sessions: [...curQ.data!, ...prevQ.data!] },
+    crew: await loadCrew([...cur, ...prev]),
   });
 
   return (
