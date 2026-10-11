@@ -1007,7 +1007,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
       ) : null}
 
       {changes.total && !readOnly ? (
-        <div className="slot-bar-open fixed inset-x-0 bottom-0 z-20 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
+        <div className="slot-bar-open fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
           <div className="mx-auto flex max-w-[1200px] items-center gap-2">
             <div className="min-w-0 flex-1 text-sm">
               <strong>ร่าง {monthLabel(month)}</strong>
