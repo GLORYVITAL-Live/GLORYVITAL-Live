@@ -1,4 +1,5 @@
 import type { GmvBefore } from "@/lib/gmv";
+import type { LiveSession } from "@/lib/live-stats";
 
 export type Role = "mc" | "admin" | "owner";
 
@@ -15,6 +16,43 @@ export type Me = {
     id: number; name: string; mc: boolean; admin: boolean; proofs: boolean; analytics: boolean; plan: boolean;
     see: { mc: boolean; admin: boolean; proofs: boolean; analytics: boolean; plan: boolean };
   } | null;
+  /** Marketing = เห็นแค่หน้า CEO Live (ดูอย่างเดียว) */
+  marketing: { id: number; name: string } | null;
+};
+
+/** ครั้งที่มี CEO Live (จาก slot Mc ที่ชื่อแคมเปญมีคำว่า CEO) — date = วันไลฟ์ YYYY-MM-DD ตามเวลาไทย */
+export type CeoEvent = {
+  date: string;
+  /** ชื่อแคมเปญใน slot เช่น "CEO Live" / "CEO PHONE IN" / "3.3 x CEO LIVE" */
+  label: string;
+  /** ช่วงเวลาที่ CEO ไลฟ์ (ชื่อช่องที่แสดง เช่น GLORY VITAL) */
+  times: { platform: string; start: string; end: string }[];
+  /** บัญชีในไฟล์ Export ของช่องที่ CEO ไลฟ์ ("TikTok|7126…") */
+  accounts: string[];
+};
+/** ข้อมูล "รอบ CEO Live" ที่ track แยก (ช่วงที่ CEO ไลฟ์) — ctr / co เป็นสัดส่วน (0.2436 = 24.36%) */
+export type CeoSession = {
+  date: string;
+  title: string;
+  timeRange: string;
+  durationHr: number | null;
+  gmv: number | null;
+  orders: number | null;
+  viewers: number | null;
+  views: number | null;
+  peakViewers: number | null;
+  peakTime: string;
+  impressions: number | null;
+  ctr: number | null;
+  co: number | null;
+};
+/**
+ * หน้า CEO Live: ไลฟ์ (sessions) มีเฉพาะของวัน CEO Live และวันก่อน · months = เดือนที่มีข้อมูลในระบบ
+ *   tracked = ข้อมูลรอบ CEO · trackedReady = รัน SQL ตาราง ceo_sessions แล้ว · canEdit = อัปโหลด / ลบข้อมูลรอบ CEO ได้
+ */
+export type CeoLiveData = {
+  today: string; events: CeoEvent[]; sessions: LiveSession[]; months: string[];
+  tracked: CeoSession[]; trackedReady: boolean; canEdit: boolean;
 };
 
 export type OwnerScope = { mc: boolean; admin: boolean };

@@ -15,6 +15,7 @@ import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
 import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
+import { CeoLive } from "@/components/CeoLive";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast,
 } from "@/components/shared";
@@ -28,7 +29,7 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-// หน้าสถิติไลฟ์ (Owner): ภาพรวมรายเดือน MoM / YoY | เทียบแคมเปญ | อัปโหลดไฟล์ Export
+// หน้าสถิติไลฟ์ (Owner): ภาพรวมรายเดือน MoM / YoY | เทียบแคมเปญ | CEO Live | อัปโหลดไฟล์ Export
 
 type MonthRow = { month: string; platform: string; lives: number; gmv: number };
 
@@ -99,7 +100,7 @@ async function fetchCampaigns() {
 /** หน้า Data analytics · readOnly = ดูได้อย่างเดียว (ไม่มีแท็บอัปโหลด / แก้แคมเปญไม่ได้ แต่ส่งออกได้) */
 export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
   const saved = useLocal(TAB_KEY);
-  const tab = saved === "compare" || saved === "campaign" || (saved === "upload" && !readOnly) ? saved : "overview";
+  const tab = saved === "compare" || saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) ? saved : "overview";
   const [months, setMonths] = useState<MonthRow[] | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [error, setError] = useState("");
@@ -117,7 +118,9 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
   if (error) return <LoadError title="โหลดสถิติไลฟ์ไม่สำเร็จ" message={error} onRetry={() => setAttempt((n) => n + 1)} />;
   if (!months || !campaigns) return <LoadingBlock />;
 
-  const tabs = [["overview", "ภาพรวม"], ["compare", "เทียบช่วง"], ["campaign", "แคมเปญ"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const])] as const;
+  const tabs = [
+    ["overview", "ภาพรวม"], ["compare", "เทียบช่วง"], ["campaign", "แคมเปญ"], ["ceo", "CEO Live"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const]),
+  ] as const;
   const dataMonths = [...new Set(months.map((m) => m.month))];
   const empty = <EmptyData readOnly={readOnly} />;
   return (
@@ -138,6 +141,8 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
       <TabsContent value="campaign">
         <CampaignView campaigns={campaigns} dataMonths={dataMonths} version={version} readOnly={readOnly} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />
       </TabsContent>
+      {/* หน้าเดียวกับที่บัญชี Marketing เห็น */}
+      <TabsContent value="ceo"><CeoLive key={version} /></TabsContent>
       {readOnly ? null : (
         <TabsContent value="upload">
           <UploadView months={months} onChanged={() => { setVersion((v) => v + 1); fetchMonths().then(setMonths, onError); }} />
@@ -160,9 +165,10 @@ function EmptyData({ readOnly }: { readOnly: boolean }) {
 
 // ---------- ตัวกรอง แพลตฟอร์ม / บัญชี ----------
 
-function useFilter() {
-  const [platform, setPlatform] = useState<Platform | "">("");
-  const [account, setAccount] = useState("");
+/** initial = แพลตฟอร์ม / บัญชี ("แพลตฟอร์ม|รหัสบัญชี") ที่เลือกไว้ตอนเปิด (ไม่ใส่ = ทุกบัญชี) */
+function useFilter(initial: { platform?: Platform | ""; account?: string } = {}) {
+  const [platform, setPlatform] = useState<Platform | "">(() => initial.platform || (initial.account?.split("|")[0] as Platform) || "");
+  const [account, setAccount] = useState(initial.account ?? "");
   return { platform, account, setPlatform: (p: Platform | "") => { setPlatform(p); setAccount(""); }, setAccount };
 }
 
@@ -836,7 +842,7 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
 // ---------- เทียบรายวัน (DoD) ----------
 
 const DAY_SINGLE_KEY = "glory_live_day_single";
-const dayKeyShift = (k: string, by: number) => new Date(Date.parse(`${k}T00:00:00Z`) + by * 86400_000).toISOString().slice(0, 10);
+export const dayKeyShift = (k: string, by: number) => new Date(Date.parse(`${k}T00:00:00Z`) + by * 86400_000).toISOString().slice(0, 10);
 /** วันเดียวกันของเดือนก่อน (เดือนก่อนมีวันน้อยกว่า = วันสุดท้ายของเดือนนั้น) เช่น 31 ต.ค. -> 30 ก.ย. */
 function sameDayLastMonth(k: string) {
   const [y, m, d] = k.split("-").map(Number);
@@ -846,7 +852,7 @@ function sameDayLastMonth(k: string) {
 const fmtWeekday = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { weekday: "long", timeZone: "UTC" });
 const fmtDayDate = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 /** วัน "YYYY-MM-DD" -> ช่วง 00:00–24:00 เวลาไทย */
-function dayPeriod(k: string): Period {
+export function dayPeriod(k: string): Period {
   const [y, m, d] = k.split("-").map(Number);
   // ชื่อช่วง เช่น "อาทิตย์ 6 ก.ย. 2026" (Intl ให้ "วันอาทิตย์" ตัดคำว่า "วัน" ออก)
   const date = new Date(`${k}T12:00:00Z`);
@@ -1133,7 +1139,7 @@ const lastMonthOf = (p: Period) => monthOf(new Date(Date.parse(p.to) - 1).toISOS
  *   unit = กราฟตามเวลาแบ่งเป็นรายวัน หรือรายเดือน (นับจากวันเริ่ม/เดือนแรกของแต่ละช่วง)
  *   prev = null: ดูช่วงเดียว ไม่เทียบ (เช่น ดูรายวัน) — ไม่มี % เปลี่ยน / ไฟล์ส่งออกไม่มีคอลัมน์เทียบ
  */
-function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, fixHint }: {
+export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, fixHint, given, initialFilter }: {
   /** ชื่อรายงานในไฟล์ที่ส่งออก เช่น "เทียบเดือน (MoM)" / "Campaign on Campaign" */
   report: string;
   cur: Period;
@@ -1142,26 +1148,31 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
   dataMonths: string[];
   version: number;
   fixHint: string;
+  /** ไลฟ์ของทั้งสองช่วงที่โหลดมาแล้ว (หน้า CEO Live) = ไม่ต้องโหลดเอง */
+  given?: { cur: LiveSession[]; prev: LiveSession[] };
+  /** แพลตฟอร์ม / บัญชีที่เลือกไว้ตอนเปิด (ไม่ใส่ = ทุกบัญชี) */
+  initialFilter?: { platform?: Platform | ""; account?: string };
 }) {
-  const filter = useFilter();
+  const filter = useFilter(initialFilter);
   const [metric, setMetric] = useState<MetricKey>("gmv");
   const [groupBy, setGroupBy] = useState<"account" | "time">("account");
-  const curQ = useSessions(pc.from, pc.to, version);
-  const prevQ = useSessions(pp?.from ?? null, pp?.to ?? null, version);
+  const curQ = useSessions(given ? null : pc.from, given ? null : pc.to, version);
+  const prevQ = useSessions(given ? null : pp?.from ?? null, given ? null : pp?.to ?? null, version);
   const single = !pp;
   const error = curQ.error || prevQ.error;
-  const prevData = single ? [] : prevQ.data;
-  if (!curQ.data || !prevData) {
+  const curData = given?.cur ?? curQ.data;
+  const prevData = single ? [] : given?.prev ?? prevQ.data;
+  if (!curData || !prevData) {
     return error ? <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={error} onRetry={() => { curQ.retry(); prevQ.retry(); }} /> : <LoadingBlock />;
   }
 
-  const cur = filterSessions(curQ.data, filter.platform, filter.account);
+  const cur = filterSessions(curData, filter.platform, filter.account);
   const prev = filterSessions(prevData, filter.platform, filter.account);
   const tc = totalsOf(cur), tp = totalsOf(prev);
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
   const curName = pc.name, prevName = pp?.name ?? "";
-  const allData = [...curQ.data, ...prevData];
+  const allData = [...curData, ...prevData];
   const timeText = unit === "hour" ? "รายชั่วโมง" : unit === "day" ? "รายวัน" : "รายเดือน";
   const stepMs = unit === "hour" ? 3600_000 : 86400_000;
 

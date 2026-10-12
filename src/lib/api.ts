@@ -61,6 +61,14 @@ export async function requireAnalytics(denied = "บัญชีนี้ไม�
   return { me: r.me };
 }
 
+/** หน้า CEO Live (ดูอย่างเดียว): บัญชี Marketing หรือ Owner ที่เข้า Data analytics ได้ */
+export async function requireCeoLive() {
+  const r = await requireMe();
+  if ("res" in r) return r;
+  if (!r.me.marketing && !r.me.owner?.see.analytics) return { res: fail("บัญชีนี้ไม่มีสิทธิ์ดูหน้า CEO Live", 403) };
+  return { me: r.me };
+}
+
 /**
  * Owner ที่ติ๊กสิทธิ์ "Plan Slot Live" (แพลน slot ทั้งเดือน เขียนทั้งแท็บ Deal Mc + Admin เสริม)
  *   ไม่ต้องมีสิทธิ์จัดการ Mc / Admin · ติ๊กให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้ · write = บันทึกแพลน

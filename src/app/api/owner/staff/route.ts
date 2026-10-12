@@ -15,16 +15,19 @@ import type { Me } from "@/lib/types";
 //           / รับอีเมลแจ้งยกเลิกคิว (Owner)
 //   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
 // สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
-//         รายชื่อและสิทธิ์ของ Owner จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
+//         รายชื่อและสิทธิ์ของ Owner / รายชื่อ Marketing จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
+// Marketing (SQL 20261021000000_marketing) = ชื่อ / อีเมล / เบอร์ เท่านั้น เห็นแค่หน้า CEO Live
 
-type Role = "mc" | "admin" | "owner";
-const ROLES: Role[] = ["mc", "admin", "owner"];
+type Role = "mc" | "admin" | "owner" | "marketing";
+const ROLES: Role[] = ["mc", "admin", "owner", "marketing"];
+/** Mc / Admin = มีคิว ค่าจ้าง ปฏิทิน (Owner / Marketing ไม่มี) */
+const isCrew = (role: Role): role is "mc" | "admin" => role === "mc" || role === "admin";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TABLE: Record<"mc" | "admin", { table: "mc_slots" | "admin_slots"; col: string }> = {
   mc: { table: "mc_slots", col: "mc_id" },
   admin: { table: "admin_slots", col: "admin_id" },
 };
-const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
+const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
 
 const requireOwner = (access: Access = "write") => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน", access);
 /** สิทธิ์ "ดูได้อย่างเดียว" ของ Owner (บันทึกเฉพาะตอนส่งมา ยังไม่ได้รัน SQL = ไม่แตะ) */
@@ -32,9 +35,9 @@ const VIEW_FIELDS = ["can_view_mc", "can_view_admin", "can_view_proofs", "can_vi
 /** รับอีเมลแจ้งเมื่อ Mc / Admin เสริมกดยกเลิกคิว (SQL 20261020000000_notify_cancel) — ไม่ใช่สิทธิ์ ตั้งให้ตัวเองได้ */
 const NOTIFY_FIELDS = ["notify_cancel_mc", "notify_cancel_admin"] as const;
 type Scope = { mc: boolean; admin: boolean; full: boolean };
-const canRole = (scope: Scope, role: Role) => (role === "owner" ? scope.full : scope[role]);
+const canRole = (scope: Scope, role: Role) => (isCrew(role) ? scope[role] : scope.full);
 const noRole = (role: Role) =>
-  fail(role === "owner" ? "จัดการรายชื่อ Owner ได้เฉพาะ Owner ที่มีสิทธิ์ทั้ง Mc และ Admin" : `บัญชีนี้ไม่มีสิทธิ์จัดการรายชื่อ ${ROLE_LABEL[role]}`, 403);
+  fail(isCrew(role) ? `บัญชีนี้ไม่มีสิทธิ์จัดการรายชื่อ ${ROLE_LABEL[role]}` : `จัดการรายชื่อ ${ROLE_LABEL[role]} ได้เฉพาะ Owner ที่มีสิทธิ์ทั้ง Mc และ Admin`, 403);
 
 async function log(me: Me, action: string) {
   await createAdminClient().from("booking_logs").insert({ email: me.email, role: "Owner", name: me.owner?.name ?? "", action, result: "สำเร็จ" });
@@ -56,6 +59,7 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     out.email = email || null;
   }
   if (!partial || "phone" in body) out.phone = String(body.phone ?? "").trim().slice(0, 30) || null;
+  if (role === "marketing") return { data: out };
   if (!partial || "hourly_rate" in body) {
     const raw = String(body.hourly_rate ?? "").replace(/[,\s฿]/g, "");
     const rate = raw === "" ? null : Number(raw);
@@ -140,11 +144,11 @@ export async function GET() {
     .select(`id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, is_salaried, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics${extra}`)
     .order("name").overrideTypes<Row[], { merge: false }>());
   if (error) return fail(error.message, 500);
-  const edit = { mc: r.scope.edit.mc, admin: r.scope.edit.admin, owner: r.scope.full };
+  const edit: Record<Role, boolean> = { mc: r.scope.edit.mc, admin: r.scope.edit.admin, owner: r.scope.full, marketing: r.scope.full };
   const staff = (rows ?? [])
-    .filter((s) => canRole(r.scope, s.role as Role) || s.id === r.me.owner?.id)
+    .filter((s) => (ROLES.includes(s.role as Role) && canRole(r.scope, s.role as Role)) || s.id === r.me.owner?.id)
     // ฝั่งที่ดูได้อย่างเดียว: ไม่ส่งค่าจ้าง / Commit
-    .map((s) => (s.role !== "owner" && !edit[s.role as "mc" | "admin"] ? { ...s, hourly_rate: null, commit_tiers: null } : s));
+    .map((s) => (!edit[s.role as Role] ? { ...s, hourly_rate: null, commit_tiers: null } : s));
 
   // จำนวนคิวตั้งแต่วันนี้ (ไม่นับที่ยกเลิก)
   const upcoming = new Map<number, number>();
@@ -162,7 +166,7 @@ export async function GET() {
   const noCalendar = await missingCalendarCounts().catch(() => new Map<number, number>());
   return ok({
     staff: (staff ?? []).map((s) => ({
-      ...s, upcoming: upcoming.get(s.id) ?? 0, ...(s.role !== "owner" ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
+      ...s, upcoming: upcoming.get(s.id) ?? 0, ...(isCrew(s.role as Role) ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
     })),
     meId: r.me.owner?.id ?? null,
     // บทบาทที่แก้รายชื่อได้ (ดูได้อย่างเดียว = false)
@@ -186,6 +190,9 @@ export async function POST(request: Request) {
   if ((c.data?.can_plan_slots || c.data?.can_view_plan) && !r.me.owner?.plan) return noPlanGrant();
 
   const { data, error } = await createAdminClient().from("staff").insert({ role, ...c.data }).select("id").single();
+  if (error && role === "marketing" && /staff_role_check|check constraint/.test(error.message)) {
+    return fail("ต้องรัน SQL 20261021000000_marketing ใน Supabase ก่อน ถึงจะเพิ่มบัญชี Marketing ได้");
+  }
   if (error) return fail(needViewSql(dupMessage(error.message)));
   after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"`));
   return ok({ id: data.id });
@@ -239,7 +246,7 @@ export async function PATCH(request: Request) {
   if (error) return fail(needViewSql(dupMessage(error.message)));
 
   // ผลต่อปฏิทิน / ชีต
-  if (role !== "owner") {
+  if (isCrew(role)) {
     const { table, col } = TABLE[role];
     const renamed = "name" in changes && changes.name !== cur.name;
     const contactChanged = ("email" in changes && changes.email !== cur.email) || ("phone" in changes && changes.phone !== cur.phone);

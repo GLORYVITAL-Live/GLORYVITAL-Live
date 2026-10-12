@@ -125,6 +125,18 @@
   API ที่อ่านอย่างเดียว (GET) ใช้ `requireOwner(…, "read")` / `requireAnalytics(…, "read")` / `requirePlanner(…, "read")` ที่เหลือ (แก้ไข) ต้องจัดการได้
 - ตาราง slot > มุมมอง Mc / Admin = หน้าจองที่ Mc / Admin เห็น (ดูอย่างเดียว จองแทนไม่ได้)
 
+## บัญชี Marketing / หน้า CEO Live
+
+- รัน SQL `20261021000000_marketing` ก่อน (เพิ่มบทบาท `marketing` ในตาราง staff)
+- เพิ่มคนที่ หน้าเจ้าของ > พนักงาน > Marketing (ชื่อ + อีเมล Google) — Owner ที่จัดการได้ทั้ง Mc + Admin เท่านั้น
+- Marketing login แล้วเห็นแค่หน้า **CEO Live** (ดูอย่างเดียว ส่งออกไฟล์ / สไลด์ได้) · Owner ดูหน้าเดียวกันที่ Data analytics > CEO Live
+- วัน CEO Live = slot Mc ที่ชื่อแคมเปญมีคำว่า CEO (CEO Live / CEO PHONE IN / 3.3 x CEO LIVE …) ไม่นับที่ยกเลิก + วันที่มีข้อมูลรอบ CEO ที่อัปโหลด
+- ภาพรวมหลายวัน (เลือกช่วงวัน / กดวันออกได้) แบบตารางที่ทีม track: **ก่อน CEO Live** (ทั้งวันของวันก่อน) | **รอบ CEO Live** (ข้อมูลที่ track แยก ตาราง `ceo_sessions`) | **วัน CEO Live** (ทั้งวัน)
+  - ยอดทั้งวันคิดจากไฟล์ Export ตามขอบเขต: TikTok ทุกบัญชี (ค่าเริ่มต้น) / ช่องที่ CEO ไลฟ์ (ช่องใน slot -> บัญชีตาม `slotPlatformOf`) / ทุกบัญชี
+  - ส่งออก Excel / Google Sheet / สไลด์ (`src/lib/ceo-report.ts`, `src/lib/ceo-slides.ts`) + รายละเอียดทีละวัน (กราฟรายชั่วโมง เทียบวันก่อน)
+- รอบ CEO: Owner ที่จัดการ Data analytics ได้ กด "อัปโหลดข้อมูลรอบ CEO" แล้ววางตาราง "Session Ceo Live" จากชีต (วางทั้งชีตได้) หรือเลือกไฟล์ .xlsx — ตัวอ่านใน `src/lib/ceo-parse.ts` (มีเทสต์) วันเดิม = แทนที่
+- `/api/ceo-live` (`src/lib/ceo-live.ts`) ส่งไลฟ์เฉพาะวัน CEO Live + วันก่อน — ข้อมูลวันอื่นไม่ออกจากเซิร์ฟเวอร์ · `/api/live-stats` ยังต้องเป็น Owner ที่มีสิทธิ์ Data analytics
+
 ## กฎการทำงาน
 
 - หน้าเจ้าของ > กฎการทำงาน: แก้ข้อความส่วน "อื่นๆ" ของ Mc / Admin (หนึ่งบรรทัด = หนึ่งข้อ) เก็บใน `settings.rules_mc` / `rules_admin`

@@ -878,4 +878,4 @@ function thaiThemeFont(pptx: Uint8Array) {
 }
 
 // ใช้ร่วมกับสไลด์อื่น (src/lib/campaign-slides.ts)
-export { C as SLIDE_C, FONT as SLIDE_FONT, W as SLIDE_W, H as SLIDE_H, M as SLIDE_M, newDeck, finish };
+export { C as SLIDE_C, FONT as SLIDE_FONT, W as SLIDE_W, H as SLIDE_H, M as SLIDE_M, newDeck, finish, shapeBars, pctText, pctColor };

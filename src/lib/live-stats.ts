@@ -116,6 +116,13 @@ function colIndex(ref: string) {
 
 /** ชีตแรกของไฟล์ .xlsx -> ตาราง (ข้อความทุกช่อง) */
 export function readXlsx(data: Uint8Array): string[][] {
+  const first = readXlsxSheets(data)[0];
+  if (!first?.rows.length) throw new Error("ไม่พบข้อมูลในไฟล์ (ชีตว่าง)");
+  return first.rows;
+}
+
+/** ทุกชีตของไฟล์ .xlsx ตามลำดับใน workbook -> [{ ชื่อชีต, ตาราง }] */
+export function readXlsxSheets(data: Uint8Array): { name: string; rows: string[][] }[] {
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(data, { filter: (f) => f.name.startsWith("xl/") && f.name.endsWith(".xml") || f.name.endsWith(".rels") });
@@ -123,16 +130,20 @@ export function readXlsx(data: Uint8Array): string[][] {
     throw new Error("เปิดไฟล์ไม่ได้ ต้องเป็นไฟล์ Excel (.xlsx)");
   }
   const read = (name: string) => (files[name] ? strFromU8(files[name]) : "");
-
-  // ชีตแรกตามลำดับใน workbook (ไม่เจอ = sheet1.xml)
-  let sheetPath = "xl/worksheets/sheet1.xml";
-  const rid = read("xl/workbook.xml").match(/<sheet\b[^>]*\br:id="([^"]+)"/)?.[1];
-  const target = rid && read("xl/_rels/workbook.xml.rels").match(new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`))?.[1];
-  if (target) sheetPath = target.startsWith("/") ? target.slice(1) : `xl/${target}`;
-  const sheet = read(sheetPath);
-  if (!sheet) throw new Error("ไม่พบข้อมูลในไฟล์ (ชีตว่าง)");
-
+  const rels = read("xl/_rels/workbook.xml.rels");
+  const attr = (tag: string, key: string) => tag.match(new RegExp(`\\b${key}="([^"]*)"`))?.[1] ?? "";
+  // ชีตตามลำดับใน workbook (ไม่มี workbook.xml = sheet1.xml)
+  const list = [...read("xl/workbook.xml").matchAll(/<sheet\b([^>]*?)\/?>/g)].map((m) => {
+    const rid = attr(m[1], "r:id");
+    const target = rid && rels.match(new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`))?.[1];
+    return { name: decodeXml(attr(m[1], "name")), path: target ? (target.startsWith("/") ? target.slice(1) : `xl/${target}`) : "" };
+  }).filter((s) => s.path);
+  if (!list.length) list.push({ name: "Sheet1", path: "xl/worksheets/sheet1.xml" });
   const shared = [...read("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1]));
+  return list.map((s) => ({ name: s.name, rows: sheetRows(read(s.path), shared) }));
+}
+
+function sheetRows(sheet: string, shared: string[]) {
   const rows: string[][] = [];
   for (const r of sheet.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)) {
     // แถวว่างไม่อยู่ในไฟล์ เติมให้เลขแถวตรงกับ Excel

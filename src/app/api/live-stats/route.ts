@@ -1,5 +1,6 @@
 import { fail, ok, requireAnalytics } from "@/lib/api";
 import { cleanSession, monthWindow, PLATFORMS, type LiveSession } from "@/lib/live-stats";
+import { loadSessions } from "@/lib/live-stats-db";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // สถิติไลฟ์ (หน้าเจ้าของ > สถิติไลฟ์) เฉพาะ Owner
@@ -8,35 +9,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 //   POST   { fileName, sessions }  บันทึกไลฟ์จากไฟล์ Export (บัญชี + เวลาเริ่มเดิม = อัปเดตแถวเดิม)
 //   DELETE { platform, month }     ลบข้อมูลทั้งเดือนของแพลตฟอร์มนั้น (อัปไฟล์ผิด)
 
-const COLS = "platform, account_id, account_name, title, started_at, duration_sec, gmv, orders, items_sold, customers, viewers, views, engaged_viewers, avg_view_sec, comments, shares, likes, new_followers, add_to_cart, impressions, clicks";
 const MAX_DAYS = 800;
-
-type Row = Record<string, unknown>;
-const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-
-const fromRow = (r: Row): LiveSession => ({
-  platform: r.platform as LiveSession["platform"],
-  accountId: String(r.account_id),
-  accountName: String(r.account_name ?? ""),
-  title: String(r.title ?? ""),
-  startedAt: new Date(String(r.started_at)).toISOString(),
-  durationSec: Number(r.duration_sec),
-  gmv: Number(r.gmv),
-  orders: Number(r.orders),
-  itemsSold: Number(r.items_sold),
-  customers: n(r.customers),
-  viewers: Number(r.viewers),
-  views: n(r.views),
-  engagedViewers: n(r.engaged_viewers),
-  avgViewSec: n(r.avg_view_sec),
-  comments: n(r.comments),
-  shares: n(r.shares),
-  likes: n(r.likes),
-  newFollowers: n(r.new_followers),
-  addToCart: n(r.add_to_cart),
-  impressions: n(r.impressions),
-  clicks: n(r.clicks),
-});
 
 const toRow = (s: LiveSession, fileName: string, by: string) => ({
   platform: s.platform,
@@ -82,18 +55,11 @@ export async function GET(request: Request) {
   if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return fail("ช่วงเวลาไม่ถูกต้อง");
   if (to - from > MAX_DAYS * 86400_000) return fail(`เลือกช่วงได้ไม่เกิน ${MAX_DAYS} วัน`);
 
-  // Supabase ส่งได้ครั้งละ 1,000 แถว ดึงต่อจนครบ
-  const rows: Row[] = [];
-  for (let page = 0; ; page++) {
-    const { data, error } = await db.from("live_sessions").select(COLS)
-      .gte("started_at", new Date(from).toISOString()).lt("started_at", new Date(to).toISOString())
-      .order("started_at").order("id")
-      .range(page * 1000, page * 1000 + 999);
-    if (error) return fail(error.message, 500);
-    rows.push(...(data ?? []));
-    if (!data || data.length < 1000) break;
+  try {
+    return ok({ sessions: await loadSessions(new Date(from).toISOString(), new Date(to).toISOString()) });
+  } catch (err) {
+    return fail((err as Error).message, 500);
   }
-  return ok({ sessions: rows.map(fromRow) });
 }
 
 export async function POST(request: Request) {

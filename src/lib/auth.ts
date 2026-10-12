@@ -25,7 +25,7 @@ export async function getMe(): Promise<Me | null> {
   if (error && /can_plan_slots/.test(error.message)) ({ data: rows, error } = await query(base));
   if (error) throw error;
 
-  const me: Me = { email, mc: null, admin: null, owner: null };
+  const me: Me = { email, mc: null, admin: null, owner: null, marketing: null };
   type Row = {
     id: number; role: string; name: string; is_extra_admin: boolean; can_manage_mc: boolean | null; can_manage_admin: boolean | null;
     can_manage_proofs: boolean | null; can_view_analytics: boolean | null; can_plan_slots?: boolean | null;
@@ -35,6 +35,7 @@ export async function getMe(): Promise<Me | null> {
   for (const r of (rows ?? []) as unknown as Row[]) {
     if (r.role === "mc") me.mc = { id: r.id, name: r.name };
     if (r.role === "admin") me.admin = { id: r.id, name: r.name, isExtra: r.is_extra_admin };
+    if (r.role === "marketing") me.marketing = { id: r.id, name: r.name };
     if (r.role === "owner") {
       // สิทธิ์เดิม = จัดการได้ / can_view_* = ดูได้อย่างเดียว / Data analytics: ติ๊กแล้วดูได้ จัดการได้ถ้าไม่ได้ตั้งเป็นดูอย่างเดียว
       const mc = r.can_manage_mc !== false, admin = r.can_manage_admin !== false, proofs = r.can_manage_proofs === true;
@@ -52,5 +53,5 @@ export async function getMe(): Promise<Me | null> {
 }
 
 export function isRegistered(me: Me) {
-  return !!(me.mc || me.admin || me.owner);
+  return !!(me.mc || me.admin || me.owner || me.marketing);
 }

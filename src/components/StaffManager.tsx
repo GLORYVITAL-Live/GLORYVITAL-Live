@@ -21,7 +21,9 @@ import { money } from "@/lib/format";
 import { parseTierHours, tiersLabel } from "@/lib/pay";
 import type { CommitTier, OwnerScope } from "@/lib/types";
 
-type Role = "mc" | "admin" | "owner";
+type Role = "mc" | "admin" | "owner" | "marketing";
+/** Mc / Admin = มีคิว ค่าจ้าง ปฏิทิน (Owner / Marketing ไม่มี) */
+const isCrew = (role: Role) => role === "mc" || role === "admin";
 type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
   hourly_rate: number | null; is_extra_admin: boolean; is_salaried: boolean; upcoming: number;
@@ -37,11 +39,11 @@ type Person = {
 };
 type StaffData = { staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean> };
 
-const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner" };
+const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
 const displayName = (p: Pick<Person, "role" | "name">) => (p.role === "mc" ? `Mc ${p.name}` : p.name);
-/** บทบาทที่ Owner คนนี้เปิดดูได้ (รายชื่อ Owner = ต้องมีสิทธิ์ทั้ง Mc และ Admin) */
+/** บทบาทที่ Owner คนนี้เปิดดูได้ (รายชื่อ Owner / Marketing = ต้องมีสิทธิ์ทั้ง Mc และ Admin) */
 const rolesOf = (scope: OwnerScope): Role[] =>
-  [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : []), ...(scope.mc && scope.admin ? ["owner" as const] : [])];
+  [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : []), ...(scope.mc && scope.admin ? ["owner" as const, "marketing" as const] : [])];
 const phoneDigits = (v: string | null | undefined) => String(v ?? "").replace(/\D/g, "");
 
 // ---------- รายชื่อที่น่าจะซ้ำ (Mc / Admin) ----------
@@ -53,7 +55,7 @@ const nameKey = (n: string) => n.toLowerCase().replace(PREFIX, "").replace(/[\s.
 type DupGroup = { people: Person[]; samePhone: boolean; sameName: boolean; emails: string[] };
 /** กลุ่มรายชื่อบทบาทเดียวกันที่เบอร์เดียวกัน หรือชื่อเดียวกัน (ต่อกันเป็นกลุ่มได้หลายคน) */
 function dupGroups(staff: Person[]): DupGroup[] {
-  const people = staff.filter((p) => p.role !== "owner");
+  const people = staff.filter((p) => isCrew(p.role));
   const parent = new Map(people.map((p) => [p.id, p.id]));
   const find = (id: number): number => (parent.get(id) === id ? id : find(parent.get(id)!));
   const first = new Map<string, number>();
@@ -126,8 +128,8 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   const toast = useToast();
   const [data, setData] = useState<StaffData | null>(null);
   // แก้รายชื่อบทบาทนี้ได้หรือไม่ (เซิร์ฟเวอร์ตัดสิน · ยังไม่โหลด = ถือว่าแก้ไม่ได้)
-  const canEditRole = (r: Role) => !!data && (data.canEdit ? data.canEdit[r] : r !== "owner" || (scope.mc && scope.admin));
-  const roles = rolesOf(scope).filter((r) => r !== "owner" || canEditRole("owner"));
+  const canEditRole = (r: Role) => !!data && (data.canEdit ? !!data.canEdit[r] : isCrew(r) || (scope.mc && scope.admin));
+  const roles = rolesOf(scope).filter((r) => isCrew(r) || canEditRole(r));
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);
   const [role, setRole] = useState<Role>(roles[0] ?? "mc");
@@ -148,9 +150,9 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   }, [tick]);
 
   const counts = useMemo(() => {
-    const c = { mc: 0, admin: 0, owner: 0, noEmail: 0 };
+    const c = { mc: 0, admin: 0, owner: 0, marketing: 0, noEmail: 0 };
     for (const p of data?.staff ?? []) {
-      c[p.role]++;
+      if (p.role in c) c[p.role]++;
       if (p.role === role && !p.email) c.noEmail++;
     }
     return c;
@@ -225,7 +227,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
 
       {noCalendar.length ? (
         <div className="my-2 flex flex-wrap items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
-          <span className="min-w-0 flex-1 leading-snug">
+          <span className="min-w-56 flex-1 leading-snug">
             <b>{ROLE_LABEL[role]} {noCalendar.length} คน ปฏิทินยังไม่แชร์</b> — รวม {noCalendar.reduce((a, p) => a + (p.calendarMissing ?? 0), 0)} คิวไม่ขึ้นใน Google Calendar
             <span className="block text-xs text-muted-foreground">{noCalendar.map((p) => `${displayName(p)} (${p.calendarMissing})`).join(", ")}</span>
           </span>
@@ -292,7 +294,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {p.commit_tiers?.length ? ` · Commit ${tiersLabel(0, p.commit_tiers)}` : ""}
                 </span>
               </span>
-              {p.role !== "owner" ? (
+              {isCrew(p.role) ? (
                 <span className={cn("shrink-0 text-right text-xs", p.upcoming && !p.email ? "font-semibold text-destructive" : "text-muted-foreground")}>
                   {p.upcoming ? `คิวข้างหน้า ${p.upcoming}` : "–"}
                 </span>
@@ -520,7 +522,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
       } : {};
       const fields = {
         name, email, phone, hourly_rate: rate, is_extra_admin: extra, is_salaried: salaried,
-        ...(role !== "owner" ? { commit_tiers: tiers } : {}),
+        ...(isCrew(role) ? { commit_tiers: tiers } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { ...manage, ...view } : {}),
         // Plan Slot Live: ให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
@@ -620,9 +622,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         </Field>
 
         <Field
-          label="อีเมล Google (ใช้ login และลงปฏิทิน)"
+          label={`อีเมล Google (${isCrew(role) ? "ใช้ login และลงปฏิทิน" : "ใช้ login"})`}
           hint={isMe ? "เปลี่ยนอีเมลของตัวเองไม่ได้ ให้ Owner คนอื่นเปลี่ยนให้" : null}
-          warning={!isMe && role !== "owner" && emailChanged && email.trim()
+          warning={!isMe && isCrew(role) && emailChanged && email.trim()
             ? email.trim().toLowerCase().endsWith("@glorythailand.com")
               ? "อีเมลในองค์กร: ระบบไม่ลงนัดในปฏิทินให้ (ดูคิวจากเว็บ/ชีต)"
               : <>ระบบจะลงคิวข้างหน้าของคนนี้ในปฏิทินของอีเมลนี้ — เจ้าของอีเมลต้องแชร์ปฏิทินให้ kunraroj.d@glorythailand.com (สิทธิ์ &quot;ทำการเปลี่ยนแปลงกิจกรรม&quot;) ก่อน</>
@@ -631,7 +633,14 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           {(id) => <Input id={id} type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={isMe} placeholder="name@gmail.com" autoComplete="off" />}
         </Field>
 
-        {role !== "owner" ? (
+        {role === "marketing" ? (
+          <p className="rounded-lg bg-secondary px-3 py-2 text-xs leading-relaxed text-secondary-foreground">
+            บัญชี Marketing เข้าเว็บแล้วเห็นแค่หน้า <b>CEO Live</b>: ยอดทั้งวันของวันที่มี CEO Live เทียบวันก่อน (ช่องที่ CEO ไลฟ์ และทุกบัญชี)
+            ดูได้อย่างเดียว ส่งออกไฟล์ / สไลด์ได้ — ไม่เห็นข้อมูลวันอื่น ตาราง slot รายชื่อ หรือค่าจ้าง
+          </p>
+        ) : null}
+
+        {isCrew(role) ? (
           <>
             <Field label="เบอร์โทร" hint="แสดงในปฏิทินของคู่ไลฟ์ (Mc เห็นเบอร์ Admin / Admin เห็นเบอร์ Mc)">
               {(id) => <Input id={id} type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />}
@@ -681,7 +690,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           </Label>
         ) : null}
 
-        {role !== "owner" ? (
+        {isCrew(role) ? (
           <Label className="items-start leading-snug font-normal">
             <Checkbox
               checked={salaried}
@@ -785,7 +794,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           </fieldset>
         ) : null}
 
-        {person && person.role !== "owner" && others.length ? (
+        {person && isCrew(person.role) && others.length ? (
           <fieldset className="space-y-2 rounded-xl border p-3">
             <legend className="px-1 font-semibold">รวมรายชื่อซ้ำ</legend>
             <p className="text-xs text-muted-foreground">
