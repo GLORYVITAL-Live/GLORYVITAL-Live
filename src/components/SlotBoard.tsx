@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, EyeIcon, LayoutGridIcon, Rows3Icon } from "lucide-react";
-import type { ActionResult, Me, OpenSlot, SlotsResponse } from "@/lib/types";
+import type { ActionResult, BookingLimits, Me, OpenSlot, SlotsResponse } from "@/lib/types";
 import {
   fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, parseKey, platformOf, relLabel,
 } from "@/lib/format";
@@ -16,17 +16,19 @@ import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
+import { CalendarGuideDialog } from "@/components/CalendarGuide";
 
-// ให้ตรงกับ settings ใน DB (ฝั่ง server เช็คซ้ำอีกชั้นเสมอ)
-const MAX_SLOTS_PER_DAY = 2;
-const MAX_HOURS_PER_DAY = 4;
-const MAX_PER_REQUEST = 10;
-const ADMIN_MAX_SLOTS_PER_DAY = 4;
-const ADMIN_MAX_HOURS_PER_DAY = 8;
-const ADMIN_MAX_BLOCKS_PER_DAY = 2; // ช่วง = slot ที่ต่อกัน เช่น 09:30–11:30 + 11:30–13:30
+// ค่าสำรองเมื่อเซิร์ฟเวอร์ไม่ได้ส่งโควต้ามา (ปกติใช้ค่าจาก settings ใน DB และฝั่ง server เช็คซ้ำอีกชั้นเสมอ)
+// ช่วง (blocks) = slot ที่ต่อกัน เช่น 09:30–11:30 + 11:30–13:30 นับเป็น 1 ช่วง
+const DEFAULT_LIMITS: Record<"mc" | "admin", BookingLimits> = {
+  mc: { slotsPerDay: 2, hoursPerDay: 4, blocksPerDay: null, perRequest: 10 },
+  admin: { slotsPerDay: 4, hoursPerDay: 8, blocksPerDay: 2, perRequest: 10 },
+};
+type Span = { startMs: number; endMs: number };
+const spanHours = (s: Span) => (s.endMs - s.startMs) / 3600_000;
 
 /** จำนวนช่วงเวลาต่อเนื่อง (slot ที่เวลาจบ = เวลาเริ่มของอีก slot นับเป็นช่วงเดียวกัน) */
-function blocksOf(list: OpenSlot[]) {
+function blocksOf(list: Span[]) {
   const sorted = [...list].sort((a, b) => a.startMs - b.startMs);
   return sorted.filter((x, i) => i === 0 || sorted[i - 1].endMs !== x.startMs).length;
 }
@@ -64,6 +66,24 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   const [results, setResults] = useState<ActionResult[] | null>(null);
   const [lostResponse, setLostResponse] = useState(false);
   const stripRef = useRef<HTMLElement>(null);
+  // แชร์ปฏิทิน: คู่มือ + ปุ่ม "แชร์แล้ว เช็กเลย"
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  async function checkCalendar() {
+    setChecking(true);
+    try {
+      const res = await api<{ access: string; message: string }>("/api/my/calendar", { role });
+      if (!res.ok) throw new Error(res.message);
+      const fine = res.access === "ok" || res.access === "skip";
+      toast(res.message, fine ? undefined : "error");
+      if (fine) { setGuideOpen(false); setTick((n) => n + 1); }
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setChecking(false);
+    }
+  }
 
   const [tick, setTick] = useState(0);
   const [updatedAt, setUpdatedAt] = useState(0);
@@ -123,6 +143,13 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
 
   const isLocked = !!data?.siteNotice;
   const slots = useMemo(() => data?.slots ?? [], [data]);
+  const limits = data?.limits ?? DEFAULT_LIMITS[role];
+  // คิวที่จองไว้แล้ว (นับรวมโควต้าต่อวัน + เวลาทับ) แยกตามวัน
+  const mineByDay = useMemo(() => {
+    const m = new Map<string, Span[]>();
+    for (const x of data?.mine ?? []) m.set(x.date, [...(m.get(x.date) ?? []), x]);
+    return m;
+  }, [data]);
 
   // สีประจำแพลตฟอร์ม ตามลำดับที่เจอ
   const platformIndex = useMemo(() => {
@@ -166,22 +193,23 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
     if (chip && strip) strip.scrollTo({ left: chip.offsetLeft - strip.clientWidth / 2 + chip.clientWidth / 2, behavior: "smooth" });
   }, [activeDate]);
 
+  /** เหตุผลที่เลือก slot นี้ไม่ได้ ("" = เลือกได้) นับทั้ง slot ที่เลือกอยู่และคิวที่จองไว้แล้วของวันนั้น */
   function blockReason(s: OpenSlot) {
     if (isLocked) return t.lockMsg;
     const chosen = [...selected.values()];
-    if (chosen.some((x) => s.startMs < x.endMs && s.endMs > x.startMs)) return "เวลานี้ทับกับ slot ที่เลือกไว้แล้ว";
-    if (chosen.length >= MAX_PER_REQUEST) return `เลือกได้ครั้งละไม่เกิน ${MAX_PER_REQUEST} slot`;
-    const sameDay = chosen.filter((x) => x.date === s.date);
-    if (role === "admin") {
-      if (sameDay.length >= ADMIN_MAX_SLOTS_PER_DAY) return `รับได้สูงสุด ${ADMIN_MAX_SLOTS_PER_DAY} slot ต่อวัน`;
-      if (sameDay.reduce((a, x) => a + hoursOf(x), 0) + hoursOf(s) > ADMIN_MAX_HOURS_PER_DAY) return `รวมแล้วเกิน ${ADMIN_MAX_HOURS_PER_DAY} ชม. ต่อวัน`;
-      if (blocksOf([...sameDay, s]) > ADMIN_MAX_BLOCKS_PER_DAY) {
-        return `แบ่งได้ไม่เกิน ${ADMIN_MAX_BLOCKS_PER_DAY} ช่วงต่อวัน เลือก slot ที่ต่อกับช่วงที่เลือกไว้`;
-      }
-      return "";
+    const booked = mineByDay.get(s.date) ?? [];
+    const hit = (x: Span) => s.startMs < x.endMs && s.endMs > x.startMs;
+    // ทับกับคิวเดิม (ดูทุกวัน เผื่อ slot ข้ามเที่ยงคืน)
+    if ((data?.mine ?? []).some(hit)) return `เวลานี้ทับกับคิวที่คุณ${t.verb}ไว้แล้ว`;
+    if (chosen.some(hit)) return "เวลานี้ทับกับ slot ที่เลือกไว้แล้ว";
+    if (chosen.length >= limits.perRequest) return `เลือกได้ครั้งละไม่เกิน ${limits.perRequest} slot`;
+    const sameDay: Span[] = [...chosen.filter((x) => x.date === s.date), ...booked];
+    const had = booked.length ? ` (คุณมีคิววันนี้แล้ว ${booked.length} slot)` : "";
+    if (sameDay.length >= limits.slotsPerDay) return `${role === "admin" ? "รับ" : "จอง"}ได้สูงสุด ${limits.slotsPerDay} slot ต่อวัน${had}`;
+    if (sameDay.reduce((a, x) => a + spanHours(x), 0) + spanHours(s) > limits.hoursPerDay) return `รวมแล้วเกิน ${limits.hoursPerDay} ชม. ต่อวัน${had}`;
+    if (limits.blocksPerDay && blocksOf([...sameDay, s]) > limits.blocksPerDay) {
+      return `แบ่งได้ไม่เกิน ${limits.blocksPerDay} ช่วงต่อวัน เลือก slot ที่ต่อกับช่วงเดิม${had}`;
     }
-    if (sameDay.length >= MAX_SLOTS_PER_DAY) return `เลือกได้สูงสุด ${MAX_SLOTS_PER_DAY} slot ต่อวัน`;
-    if (sameDay.reduce((a, x) => a + hoursOf(x), 0) + hoursOf(s) > MAX_HOURS_PER_DAY) return `รวมแล้วเกิน ${MAX_HOURS_PER_DAY} ชม. ต่อวัน`;
     return "";
   }
 
@@ -281,6 +309,22 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
 
       {data?.siteNotice ? <Notice variant="warning" icon className="font-medium">{data.siteNotice}</Notice> : null}
       {data?.scheduleNotice ? <Notice>{data.scheduleNotice}</Notice> : null}
+      {!preview && data?.calendarMissing ? (
+        <Notice variant="warning" icon title={`คิวของคุณ ${data.calendarMissing} คิว ยังไม่ขึ้นใน Google Calendar`}>
+          <span className="block">แชร์ปฏิทินให้ระบบครั้งเดียว ต่อไปทุกคิวที่จอง / ยกเลิก จะขึ้นในปฏิทินของคุณเองภายใน 1–2 นาที</span>
+          <span className="mt-2 flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" className="bg-card" onClick={() => setGuideOpen(true)}>ดูวิธีแชร์ (มีรูป)</Button>
+            <Button size="sm" disabled={checking} onClick={checkCalendar}>{checking ? "กำลังเช็ก..." : "แชร์แล้ว เช็กเลย"}</Button>
+          </span>
+        </Notice>
+      ) : null}
+      <CalendarGuideDialog open={guideOpen} onClose={() => setGuideOpen(false)} onCheck={checkCalendar} checking={checking} />
+      {data && slots.length ? (
+        <p className="my-1 text-xs text-muted-foreground">
+          {role === "admin" ? "รับคิว" : "จอง"}ได้ไม่เกิน {limits.slotsPerDay} slot และ {limits.hoursPerDay} ชม. ต่อวัน
+          {limits.blocksPerDay ? ` · แบ่งได้ไม่เกิน ${limits.blocksPerDay} ช่วงต่อวัน` : ""} (นับรวมคิวที่{t.verb}ไว้แล้ว)
+        </p>
+      ) : null}
       {data && updatedAt ? (
         <div className="my-1 flex items-center justify-end gap-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
@@ -374,12 +418,16 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
             <h2 className="mb-2 flex flex-wrap items-center gap-2 font-bold">
               {fmtDayLong.format(parseKey(k))}
               <DayBadge label={relLabel(k)} />
+              {mineByDay.get(k)?.length ? (
+                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">คุณมีคิวแล้ว {mineByDay.get(k)!.length} slot</span>
+              ) : null}
               <span className="ml-auto text-xs font-medium text-muted-foreground">{t.countLbl} {list.length} slot</span>
             </h2>
             <div className={view === "card" ? "grid grid-cols-1 gap-2 sm:grid-cols-2" : "overflow-hidden rounded-xl border bg-card"}>
               {list.map((s) => {
                 const isSel = selected.has(s.id);
-                const blocked = !isSel && !!blockReason(s);
+                const reason = isSel || preview ? "" : blockReason(s);
+                const blocked = !!reason;
                 return (
                   <button
                     key={s.id}
@@ -392,7 +440,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                       view === "card"
                         ? cn("rounded-xl border bg-card px-4 py-3 shadow-card", isSel ? "border-primary ring-2 ring-primary/30" : "hover:border-primary/50")
                         : cn("border-b px-3 py-2.5 last:border-b-0", isSel ? "bg-secondary" : "hover:bg-muted"),
-                      blocked && "opacity-45",
+                      blocked && "opacity-60",
                     )}
                   >
                     <span className="min-w-0 flex-1">
@@ -402,6 +450,8 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                         <span>{fmtHours(hoursOf(s))}</span>
                         {role === "admin" && s.pairName ? <span className="font-medium text-foreground">{s.pairName}</span> : null}
                       </span>
+                      {/* บอกเหตุผลที่เลือกไม่ได้เลย ไม่ต้องกดก่อนถึงรู้ */}
+                      {blocked && !isLocked ? <span className="mt-0.5 block text-[11px] text-muted-foreground">{reason}</span> : null}
                     </span>
                     <span
                       aria-hidden

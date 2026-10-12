@@ -55,11 +55,19 @@ export type OpenSlot = {
   pairName?: string; // Admin เห็นว่า slot นี้ Mc คนไหนไลฟ์
 };
 
+/** โควต้าการจองต่อวัน (blocksPerDay = จำนวนช่วงต่อเนื่อง ใช้กับ Admin เสริม) */
+export type BookingLimits = { slotsPerDay: number; hoursPerDay: number; blocksPerDay: number | null; perRequest: number };
+
 export type SlotsResponse = {
   ok: true;
   siteNotice: string;
   scheduleNotice: string;
   slots: OpenSlot[];
+  /** คิวที่จองไว้แล้วตั้งแต่วันนี้ (เซิร์ฟเวอร์เก่าไม่ส่ง = ไม่รู้) ใช้เช็กโควต้าก่อนกดจอง */
+  mine?: { date: string; startMs: number; endMs: number }[];
+  limits?: BookingLimits;
+  /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทินของคนนี้ (> 0 = แสดงแถบเตือนให้แชร์ปฏิทิน) */
+  calendarMissing?: number;
 };
 
 export type ActionResult = { id: number; success: boolean; message: string };

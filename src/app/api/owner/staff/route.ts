@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
 import { VIEW_COL_RE, VIEW_COLS } from "@/lib/auth";
+import { missingCalendarCounts } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
 import { parseTierHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -157,8 +158,12 @@ export async function GET() {
       if (!data || data.length < 1000) break;
     }
   }
+  // คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้บัญชีระบบ) — ดึงไม่ได้ก็แสดงรายชื่อได้ปกติ
+  const noCalendar = await missingCalendarCounts().catch(() => new Map<number, number>());
   return ok({
-    staff: (staff ?? []).map((s) => ({ ...s, upcoming: upcoming.get(s.id) ?? 0 })),
+    staff: (staff ?? []).map((s) => ({
+      ...s, upcoming: upcoming.get(s.id) ?? 0, ...(s.role !== "owner" ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
+    })),
     meId: r.me.owner?.id ?? null,
     // บทบาทที่แก้รายชื่อได้ (ดูได้อย่างเดียว = false)
     canEdit: edit,

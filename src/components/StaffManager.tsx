@@ -1,7 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { MailIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import { CalendarXIcon, CopyIcon, MailIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import { copyText } from "@/components/CalendarGuide";
+import { CALENDAR_SHARE_TO, calendarShareMessage } from "@/lib/calendar-share";
 import {
   AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, StateBox, api, useConfirm, useToast,
 } from "@/components/shared";
@@ -29,6 +32,8 @@ type Person = {
   can_view_mc?: boolean; can_view_admin?: boolean; can_view_proofs?: boolean; can_view_plan?: boolean; analytics_readonly?: boolean;
   // รับอีเมลแจ้งเมื่อ Mc / Admin เสริมกดยกเลิกคิว (ไม่มี = ยังไม่ได้รัน SQL 20261020000000_notify_cancel)
   notify_cancel_mc?: boolean; notify_cancel_admin?: boolean;
+  /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้บัญชีระบบ) */
+  calendarMissing?: number;
 };
 type StaffData = { staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean> };
 
@@ -41,8 +46,10 @@ const phoneDigits = (v: string | null | undefined) => String(v ?? "").replace(/\
 
 // ---------- รายชื่อที่น่าจะซ้ำ (Mc / Admin) ----------
 
-/** ชื่อสำหรับเทียบ: ตัดคำนำหน้า Mc / Admin / แอดมิน + ช่องว่าง / จุด / ขีด เช่น "Admin ปัน" = "ปัน" (ตัวเลขท้ายชื่อไม่ตัด "มะนาว2" ≠ "มะนาว") */
-const nameKey = (n: string) => n.toLowerCase().replace(/^(mc|admin|แอดมิน)\s*/i, "").replace(/[\s.\-_()]/g, "");
+const PREFIX = /^(mc|admin|แอดมิน)\s*/i;
+/** ชื่อสำหรับเทียบ: ตัดคำนำหน้า Mc / Admin / แอดมิน + ช่องว่าง / จุด / ขีด + ตัวการันต์ เช่น "Admin ปัน" = "ปัน", "มายด์" = "มาย"
+ *  (ตัวเลขท้ายชื่อไม่ตัด "มะนาว2" ≠ "มะนาว") */
+const nameKey = (n: string) => n.toLowerCase().replace(PREFIX, "").replace(/[\s.\-_()]/g, "").replace(/[ก-ฮ][ิุ]?์/g, "");
 type DupGroup = { people: Person[]; samePhone: boolean; sameName: boolean; emails: string[] };
 /** กลุ่มรายชื่อบทบาทเดียวกันที่เบอร์เดียวกัน หรือชื่อเดียวกัน (ต่อกันเป็นกลุ่มได้หลายคน) */
 function dupGroups(staff: Person[]): DupGroup[] {
@@ -73,7 +80,7 @@ function dupGroups(staff: Person[]): DupGroup[] {
 /** คนที่ควรเก็บไว้: มีอีเมล > คิวข้างหน้ามากกว่า > ชื่อไม่มีคำนำหน้า > เพิ่มก่อน */
 const keepOf = (g: Person[]) => [...g].sort((a, b) =>
   Number(!!b.email) - Number(!!a.email) || b.upcoming - a.upcoming
-  || Number(nameKey(a.name) !== a.name.toLowerCase().replace(/[\s.\-_()]/g, "")) - Number(nameKey(b.name) !== b.name.toLowerCase().replace(/[\s.\-_()]/g, ""))
+  || Number(PREFIX.test(a.name)) - Number(PREFIX.test(b.name))
   || a.id - b.id)[0];
 
 // ---------- สิทธิ์ Owner 3 ระดับ: ไม่มี / ดูได้ / จัดการได้ ----------
@@ -153,6 +160,9 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   const dups = useMemo(() => dupGroups(data?.staff ?? []), [data]);
   const dupOf = useMemo(() => new Map(dups.flatMap((g) => g.people.map((p) => [p.id, g] as const))), [dups]);
   const roleDups = dups.filter((g) => g.people[0].role === role);
+  // คนในบทบาทนี้ที่คิวข้างหน้ายังไม่ขึ้นปฏิทิน (มากไปน้อย)
+  const noCalendar = (data?.staff ?? []).filter((p) => p.role === role && p.calendarMissing)
+    .sort((a, b) => (b.calendarMissing ?? 0) - (a.calendarMissing ?? 0));
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -213,6 +223,29 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
         <DuplicatePanel key={role} role={role as "mc" | "admin"} groups={roleDups} onMerged={(msg) => { toast(msg); reload(); }} />
       ) : null}
 
+      {noCalendar.length ? (
+        <div className="my-2 flex flex-wrap items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+          <span className="min-w-0 flex-1 leading-snug">
+            <b>{ROLE_LABEL[role]} {noCalendar.length} คน ปฏิทินยังไม่แชร์</b> — รวม {noCalendar.reduce((a, p) => a + (p.calendarMissing ?? 0), 0)} คิวไม่ขึ้นใน Google Calendar
+            <span className="block text-xs text-muted-foreground">{noCalendar.map((p) => `${displayName(p)} (${p.calendarMissing})`).join(", ")}</span>
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="bg-card"
+            onClick={async () => {
+              if (await copyText(calendarShareMessage(location.origin))) toast("คัดลอกข้อความแล้ว วางส่งใน LINE ได้เลย");
+              else toast("คัดลอกไม่ได้", "error");
+            }}
+          >
+            <CopyIcon />คัดลอกวิธีแชร์ (ส่ง LINE)
+          </Button>
+          <Button size="sm" variant="outline" className="bg-card" asChild>
+            <Link href="/guide#calendar" target="_blank">ดูคู่มือ</Link>
+          </Button>
+        </div>
+      ) : null}
+
       {!list.length ? (
         <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : canEditRole(role) ? "กด \"เพิ่มคน\" เพื่อเพิ่มรายชื่อ" : null}</StateBox>
       ) : (
@@ -235,6 +268,14 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                     </Badge>
                   ) : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
+                  {p.calendarMissing ? (
+                    <Badge
+                      className="bg-destructive/10 text-[11px] text-destructive"
+                      title={`คิวข้างหน้า ${p.calendarMissing} คิวยังไม่ขึ้นใน Google Calendar ของคนนี้ — ส่วนใหญ่เพราะยังไม่ได้แชร์ปฏิทินให้ ${CALENDAR_SHARE_TO}`}
+                    >
+                      <CalendarXIcon />ปฏิทินยังไม่แชร์ · {p.calendarMissing} คิว
+                    </Badge>
+                  ) : null}
                   {dupOf.has(p.id) ? (
                     <Badge
                       className="border-warning-border bg-warning text-[11px] text-warning-foreground"
@@ -504,32 +545,29 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   const samePhoneAs = (o: Person) => !!person && phoneDigits(o.phone).length >= 9 && phoneDigits(o.phone) === phoneDigits(person.phone);
   const twin = person ? others.find(samePhoneAs) ?? others.find((o) => nameKey(o.name) === nameKey(person.name)) : undefined;
   const [mergeTo, setMergeTo] = useState(twin ? String(twin.id) : "");
-  const [mergeInfo, setMergeInfo] = useState<MergeSummary | null>(null);
 
-  async function checkMerge() {
+  /** รวมรายชื่อ: ตรวจก่อน (ย้ายกี่คิว / เวลาชน / อีเมล เบอร์ที่ย้าย) -> ยืนยัน -> รวม (กดปุ่มเดียว) */
+  async function doMerge() {
     if (!person || !mergeTo) return;
     setSaving(true);
     try {
-      const res = await api<{ summary: MergeSummary }>("/api/owner/staff/merge", { sourceId: person.id, targetId: Number(mergeTo), dryRun: true });
-      if (!res.ok) throw new Error(res.message);
-      setMergeInfo(res.summary);
-    } catch (err) {
-      toast((err as Error).message, "error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function doMerge() {
-    if (!person || !mergeInfo) return;
-    const ok = await confirm({
-      title: `รวม ${mergeInfo.source} เข้ากับ ${mergeInfo.target}?`,
-      description: `ย้ายคิวทั้งหมด ${mergeInfo.total} คิวไปเป็นของ ${mergeInfo.target} (ชีตและปฏิทินอัปเดตให้) แล้วลบรายชื่อ ${mergeInfo.source} — ย้อนกลับไม่ได้`,
-      confirmText: "รวมรายชื่อ", destructive: true,
-    });
-    if (!ok) return;
-    setSaving(true);
-    try {
+      const check = await api<{ summary: MergeSummary }>("/api/owner/staff/merge", { sourceId: person.id, targetId: Number(mergeTo), dryRun: true });
+      if (!check.ok) throw new Error(check.message);
+      const x = check.summary;
+      const ok = await confirm({
+        title: `รวม ${x.source} เข้ากับ ${x.target}?`,
+        description: (
+          <span className="block space-y-1">
+            <span className="block">ย้าย <b>{x.total}</b> คิว (ตั้งแต่วันนี้ {x.upcoming} คิว) ไปเป็นของ {x.target} แล้วลบรายชื่อ {x.source}</span>
+            {x.moveEmail ? <span className="block">อีเมล {x.moveEmail} ย้ายไปที่ {x.target}</span> : null}
+            {x.movePhone ? <span className="block">เบอร์ {x.movePhone} ย้ายไปที่ {x.target}</span> : null}
+            {x.conflicts ? <b className="block text-destructive">มี {x.conflicts} คิวที่เวลาชนกับคิวเดิมของ {x.target} ตรวจที่ตาราง slot หลังรวม</b> : null}
+            <span className="block">ชีตและปฏิทินอัปเดตให้ — ย้อนกลับไม่ได้</span>
+          </span>
+        ),
+        confirmText: "รวมรายชื่อ", destructive: true,
+      });
+      if (!ok) { setSaving(false); return; }
       const res = await api<{ message: string }>("/api/owner/staff/merge", { sourceId: person.id, targetId: Number(mergeTo) });
       if (!res.ok) throw new Error(res.message);
       onClose(res.message);
@@ -755,7 +793,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
               {twin ? <span className="font-semibold text-warning-foreground"> · {samePhoneAs(twin) ? "เบอร์" : "ชื่อ"}เดียวกับ {displayName(twin)}</span> : null}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={mergeTo} onValueChange={(v) => { setMergeTo(v); setMergeInfo(null); }}>
+              <Select value={mergeTo} onValueChange={setMergeTo}>
                 <SelectTrigger aria-label="รวมเข้ากับ" className="min-w-48 flex-1"><SelectValue placeholder="เลือกรายชื่อที่จะเก็บไว้" /></SelectTrigger>
                 <SelectContent position="popper" className="max-h-72">
                   {[...others].sort((a, b) => a.name.localeCompare(b.name, "th")).map((o) => (
@@ -763,17 +801,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
                   ))}
                 </SelectContent>
               </Select>
-              <Button variant="outline" disabled={saving || !mergeTo} onClick={checkMerge}>ตรวจก่อนรวม</Button>
+              <Button variant="destructive" disabled={saving || !mergeTo} onClick={doMerge}>รวมรายชื่อ</Button>
             </div>
-            {mergeInfo ? (
-              <div className="space-y-1 rounded-lg bg-secondary p-2.5 text-xs">
-                <p>ย้าย <b>{mergeInfo.total}</b> คิว (ตั้งแต่วันนี้ {mergeInfo.upcoming} คิว) จาก {mergeInfo.source} ไปเป็นของ <b>{mergeInfo.target}</b></p>
-                {mergeInfo.moveEmail ? <p>อีเมล {mergeInfo.moveEmail} จะย้ายไปที่ {mergeInfo.target} (ตอนนี้ยังไม่มีอีเมล)</p> : null}
-                {mergeInfo.movePhone ? <p>เบอร์ {mergeInfo.movePhone} จะย้ายไปที่ {mergeInfo.target}</p> : null}
-                {mergeInfo.conflicts ? <p className="font-semibold text-destructive">มี {mergeInfo.conflicts} คิวที่เวลาชนกับคิวเดิมของ {mergeInfo.target} ตรวจที่หน้าจัดการ slot หลังรวม</p> : null}
-                <Button size="sm" variant="destructive" className="mt-1" disabled={saving} onClick={doMerge}>รวมเข้ากับ {mergeInfo.target}</Button>
-              </div>
-            ) : null}
+            <p className="text-xs text-muted-foreground">ปุ่ม &quot;บันทึก&quot; ด้านล่างไม่ได้รวมรายชื่อ — กด &quot;รวมรายชื่อ&quot; แล้วยืนยัน</p>
           </fieldset>
         ) : null}
       </DialogBody>

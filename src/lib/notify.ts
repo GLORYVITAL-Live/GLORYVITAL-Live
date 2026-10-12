@@ -1,7 +1,6 @@
 import "server-only";
-import { google } from "googleapis";
 import { fmtDayLong, parseKey } from "@/lib/format";
-import { googleAuth } from "@/lib/google";
+import { escapeHtml, sendMail } from "@/lib/mail";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -21,38 +20,10 @@ const SITE = "https://glory-vital-live.vercel.app";
 /** ยกเลิกก่อนไลฟ์ไม่ถึงกี่ชั่วโมง = ขึ้น [ด่วน] ที่หัวเรื่อง */
 const URGENT_HOURS = 48;
 
-const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+const esc = escapeHtml;
 const hm = (t: string) => String(t).slice(0, 5);
 
-/** ส่งอีเมล HTML (หัวเรื่องภาษาไทยได้) จากบัญชีระบบ ถึงผู้รับหลายคนในฉบับเดียว · ส่งไม่ได้ = คืน false ไม่ throw */
-export async function sendMail(to: string | string[], subject: string, html: string) {
-  const auth = googleAuth();
-  const list = (Array.isArray(to) ? to : [to]).filter(Boolean);
-  if (!auth || !list.length) return false;
-  const mime = [
-    `To: ${list.join(", ")}`,
-    `Subject: =?UTF-8?B?${b64(subject)}?=`,
-    "MIME-Version: 1.0",
-    "Content-Type: text/html; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    b64(html).replace(/.{76}/g, "$&\r\n"),
-  ].join("\r\n");
-  try {
-    await google.gmail({ version: "v1", auth }).users.messages.send({
-      userId: "me",
-      requestBody: { raw: Buffer.from(mime, "utf8").toString("base64url") },
-    });
-    return true;
-  } catch (err) {
-    const msg = (err as Error).message ?? String(err);
-    console.error(/insufficient|scope|permission/i.test(msg)
-      ? "ส่งอีเมลแจ้งเตือนไม่ได้: บัญชี Google ของระบบยังไม่ได้อนุญาตสิทธิ์ส่งอีเมล (รัน bun run google:auth ใหม่ แล้วอัปเดต GOOGLE_REFRESH_TOKEN)"
-      : `ส่งอีเมลแจ้งเตือนไม่สำเร็จ: ${msg}`);
-    return false;
-  }
-}
+export { sendMail };
 
 /** ระยะเวลาก่อนไลฟ์ เช่น "3 วัน 4 ชม." / "5 ชม." */
 function leadText(ms: number) {

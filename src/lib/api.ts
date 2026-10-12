@@ -1,5 +1,6 @@
 import "server-only";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { alertError } from "@/lib/alert";
 import { getMe, isRegistered } from "@/lib/auth";
 import type { Me } from "@/lib/types";
 
@@ -8,6 +9,10 @@ export function ok<T extends object>(data: T) {
 }
 
 export function fail(message: string, status = 400, extra: object = {}) {
+  // error ฝั่งเซิร์ฟเวอร์ (500+) แจ้งทางอีเมลหลังตอบผู้ใช้แล้ว (เฉพาะเว็บจริง กันเมลรัวใน alert.ts)
+  if (status >= 500) {
+    try { after(() => alertError({ where: `API ตอบ ${status}`, message })); } catch { /* นอกคำขอ (เช่น สคริปต์) ไม่ต้องแจ้ง */ }
+  }
   return NextResponse.json({ ok: false, message, ...extra }, { status });
 }
 

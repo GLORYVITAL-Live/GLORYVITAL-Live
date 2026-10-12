@@ -54,8 +54,75 @@ const isNotFound = (err: unknown) => {
  * ลงปฏิทินเฉพาะ Mc / Admin เสริมที่ใช้อีเมลภายนอก (ต้องแชร์ปฏิทินแบบ "ทำการเปลี่ยนแปลงกิจกรรม" ให้บัญชีระบบ)
  */
 const NO_CALENDAR_DOMAINS = ["@glorythailand.com"];
-const usesCalendar = (email: string | null | undefined) =>
+export const usesCalendar = (email: string | null | undefined) =>
   !!email && !NO_CALENDAR_DOMAINS.some((d) => email.toLowerCase().endsWith(d));
+
+export { CALENDAR_SHARE_TO } from "@/lib/calendar-share";
+
+/**
+ * ระบบเขียนปฏิทินของอีเมลนี้ได้ไหม (ถาม Google ตรงๆ 1 ครั้ง)
+ *   ok = แชร์แบบแก้ไขได้แล้ว / readonly = แชร์แล้วแต่ดูได้อย่างเดียว (ต้องเปลี่ยนสิทธิ์) / none = ยังไม่แชร์
+ *   skip = ไม่ต้องใช้ (อีเมลในองค์กร / ไม่มีอีเมล) / error = ถาม Google ไม่สำเร็จ
+ */
+export async function calendarAccess(email: string | null | undefined): Promise<"ok" | "readonly" | "none" | "skip" | "error"> {
+  if (!usesCalendar(email)) return "skip";
+  const cal = calendarApi();
+  if (!cal) return "error";
+  try {
+    const r = await cal.events.list({ calendarId: email!, maxResults: 1, timeMin: new Date().toISOString(), singleEvents: true });
+    return r.data.accessRole === "writer" || r.data.accessRole === "owner" ? "ok" : "readonly";
+  } catch (err) {
+    const code = (err as { code?: number })?.code;
+    return code === 404 || code === 403 ? "none" : "error";
+  }
+}
+
+/**
+ * คิวข้างหน้าที่ยังไม่มีนัดในปฏิทิน นับต่อคน (Map staff id -> จำนวนคิว)
+ *   เฉพาะคนที่ใช้อีเมลนอกองค์กร · ไม่นับคิวที่เพิ่งจอง/แก้ไม่ถึง 10 นาที (ระบบกำลังลงให้)
+ *   ไม่นับ Admin ประจำ (ยังไม่ต้องแชร์ปฏิทิน) — นับเฉพาะ Mc และ Admin เสริม
+ *   ส่วนใหญ่ = ยังไม่ได้แชร์ปฏิทินให้บัญชีระบบ
+ */
+export async function missingCalendarCounts(only?: { role: "mc" | "admin"; id: number }) {
+  const db = createAdminClient();
+  const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const settled = new Date(Date.now() - 10 * 60_000).toISOString();
+  const out = new Map<number, number>();
+  for (const [table, col, role] of [["mc_slots", "mc_id", "mc"], ["admin_slots", "admin_id", "admin"]] as const) {
+    if (only && only.role !== role) continue;
+    for (let from = 0; ; from += 1000) {
+      let q = db.from(table).select(`id, who:${col}, person:staff!${col}(email, is_extra_admin)`)
+        .gte("live_date", today).not(col, "is", null).is("calendar_event_id", null).eq("is_cancelled", false)
+        .or("confirmed.is.null,confirmed.eq.true").lt("updated_at", settled);
+      if (only) q = q.eq(col, only.id);
+      const { data, error } = await q.order("id").range(from, from + 999);
+      if (error) throw error;
+      for (const r of (data ?? []) as unknown as { who: number; person: { email: string | null; is_extra_admin: boolean } | null }[]) {
+        if (role === "admin" && !r.person?.is_extra_admin) continue; // Admin ประจำ ไม่เตือน
+        if (usesCalendar(r.person?.email)) out.set(r.who, (out.get(r.who) ?? 0) + 1);
+      }
+      if (!data || data.length < 1000) break;
+    }
+  }
+  return out;
+}
+
+/** จดงานลงปฏิทินของคิวข้างหน้าที่ยังไม่มีนัด ของคนนี้ (หลังเขาแชร์ปฏิทินแล้ว) คืนจำนวนงาน */
+export async function enqueueMissingCalendar(role: "mc" | "admin", personId: number) {
+  const db = createAdminClient();
+  const table = role === "mc" ? "mc_slots" : "admin_slots";
+  const col = role === "mc" ? "mc_id" : "admin_id";
+  const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const { data, error } = await db.from(table).select("id").eq(col, personId).gte("live_date", today)
+    .is("calendar_event_id", null).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true");
+  if (error) throw error;
+  const jobs = (data ?? []).map((r) => ({ slot_table: table, slot_id: r.id }));
+  if (jobs.length) {
+    const { error: e } = await db.from("calendar_jobs").insert(jobs);
+    if (e) throw e;
+  }
+  return jobs.length;
+}
 
 /** ปฏิทินของพนักงานไม่ได้แชร์ให้บัญชีระบบแบบ "ทำการเปลี่ยนแปลงกิจกรรม" (ลองซ้ำก็ไม่สำเร็จ) */
 const isNoAccess = (err: unknown) =>

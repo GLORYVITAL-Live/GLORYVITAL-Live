@@ -1,6 +1,7 @@
 import { fail, ok, requireMe } from "@/lib/api";
 import { withPlatformLabels } from "@/lib/platform";
-import { getSettings, openAdminSlots, openMcSlots, scheduleNotice } from "@/lib/data";
+import { missingCalendarCounts, usesCalendar } from "@/lib/calendar";
+import { bookingLimits, getSettings, openAdminSlots, openMcSlots, scheduleNotice, upcomingQueues } from "@/lib/data";
 
 // หน้าแรก: ประกาศ + slot ที่ว่าง (?role=mc | admin) — แทน action "init" / "adminInit"
 // Owner ที่มีสิทธิ์ฝั่งนั้นเปิดดูได้ (ดูอย่างเดียว เห็นแบบเดียวกับ Mc / Admin เสริม)
@@ -18,6 +19,7 @@ export async function GET(request: Request) {
   } else {
     if (!r.me.admin && !owner?.see.admin) return fail("บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Admin", 403);
     if (r.me.admin && !r.me.admin.isExtra && !owner?.see.admin) {
+      // Admin ประจำ: ไม่มี slot ให้รับ และยังไม่ต้องแชร์ปฏิทิน (ไม่เตือน)
       return ok({
         siteNotice: "",
         scheduleNotice: `${r.me.admin.name} เป็น Admin ประจำ คิวของคุณจัดโดยทีมงาน กดที่ชื่อมุมขวาบนเพื่อดู "ตารางของฉัน"`,
@@ -29,10 +31,20 @@ export async function GET(request: Request) {
   // ช่วงเปิดจองตามคน: คนในรายชื่อจองก่อนได้ช่วงของตัวเอง คนอื่นใช้ช่วงทั่วไป
   // (ข้อความแจ้งบอกแค่ช่วงวันของคนนั้น ไม่บอกว่ามีรายชื่อจองก่อน) Owner ที่เปิดดูเห็นแบบคนทั่วไป
   const personId = (role === "mc" ? r.me.mc : r.me.admin?.isExtra ? r.me.admin : null)?.id ?? null;
+  const [slots, mine, missing] = await Promise.all([
+    role === "mc" ? openMcSlots(settings, personId) : openAdminSlots(settings, personId),
+    // คิวที่จองไว้แล้ว: หน้าจองเช็กโควต้าต่อวัน / เวลาทับ ก่อนกดจอง (ไม่ต้องรอฐานข้อมูลปฏิเสธ)
+    personId ? upcomingQueues(role, personId) : Promise.resolve([]),
+    // คิวที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้ระบบ) ใช้แสดงแถบเตือน + วิธีแชร์
+    personId && usesCalendar(r.me.email) ? missingCalendarCounts({ role, id: personId }).catch(() => null) : Promise.resolve(null),
+  ]);
   return ok({
     siteNotice: settings.site_notice,
     scheduleNotice: scheduleNotice(settings, role, personId),
     // ชื่อช่องที่แสดง (เช่น GLORY MALL -> GLORY VITAL) ชีตยังใช้ชื่อเดิม
-    slots: withPlatformLabels(role === "mc" ? await openMcSlots(settings, personId) : await openAdminSlots(settings, personId)),
+    slots: withPlatformLabels(slots),
+    mine,
+    limits: bookingLimits(settings, role),
+    calendarMissing: personId && missing ? missing.get(personId) ?? 0 : 0,
   });
 }

@@ -137,6 +137,11 @@
   เจ้าของปฏิทินต้องแชร์ปฏิทินให้บัญชีนี้แบบ "ทำการเปลี่ยนแปลงกิจกรรม"
 - อีเมล @glorythailand.com (คนในองค์กร) **ไม่ลงนัด** (`NO_CALENDAR_DOMAINS` ใน `src/lib/calendar.ts`)
 - หน้าจัดการ slot: "ซิงค์ปฏิทินใหม่ทั้งหมด" (สร้างนัดที่หาย / แก้ที่ไม่ตรง / บอกรายชื่อที่ยังไม่แชร์) และ "ล้าง event ซ้ำ"
+- **ยังไม่แชร์ปฏิทิน** (นับจากคิวข้างหน้าที่ยังไม่มีนัดเกิน 10 นาที `missingCalendarCounts` · ไม่นับ Admin ประจำ / อีเมลในองค์กร)
+  - หน้าจองของ Mc / Admin เสริม: แถบเตือน + "ดูวิธีแชร์ (มีรูป)" + "แชร์แล้ว เช็กเลย" (`POST /api/my/calendar` ถาม Google ว่าเขียนได้ไหม ได้ = ลงคิวที่ค้างให้ทันที)
+  - หน้าพนักงาน: ป้าย "ปฏิทินยังไม่แชร์ · N คิว" + แถบรวม + "คัดลอกวิธีแชร์ (ส่ง LINE)"
+  - คู่มือ (ไม่ต้อง login): `/guide` — แชร์ปฏิทินในแอป Google Calendar (รูป `public/guide/calendar-share-*.jpg`) + เพิ่มเว็บไว้หน้าจอโฮม (วิดีโอ `public/guide/home-screen.mp4` เบลอรายชื่อติดต่อแล้ว ไม่มีเสียง)
+  - ข้อความขั้นตอน / อีเมล / สิทธิ์ที่ต้องเลือก: `src/lib/calendar-share.ts`
 
 ## อีเมลแจ้งเตือนยกเลิกคิว
 
@@ -186,5 +191,16 @@
 
 ## Cron
 
-ตั้งให้เรียก `GET /api/cron/calendar` ทุก 1–5 นาที พร้อม header `Authorization: Bearer $CRON_SECRET`
+`vercel.json` เรียก `GET /api/cron/calendar` วันละครั้ง (03:00 เวลาไทย) พร้อม header `Authorization: Bearer $CRON_SECRET`
 เพื่อเก็บตกงานลงปฏิทินที่ล้มเหลวชั่วคราว (ปกติระบบลงปฏิทินให้ทันทีหลังจอง)
+
+## เทส / ตรวจโค้ด / แจ้งเมื่อเว็บ error
+
+- `bun test` = เทสกฎคิดเงิน (สาย / ชดเชย / Commit) ช่วงเปิดจอง ชื่อแคมเปญ และ GMV ต่อ slot (`src/lib/*.test.ts`)
+  แก้กฎแล้วเทสพัง = ตัวเลขเงินเปลี่ยน ต้องตั้งใจเปลี่ยนจริงแล้วค่อยแก้เทสให้ตรง
+- GitHub Actions (`.github/workflows/ci.yml`) รัน typegen + tsc + eslint + เทส ทุกครั้งที่ push ไม่ผ่าน = กากบาทแดงที่ commit
+- เว็บจริง error ฝั่งเซิร์ฟเวอร์ (error ที่ไม่ได้ดัก ผ่าน `src/instrumentation.ts` + API ที่ตอบ 500 ผ่าน `fail()`)
+  → อีเมลเข้า kunraroj.d (`src/lib/alert.ts` · เฉพาะ Vercel production · error เดียวกันไม่ซ้ำใน 30 นาที / ไม่เกิน 10 ฉบับต่อชั่วโมง)
+- หน้า error / ไม่พบหน้า ภาษาไทย: `src/app/error.tsx` · `global-error.tsx` · `not-found.tsx`
+- หน้าจอง: โควต้าต่อวันอ่านจาก settings (`bookingLimits`) และนับคิวที่จองไว้แล้ว (`upcomingQueues`) slot ที่เลือกไม่ได้บอกเหตุผลบนการ์ด
+- ปุ่มบนจอสัมผัส (`pointer-coarse:`) สูงขึ้นอัตโนมัติ (`src/components/ui/button.tsx`) จอคอมคงขนาดเดิม

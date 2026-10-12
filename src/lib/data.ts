@@ -3,7 +3,7 @@ import { gmvCoverage } from "@/lib/gmv";
 import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays, bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
-import type { MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo, SlotGmv } from "@/lib/types";
+import type { BookingLimits, MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo, SlotGmv } from "@/lib/types";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -16,6 +16,12 @@ export type Settings = {
   default_admin_rate: number;
   cancel_min_hours: number;
   max_per_request: number;
+  // โควต้าต่อวัน (ฐานข้อมูลตรวจซ้ำตอนจองเสมอ)
+  mc_max_slots_per_day: number;
+  mc_max_hours_per_day: number;
+  admin_max_slots_per_day: number;
+  admin_max_hours_per_day?: number; // SQL 20261001000000_admin_rules
+  admin_max_blocks_per_day?: number;
   rules_mc?: string | null; // กฎการทำงาน ส่วน "อื่นๆ" (null = ข้อความเริ่มต้น)
   rules_admin?: string | null;
   book_window_mc?: unknown; // ช่วงเปิดจอง (src/lib/window.ts) null = ไม่จำกัดเพิ่ม
@@ -179,6 +185,24 @@ export async function openMcSlots(settings: Settings, personId?: number | null) 
     return q.order("starts_at").range(from, to);
   });
   return rows.map(toOpenSlot);
+}
+
+/** โควต้าการจองต่อวันของบทบาทนี้ (ตัวเลขเดียวกับที่ฐานข้อมูลใช้ตรวจ) */
+export const bookingLimits = (s: Settings, role: "mc" | "admin"): BookingLimits => role === "mc"
+  ? { slotsPerDay: Number(s.mc_max_slots_per_day) || 2, hoursPerDay: Number(s.mc_max_hours_per_day) || 4, blocksPerDay: null, perRequest: Number(s.max_per_request) || 10 }
+  : {
+    slotsPerDay: Number(s.admin_max_slots_per_day) || 4, hoursPerDay: Number(s.admin_max_hours_per_day) || 8,
+    blocksPerDay: Number(s.admin_max_blocks_per_day) || 2, perRequest: Number(s.max_per_request) || 10,
+  };
+
+/** คิวที่คนนี้มีอยู่แล้วตั้งแต่วันนี้ (ไม่นับที่ยกเลิก) ใช้เช็กโควต้า / เวลาทับ ก่อนกดจอง */
+export async function upcomingQueues(role: "mc" | "admin", personId: number): Promise<{ date: string; startMs: number; endMs: number }[]> {
+  const table = role === "mc" ? "mc_slots" : "admin_slots";
+  const col = role === "mc" ? "mc_id" : "admin_id";
+  const rows = await fetchAll<SlotRow>((from, to) =>
+    createAdminClient().from(table).select(SLOT_COLS).eq(col, personId).gte("live_date", addDays(bkkToday(), -1))
+      .or("confirmed.is.null,confirmed.eq.true").order("starts_at").range(from, to));
+  return rows.filter((r) => !r.is_cancelled).map((r) => ({ date: r.live_date, startMs: ms(r.starts_at), endMs: ms(r.ends_at) }));
 }
 
 /** slot ที่รอ Admin เสริม (เฉพาะในช่วงที่เปิดจอง) + ชื่อ Mc ที่ไลฟ์ใน slot นั้น */
