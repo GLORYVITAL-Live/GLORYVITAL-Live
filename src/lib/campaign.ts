@@ -9,6 +9,12 @@ export type CampFamily = "payday" | "double" | "prime" | "midmonth" | "other";
 
 export type Norm = { label: string; nameKey: string; family: CampFamily; big: boolean; isCeo: boolean };
 
+/**
+ * slot สแตนด์บาย: Mc อยู่สำรองไว้ (เช่น รอบ CEO เผื่อ CEO ลงก่อนเวลา) — พิมพ์ในช่อง Remark (แท็บ Deal Mc คอลัมน์ L)
+ *   ยอด GMV ของ slot นี้ไม่นับเป็นผลงานของ Mc (อันดับ Mc / แคมเปญ) แต่ชั่วโมงยังได้ค่าจ้างตามปกติ
+ */
+export const isStandby = (remark: string | null | undefined) => /สแตน(?:ด์)?บาย|standby|stand\s*by|สำรอง|สแปร์|สแปล|spare/i.test(String(remark ?? ""));
+
 export type CampInfo = {
   /** รหัสรอบ (ชื่อ + วันเริ่ม) เช่น "pay day@2026-09-25" */
   key: string;

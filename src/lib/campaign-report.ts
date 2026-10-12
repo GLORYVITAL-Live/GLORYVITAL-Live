@@ -100,9 +100,11 @@ export type Unit = {
  *   E: slot ที่กรอก GMV (+ slot ว่างก่อนหน้าของ Mc คนเดียวกันที่ยอดรวมอยู่ใน slot นี้)
  *   X: slot ที่ไม่มียอดที่กรอก ใช้ยอดที่แบ่งจากไฟล์ Export (ไลฟ์ต้องซ้อนกับ slot อย่างน้อย 30 นาที)
  *   ยอดจริงเกิน CAP เท่าของที่คาดหวัง นับแค่ CAP เท่า (actual) / ไม่มีค่าที่คาดหวัง = ข้าม (skipped)
+ *   slot สแตนด์บาย (Remark มีคำว่า สแตนด์บาย / สำรอง) = ไม่นับเป็นผลงานของ Mc (standby = จำนวนที่ไม่นับ)
  */
-export function slotUnits(slots: CtxSlot[], now: number): { units: Unit[]; skipped: number } {
-  const past = slots.filter((s) => s.startMs <= now);
+export function slotUnits(slots: CtxSlot[], now: number): { units: Unit[]; skipped: number; standby: number } {
+  const done = slots.filter((s) => s.startMs <= now);
+  const past = done.filter((s) => !s.standby);
   const units: Unit[] = [];
   let skipped = 0;
   const base = (s: CtxSlot) => ({
@@ -133,7 +135,7 @@ export function slotUnits(slots: CtxSlot[], now: number): { units: Unit[]; skipp
     const expected = s.expRate * s.exp.hours;
     units.push({ ...base(s), source: "X", hours: s.exp.hours, gmv: s.exp.gmv, actual: Math.min(s.exp.gmv, CAP * expected), expected, slots: 1 });
   }
-  return { units, skipped };
+  return { units, skipped, standby: done.length - past.length };
 }
 
 // ---------- อันดับ Mc ตามช่วง (เดือนที่เลือก / 30 วันล่าสุด / 90 วันล่าสุด) ----------
@@ -205,7 +207,7 @@ export async function rankReport(period: RankPeriod, month: string): Promise<Ran
   return {
     period, month, from, to, prevFrom, prevTo, today,
     partial: to >= today,
-    cells: toRankCells(u.units), prevCells: toRankCells(slotUnits(prev, now).units), skipped: u.skipped,
+    cells: toRankCells(u.units), prevCells: toRankCells(slotUnits(prev, now).units), skipped: u.skipped, standby: u.standby,
     expect: [...expect.values()].sort((a, b) => Number(a.label === "วันปกติ") - Number(b.label === "วันปกติ") || a.label.localeCompare(b.label) || a.platform.localeCompare(b.platform)),
     progress: {
       total, past, entered,

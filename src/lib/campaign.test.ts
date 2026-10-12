@@ -2,6 +2,12 @@
 import { describe, expect, test } from "bun:test";
 import { assignCampaigns, canonicalCampaign, standardCampaigns } from "@/lib/campaign";
 import { computeGmv, downstreamGmv, evalGmv, gmvBeforeMap, gmvCoverage, type GmvSlot } from "@/lib/gmv";
+import { isStandby } from "@/lib/campaign";
+
+test("isStandby: Remark สแตนด์บาย / สำรอง / สแปร์ = ไม่นับเป็นผลงาน Mc (หมายเหตุอื่นที่ทีมใช้ไม่โดน)", () => {
+  for (const t of ["สแตนด์บาย CEO", "สแตนบาย", "Standby เผื่อ CEO ลงก่อนเวลา", "สำรอง", "สแปลไว้", "spare"]) expect(isStandby(t)).toBe(true);
+  for (const t of ["", "แคน", "เพิ่มสล็อต", "เลท 20นาที", "หัก20% สาย", "โยกไป MCN", "agency", null]) expect(isStandby(t)).toBe(false);
+});
 
 describe("ชื่อแคมเปญมาตรฐาน", () => {
   test.each([

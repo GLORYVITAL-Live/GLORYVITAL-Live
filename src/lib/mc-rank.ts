@@ -34,6 +34,8 @@ export type RankReport = {
   /** ช่วงนี้ยังไม่จบ (มีวันที่ยังไม่ถึง) */
   partial: boolean;
   cells: RankCellRaw[]; prevCells: RankCellRaw[]; skipped: number;
+  /** slot สแตนด์บาย (Remark) ที่ไม่นับเป็นผลงาน */
+  standby?: number;
   expect: ExpectRow[];
   progress: {
     total: number; past: number; entered: number;

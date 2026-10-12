@@ -1,5 +1,5 @@
 import "server-only";
-import { assignCampaigns, bandOf, type Band, type CampInfo } from "@/lib/campaign";
+import { assignCampaigns, bandOf, isStandby, type Band, type CampInfo } from "@/lib/campaign";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays } from "@/lib/window";
 
@@ -44,11 +44,13 @@ export type CtxSlot = {
   expRate: number | null;
   /** GMV/ชม. ของวันปกติ ช่องและช่วงเวลาเดียวกัน */
   normRate: number | null;
+  /** Remark มีคำว่า สแตนด์บาย (Mc อยู่สำรอง) = ไม่นับยอดเป็นผลงานของ Mc */
+  standby: boolean;
 };
 
 type Row = {
   id: number; platform: string; live_date: string; start_time: string; starts_at: string; ends_at: string;
-  campaign: string | null; gmv: number | string | null; mc_id: number | null; person: { name: string } | null;
+  campaign: string | null; gmv: number | string | null; mc_id: number | null; person: { name: string } | null; remark: string | null;
 };
 
 const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
@@ -73,7 +75,7 @@ export async function loadCampaignContext(first: string, last: string): Promise<
 
   const rows = await fetchAll<Row>((a, b) =>
     db.from("mc_slots")
-      .select("id, platform, live_date, start_time, starts_at, ends_at, campaign, gmv, mc_id, person:staff!mc_id(name)")
+      .select("id, platform, live_date, start_time, starts_at, ends_at, campaign, gmv, mc_id, remark, person:staff!mc_id(name)")
       .eq("is_cancelled", false).not("mc_id", "is", null).or("confirmed.is.null,confirmed.eq.true")
       .gte("live_date", from).lte("live_date", last).order("id").range(a, b) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
   );
@@ -83,7 +85,7 @@ export async function loadCampaignContext(first: string, last: string): Promise<
     return {
       id: Number(r.id), platform: r.platform, date: r.live_date, startMs, endMs, hours: (endMs - startMs) / 3600_000,
       band: bandOf(r.start_time), mc: `Mc ${r.person!.name}`, gmv: r.gmv === null ? null : Number(r.gmv),
-      camp: camps.get(Number(r.id)) ?? null, exp: null, expRate: null, normRate: null,
+      camp: camps.get(Number(r.id)) ?? null, exp: null, expRate: null, normRate: null, standby: isStandby(r.remark),
     };
   });
 

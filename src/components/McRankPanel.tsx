@@ -304,6 +304,7 @@ export function McRankPanel() {
             <span>
               ระดับ A ≥ 110% · B 95–110% · C &lt; 95% · ข้อมูลน้อยถูกดึงเข้าหา 100% · ≈ = ประมาณจากไฟล์ Export
               {report.skipped ? ` · ข้าม ${report.skipped} หน่วยที่ไม่มีค่าเทียบ` : ""}
+              {report.standby ? ` · ไม่นับ ${report.standby} slot สแตนด์บาย (Remark ในชีต)` : ""}
             </span>
           </div>
           <details className="border-t px-3 py-2 text-sm">
