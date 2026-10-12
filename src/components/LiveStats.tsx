@@ -1069,24 +1069,36 @@ function CampaignView({ campaigns, dataMonths, version, readOnly, onChanged }: {
 
 function CampaignCompare({ c, all, dataMonths, version }: { c: Campaign; all: Campaign[]; dataMonths: string[]; version: number }) {
   const cmp = compareOf(c, all);
+  // แคมเปญที่ใหม่กว่าเป็นช่วงหลักเสมอ: VS / เปลี่ยน % = ใหม่ เทียบ เก่า (เช่น 10.10 vs 9.9) แม้ตั้ง "เทียบกับ" ไว้ที่แคมเปญเก่า
+  const picked: Period = { from: c.startsAt, to: c.endsAt, name: c.name };
+  const other: Period = { from: cmp.from, to: cmp.to, name: cmp.name };
+  const swapped = Date.parse(other.from) > Date.parse(picked.from);
+  const [cur, prev] = swapped ? [other, picked] : [picked, other];
   return (
     <>
       <div className="my-3 grid gap-2 rounded-xl border bg-card p-3 text-sm sm:grid-cols-2">
         <div>
-          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2.5 rounded-[3px] bg-viz-cur" />ช่วงแคมเปญ</span>
-          <div className="font-semibold">{windowText(c.startsAt, c.endsAt)}</div>
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="size-2.5 rounded-[3px] bg-viz-cur" />{swapped ? `ช่วงหลัก: ${cur.name}` : "ช่วงแคมเปญ"}
+          </span>
+          <div className="font-semibold">{windowText(cur.from, cur.to)}</div>
         </div>
         <div>
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="size-2.5 rounded-[3px] bg-viz-prev" />เทียบกับ {cmp.auto ? `(อัตโนมัติ: ${cmp.auto})` : cmp.name}
+            <span className="size-2.5 rounded-[3px] bg-viz-prev" />เทียบกับ {swapped ? prev.name : cmp.auto ? `(อัตโนมัติ: ${cmp.auto})` : prev.name}
           </span>
-          <div className="font-semibold">{windowText(cmp.from, cmp.to)}</div>
+          <div className="font-semibold">{windowText(prev.from, prev.to)}</div>
         </div>
+        {swapped ? (
+          <p className="text-xs text-muted-foreground sm:col-span-2">
+            {cur.name} ใหม่กว่า จึงเป็นช่วงหลัก — เปลี่ยน % / VS ในหน้านี้ ไฟล์ส่งออก และสไลด์ = {cur.name} เทียบ {prev.name}
+          </p>
+        ) : null}
       </div>
       <PeriodCompare
         report="Campaign on Campaign"
-        cur={{ from: c.startsAt, to: c.endsAt, name: c.name }}
-        prev={{ from: cmp.from, to: cmp.to, name: cmp.name }}
+        cur={cur}
+        prev={prev}
         unit="day"
         dataMonths={dataMonths}
         version={version}
