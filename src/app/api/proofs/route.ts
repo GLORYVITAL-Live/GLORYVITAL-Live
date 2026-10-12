@@ -4,9 +4,11 @@ import { bkkToday } from "@/lib/data";
 import { syncProofsToDrive, trashUnusedDriveFiles } from "@/lib/drive";
 import { withPlatformLabels } from "@/lib/platform";
 import {
-  PROOF_BUCKET, asEditor, canEditAll, canEditProofs, canSeeAll, canUseProofs, parseGmvEntries, proofSlots, removeOrphanProofs, resolveGmv, saveGmv,
+  PROOF_BUCKET, asEditor, canEditAll, canEditProofs, canSeeAll, canUseProofs, parseGmvEntries, proofSlots, recomputeAfterSave, removeOrphanProofs,
+  resolveGmv, saveGmv,
 } from "@/lib/proofs";
 import { createAdminClient } from "@/lib/supabase/server";
+import type { Me } from "@/lib/types";
 
 // หลักฐานไลฟ์ (หน้า "หลักฐานไลฟ์") — Admin ของ slot นั้น + Owner ที่มีสิทธิ์ฝั่ง Mc
 //   GET    ?date=YYYY-MM-DD  slot ของวันนั้น + หลักฐานที่แนบแล้ว
@@ -18,6 +20,23 @@ import { createAdminClient } from "@/lib/supabase/server";
 //   DELETE { id }  ลบหลักฐาน (คนที่อัปโหลด หรือ Owner ฝั่ง Mc)
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const bkkHm = (iso: string) => new Date(Date.parse(iso) + 7 * 3600_000).toISOString().slice(11, 16);
+
+/**
+ * หลังบันทึก GMV: slot ถัดไปที่หักยอดอัตโนมัติไว้ คิดใหม่ตามยอดก่อนหน้าที่เปลี่ยน + ลงประวัติ คืนจำนวนที่ปรับ
+ *   (เดิมแก้ยอด slot ก่อนหน้าแล้ว slot ถัดไปยังหักยอดเก่าอยู่ = ยอดเพี้ยนต่อกันเป็นทอด)
+ */
+async function shiftNext(db: ReturnType<typeof createAdminClient>, me: Me, ids: number[]) {
+  const shifted = await recomputeAfterSave(db, ids).catch(() => []);
+  if (shifted.length) {
+    await db.from("booking_logs").insert(shifted.map((c) => ({
+      email: me.email, role: me.owner ? "Owner" : "Admin", name: me.owner?.name || me.admin?.name || me.email,
+      action: `ปรับ GMV ตาม slot ก่อนหน้า: ${c.gmv} (หักยอดสะสม ${c.minus})`, slot_table: "mc_slots", slot_id: c.id,
+      platform: c.slot.platform, live_date: c.slot.live_date, time_range: `${bkkHm(c.slot.starts_at)}-${bkkHm(c.slot.ends_at)}`, result: "สำเร็จ",
+    })));
+  }
+  return shifted.length;
+}
 const DT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
 const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_SLOTS = 12;
@@ -145,6 +164,7 @@ export async function POST(request: Request) {
   }
   // GMV เก็บที่ slot (หลักฐานบันทึกแล้ว ถ้า GMV พลาดแจ้งให้กรอกใหม่ทีหลังได้)
   const gmvFail = gmv.some((g) => g.gmv !== null || g.input) ? await saveGmv(db, gmv) : "";
+  const shifted = !gmvFail && gmv.length ? await shiftNext(db, r.me, gmv.map((g) => g.id)) : 0;
 
   // หลักฐานเก่าที่ถูกแทนที่จนไม่เหลือ slot ไหนแล้ว -> ลบทิ้ง (รวมไฟล์รูป)
   const replaced = [...new Set(picked.map((s) => s.proof?.id).filter((x): x is number => !!x))];
@@ -164,7 +184,7 @@ export async function POST(request: Request) {
   return ok({
     message: gmvFail
       ? `แนบหลักฐานให้ ${ids.length} slot แล้ว แต่บันทึก GMV ไม่สำเร็จ: ${gmvFail}`
-      : `แนบหลักฐานให้ ${ids.length} slot แล้ว`,
+      : `แนบหลักฐานให้ ${ids.length} slot แล้ว${shifted ? ` · ปรับยอด GMV ของ slot ถัดไปตามให้ ${shifted} slot` : ""}`,
   });
 }
 
@@ -194,7 +214,8 @@ export async function PATCH(request: Request) {
     email: r.me.email, role: r.me.owner ? "Owner" : "Admin", name, action: `แก้ GMV: ${gmv.find((g) => g.id === s.mcSlotId)?.gmv ?? "ล้าง"}`,
     slot_table: "mc_slots", slot_id: s.mcSlotId, platform: s.platform, live_date: s.date, time_range: `${s.start}-${s.end}`, result: "สำเร็จ",
   })));
-  return ok({ message: `บันทึก GMV ${gmv.length} slot แล้ว` });
+  const shifted = await shiftNext(db, r.me, gmv.map((g) => g.id));
+  return ok({ message: `บันทึก GMV ${gmv.length} slot แล้ว${shifted ? ` · ปรับยอดของ slot ถัดไปตามให้ ${shifted} slot` : ""}` });
 }
 
 export async function DELETE(request: Request) {

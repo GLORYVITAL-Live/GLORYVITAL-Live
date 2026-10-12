@@ -46,7 +46,10 @@ export function HomeView({ go }: { go: Go }) {
   const liveNow = data.live.filter((s) => s.status === "live");
   const nextCamp = data.campaigns.find((c) => c.status === "upcoming");
   const liveCamp = data.campaigns.find((c) => c.status === "live");
-  const issueCount = data.issues.noEmail.length + data.issues.samePhone.length;
+  const gmvOver = data.issues.gmvOver ?? [];
+  const gmvOdd = data.issues.gmvOdd ?? [];
+  const issueCount = data.issues.noEmail.length + data.issues.samePhone.length + gmvOver.length + gmvOdd.length;
+  const baht = (n: number) => `฿${Math.round(n).toLocaleString("th-TH")}`;
 
   const stats: { label: string; value: string; tone: "ok" | "warn" | "info"; target: string; show: boolean }[] = [
     { label: "ไลฟ์วันนี้", value: `${data.live.length} slot`, tone: "info", target: "home-live", show: scope.mc || scope.proofs },
@@ -173,6 +176,31 @@ export function HomeView({ go }: { go: Go }) {
       <Section id="home-issues" title="ข้อมูลที่ควรแก้" icon={<AlertTriangleIcon />} count={issueCount} action={<GoButton onClick={() => go("owner", "staff")}>หน้าพนักงาน</GoButton>}>
         {issueCount ? (
           <div className="space-y-3 text-sm">
+            {gmvOver.length ? (
+              <div>
+                <h3 className="font-semibold">GMV ที่กรอกรวมเกินยอดไลฟ์จริง <span className="font-normal text-muted-foreground">— น่าจะมี slot ที่กรอกยอดสะสมจากแดชบอร์ดโดยไม่ได้หัก slot ก่อนหน้า (ยอด / อันดับ Mc จะสูงเกินจริง)</span></h3>
+                <ul className="mt-1 space-y-1 text-xs">
+                  {gmvOver.map((g) => (
+                    <li key={`${g.date}|${g.platform}|${g.from}`} className="rounded-lg border border-warning-border bg-warning px-2.5 py-1.5 text-warning-foreground">
+                      <b>{dayText(g.date)} {g.platform} {g.from}–{g.to}</b>: กรอกรวม {baht(g.entered)} แต่ไลฟ์จริง (ไฟล์ Export) {baht(g.actual)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {gmvOdd.length ? (
+              <div>
+                <h3 className="font-semibold">GMV ราย slot ผิดปกติ <span className="font-normal text-muted-foreground">— ต่างจากยอดประมาณจากไฟล์ Export มาก (พิมพ์เลขเกิน / ใส่ตัวเลขอื่นที่ไม่ใช่ GMV / ยอดสะสม)</span></h3>
+                <ul className="mt-1 space-y-1 text-xs">
+                  {gmvOdd.map((g) => (
+                    <li key={`${g.date}|${g.platform}|${g.time}`} className="rounded-lg border border-warning-border bg-warning px-2.5 py-1.5 text-warning-foreground">
+                      <b>{dayText(g.date)} {g.platform} {g.time} {g.mc}</b>: กรอก {baht(g.gmv)} · ประมาณจาก Export {baht(g.est)} ({g.high ? "สูงกว่า" : "ต่ำกว่า"} {g.high ? (g.gmv / g.est).toFixed(1) : (g.est / Math.max(1, g.gmv)).toFixed(1)} เท่า)
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {gmvOver.length || gmvOdd.length ? <GoButton onClick={() => go("proof")}>แก้ที่หน้าหลักฐานไลฟ์ (กรอก GMV)</GoButton> : null}
             {data.issues.noEmail.length ? (
               <div>
                 <h3 className="font-semibold">มีคิวข้างหน้าแต่ยังไม่มีอีเมล <span className="font-normal text-muted-foreground">— login ไม่ได้ และคิวไม่ลงปฏิทิน</span></h3>

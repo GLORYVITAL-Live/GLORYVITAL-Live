@@ -88,7 +88,7 @@ export function gmvCoverage(slots: GmvSlot[]): Map<number, GmvSlot> {
 export function computeGmv(
   items: { slot: GmvSlot; input: string; auto: boolean }[],
   others: GmvSlot[],
-): { id: number; gmv: number | null; input: string; minus: number | null; error?: string }[] {
+): { id: number; gmv: number | null; input: string; minus: number | null; error?: string; warning?: string }[] {
   const ids = new Set(items.map((x) => x.slot.id));
   const pool = others.filter((s) => !ids.has(s.id));
   const out: ReturnType<typeof computeGmv> = [];
@@ -103,13 +103,54 @@ export function computeGmv(
       out.push({ id: it.slot.id, gmv: null, input: it.input, minus: null, error: "อ่านตัวเลขไม่ได้ ใส่ได้เฉพาะตัวเลขกับ + −" });
       continue;
     }
-    const b = it.auto ? gmvBeforeMap([...pool, { ...it.slot, gmv: null }]).get(it.slot.id) ?? null : null;
+    const prior = gmvBeforeMap([...pool, { ...it.slot, gmv: null }]).get(it.slot.id) ?? null;
+    const b = it.auto ? prior : null;
     const gmv = Math.round((value - (b?.amount ?? 0)) * 100) / 100;
     out.push({
       id: it.slot.id, gmv, input: it.input.trim(), minus: b ? b.amount : null,
-      ...(gmv < 0 ? { error: "ยอดติดลบ ตรวจตัวเลข หรือเอาติ๊ก \"หักยอด slot ก่อนหน้า\" ออก" } : {}),
+      // ติดลบ = ยอดสะสมก่อนหน้าสูงเกินจริง (มักเป็น slot ก่อนหน้ากรอกยอดสะสมไว้โดยไม่ได้หัก) — ให้แก้ slot นั้น ไม่ใช่เอาติ๊กออก
+      ...(gmv < 0 ? {
+        error: `ยอดติดลบ: ยอดสะสมของ slot ก่อนหน้า (${fmtGmv(b?.amount ?? 0)}) มากกว่าตัวเลขที่กรอก — slot ก่อนหน้าน่าจะกรอกยอดสะสมไว้โดยไม่ได้หัก ให้แก้ slot นั้นก่อน (เอาติ๊กหักยอดออกเฉพาะเมื่อเริ่มไลฟ์ใหม่)`,
+      } : {}),
+      // ไม่ได้หักยอด แต่ตัวเลขมากกว่ายอดสะสมก่อนหน้า = น่าจะเป็นยอดสะสมจากแดชบอร์ด (จะนับซ้ำกับ slot ก่อนหน้า)
+      ...(!it.auto && prior && value > prior.amount ? {
+        warning: `ไม่ได้หักยอดสะสมก่อนหน้า (${fmtGmv(prior.amount)}) แต่ตัวเลขนี้มากกว่า — ถ้าเป็นยอดสะสมจากแดชบอร์ด ให้ติ๊กหักยอด ไม่งั้นยอดจะนับซ้ำกับ slot ก่อนหน้า`,
+      } : {}),
     });
     pool.push({ ...it.slot, gmv });
   }
   return out;
+}
+
+/** slot ที่บันทึกยอดไว้แล้ว: input = ตัวเลขที่พิมพ์ / minus = ยอดสะสมที่หักไว้ (null = ไม่ได้หัก) */
+export type StoredGmv = GmvSlot & { input: string | null; minus: number | null };
+
+/**
+ * ยอดของ slot ก่อนหน้าเปลี่ยน (แก้ / กรอกใหม่) -> slot ถัดไปในสายไลฟ์เดียวกันที่เคยหักยอดอัตโนมัติ (minus มีค่า)
+ *   คิดใหม่จากตัวเลขที่พิมพ์ไว้ ไม่งั้นยอดที่หักจะค้างเป็นของเก่า
+ *   เดินต่อตามสาย (ช่องเดียวกัน เวลาต่อกัน) · slot ที่กรอกเองโดยไม่หัก = ไม่แตะ · หายอดก่อนหน้าไม่เจอ / ติดลบ = คงค่าเดิม
+ */
+export function downstreamGmv(changedIds: number[], all: StoredGmv[]): { id: number; gmv: number; minus: number }[] {
+  const cur = new Map(all.map((s) => [s.id, { ...s }]));
+  const byStart = new Map<string, StoredGmv>();
+  for (const s of cur.values()) byStart.set(`${s.platform}|${s.startMs}`, s);
+  const out = new Map<number, { id: number; gmv: number; minus: number }>();
+  const starts = changedIds.map((id) => cur.get(id)).filter((s): s is StoredGmv => !!s).sort((a, b) => a.startMs - b.startMs);
+  for (const first of starts) {
+    let s = first;
+    for (let i = 0; i < 24; i++) {
+      const n = byStart.get(`${s.platform}|${s.endMs}`);
+      if (!n) break;
+      if (n.minus !== null && n.input) {
+        const [r] = computeGmv([{ slot: { ...n, gmv: null }, input: n.input, auto: true }], [...cur.values()].filter((x) => x.id !== n.id));
+        if (r && r.minus !== null && r.gmv !== null && r.gmv >= 0 && (r.gmv !== n.gmv || r.minus !== n.minus)) {
+          n.gmv = r.gmv;
+          n.minus = r.minus;
+          out.set(n.id, { id: n.id, gmv: r.gmv, minus: r.minus });
+        }
+      }
+      s = n;
+    }
+  }
+  return [...out.values()];
 }

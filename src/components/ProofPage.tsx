@@ -120,6 +120,9 @@ function GmvField({ slot, draft, result, before, disabled, onChange, showSlot, b
             : <>GMV {block && block.length > 1 ? `${block[0].start}–${slot.end}` : "ของ slot นี้"} <strong className="text-foreground tabular-nums">{fmtGmv(value.gmv ?? 0)}</strong>
                 {value.minus !== null ? <span className="tabular-nums"> ({fmtGmv((value.gmv ?? 0) + value.minus)} − {fmtGmv(value.minus)})</span> : null}</>}
       </p>
+      {value?.warning && !value.error ? (
+        <p className="mt-1.5 rounded-md border border-warning-border bg-warning px-2 py-1.5 text-xs font-semibold text-warning-foreground">{value.warning}</p>
+      ) : null}
     </div>
   );
 }

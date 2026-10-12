@@ -1,7 +1,7 @@
 // เทสชื่อแคมเปญ + GMV ต่อ slot (bun test)
 import { describe, expect, test } from "bun:test";
 import { assignCampaigns, canonicalCampaign, standardCampaigns } from "@/lib/campaign";
-import { computeGmv, evalGmv, gmvBeforeMap, gmvCoverage, type GmvSlot } from "@/lib/gmv";
+import { computeGmv, downstreamGmv, evalGmv, gmvBeforeMap, gmvCoverage, type GmvSlot } from "@/lib/gmv";
 
 describe("ชื่อแคมเปญมาตรฐาน", () => {
   test.each([
@@ -53,10 +53,33 @@ describe("GMV ต่อ slot (ไลฟ์ต่อกันหลาย slot �
     expect(out[2].minus).toBe(123506);
   });
 
-  test("ยอดติดลบ = แจ้งเตือน", () => {
+  test("ยอดติดลบ = แจ้งให้แก้ slot ก่อนหน้า (ไม่ใช่ให้เอาติ๊กออก)", () => {
     const [x] = computeGmv([{ slot: slot(2, 2, 4, null), input: "100", auto: true }], [slot(1, 0, 2, 500, "Z")]);
     expect(x.gmv).toBe(-400);
-    expect(x.error).toBeTruthy();
+    expect(x.error).toContain("slot ก่อนหน้าน่าจะกรอกยอดสะสม");
+  });
+
+  test("ไม่ติ๊กหักยอด แต่ตัวเลขมากกว่ายอดสะสมก่อนหน้า = เตือนว่าอาจนับซ้ำ (ยังบันทึกได้)", () => {
+    const [x] = computeGmv([{ slot: slot(2, 2, 4, null), input: "552542", auto: false }], [slot(1, 0, 2, 475382, "Z")]);
+    expect(x.gmv).toBe(552542);
+    expect(x.error).toBeUndefined();
+    expect(x.warning).toContain("นับซ้ำ");
+    const [y] = computeGmv([{ slot: slot(2, 2, 4, null), input: "77160", auto: false }], [slot(1, 0, 2, 475382, "Z")]);
+    expect(y.warning).toBeUndefined();
+  });
+
+  test("แก้ยอด slot ก่อนหน้า -> slot ถัดไปที่หักยอดอัตโนมัติคิดใหม่ตาม (ที่กรอกเองไม่แตะ)", () => {
+    const stored = (id: number, from: number, to: number, gmv: number | null, input: string | null, minus: number | null, who: string) =>
+      ({ ...slot(id, from, to, gmv, who), input, minus });
+    // 1 แก้จาก 410,366 (ยอดสะสม ไม่ได้หัก) เป็น 71,329 แล้ว: 2 = 443,015 − ยอดสะสมใหม่ 410,366 · 3 กรอกเองไม่หัก = ไม่แตะ · 4 หักต่อจาก 3
+    const all = [
+      stored(0, 0, 2, 339037, "339037", null, "A"),
+      stored(1, 2, 4, 71329, "410366", 339037, "B"),
+      stored(2, 4, 6, 0, "443015", 443015, "C"), // ค่าเก่าที่หักจากยอดผิด
+      stored(3, 6, 8, 32367, "32367", null, "B"),
+      stored(4, 8, 10, 0, "552542", 552542, "D"),
+    ];
+    expect(downstreamGmv([1], all)).toEqual([{ id: 2, gmv: 32649, minus: 410366 }, { id: 4, gmv: 77160, minus: 475382 }]);
   });
 
   test("Mc คนเดียวไลฟ์ต่อกัน กรอกแค่ slot สุดท้าย = slot ก่อนหน้านับว่ารวมอยู่แล้ว", () => {

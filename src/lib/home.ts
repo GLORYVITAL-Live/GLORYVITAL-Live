@@ -1,7 +1,10 @@
 import "server-only";
 import { assignCampaigns, instLabel } from "@/lib/campaign";
+import { slotPlatformOf } from "@/lib/campaign-data";
 import { bkkToday, fetchAll, proofsBySlot } from "@/lib/data";
 import { gmvCoverage } from "@/lib/gmv";
+import { loadSessions } from "@/lib/live-stats-db";
+import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { HomeData, HomeSlot } from "@/lib/types";
 import { addDays } from "@/lib/window";
@@ -59,7 +62,7 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
 
   const out: HomeData = {
     today, scope, live: [], noMc: [], noAdmin: [], missingProof: [], missingGmv: [], campaigns: [],
-    issues: { noEmail: [], noEmailTotal: 0, samePhone: [] },
+    issues: { noEmail: [], noEmailTotal: 0, samePhone: [], gmvOver: [], gmvOdd: [] },
   };
 
   if (scope.mc || scope.proofs) {
@@ -103,6 +106,9 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
       byKey.set(c.key, x);
     }
     out.campaigns = [...byKey.values()].sort((a, b) => a.start.localeCompare(b.start));
+    const checks = await gmvChecks(assigned, now).catch(() => ({ over: [], odd: [] }));
+    out.issues.gmvOver = checks.over;
+    out.issues.gmvOdd = checks.odd;
   }
 
   if (scope.admin) {
@@ -140,3 +146,64 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   out.issues.samePhone = [...phones.values()].filter((g) => g.names.length > 1);
   return out;
 }
+
+/**
+ * ตรวจ GMV ที่กรอกเทียบไฟล์ Export (ไลฟ์ที่จบแล้วในช่วงที่หน้าแรกโหลด = 14 วันล่าสุด และมียอดไลฟ์ใน Export แล้ว)
+ *   over = สายไลฟ์ (ช่องเดียวกัน slot ต่อเวลากัน) ที่กรอกรวมเกินยอดทั้งไลฟ์ > 30%
+ *          = น่าจะกรอกยอดสะสมจากแดชบอร์ดโดยไม่ได้หัก (เช่น 9 ต.ค. 2026 กรอกรวม 2.39 ล้าน แต่ไลฟ์จริง 6.4 แสน)
+ *   odd  = slot ที่ยอดที่กรอกสูงกว่า 3 เท่า หรือต่ำกว่า 1/4 ของยอดประมาณ (ยอดไลฟ์แบ่งตามนาทีที่ซ้อนกับ slot)
+ *          เช่น พิมพ์เลขเกินหลัก (7 ต.ค. 293,769 แทน 193,769) / กรอกตัวเลขอื่นที่ไม่ใช่ GMV (10 ต.ค. 4,792 แต่ไลฟ์จริง 19,263)
+ *          ยอดประมาณต่ำกว่า 8,000 = ไม่ตรวจ (ไลฟ์เล็ก ยอดแกว่งง่าย) · Mc คนเดียวไลฟ์ต่อกันแล้วกรอกที่ slot สุดท้าย = รวมเวลาทั้งช่วง
+ */
+async function gmvChecks(rows: McRow[], now: number): Promise<{ over: HomeData["issues"]["gmvOver"]; odd: HomeData["issues"]["gmvOdd"] }> {
+  const done = rows.filter((r) => ms(r.ends_at) <= now).sort((a, b) => ms(a.starts_at) - ms(b.starts_at));
+  const entered = done.filter((r) => r.gmv !== null);
+  if (!entered.length) return { over: [], odd: [] };
+  const a0 = Math.min(...done.map((r) => ms(r.starts_at))), b0 = Math.max(...done.map((r) => ms(r.ends_at)));
+  const sessions = (await loadSessions(new Date(a0 - 20 * 3600_000).toISOString(), new Date(b0).toISOString()))
+    .map((s) => ({ ...s, ch: (slotPlatformOf(s.platform, s.accountId) ?? "").toUpperCase(), s0: Date.parse(s.startedAt), s1: Date.parse(s.startedAt) + s.durationSec * 1000 }));
+  const lives = (ch: string, a: number, b: number) => sessions.filter((s) => s.ch === ch && s.s0 < b && s.s1 > a);
+
+  // สายไลฟ์
+  const chains: McRow[][] = [];
+  const open = new Map<string, McRow[]>();
+  for (const r of done) {
+    const key = r.platform.toUpperCase(), cur = open.get(key);
+    if (cur && ms(cur[cur.length - 1].ends_at) === ms(r.starts_at)) cur.push(r);
+    else { const c = [r]; chains.push(c); open.set(key, c); }
+  }
+  const over: HomeData["issues"]["gmvOver"] = [];
+  for (const c of chains.filter((x) => x.some((r) => r.gmv !== null))) {
+    const a = ms(c[0].starts_at), b = ms(c[c.length - 1].ends_at);
+    const actual = lives(c[0].platform.toUpperCase(), a, b).reduce((sum, s) => sum + s.gmv, 0);
+    const sum = c.reduce((t, r) => t + (r.gmv === null ? 0 : Number(r.gmv)), 0);
+    if (!actual || sum <= actual * 1.3) continue;
+    over.push({ date: c[0].live_date, platform: platformLabel(c[0].platform), entered: sum, actual, from: hm(c[0].start_time), to: hm(c[c.length - 1].end_time) });
+  }
+
+  // ราย slot: ช่วงของ slot ที่ยอดนี้ครอบ (รวม slot ว่างก่อนหน้าของ Mc คนเดียวกันที่ต่อกัน)
+  const covered = gmvCoverage(done.map((r) => ({
+    id: Number(r.id), platform: r.platform, startMs: ms(r.starts_at), endMs: ms(r.ends_at), gmv: r.gmv === null ? null : Number(r.gmv), who: r.mc_id,
+  })));
+  const startOf = new Map<number, number>();
+  for (const r of done) {
+    const by = covered.get(Number(r.id));
+    if (by) startOf.set(by.id, Math.min(startOf.get(by.id) ?? Infinity, ms(r.starts_at)));
+  }
+  const odd: HomeData["issues"]["gmvOdd"] = [];
+  for (const r of entered) {
+    const a = startOf.get(Number(r.id)) ?? ms(r.starts_at), b = ms(r.ends_at);
+    const est = lives(r.platform.toUpperCase(), a, b)
+      .reduce((sum, s) => sum + (s.durationSec ? ((Math.min(b, s.s1) - Math.max(a, s.s0)) / 1000 / s.durationSec) * s.gmv : 0), 0);
+    const gmv = Number(r.gmv);
+    if (est < 8000) continue;
+    const ratio = gmv / est;
+    if (ratio <= 3 && ratio >= 0.25) continue;
+    odd.push({
+      date: r.live_date, platform: platformLabel(r.platform), time: `${new Date(a + 7 * 3600_000).toISOString().slice(11, 16)}–${hm(r.end_time)}`,
+      mc: mcLabel(r), gmv, est, high: ratio > 3,
+    });
+  }
+  return { over, odd };
+}
+const mcLabel = (r: McRow) => (r.person ? `Mc ${r.person.name}` : "");

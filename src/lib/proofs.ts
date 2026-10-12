@@ -1,7 +1,7 @@
 import "server-only";
 import { fetchAll, gmvBySlot, proofsBySlot } from "@/lib/data";
 import { addDays } from "@/lib/window";
-import { computeGmv, gmvBeforeMap, gmvCoverage, type GmvSlot } from "@/lib/gmv";
+import { computeGmv, downstreamGmv, gmvBeforeMap, gmvCoverage, type GmvSlot } from "@/lib/gmv";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me, ProofSlot } from "@/lib/types";
 
@@ -150,6 +150,41 @@ export async function saveGmv(db: Db, results: Awaited<ReturnType<typeof resolve
     if (error) return /gmv/.test(error.message) ? "ยังไม่ได้รัน SQL ยอด GMV (supabase/migrations/20261016000000_proof_gmv.sql)" : error.message;
   }
   return "";
+}
+
+/**
+ * หลังบันทึก GMV: slot ถัดไปในสายไลฟ์เดียวกันที่หักยอดอัตโนมัติไว้ คิดใหม่ตามยอดก่อนหน้าที่เปลี่ยน (downstreamGmv)
+ *   คืนรายการที่ปรับ (ไว้ลงประวัติ) · พลาด = คืน [] (ยอดที่เพิ่งบันทึกไม่กระทบ)
+ */
+export async function recomputeAfterSave(db: Db, ids: number[]) {
+  if (!ids.length) return [];
+  type Row = { id: number; platform: string; live_date: string; starts_at: string; ends_at: string; mc_id: number | null };
+  const { data: targets, error } = await db.from("mc_slots").select("id, platform, live_date, starts_at, ends_at, mc_id").in("id", ids);
+  if (error || !targets?.length) return [];
+  const dates = (targets as Row[]).map((r) => r.live_date).sort();
+  const [ctx, gmvs] = await Promise.all([
+    fetchAll<Row>((from, to) =>
+      db.from("mc_slots").select("id, platform, live_date, starts_at, ends_at, mc_id")
+        .in("platform", [...new Set((targets as Row[]).map((r) => r.platform))])
+        .not("mc_id", "is", null).eq("is_cancelled", false)
+        .gte("live_date", addDays(dates[0], -1)).lte("live_date", addDays(dates[dates.length - 1], 1))
+        .range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>),
+    gmvBySlot(db, addDays(dates[0], -1), addDays(dates[dates.length - 1], 1)),
+  ]);
+  const all = ctx.map((r) => {
+    const g = gmvs.get(Number(r.id));
+    return {
+      id: Number(r.id), platform: r.platform, startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at),
+      gmv: g?.value ?? null, input: g?.input ?? null, minus: g?.minus ?? null, who: r.mc_id === null ? null : Number(r.mc_id),
+    };
+  });
+  const changes = downstreamGmv(ids, all);
+  for (const c of changes) {
+    const { error: e } = await db.from("mc_slots").update({ gmv: c.gmv, gmv_minus: c.minus }).eq("id", c.id);
+    if (e) return [];
+  }
+  const info = new Map(ctx.map((r) => [Number(r.id), r]));
+  return changes.map((c) => ({ ...c, slot: info.get(c.id)! }));
 }
 
 /** ลบหลักฐานที่ไม่ได้ผูกกับ slot ไหนแล้ว (ทั้งแถวและไฟล์รูป) */

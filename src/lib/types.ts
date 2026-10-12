@@ -78,6 +78,10 @@ export type HomeData = {
     noEmailTotal: number;
     /** เบอร์โทรเดียวกันหลายรายชื่อ (อาจเป็นคนเดียวกันที่ลงชื่อซ้ำ) */
     samePhone: { role: "mc" | "admin"; phone: string; names: string[] }[];
+    /** สายไลฟ์ที่ GMV ที่กรอกรวมเกินยอดไลฟ์จริงใน Export (น่าจะกรอกยอดสะสมโดยไม่ได้หัก) */
+    gmvOver: { date: string; platform: string; from: string; to: string; entered: number; actual: number }[];
+    /** slot ที่ยอดที่กรอกสูงกว่า 3 เท่า (high) หรือต่ำกว่า 1/4 ของยอดประมาณจาก Export (est) */
+    gmvOdd: { date: string; platform: string; time: string; mc: string; gmv: number; est: number; high: boolean }[];
   };
 };
 
