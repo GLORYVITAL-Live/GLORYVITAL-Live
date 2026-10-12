@@ -69,6 +69,7 @@ function hourBuckets(list: LiveSession[]) {
 export function analyze(o: {
   aName: string; bName: string; a: LiveSession[]; b: LiveSession[];
   time: { short: string; a: LiveSession[]; b: LiveSession[] }[]; stepWord: string; // "วัน" / "เดือน"
+  single?: boolean; // ช่วงเดียว ไม่เทียบ (ไม่บอกให้อัปโหลดข้อมูลช่วงเทียบ)
 }): Analysis {
   const { aName, bName, a, b } = o;
   const ta = totalsOf(a), tb = totalsOf(b);
@@ -176,7 +177,7 @@ export function analyze(o: {
   if (!drops.length && hasB) {
     suggestions.unshift(`ตัวชี้วัดหลักไม่มีตัวไหนลดลงเกิน 5% → ทำซ้ำสิ่งที่ได้ผล${bestWin ? ` (เด่นสุด: ${bestWin.text})` : ""} และขยายในช่วงที่ขายดี`);
   }
-  if (!hasB) suggestions.push(`ยังไม่มีข้อมูล ${bName} ให้เทียบ → อัปโหลดไฟล์ของช่วงนั้นก่อน จะวิเคราะห์ได้ครบ`);
+  if (!hasB && !o.single) suggestions.push(`ยังไม่มีข้อมูล ${bName} ให้เทียบ → อัปโหลดไฟล์ของช่วงนั้นก่อน จะวิเคราะห์ได้ครบ`);
 
   const top = (list: { score: number; text: string }[], n: number) => list.sort((x, y) => y.score - x.score).slice(0, n).map((x) => x.text);
   return { drivers, funnels, drops: top(drops, 6), wins: top(wins, 4), suggestions: suggestions.slice(0, 6) };

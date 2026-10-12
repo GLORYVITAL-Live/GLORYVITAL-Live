@@ -21,6 +21,8 @@ export type CompareDeckInput = {
   exportedAt: string;
   /** หน้าปกแบบอื่น (ภาพรวมทั้งปี): หัวเล็ก + หัวใหญ่ แทน "report" + "A vs B" */
   cover?: { kicker: string; headline: string };
+  /** ช่วงเดียว ไม่เทียบ (เช่น ดูรายวัน): ไม่มีข้อความ "ไม่มีข้อมูลให้เทียบ" (b = []) */
+  single?: boolean;
   /** เพิ่มหน้ารายไตรมาส (a = ช่วงหลัก, b = ปีก่อน) + QoQ */
   quarters?: { label: string; a: LiveSession[]; b: LiveSession[]; before: LiveSession[]; open: boolean }[];
   /** หน้าวิเคราะห์ใช้คู่นี้แทน (เช่น ยังไม่มีข้อมูลปีก่อน -> เดือนล่าสุดเทียบเดือนก่อน) */
@@ -51,7 +53,7 @@ function insights(o: CompareDeckInput, ta: Totals, tb: Totals) {
   const out: string[] = [];
   const g = changeOf(val(ta, "gmv"), val(tb, "gmv"));
   out.push(g === null
-    ? `GMV ${o.aName} ${fmt("gmv", val(ta, "gmv"))} (ไม่มีข้อมูล ${o.bName} ให้เทียบ)`
+    ? `GMV ${o.aName} ${fmt("gmv", val(ta, "gmv"))}${o.single ? "" : ` (ไม่มีข้อมูล ${o.bName} ให้เทียบ)`}`
     : `GMV ${o.aName} ${fmt("gmv", val(ta, "gmv"))} ${g >= 0 ? "เพิ่มขึ้น" : "ลดลง"} ${Math.abs(g * 100).toFixed(1)}% จาก ${o.bName}`);
   const changes = METRICS.filter((m) => m.key !== "gmv")
     .map((m) => ({ m, c: changeOf(val(ta, m.key), val(tb, m.key)) }))
@@ -331,7 +333,7 @@ function addTop5Slide(pres: PptxGenJS, lives: LiveSession[], name: string) {
 }
 
 export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gslides" = "pptx"): Promise<Blob> {
-  const pres = await newDeck(`${o.report}: ${o.aName} vs ${o.bName}`, `GLORY VITAL · ${o.report}: ${o.aName}${o.b.length ? ` vs ${o.bName}` : ""}`);
+  const pres = await newDeck(o.single ? `${o.report}: ${o.aName}` : `${o.report}: ${o.aName} vs ${o.bName}`, `GLORY VITAL · ${o.report}: ${o.aName}${o.b.length ? ` vs ${o.bName}` : ""}`);
 
   const ta = totalsOf(o.a), tb = totalsOf(o.b);
   const hasB = tb.lives > 0;
@@ -339,7 +341,7 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
   const f = o.focus;
   const analysis = f
     ? analyze({ aName: f.aName, bName: f.bName, a: f.a, b: f.b, time: [], stepWord: "วัน" })
-    : analyze({ aName: o.aName, bName: o.bName, a: o.a, b: o.b, time: o.time, stepWord: stepWordOf(o.timeName) });
+    : analyze({ aName: o.aName, bName: o.bName, a: o.a, b: o.b, time: o.time, stepWord: stepWordOf(o.timeName), single: o.single });
   const gmvChange = changeOf(val(ta, "gmv"), val(tb, "gmv"));
   // เฉลี่ยต่อเดือน (ใช้แทน % เทียบ เมื่อไม่มีข้อมูลช่วงเทียบ)
   const activeMonths = o.timeName === "รายเดือน" ? o.time.filter((t) => t.a.length).length : 0;

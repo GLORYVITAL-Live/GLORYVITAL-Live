@@ -9,7 +9,7 @@ import {
 import { fmtMonthShort, monthKey, monthLabel } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
-import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, yearBook, type CrewMap } from "@/lib/live-export";
+import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
@@ -812,7 +812,7 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
 }
 
 type CompareMode = PeriodKind | "day" | "multi";
-const COMPARE_MODES: [CompareMode, string][] = [["day", "วัน (DoD)"], ["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"]];
+const COMPARE_MODES: [CompareMode, string][] = [["day", "วัน"], ["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"]];
 
 /** แท็บเทียบช่วง: วัน / เดือน / ไตรมาส (เทียบ 2 ช่วง) หรือ หลายเดือน (เดือนหลัก vs เดือนอื่นทีละเดือน) */
 function CompareView({ dataMonths, version }: { dataMonths: string[]; version: number }) {
@@ -835,6 +835,7 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
 
 // ---------- เทียบรายวัน (DoD) ----------
 
+const DAY_SINGLE_KEY = "glory_live_day_single";
 const dayKeyShift = (k: string, by: number) => new Date(Date.parse(`${k}T00:00:00Z`) + by * 86400_000).toISOString().slice(0, 10);
 /** วันเดียวกันของเดือนก่อน (เดือนก่อนมีวันน้อยกว่า = วันสุดท้ายของเดือนนั้น) เช่น 31 ต.ค. -> 30 ก.ย. */
 function sameDayLastMonth(k: string) {
@@ -869,6 +870,9 @@ function DayCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMo
   const today = init.today;
   const [a, setA] = useState(init.start);
   const [b, setB] = useState(() => dayKeyShift(init.start, -1));
+  // ไม่เทียบ = ดูตัวเลขของวันเดียว (จำไว้ในเครื่อง)
+  const single = useLocal(DAY_SINGLE_KEY) === "1";
+  const setSingle = (v: boolean) => writeLocal(DAY_SINGLE_KEY, v ? "1" : "0");
   const presets: [string, string][] = [
     [dayKeyShift(a, -1), "วันก่อน (DoD)"],
     [dayKeyShift(a, -7), "วันเดียวกันสัปดาห์ก่อน (WoW)"],
@@ -889,16 +893,26 @@ function DayCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMo
         {toggle}
         <div className="flex flex-wrap gap-3 sm:flex-nowrap">
           {picker(a, setA, "วัน", "bg-viz-cur")}
-          {picker(b, setB, "เทียบกับ", "bg-viz-prev")}
+          {single ? null : picker(b, setB, "เทียบกับ", "bg-viz-prev")}
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
-          {presets.map(([k, text]) => (
-            <Button key={text} variant={b === k ? "secondary" : "outline"} size="sm" className="rounded-full" onClick={() => setB(k)}>{text}</Button>
-          ))}
+          <Button variant={single ? "secondary" : "outline"} size="sm" className="rounded-full" aria-pressed={single} onClick={() => setSingle(true)}>
+            ไม่เทียบ (ดูวันเดียว)
+          </Button>
+          {presets.map(([k, text]) => {
+            const on = !single && b === k;
+            return (
+              <Button key={text} variant={on ? "secondary" : "outline"} size="sm" className="rounded-full" aria-pressed={on} onClick={() => { setB(k); setSingle(false); }}>
+                {text}
+              </Button>
+            );
+          })}
         </div>
       </div>
-      {a === today || b === today ? <Notice>วันนี้ยังไม่จบวัน ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice> : null}
-      {a === b ? <StateBox title="เลือกวันที่ต่างกัน">เลือกวันในช่อง &ldquo;เทียบกับ&rdquo; หรือกดปุ่มลัดด้านบน</StateBox> : (
+      {a === today || (!single && b === today) ? <Notice>วันนี้ยังไม่จบวัน ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice> : null}
+      {single ? (
+        <PeriodCompare report="ดูรายวัน" cur={dayPeriod(a)} prev={null} unit="hour" dataMonths={dataMonths} version={version} fixHint="หรือเลือกวันอื่น" />
+      ) : a === b ? <StateBox title="เลือกวันที่ต่างกัน">เลือกวันในช่อง &ldquo;เทียบกับ&rdquo; หรือกดปุ่มลัดด้านบน</StateBox> : (
         <PeriodCompare
           report={`เทียบวัน (${kindOf(b)})`}
           cur={dayPeriod(a)} prev={dayPeriod(b)} unit="hour" dataMonths={dataMonths} version={version} fixHint="หรือเลือกวันอื่น" />
@@ -1117,12 +1131,13 @@ const lastMonthOf = (p: Period) => monthOf(new Date(Date.parse(p.to) - 1).toISOS
 /**
  * เทียบสองช่วงเวลา (แคมเปญ / ไตรมาส): แท่งเทียบทุกตัวชี้วัด + กราฟแยกบัญชี หรือตามเวลา + รายการไลฟ์
  *   unit = กราฟตามเวลาแบ่งเป็นรายวัน หรือรายเดือน (นับจากวันเริ่ม/เดือนแรกของแต่ละช่วง)
+ *   prev = null: ดูช่วงเดียว ไม่เทียบ (เช่น ดูรายวัน) — ไม่มี % เปลี่ยน / ไฟล์ส่งออกไม่มีคอลัมน์เทียบ
  */
 function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, fixHint }: {
   /** ชื่อรายงานในไฟล์ที่ส่งออก เช่น "เทียบเดือน (MoM)" / "Campaign on Campaign" */
   report: string;
   cur: Period;
-  prev: Period;
+  prev: Period | null;
   unit: "hour" | "day" | "month";
   dataMonths: string[];
   version: number;
@@ -1132,18 +1147,21 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
   const [metric, setMetric] = useState<MetricKey>("gmv");
   const [groupBy, setGroupBy] = useState<"account" | "time">("account");
   const curQ = useSessions(pc.from, pc.to, version);
-  const prevQ = useSessions(pp.from, pp.to, version);
+  const prevQ = useSessions(pp?.from ?? null, pp?.to ?? null, version);
+  const single = !pp;
   const error = curQ.error || prevQ.error;
-  if (!curQ.data || !prevQ.data) {
+  const prevData = single ? [] : prevQ.data;
+  if (!curQ.data || !prevData) {
     return error ? <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={error} onRetry={() => { curQ.retry(); prevQ.retry(); }} /> : <LoadingBlock />;
   }
 
   const cur = filterSessions(curQ.data, filter.platform, filter.account);
-  const prev = filterSessions(prevQ.data, filter.platform, filter.account);
+  const prev = filterSessions(prevData, filter.platform, filter.account);
   const tc = totalsOf(cur), tp = totalsOf(prev);
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
-  const curName = pc.name, prevName = pp.name;
+  const curName = pc.name, prevName = pp?.name ?? "";
+  const allData = [...curQ.data, ...prevData];
   const timeText = unit === "hour" ? "รายชั่วโมง" : unit === "day" ? "รายวัน" : "รายเดือน";
   const stepMs = unit === "hour" ? 3600_000 : 86400_000;
 
@@ -1164,9 +1182,9 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
     short: stepLabel(pc.from, i),
     label: unit === "hour"
       ? `${stepLabel(pc.from, i)}–${stepLabel(pc.from, i + 1)} น.`
-      : `${unit === "day" ? "วันที่" : "เดือนที่"} ${i + 1}: ${stepLabel(pc.from, i)} vs ${stepLabel(pp.from, i)}`,
+      : `${unit === "day" ? "วันที่" : "เดือนที่"} ${i + 1}: ${stepLabel(pc.from, i)}${pp ? ` vs ${stepLabel(pp.from, i)}` : ""}`,
     a: cur.filter((s) => stepOf(s, pc.from) === i),
-    b: prev.filter((s) => stepOf(s, pp.from) === i),
+    b: pp ? prev.filter((s) => stepOf(s, pp.from) === i) : [],
   }));
   let categories: string[], titles: string[], curVals: (number | null)[], prevVals: (number | null)[];
   const val = (list: LiveSession[]) => (list.length ? def.value(totalsOf(list)) : null);
@@ -1183,27 +1201,34 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
     curVals = accounts.map((a) => val(of(cur, a.key)));
     prevVals = accounts.map((a) => val(of(prev, a.key)));
   }
-  const chartSeries = [{ name: curName, color: CUR, values: curVals }, { name: prevName, color: PREV, values: prevVals }];
-  const missing = [...new Set([...missingMonths(pc.from, pc.to, dataMonths), ...missingMonths(pp.from, pp.to, dataMonths)])];
+  const chartSeries = single ? [{ name: curName, color: CUR, values: curVals }]
+    : [{ name: curName, color: CUR, values: curVals }, { name: prevName, color: PREV, values: prevVals }];
+  const missing = [...new Set([...missingMonths(pc.from, pc.to, dataMonths), ...(pp ? missingMonths(pp.from, pp.to, dataMonths) : [])])];
+  const title = single ? `GLORY ${report} ${curName}` : `GLORY ${report} ${curName} vs ${prevName}`;
+  const exportFilter = { platform: filter.platform, account: filter.account, sessions: allData };
 
-  const exportBook = async () => compareBook({
-    title: `GLORY ${report} ${curName} vs ${prevName}`, report, aName: curName, bName: prevName,
-    aRange: windowText(pc.from, pc.to), bRange: windowText(pp.from, pp.to), a: cur, b: prev,
-    timeName: timeText, time: timeGroups,
-    filter: { platform: filter.platform, account: filter.account, sessions: [...curQ.data!, ...prevQ.data!] },
-    crew: await loadCrew([...cur, ...prev]),
-  });
+  const exportBook = async () => (pp
+    ? compareBook({
+      title, report, aName: curName, bName: prevName,
+      aRange: windowText(pc.from, pc.to), bRange: windowText(pp.from, pp.to), a: cur, b: prev,
+      timeName: timeText, time: timeGroups, filter: exportFilter, crew: await loadCrew([...cur, ...prev]),
+    })
+    : singleBook({
+      title, report, aName: curName, aRange: windowText(pc.from, pc.to), a: cur,
+      timeName: timeText, time: timeGroups, filter: exportFilter, crew: await loadCrew(cur),
+    }));
 
   return (
     <>
-      <FilterBar filter={filter} sessions={[...curQ.data, ...prevQ.data]}>
+      <FilterBar filter={filter} sessions={allData}>
         <div className="flex flex-wrap gap-2">
           <ExportMenu size="sm" label="ส่งออก" build={exportBook} />
-          <SlidesMenu label="สไลด์" title={`GLORY ${report} ${curName} vs ${prevName}`} build={(target) => buildCompareDeck({
-            report, aName: curName, bName: prevName, aRange: windowText(pc.from, pc.to), bRange: windowText(pp.from, pp.to),
+          <SlidesMenu label="สไลด์" title={title} build={(target) => buildCompareDeck({
+            report, aName: curName, bName: prevName, aRange: windowText(pc.from, pc.to), bRange: pp ? windowText(pp.from, pp.to) : "",
             a: cur, b: prev, timeName: timeText, time: timeGroups,
-            filterText: filterText({ platform: filter.platform, account: filter.account, sessions: [...curQ.data!, ...prevQ.data!] }).join(" · "),
+            filterText: filterText(exportFilter).join(" · "),
             exportedAt: bkkStamp(new Date().toISOString()),
+            ...(single ? { single: true, cover: { kicker: report, headline: curName } } : {}),
           }, target)} />
         </div>
       </FilterBar>
@@ -1213,19 +1238,21 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
         </Notice>
       ) : null}
       {!tc.lives && !tp.lives ? (
-        <StateBox title="ไม่มีไลฟ์ในทั้งสองช่วง">ไลฟ์นับตามเวลาเริ่มไลฟ์ (เวลาไทย)</StateBox>
+        <StateBox title={single ? `ไม่มีไลฟ์ใน ${curName}` : "ไม่มีไลฟ์ในทั้งสองช่วง"}>ไลฟ์นับตามเวลาเริ่มไลฟ์ (เวลาไทย)</StateBox>
       ) : (
         <>
           <div className="mt-3 mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-bold">สรุปเทียบทุกตัวชี้วัด</h2>
-            <Legend series={chartSeries} />
+            <h2 className="text-lg font-bold">{single ? `สรุปทุกตัวชี้วัด ${curName}` : "สรุปเทียบทุกตัวชี้วัด"}</h2>
+            {single ? null : <Legend series={chartSeries} />}
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {METRICS.map((m) => (
-              <PairBars key={m.key} label={m.label} note={m.note} cur={tc.lives ? m.value(tc) : null} prev={tp.lives ? m.value(tp) : null}
-                format={(v) => fmtMetric(m.kind, v)} curName={curName} prevName={prevName} />
-            ))}
-          </div>
+          {single ? <KpiGrid cur={tc} compare={[]} /> : (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {METRICS.map((m) => (
+                <PairBars key={m.key} label={m.label} note={m.note} cur={tc.lives ? m.value(tc) : null} prev={tp.lives ? m.value(tp) : null}
+                  format={(v) => fmtMetric(m.kind, v)} curName={curName} prevName={prevName} />
+              ))}
+            </div>
+          )}
 
           <section className="my-4 rounded-2xl border bg-card p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -1242,21 +1269,31 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
                 <MetricSelect value={metric} onChange={setMetric} />
               </div>
             </div>
-            <Legend series={chartSeries} />
+            {single ? null : <Legend series={chartSeries} />}
             <div className="mt-2">
-              <BarChart label={`${def.label} ${curName} เทียบ ${prevName}`} categories={categories} tooltipTitles={titles} series={chartSeries}
+              <BarChart label={single ? `${def.label} ${curName}` : `${def.label} ${curName} เทียบ ${prevName}`} categories={categories} tooltipTitles={titles} series={chartSeries}
                 format={fmt} formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)} />
             </div>
             <TableView title="ดูเป็นตาราง">
               <Table>
-                <TableHeader><TableRow><TableHead>{byTime ? (unit === "hour" ? "ช่วงเวลา" : unit === "day" ? "วัน" : "เดือน") : "บัญชี"}</TableHead><TableHead className="text-right">{curName}</TableHead><TableHead className="text-right">{prevName}</TableHead><TableHead className="text-right">เปลี่ยน</TableHead></TableRow></TableHeader>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{byTime ? (unit === "hour" ? "ช่วงเวลา" : unit === "day" ? "วัน" : "เดือน") : "บัญชี"}</TableHead>
+                    <TableHead className="text-right">{curName}</TableHead>
+                    {single ? null : <><TableHead className="text-right">{prevName}</TableHead><TableHead className="text-right">เปลี่ยน</TableHead></>}
+                  </TableRow>
+                </TableHeader>
                 <TableBody>
                   {categories.map((cat, i) => (
                     <TableRow key={i}>
                       <TableCell>{titles[i]}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmt(curVals[i])}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmt(prevVals[i])}</TableCell>
-                      <TableCell className="text-right"><ChangeText cur={curVals[i]} prev={prevVals[i]} /></TableCell>
+                      {single ? null : (
+                        <>
+                          <TableCell className="text-right tabular-nums">{fmt(prevVals[i])}</TableCell>
+                          <TableCell className="text-right"><ChangeText cur={curVals[i]} prev={prevVals[i]} /></TableCell>
+                        </>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1265,7 +1302,7 @@ function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, f
           </section>
 
           <SessionList title={`ไลฟ์ใน ${curName} (${cur.length})`} sessions={cur} />
-          <SessionList title={`ไลฟ์ใน ${prevName} (${prev.length})`} sessions={prev} />
+          {single ? null : <SessionList title={`ไลฟ์ใน ${prevName} (${prev.length})`} sessions={prev} />}
         </>
       )}
     </>

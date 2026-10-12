@@ -41,6 +41,10 @@ export async function POST(request: Request) {
   const role = source.role as "mc" | "admin";
   if (!(role === "mc" ? r.scope.mc : r.scope.admin)) return fail(`บัญชีนี้ไม่มีสิทธิ์จัดการฝั่ง ${role === "mc" ? "Mc" : "Admin"}`, 403);
   const label = (p: Person) => (role === "mc" ? `Mc ${p.name}` : p.name);
+  // อีเมลคนละอัน = อาจเป็นคนละคน และรวมแล้วอีเมลของ source หาย (login ไม่ได้) จึงไม่รวมให้
+  if (source.email && target.email && source.email.toLowerCase() !== target.email.toLowerCase()) {
+    return fail(`${label(source)} กับ ${label(target)} ใช้อีเมลคนละอัน อาจเป็นคนละคน — ถ้าเป็นคนเดียวกัน ให้ลบอีเมลของรายชื่อที่ไม่ใช้ก่อน แล้วค่อยรวม`);
+  }
 
   const { table, col } = TABLE[role];
   const today = bkkToday();

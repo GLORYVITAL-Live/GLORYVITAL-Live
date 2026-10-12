@@ -39,6 +39,43 @@ const rolesOf = (scope: OwnerScope): Role[] =>
   [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : []), ...(scope.mc && scope.admin ? ["owner" as const] : [])];
 const phoneDigits = (v: string | null | undefined) => String(v ?? "").replace(/\D/g, "");
 
+// ---------- รายชื่อที่น่าจะซ้ำ (Mc / Admin) ----------
+
+/** ชื่อสำหรับเทียบ: ตัดคำนำหน้า Mc / Admin / แอดมิน + ช่องว่าง / จุด / ขีด เช่น "Admin ปัน" = "ปัน" (ตัวเลขท้ายชื่อไม่ตัด "มะนาว2" ≠ "มะนาว") */
+const nameKey = (n: string) => n.toLowerCase().replace(/^(mc|admin|แอดมิน)\s*/i, "").replace(/[\s.\-_()]/g, "");
+type DupGroup = { people: Person[]; samePhone: boolean; sameName: boolean; emails: string[] };
+/** กลุ่มรายชื่อบทบาทเดียวกันที่เบอร์เดียวกัน หรือชื่อเดียวกัน (ต่อกันเป็นกลุ่มได้หลายคน) */
+function dupGroups(staff: Person[]): DupGroup[] {
+  const people = staff.filter((p) => p.role !== "owner");
+  const parent = new Map(people.map((p) => [p.id, p.id]));
+  const find = (id: number): number => (parent.get(id) === id ? id : find(parent.get(id)!));
+  const first = new Map<string, number>();
+  for (const p of people) {
+    const keys = [`${p.role}|n|${nameKey(p.name)}`, ...(phoneDigits(p.phone).length >= 9 ? [`${p.role}|t|${phoneDigits(p.phone)}`] : [])];
+    for (const k of keys) {
+      const other = first.get(k);
+      if (other === undefined) first.set(k, p.id);
+      else parent.set(find(p.id), find(other));
+    }
+  }
+  const byRoot = new Map<number, Person[]>();
+  for (const p of people) byRoot.set(find(p.id), [...(byRoot.get(find(p.id)) ?? []), p]);
+  return [...byRoot.values()].filter((g) => g.length > 1).map((g) => {
+    const phones = new Set(g.map((p) => phoneDigits(p.phone)).filter((d) => d.length >= 9));
+    return {
+      people: g,
+      samePhone: phones.size > 0 && g.filter((p) => phoneDigits(p.phone).length >= 9).length > phones.size,
+      sameName: new Set(g.map((p) => nameKey(p.name))).size < g.length,
+      emails: [...new Set(g.map((p) => p.email).filter((e): e is string => !!e))],
+    };
+  });
+}
+/** คนที่ควรเก็บไว้: มีอีเมล > คิวข้างหน้ามากกว่า > ชื่อไม่มีคำนำหน้า > เพิ่มก่อน */
+const keepOf = (g: Person[]) => [...g].sort((a, b) =>
+  Number(!!b.email) - Number(!!a.email) || b.upcoming - a.upcoming
+  || Number(nameKey(a.name) !== a.name.toLowerCase().replace(/[\s.\-_()]/g, "")) - Number(nameKey(b.name) !== b.name.toLowerCase().replace(/[\s.\-_()]/g, ""))
+  || a.id - b.id)[0];
+
 // ---------- สิทธิ์ Owner 3 ระดับ: ไม่มี / ดูได้ / จัดการได้ ----------
 
 type Level = "none" | "view" | "edit";
@@ -112,15 +149,10 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
     return c;
   }, [data, role]);
 
-  // เบอร์เดียวกันหลายรายชื่อ (บทบาทเดียวกัน) = อาจลงชื่อซ้ำ
-  const samePhone = useMemo(() => {
-    const by = new Map<string, number[]>();
-    for (const p of data?.staff ?? []) {
-      const d = phoneDigits(p.phone);
-      if (p.role !== "owner" && d.length >= 9) by.set(`${p.role}|${d}`, [...(by.get(`${p.role}|${d}`) ?? []), p.id]);
-    }
-    return new Set([...by.values()].filter((ids) => ids.length > 1).flat());
-  }, [data]);
+  // รายชื่อที่น่าจะซ้ำ (เบอร์เดียวกัน / ชื่อเดียวกันเมื่อตัด Mc / Admin) = อาจลงชื่อซ้ำ
+  const dups = useMemo(() => dupGroups(data?.staff ?? []), [data]);
+  const dupOf = useMemo(() => new Map(dups.flatMap((g) => g.people.map((p) => [p.id, g] as const))), [dups]);
+  const roleDups = dups.filter((g) => g.people[0].role === role);
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -177,6 +209,10 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
         </Label>
       ) : null}
 
+      {roleDups.length && canEditRole(role) ? (
+        <DuplicatePanel key={role} role={role as "mc" | "admin"} groups={roleDups} onMerged={(msg) => { toast(msg); reload(); }} />
+      ) : null}
+
       {!list.length ? (
         <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : canEditRole(role) ? "กด \"เพิ่มคน\" เพื่อเพิ่มรายชื่อ" : null}</StateBox>
       ) : (
@@ -199,8 +235,13 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                     </Badge>
                   ) : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
-                  {samePhone.has(p.id) ? (
-                    <Badge className="border-warning-border bg-warning text-[11px] text-warning-foreground" title="เบอร์เดียวกับรายชื่ออื่น อาจลงชื่อซ้ำ กดเพื่อรวมรายชื่อ">เบอร์ซ้ำ</Badge>
+                  {dupOf.has(p.id) ? (
+                    <Badge
+                      className="border-warning-border bg-warning text-[11px] text-warning-foreground"
+                      title={`${dupOf.get(p.id)!.samePhone ? "เบอร์เดียวกับ" : "ชื่อเดียวกับ"} ${dupOf.get(p.id)!.people.filter((x) => x.id !== p.id).map(displayName).join(", ")} — รวมได้ที่กล่อง "รายชื่อที่น่าจะซ้ำ" ด้านบน`}
+                    >
+                      {dupOf.get(p.id)!.samePhone ? "เบอร์ซ้ำ" : "ชื่อซ้ำ"}
+                    </Badge>
                   ) : null}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
@@ -251,6 +292,126 @@ type MergeSummary = {
   source: string; target: string; total: number; upcoming: number; conflicts: number;
   moveEmail: string | null; movePhone: string | null;
 };
+
+/**
+ * กล่อง "รายชื่อที่น่าจะซ้ำ" (บทบาทที่เลือกอยู่): เลือกคนที่เก็บไว้ แล้วรวมคนอื่นในกลุ่มเข้าไป
+ *   ย้ายคิวทั้งหมด (ชีต + ปฏิทินตามให้) แล้วลบรายชื่อซ้ำ · ตรวจก่อนทุกครั้ง (กี่คิว / เวลาชน / อีเมล เบอร์ที่ย้าย)
+ *   อีเมลคนละอัน = อาจเป็นคนละคน รวมไม่ได้ (ต้องลบอีเมลของรายชื่อที่ไม่ใช้ก่อน)
+ */
+function DuplicatePanel({ role, groups, onMerged }: { role: "mc" | "admin"; groups: DupGroup[]; onMerged: (message: string) => void }) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [open, setOpen] = useState(false);
+  const [keep, setKeep] = useState<Record<string, number>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const keyOf = (g: DupGroup) => g.people.map((p) => p.id).sort((a, b) => a - b).join("-");
+  const targetOf = (g: DupGroup) => g.people.find((p) => p.id === keep[keyOf(g)]) ?? keepOf(g.people);
+
+  async function merge(g: DupGroup) {
+    const k = keyOf(g), target = targetOf(g);
+    const sources = g.people.filter((p) => p.id !== target.id);
+    setBusy(k);
+    try {
+      const sums: MergeSummary[] = [];
+      for (const s of sources) {
+        const res = await api<{ summary: MergeSummary }>("/api/owner/staff/merge", { sourceId: s.id, targetId: target.id, dryRun: true });
+        if (!res.ok) throw new Error(res.message);
+        sums.push(res.summary);
+      }
+      const ok = await confirm({
+        title: `รวมเป็น ${displayName(target)}?`,
+        description: (
+          <span className="block space-y-1">
+            {sums.map((x) => (
+              <span key={x.source} className="block">
+                ย้าย <b>{x.total}</b> คิวของ {x.source} (ตั้งแต่วันนี้ {x.upcoming} คิว) ไปเป็นของ {x.target} แล้วลบ {x.source}
+                {x.moveEmail ? ` · ย้ายอีเมล ${x.moveEmail}` : ""}{x.movePhone ? ` · ย้ายเบอร์ ${x.movePhone}` : ""}
+                {x.conflicts ? <b className="text-destructive"> · มี {x.conflicts} คิวเวลาชนกัน ตรวจที่ตาราง slot หลังรวม</b> : null}
+              </span>
+            ))}
+            <span className="block">ชีตและปฏิทินอัปเดตตามให้ — ย้อนกลับไม่ได้</span>
+          </span>
+        ),
+        confirmText: "รวมรายชื่อ",
+        destructive: true,
+      });
+      if (!ok) return;
+      for (const s of sources) {
+        const res = await api<{ message: string }>("/api/owner/staff/merge", { sourceId: s.id, targetId: target.id });
+        if (!res.ok) throw new Error(res.message);
+      }
+      onMerged(`รวม ${sources.map(displayName).join(", ")} เข้ากับ ${displayName(target)} แล้ว`);
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="my-2 rounded-xl border border-warning-border bg-warning text-warning-foreground">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="flex-1">
+          <b>รายชื่อ {ROLE_LABEL[role]} ที่น่าจะซ้ำ {groups.length} กลุ่ม</b> — เบอร์เดียวกัน หรือชื่อเดียวกัน (เช่น &quot;ปัน&quot; กับ &quot;Admin ปัน&quot;)
+        </span>
+        <span className="shrink-0 text-xs font-semibold underline">{open ? "ซ่อน" : "ดู / รวมรายชื่อ"}</span>
+      </button>
+      {open ? (
+        <div className="space-y-2 border-t border-warning-border p-2">
+          {groups.map((g) => {
+            const k = keyOf(g), target = targetOf(g);
+            // อีเมลคนละอัน: ถ้ารวม อีเมลของคนที่ถูกลบจะหาย (login ไม่ได้) จึงไม่ให้รวมจากตรงนี้
+            const twoEmails = g.emails.length > 1;
+            return (
+              <div key={k} className="rounded-lg border bg-card p-2.5 text-sm text-foreground">
+                <div className="mb-1.5 text-xs text-muted-foreground">
+                  {[g.samePhone ? "เบอร์เดียวกัน" : "", g.sameName ? "ชื่อเดียวกัน" : ""].filter(Boolean).join(" + ")} · เลือกรายชื่อที่จะเก็บไว้
+                </div>
+                <div role="radiogroup" aria-label="รายชื่อที่จะเก็บไว้" className="space-y-1">
+                  {g.people.map((p) => (
+                    <label key={p.id} className={cn("flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1", p.id === target.id && "bg-secondary")}>
+                      <input
+                        type="radio"
+                        name={`keep-${k}`}
+                        checked={p.id === target.id}
+                        disabled={!!busy}
+                        onChange={() => setKeep({ ...keep, [k]: p.id })}
+                        className="mt-1 accent-primary"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="font-semibold">{displayName(p)}</span>
+                        {p.id === target.id ? <Badge variant="secondary" className="ml-1.5 text-[11px]">เก็บไว้</Badge> : null}
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {p.email ?? "ไม่มีอีเมล"} · {p.phone || "ไม่มีเบอร์"} · {p.upcoming ? `คิวข้างหน้า ${p.upcoming}` : "ไม่มีคิวข้างหน้า"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {twoEmails ? (
+                  <p className="mt-1.5 text-xs text-destructive">
+                    อีเมลคนละอัน ({g.emails.join(" / ")}) อาจเป็นคนละคน — ถ้าเป็นคนเดียวกันจริง ลบอีเมลของรายชื่อที่ไม่ใช้ก่อน แล้วค่อยรวม
+                  </p>
+                ) : (
+                  <div className="mt-1.5 flex justify-end">
+                    <Button size="sm" variant="destructive" disabled={!!busy} onClick={() => merge(g)}>
+                      {busy === k ? "กำลังรวม..." : `รวมเป็น ${displayName(target)}`}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, others, onClose }: {
   person: Person | null;
@@ -340,7 +501,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   }
 
   // ---------- รวมรายชื่อซ้ำ: ย้ายคิวทั้งหมดของคนนี้ไปให้รายชื่อที่เลือก แล้วลบคนนี้ ----------
-  const twin = person ? others.find((o) => phoneDigits(o.phone).length >= 9 && phoneDigits(o.phone) === phoneDigits(person.phone)) : undefined;
+  const samePhoneAs = (o: Person) => !!person && phoneDigits(o.phone).length >= 9 && phoneDigits(o.phone) === phoneDigits(person.phone);
+  const twin = person ? others.find(samePhoneAs) ?? others.find((o) => nameKey(o.name) === nameKey(person.name)) : undefined;
   const [mergeTo, setMergeTo] = useState(twin ? String(twin.id) : "");
   const [mergeInfo, setMergeInfo] = useState<MergeSummary | null>(null);
 
@@ -590,7 +752,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
             <legend className="px-1 font-semibold">รวมรายชื่อซ้ำ</legend>
             <p className="text-xs text-muted-foreground">
               ใช้เมื่อคนเดียวกันมี 2 รายชื่อ (เช่น สะกดชื่อในชีตต่างกัน) — ย้ายคิวทั้งหมดของ {displayName(person)} ไปเป็นของรายชื่อที่เลือก แล้วลบ {displayName(person)}
-              {twin ? <span className="font-semibold text-warning-foreground"> · เบอร์เดียวกับ {displayName(twin)}</span> : null}
+              {twin ? <span className="font-semibold text-warning-foreground"> · {samePhoneAs(twin) ? "เบอร์" : "ชื่อ"}เดียวกับ {displayName(twin)}</span> : null}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Select value={mergeTo} onValueChange={(v) => { setMergeTo(v); setMergeInfo(null); }}>

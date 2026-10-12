@@ -286,6 +286,32 @@ export function multiBook(o: {
   };
 }
 
+/** ช่วงเดียว ไม่เทียบ (เช่น ดูรายวัน): สรุป + แยกแพลตฟอร์ม + แยกบัญชี + ตามเวลา + รายการไลฟ์ */
+export function singleBook(o: {
+  title: string; report: string; aName: string; aRange: string; a: LiveSession[];
+  timeName: string; time: { label: string; a: LiveSession[] }[]; filter: ExportFilter; crew?: CrewMap;
+}): ExportBook {
+  const groupSheet = (name: string, first: string, groups: { label: string; a: LiveSession[] }[]): ExportSheet => ({
+    name,
+    rows: [[first, ...METRIC_HEADERS], ...groups.map((g): Cell[] => [g.label, ...metricCells(totalsOf(g.a))])],
+  });
+  const accounts = accountsOf(o.a);
+  return {
+    title: o.title,
+    sheets: [
+      infoSheet([["รายงาน", o.report], [`ช่วง ${o.aName}`, o.aRange]], o.filter),
+      summarySheet("สรุป", o.aName, totalsOf(o.a), []),
+      ...platformSheets(o.aName, o.a, []),
+      groupSheet("แยกบัญชี", "บัญชี", [
+        ...accounts.map((acc) => ({ label: accountLabel(acc), a: o.a.filter((s) => keyOf(s) === acc.key) })),
+        { label: "รวม", a: o.a },
+      ]),
+      ...(o.time.length > 1 ? [groupSheet(o.timeName, o.timeName, o.time)] : []),
+      sessionSheet(`ไลฟ์ ${o.aName}`, o.a, o.crew),
+    ],
+  };
+}
+
 /** เทียบ 2 ช่วง (เดือน / ไตรมาส / แคมเปญ): สรุป + แยกบัญชี + ตามเวลา + รายการไลฟ์ทั้งสองช่วง */
 export function compareBook(o: {
   title: string; report: string; aName: string; bName: string; aRange: string; bRange: string;
