@@ -4,6 +4,7 @@ import { deleteCalendarEvent } from "@/lib/calendar";
 import { canonicalCampaign } from "@/lib/campaign";
 import { bkkToday } from "@/lib/data";
 import { withSyncLock } from "@/lib/lock";
+import { addDays } from "@/lib/window";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   COLS, SHEET_ID, TABLE_OF, TAB_OF, TABS, colLetter, dateSerial, hoursOf, normalizeMcName, parseRow, readTab, sheetIdOf,
@@ -641,9 +642,57 @@ async function removeMissing(tab: TabKey, rows: Row[]) {
   return deleteGoneSlots(table, gone);
 }
 
+/**
+ * วันที่ผ่านมาแล้ว (ย้อนหลังไม่เกิน 120 วัน) ที่ชีตยังมีแถวของวันนั้นอยู่ แต่ slot ในระบบไม่มีแถวในชีตแล้ว
+ *   = แถวถูกแก้ / ลบในชีต -> ยกเลิก slot นั้นในระบบ (ไม่ลบ: ประวัติ / หลักฐาน / GMV ยังอยู่)
+ *   เดิมเก็บไว้ทั้งหมด ทำให้แถวเก่าค้างซ้อนกับแถวใหม่ (ค่าจ้างนับซ้ำ / หน้าหลักฐานแสดงชื่อ Admin ของแถวเก่า เช่น 2 ต.ค. 2026)
+ *   วันที่ไม่มีในชีตเลย (ลบทั้งเดือนออกจากชีตเพื่อเก็บถาวร) = ไม่แตะ ยังเก็บไว้ให้สรุปรายเดือนเหมือนเดิม
+ */
+async function cancelPastMissing(tab: TabKey, rows: Row[]) {
+  const db = createAdminClient();
+  const table = TABLE_OF[tab];
+  const today = bkkToday();
+  const dates = new Set(rows.map((r) => parseRow(tab, r)?.live_date).filter((d): d is string => !!d && d < today));
+  if (!dates.size) return 0;
+  type Past = SlotKey & { id: number };
+  const past: Past[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from(table).select("id, platform, live_date, start_time, end_time")
+      .gte("live_date", addDays(today, -120)).lt("live_date", today).eq("is_cancelled", false).order("id").range(from, from + 999);
+    if (error) throw error;
+    past.push(...((data ?? []) as Past[]));
+    if (!data || data.length < 1000) break;
+  }
+  const present = sheetContents(tab, rows);
+  const missing = past.filter((s) => dates.has(s.live_date) && !present.ids.has(s.id) && !present.keys.has(keyOf(s))).map((s) => s.id);
+  if (!missing.length) return 0;
+  // กันพลาด: หายพร้อมกันเยอะ อาจอ่านชีตผิด / คอลัมน์ V ถูกล้าง -> ไม่ยกเลิกให้อัตโนมัติ
+  if (missing.length > 20) {
+    throw new Error(`slot ย้อนหลังในแท็บ "${TABS[tab]}" ไม่มีแถวในชีต ${missing.length} slot ระบบจึงไม่ยกเลิกให้อัตโนมัติ (ตรวจว่าคอลัมน์ V ไม่ถูกลบ)`);
+  }
+  const known = await everInSheet(table, missing);
+  const { data: jobs, error: jobErr } = await db.from("sheet_jobs").select("slot_id").eq("slot_table", table).is("done_at", null).in("slot_id", missing);
+  if (jobErr) throw jobErr;
+  const pending = new Set((jobs ?? []).map((j) => j.slot_id));
+  const gone = past.filter((s) => missing.includes(s.id) && known.has(s.id) && !pending.has(s.id));
+  if (!gone.length) return 0;
+  // ยกเลิกอย่างเดียว (is_cancelled เป็นคอลัมน์ที่ระบบใช้เอง ไม่สร้างงานเขียนชีต)
+  const { error } = await db.from(table).update({ is_cancelled: true }).in("id", gone.map((s) => s.id));
+  if (error) throw error;
+  await db.from("booking_logs").insert(gone.map((s) => ({
+    role: "Sheet", name: TABS[tab], action: "ยกเลิก slot ย้อนหลัง (แถวถูกแก้ / ลบในชีตแล้ว)",
+    slot_table: table, slot_id: s.id, platform: s.platform, live_date: s.live_date, time_range: `${hm(s.start_time)}-${hm(s.end_time)}`, result: "สำเร็จ",
+  })));
+  console.log(`ยกเลิก slot ย้อนหลังที่ไม่มีแถวในชีตแล้ว (${table}): ${gone.map((s) => s.id).join(", ")}`);
+  return gone.length;
+}
+
 /** เรียกเมื่อมีการลบแถวในแท็บ (Apps Script onChange) / ซิงค์ทั้งหมด / cron */
 export async function removeSlotsDeletedInSheet(tab: TabKey) {
-  const result = await withSheetLock(async () => removeMissing(tab, await readTab(tab)));
+  const result = await withSheetLock(async () => {
+    const rows = await readTab(tab);
+    return (await removeMissing(tab, rows)) + (await cancelPastMissing(tab, rows));
+  });
   if (result === null) throw new Error("ระบบกำลังซิงค์ชีตอยู่ กรุณาลองใหม่อีกครั้ง");
   return { removed: result };
 }
@@ -804,7 +853,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     // ซิงค์ทั้งหมด หรือมีแถวถูกล้างข้อมูลทั้งแถว (เลือกแถวแล้วกด Delete ซึ่งรหัสในคอลัมน์ V อาจหายไปด้วย)
     // = ตรวจหา slot ที่ไม่มีแถวในชีตแล้วลบออก
     const cleared = rowNumbers?.some((r) => isBlankRow(tab, all[r - 1] ?? [])) ?? true;
-    const removed = cleared ? await removeMissing(tab, all) : 0;
+    const removed = cleared ? (await removeMissing(tab, all)) + (await cancelPastMissing(tab, all)) : 0;
     return { updated, created, removed, paired };
   });
   if (!result) throw new Error("ระบบกำลังซิงค์ชีตอยู่ กรุณาลองใหม่อีกครั้ง");
