@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { FileSpreadsheetIcon, Trash2Icon, UploadIcon } from "lucide-react";
+import { ceoInsights, planSheet, targetText } from "@/lib/ceo-insights";
 import { hasCeoSheet, parseCeoSheet, splitCsv, splitPasted } from "@/lib/ceo-parse";
 import {
   bkkDay, ceoBlocks, ceoBook, ceoDays, CEO_SCOPES, fmtCell, scopeText, shiftDay, shortDay, type CeoDay, type CeoScope,
@@ -141,8 +142,11 @@ export function CeoLiveView({ data, onChanged }: { data: CeoLiveData; onChanged?
           </ToggleGroup>
           {days.length ? (
             <div className="ml-auto flex flex-wrap gap-2">
-              <ExportMenu size="sm" label="ส่งออก" build={() => ceoBook(days, scope, { rangeText, exportedAt: bkkStamp(new Date().toISOString()) })} />
-              <SlidesMenu label="สไลด์" title={`GLORY CEO Live ${rangeText}`} build={() => buildCeoDeck({ days, scope, rangeText, exportedAt: bkkStamp(new Date().toISOString()) })} />
+              <ExportMenu size="sm" label="ส่งออก" build={() => {
+                const book = ceoBook(days, scope, { rangeText, exportedAt: bkkStamp(new Date().toISOString()) });
+                return { ...book, sheets: [book.sheets[0], planSheet(ceoInsights(days, { next })), ...book.sheets.slice(1)] };
+              }} />
+              <SlidesMenu label="สไลด์" title={`GLORY CEO Live ${rangeText}`} build={() => buildCeoDeck({ days, scope, rangeText, exportedAt: bkkStamp(new Date().toISOString()), next })} />
             </div>
           ) : null}
         </div>
@@ -157,6 +161,7 @@ export function CeoLiveView({ data, onChanged }: { data: CeoLiveData; onChanged?
           ) : !data.tracked.length ? (
             <Notice>ยังไม่มีข้อมูลรอบ CEO (ช่วงที่ CEO ไลฟ์){data.canEdit ? " — กด \"อัปโหลดข้อมูลรอบ CEO\" ด้านบน" : ""}</Notice>
           ) : null}
+          <PlanCard days={days} next={next ?? null} />
         </>
       )}
 
@@ -254,6 +259,55 @@ function BlockRows({ block, days }: { block: ReturnType<typeof ceoBlocks>[number
         </TableRow>
       ))}
     </>
+  );
+}
+
+/** แผนต่อยอด: สิ่งที่เห็นจากข้อมูล / ข้อเสนอแนะครั้งถัดไป / เป้าครั้งถัดไป (เหมือนในสไลด์ / ไฟล์ส่งออก) */
+function PlanCard({ days, next }: { days: CeoDay[]; next: CeoEvent | null }) {
+  const plan = ceoInsights(days, { next });
+  if (!plan.findings.length && !plan.actions.length) return null;
+  return (
+    <section className="my-5 rounded-2xl border bg-card p-3">
+      <h2 className="text-lg font-bold">แผนต่อยอด CEO Live</h2>
+      <p className="text-xs text-muted-foreground">คิดอัตโนมัติจากตัวเลขของวันที่เลือกด้านบน (กฎตายตัว ไม่ใช่ AI) · อยู่ในไฟล์ส่งออกและสไลด์ด้วย</p>
+      {plan.findings.length ? (
+        <>
+          <h3 className="mt-3 mb-1 text-sm font-semibold">สิ่งที่เห็นจากข้อมูล</h3>
+          <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed">{plan.findings.map((t) => <li key={t}>{t}</li>)}</ul>
+        </>
+      ) : null}
+      {plan.actions.length ? (
+        <div className="mt-3 rounded-xl bg-primary/10 p-3">
+          <h3 className="mb-1 text-sm font-semibold text-primary">ข้อเสนอแนะครั้งถัดไป</h3>
+          <ol className="list-decimal space-y-1 pl-5 text-sm leading-relaxed">{plan.actions.map((t) => <li key={t}>{t}</li>)}</ol>
+        </div>
+      ) : null}
+      {plan.targets.length ? (
+        <>
+          <h3 className="mt-3 mb-1 text-sm font-semibold">เป้าครั้งถัดไป{next ? `: ${shortDay(next.date)} ${next.label}` : ""}</h3>
+          <div className="overflow-x-auto rounded-xl border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>ตัวชี้วัด</TableHead><TableHead className="text-right">ขั้นต่ำ (เฉลี่ย)</TableHead>
+                  <TableHead className="text-right">ท้าทาย (ดีที่สุด)</TableHead><TableHead className="text-right">ครั้งที่ดีที่สุด</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {plan.targets.map((t) => (
+                  <TableRow key={t.label}>
+                    <TableCell className="whitespace-nowrap">{t.label}</TableCell>
+                    <TableCell className="text-right tabular-nums">{targetText(t, t.avg)}</TableCell>
+                    <TableCell className="text-right font-semibold text-primary tabular-nums">{targetText(t, t.best)}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">{t.bestDay || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      ) : null}
+    </section>
   );
 }
 

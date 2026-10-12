@@ -1,13 +1,15 @@
 // สไลด์ CEO Live หลายวัน -> PowerPoint (.pptx) / Google Slides (กราฟวาดด้วยรูปทรง ใช้ได้ทั้งสองแบบ)
-//   ปก · GMV วัน CEO เทียบวันก่อน · GMV รอบ CEO · ตาราง 3 ส่วน (แบบชีตที่ทีมใช้) · สรุป
+//   ปก · GMV วัน CEO เทียบวันก่อน · GMV รอบ CEO · ตาราง 3 ส่วน (แบบชีตที่ทีมใช้) · สิ่งที่เห็น · แผนต่อยอด · เป้าครั้งถัดไป
 
 import type PptxGenJS from "pptxgenjs";
+import { ceoInsights, targetText } from "@/lib/ceo-insights";
 import { ceoBlocks, ceoSummary, fmtCell, scopeText, shortDay, shiftDay, type CeoDay, type CeoScope } from "@/lib/ceo-report";
+import type { CeoEvent } from "@/lib/types";
 import { fmtMetric, totalsOf } from "@/lib/live-stats";
 import { SLIDE_C as C, SLIDE_FONT as FONT, SLIDE_H as H, SLIDE_M as M, SLIDE_W as W, finish, newDeck, pctColor, pctText, shapeBars } from "@/lib/live-slides";
 
 /** target ไม่ได้ใช้แยก (กราฟวาดด้วยรูปทรงทั้งสองแบบ) รับไว้ให้ตรงกับ SlidesMenu */
-export async function buildCeoDeck(o: { days: CeoDay[]; scope: CeoScope; rangeText: string; exportedAt: string }): Promise<Blob> {
+export async function buildCeoDeck(o: { days: CeoDay[]; scope: CeoScope; rangeText: string; exportedAt: string; next?: CeoEvent | null }): Promise<Blob> {
   // ซ้ายไปขวา = เก่าไปใหม่ (แบบชีตที่ทีมใช้)
   const days = [...o.days].sort((a, b) => a.event.date.localeCompare(b.event.date));
   const where = scopeText(o.scope, days[0]?.event);
@@ -107,20 +109,44 @@ export async function buildCeoDeck(o: { days: CeoDay[]; scope: CeoScope; rangeTe
     }
   }
 
-  // 5) สรุป
-  {
+  // 5) แผนต่อยอด (สำหรับ Marketing): สิ่งที่เห็นจากข้อมูล / ข้อเสนอแนะครั้งถัดไป / เป้าครั้งถัดไป — คิดจากตัวเลขด้วยกฎตายตัว
+  const plan = ceoInsights(days, { next: o.next });
+  const note = `คิดอัตโนมัติจากตัวเลข · ยอดทั้งวันนับ ${where} · รอบ CEO = ข้อมูลที่ทีม track แยก`;
+  if (plan.findings.length) {
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText("สิ่งที่เห็นจากข้อมูล", { placeholder: "title" });
+    text(s, plan.findings.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < plan.findings.length - 1 } })),
+      { x: M, y: 1.45, w: W - 2 * M, h: 4.9, fontSize: 17, color: C.text, valign: "top", paraSpaceAfter: 10, fit: "shrink" });
+    text(s, note, { x: M, y: 6.55, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted });
+  }
+  if (plan.actions.length) {
     const s = pres.addSlide();
     s.background = { color: C.dark };
-    text(s, "สรุป", { x: M, y: 0.6, w: W - 2 * M, h: 0.8, fontSize: 30, bold: true, color: C.white });
-    const lines = [
-      sum.avgUplift === null ? "ยังไม่มีข้อมูลวันก่อนให้เทียบ" : `รวมทุกครั้ง GMV วัน CEO Live ${sum.avgUplift >= 0 ? "สูงกว่า" : "ต่ำกว่า"}วันก่อน ${Math.abs(sum.avgUplift * 100).toFixed(1)}%`,
-      ...(sum.best ? [`เพิ่มมากสุด: ${shortDay(sum.best.d.event.date)} ${sum.best.d.event.label} (${pctText(sum.best.c)})`] : []),
-      ...(sum.worst && sum.worst !== sum.best ? [`เพิ่มน้อยสุด: ${shortDay(sum.worst.d.event.date)} ${sum.worst.d.event.label} (${pctText(sum.worst.c)})`] : []),
-      ...(tracked.length ? [`GMV รอบ CEO รวม ${fmtMetric("baht", sum.sessionGmv)} จาก ${tracked.length} ครั้งที่มีข้อมูล`] : ["ยังไม่มีข้อมูลรอบ CEO (อัปโหลดได้ที่หน้า CEO Live)"]),
-    ];
-    text(s, lines.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < lines.length - 1 } })),
-      { x: M, y: 1.7, w: W - 2 * M, h: 4.6, fontSize: 18, color: C.white, valign: "top", paraSpaceAfter: 12, fit: "shrink" });
-    text(s, `ยอดทั้งวันนับ ${where} · รอบ CEO = ข้อมูลที่ทีม track แยก`, { x: M, y: H - 0.9, w: W - 2 * M, h: 0.4, fontSize: 11, color: C.mutedOnDark });
+    text(s, "แผนต่อยอด CEO Live ครั้งถัดไป", { x: M, y: 0.55, w: W - 2 * M, h: 0.8, fontSize: 30, bold: true, color: C.white });
+    text(s, plan.actions.map((t, i) => ({ text: t, options: { bullet: { type: "number" as const }, breakLine: i < plan.actions.length - 1 } })),
+      { x: M, y: 1.55, w: W - 2 * M, h: 5.0, fontSize: 16, color: C.white, valign: "top", paraSpaceAfter: 9, fit: "shrink" });
+    text(s, note, { x: M, y: H - 0.75, w: W - 2 * M, h: 0.35, fontSize: 11, color: C.mutedOnDark });
+  }
+  if (plan.targets.length) {
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText(o.next ? `เป้าครั้งถัดไป: ${shortDay(o.next.date)} ${o.next.label}` : "เป้าครั้งถัดไป", { placeholder: "title" });
+    const rows: PptxGenJS.TableRow[] = [[
+      head("ตัวชี้วัด", "left"), head("เป้าขั้นต่ำ (เฉลี่ย)"), head("เป้าท้าทาย (ดีที่สุด)"), head("ครั้งที่ดีที่สุด"),
+    ]];
+    for (const t of plan.targets) {
+      rows.push([
+        { text: t.label, options: { align: "left", bold: true } },
+        { text: targetText(t, t.avg), options: { align: "right" } },
+        { text: targetText(t, t.best), options: { align: "right", bold: true, color: C.pink } },
+        { text: t.bestDay || "-", options: { align: "right", color: C.muted } },
+      ]);
+    }
+    s.addTable(rows, {
+      x: M, y: 1.5, w: W - 2 * M, colW: [3.6, 2.7, 2.7, W - 2 * M - 9], fontSize: 16,
+      fontFace: FONT, color: C.text, rowH: 0.55, border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.12, 0, 0.12],
+    });
+    text(s, `เป้าขั้นต่ำ = ค่าเฉลี่ยของทุกครั้งที่เลือก (GMV เทียบวันก่อน = ยอดรวมเทียบยอดรวม) · เป้าท้าทาย = ครั้งที่ดีที่สุด · ${sum.sessionGmv !== null ? `GMV รอบ CEO รวม ${fmtMetric("baht", sum.sessionGmv)}` : "ยังไม่มีข้อมูลรอบ CEO"}`,
+      { x: M, y: 6.3, w: W - 2 * M, h: 0.5, fontSize: 11, italic: true, color: C.muted, fit: "shrink" });
   }
   return finish(pres);
 }
