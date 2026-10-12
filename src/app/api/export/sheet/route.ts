@@ -3,7 +3,7 @@ import { fail, ok, requireMe } from "@/lib/api";
 import { cleanBook, isUrl, sheetNames, styleAt, type Cell, type RowStyle } from "@/lib/export";
 import { googleAuth } from "@/lib/google";
 
-// ส่งออกเป็น Google Sheet (หน้าเจ้าของ: สรุปรายเดือน / สถิติไลฟ์ / Plan Slot Live) เฉพาะ Owner
+// ส่งออกเป็น Google Sheet (หน้าเจ้าของ: สรุปรายเดือน / สถิติไลฟ์ / Plan Slot Live) เฉพาะ Owner / Marketing (หน้า CEO Live)
 //   POST { title, sheets: [{ name, rows, header }] } -> สร้างไฟล์ใหม่ในไดรฟ์ของบัญชีระบบ
 //   แชร์สิทธิ์แก้ไขให้อีเมลของคนที่กด (ไม่ส่งอีเมลแจ้ง) แล้วคืนลิงก์ { url }
 
@@ -60,8 +60,10 @@ export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
   const o = r.me.owner;
-  // ดูได้อย่างเดียวก็ส่งออกได้ (เป็นข้อมูลที่เห็นในหน้าอยู่แล้ว)
-  if (!o || !(o.see.mc || o.see.admin || o.see.analytics || o.see.plan || o.see.proofs)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
+  // ดูได้อย่างเดียวก็ส่งออกได้ (เป็นข้อมูลที่เห็นในหน้าอยู่แล้ว) · Marketing = ไฟล์ของหน้า CEO Live
+  if (!r.me.marketing && !(o && (o.see.mc || o.see.admin || o.see.analytics || o.see.plan || o.see.proofs))) {
+    return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
+  }
   const book = cleanBook(await request.json().catch(() => null));
   if (!book) return fail("ข้อมูลที่ส่งออกไม่ถูกต้อง หรือใหญ่เกินไป");
   const auth = googleAuth();

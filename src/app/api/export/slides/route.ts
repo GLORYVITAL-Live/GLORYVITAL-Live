@@ -3,7 +3,7 @@ import { google } from "googleapis";
 import { fail, ok, requireMe } from "@/lib/api";
 import { googleAuth } from "@/lib/google";
 
-// แปลงไฟล์สไลด์ (.pptx ที่สร้างในเบราว์เซอร์) เป็น Google Slides เฉพาะ Owner
+// แปลงไฟล์สไลด์ (.pptx ที่สร้างในเบราว์เซอร์) เป็น Google Slides เฉพาะ Owner / Marketing (หน้า CEO Live)
 //   POST ?title=...  body = ไฟล์ .pptx -> สร้างในไดรฟ์ของบัญชีระบบ แชร์สิทธิ์แก้ไขให้คนที่กด แล้วคืนลิงก์ { url }
 
 const PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
@@ -11,10 +11,11 @@ const MAX_BYTES = 4 * 1024 * 1024;
 
 export async function POST(request: Request) {
   // Owner ที่เปิดหน้าไหนก็ได้ที่มีปุ่มสไลด์: Data analytics / สรุปรายเดือน + Campaign (จัดการ Mc หรือ Admin)
+  //   + Marketing (สไลด์ของหน้า CEO Live = ข้อมูลที่เห็นในหน้าอยู่แล้ว)
   const r = await requireMe();
   if ("res" in r) return r.res;
   const o = r.me.owner;
-  if (!o || !(o.see.analytics || o.see.mc || o.see.admin)) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
+  if (!r.me.marketing && !(o && (o.see.analytics || o.see.mc || o.see.admin))) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
   const title = (new URL(request.url).searchParams.get("title") ?? "").trim().slice(0, 150) || "GLORY VITAL สไลด์";
   const data = Buffer.from(await request.arrayBuffer());
   if (!data.length || data.length > MAX_BYTES) return fail("ไฟล์สไลด์ว่างหรือใหญ่เกินไป");
