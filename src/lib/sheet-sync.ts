@@ -644,7 +644,7 @@ async function removeMissing(tab: TabKey, rows: Row[]) {
 
 /**
  * วันที่ผ่านมาแล้ว (ย้อนหลังไม่เกิน 120 วัน) ที่ชีตยังมีแถวของวันนั้นอยู่ แต่ slot ในระบบไม่มีแถวในชีตแล้ว
- *   = แถวถูกแก้ / ลบในชีต -> ยกเลิก slot นั้นในระบบ (ไม่ลบ: ประวัติ / หลักฐาน / GMV ยังอยู่)
+ *   = แถวถูกแก้ / ลบในชีต -> ยกเลิก slot นั้นในระบบ = สถานะ "แคน" (ไม่ลบ: ประวัติ / หลักฐาน / GMV ยังอยู่)
  *   เดิมเก็บไว้ทั้งหมด ทำให้แถวเก่าค้างซ้อนกับแถวใหม่ (ค่าจ้างนับซ้ำ / หน้าหลักฐานแสดงชื่อ Admin ของแถวเก่า เช่น 2 ต.ค. 2026)
  *   วันที่ไม่มีในชีตเลย (ลบทั้งเดือนออกจากชีตเพื่อเก็บถาวร) = ไม่แตะ ยังเก็บไว้ให้สรุปรายเดือนเหมือนเดิม
  */
@@ -676,9 +676,14 @@ async function cancelPastMissing(tab: TabKey, rows: Row[]) {
   const pending = new Set((jobs ?? []).map((j) => j.slot_id));
   const gone = past.filter((s) => missing.includes(s.id) && known.has(s.id) && !pending.has(s.id));
   if (!gone.length) return 0;
-  // ยกเลิกอย่างเดียว (is_cancelled เป็นคอลัมน์ที่ระบบใช้เอง ไม่สร้างงานเขียนชีต)
-  const { error } = await db.from(table).update({ is_cancelled: true }).in("id", gone.map((s) => s.id));
+  // ยกเลิก = ตั้งสถานะ "แคน" (is_cancelled คิดจากสถานะเอง เขียนตรงไม่ได้)
+  // งานเขียนชีตที่เกิดจากการแก้นี้ไม่ต้องทำ (แถวไม่มีในชีตแล้ว และระบบไม่แทรกแถวที่เคยอยู่ในชีตกลับเข้าไปอยู่แล้ว)
+  const ids = gone.map((s) => s.id);
+  const { data: lastJob } = await db.from("sheet_jobs").select("id").order("id", { ascending: false }).limit(1).maybeSingle();
+  const { error } = await db.from(table).update({ status: "แคน" }).in("id", ids);
   if (error) throw error;
+  await db.from("sheet_jobs").update({ done_at: new Date().toISOString(), last_error: "ยกเลิก slot ย้อนหลังที่ไม่มีแถวในชีตแล้ว ไม่ต้องเขียนกลับ" })
+    .eq("slot_table", table).in("slot_id", ids).gt("id", Number(lastJob?.id ?? 0)).is("done_at", null);
   await db.from("booking_logs").insert(gone.map((s) => ({
     role: "Sheet", name: TABS[tab], action: "ยกเลิก slot ย้อนหลัง (แถวถูกแก้ / ลบในชีตแล้ว)",
     slot_table: table, slot_id: s.id, platform: s.platform, live_date: s.live_date, time_range: `${hm(s.start_time)}-${hm(s.end_time)}`, result: "สำเร็จ",
