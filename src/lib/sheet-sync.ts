@@ -459,8 +459,24 @@ async function mirrorNewSlot(table: Table, k: SlotKey) {
   return 1;
 }
 
-/** แก้แพลตฟอร์ม/วัน/เวลาในชีต: ย้าย slot คู่ในอีกแท็บตาม (เฉพาะเมื่อมีคู่ตัวเดียว ไม่งั้นไม่แน่ใจว่าตัวไหน) */
-async function mirrorKeyChange(table: Table, old: SlotKey, row: Record<string, unknown>) {
+/** slot ที่ยังใช้อยู่ (ไม่ยกเลิก) ในตารางนี้ ที่แพลตฟอร์ม/วัน/เวลาตรงกัน */
+async function liveAt(table: Table, k: SlotKey) {
+  const { data, error } = await createAdminClient().from(table).select("id")
+    .eq("platform", k.platform).eq("live_date", k.live_date)
+    .eq("start_time", hm(k.start_time)).eq("end_time", hm(k.end_time)).eq("is_cancelled", false);
+  if (error) throw error;
+  return (data ?? []).map((x) => x.id as number);
+}
+
+/**
+ * แก้แพลตฟอร์ม/วัน/เวลาในชีต: ย้าย slot คู่ในอีกแท็บตาม (ไลฟ์ย้ายจริงทั้ง Mc และ Admin)
+ *   ย้ายเฉพาะเมื่อแน่ใจว่าเป็นการย้ายไลฟ์ ไม่ใช่การแก้แถวที่ลงวัน/เวลาผิด:
+ *   - ที่เดิมมีคู่ตัวเดียว (ไม่งั้นไม่รู้ว่าตัวไหน)
+ *   - ที่เดิมไม่เหลือแถวอื่นในแท็บนี้ (ยังเหลือ = แถวคู่เป็นของแถวนั้น เช่น แก้ Mc ที่ลงซ้อนกันผิดวัน)
+ *   - ที่ใหม่อีกแท็บยังไม่มีแถว (มีแล้ว = ช่องนั้นมีคู่อยู่แล้ว ย้ายไปจะซ้อนกัน)
+ *   เคยพลาด: แก้ Mc 31 -> 30 ต.ค. แล้ว Admin ของวันที่ 31 ถูกย้ายไปซ้อนกับ Admin ของวันที่ 30
+ */
+async function mirrorKeyChange(table: Table, id: number, old: SlotKey, row: Record<string, unknown>) {
   const change: Record<string, unknown> = {};
   for (const k of ["platform", "live_date", "start_time", "end_time"] as const) {
     if (k in row && row[k] !== old[k]) change[k] = row[k];
@@ -469,10 +485,18 @@ async function mirrorKeyChange(table: Table, old: SlotKey, row: Record<string, u
   const partners = await findPartners(table, old);
   if (partners.length !== 1) return;
   const other = otherTable(table);
+  const next = { ...old, ...change } as SlotKey;
+  const [ownLeft, otherThere] = await Promise.all([liveAt(table, old), liveAt(other, next)]);
+  if (ownLeft.some((x) => x !== id) || otherThere.length) return;
   const db = createAdminClient();
   const { error } = await db.from(other).update(change).eq("id", partners[0].id);
   if (error) throw error;
   if (partners[0].personId) await db.from("calendar_jobs").insert({ slot_table: other, slot_id: partners[0].id });
+  await db.from("booking_logs").insert({
+    role: "Sheet", name: TABS[TAB_OF[table]], action: `ย้าย slot คู่ตาม (แก้แพลตฟอร์ม/วัน/เวลาในแท็บ ${TABS[TAB_OF[table]]})`,
+    slot_table: other, slot_id: partners[0].id, platform: next.platform, live_date: next.live_date,
+    time_range: `${hm(next.start_time)}-${hm(next.end_time)}`, result: "สำเร็จ",
+  });
 }
 
 /**
@@ -810,7 +834,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         calendar.push({ slot_table: table, slot_id: p.id });
         touched.push(p.id);
         updated++;
-        if (rowNumbers) await mirrorKeyChange(table, s, row);
+        if (rowNumbers) await mirrorKeyChange(table, p.id, s, row);
       } else {
         // มี slot นี้อยู่แล้วแต่ยังไม่มีแถวในชีต (เช่น ระบบเพิ่งสร้างเป็นแถวคู่ให้ แต่ยังเขียนลงชีตไม่ทัน)
         // = ผูกแถวนี้กับ slot เดิม ไม่สร้างซ้ำ
