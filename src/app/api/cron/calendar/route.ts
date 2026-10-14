@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { matchPayDocsFolders, syncPendingPayDocs } from "@/lib/drive";
 import { removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 
@@ -20,5 +21,11 @@ export async function GET(request: Request) {
       removed[tab] = { error: String((err as Error)?.message ?? err) };
     }
   }
-  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed });
+  // เอกสารทำเบิก: ที่ยังไม่ขึ้น Google Drive (เช่น ส่งตอนบัญชีระบบยังไม่มีสิทธิ์) + จับคู่คนใหม่กับโฟลเดอร์เอกสารเดิมใน Drive
+  const errorOf = (err: unknown) => ({ error: String((err as Error)?.message ?? err) });
+  const payDocs = {
+    sync: await syncPendingPayDocs().catch(errorOf),
+    match: await matchPayDocsFolders().then((m) => ({ linked: m.linked.length })).catch(errorOf),
+  };
+  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, payDocs });
 }

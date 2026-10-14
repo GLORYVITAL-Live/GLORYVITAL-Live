@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { CalendarXIcon, CopyIcon, MailIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import { CalendarXIcon, CopyIcon, IdCardIcon, MailIcon, PlusIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { copyText } from "@/components/CalendarGuide";
+import { PayDocsPanel } from "@/components/PayDocs";
 import { CALENDAR_SHARE_TO, calendarShareMessage } from "@/lib/calendar-share";
 import {
   AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, StateBox, api, useConfirm, useToast,
@@ -36,8 +37,10 @@ type Person = {
   notify_cancel_mc?: boolean; notify_cancel_admin?: boolean;
   /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้บัญชีระบบ) */
   calendarMissing?: number;
+  /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
+  payDocs?: "ok" | "drive" | "missing";
 };
-type StaffData = { staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean> };
+type StaffData = { staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean>; payDocsViewer?: boolean };
 
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
 const displayName = (p: Pick<Person, "role" | "name">) => (p.role === "mc" ? `Mc ${p.name}` : p.name);
@@ -165,6 +168,27 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   // คนในบทบาทนี้ที่คิวข้างหน้ายังไม่ขึ้นปฏิทิน (มากไปน้อย)
   const noCalendar = (data?.staff ?? []).filter((p) => p.role === role && p.calendarMissing)
     .sort((a, b) => (b.calendarMissing ?? 0) - (a.calendarMissing ?? 0));
+  // เอกสารทำเบิก (เห็นเฉพาะ Owner ที่ดูเอกสารได้): คนใหม่ที่ยังไม่ส่ง + จำนวนที่มีแล้ว
+  const noPayDocs = (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "missing");
+  const payDocsCount = {
+    ok: (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "ok").length,
+    drive: (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "drive").length,
+  };
+  const [scanning, setScanning] = useState(false);
+  /** จับคู่รายชื่อกับโฟลเดอร์เอกสารเดิมใน Drive ตามชื่อ ("Mc มะนาว" = มะนาว) */
+  async function scanDrive() {
+    setScanning(true);
+    try {
+      const res = await api<{ linked: string[]; unmatched: string[] }>("/api/owner/pay-docs/scan", {});
+      if (!res.ok) throw new Error(res.message);
+      toast(`${res.linked.length ? `ผูกโฟลเดอร์ใหม่ ${res.linked.length} คน` : "ไม่มีคนที่ผูกใหม่"}${res.unmatched.length ? ` · ยังไม่เจอใน Drive: ${res.unmatched.join(", ")}` : ""}`);
+      reload();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setScanning(false);
+    }
+  }
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -248,6 +272,33 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
         </div>
       ) : null}
 
+      {data.payDocsViewer && isCrew(role) ? (
+        <div
+          className={cn(
+            "my-2 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-sm leading-snug",
+            noPayDocs.length ? "border-warning-border bg-warning text-warning-foreground" : "bg-card",
+          )}
+        >
+          <IdCardIcon className="size-4 shrink-0" />
+          <span className="min-w-56 flex-1">
+            {noPayDocs.length ? (
+              <>
+                <b>{ROLE_LABEL[role]} {noPayDocs.length} คน ยังไม่ส่งเอกสารทำเบิก</b> — {noPayDocs.map(displayName).join(", ")}
+                <span className="block text-xs">คนนั้นเห็นป้ายเตือนในหน้าจองคิว · มีเอกสารใน Drive แล้ว = กดชื่อ &gt; ผูกกับโฟลเดอร์ หรือตั้งชื่อโฟลเดอร์ให้ตรงแล้วกดตรวจ</span>
+              </>
+            ) : (
+              <>
+                เอกสารทำเบิก {ROLE_LABEL[role]}: ส่งในเว็บ {payDocsCount.ok} · มีใน Drive {payDocsCount.drive} คน
+                <span className="block text-xs text-muted-foreground">ป้ายเตือนขึ้นเฉพาะคนที่เพิ่มใหม่และยังไม่มีเอกสาร (ไม่นับพนักงานประจำ)</span>
+              </>
+            )}
+          </span>
+          <Button size="sm" variant="outline" className="bg-card" disabled={scanning} onClick={scanDrive}>
+            <RefreshCwIcon className={cn(scanning && "animate-spin")} />{scanning ? "กำลังตรวจ..." : "ตรวจเอกสารใน Drive"}
+          </Button>
+        </div>
+      ) : null}
+
       {!list.length ? (
         <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : canEditRole(role) ? "กด \"เพิ่มคน\" เพื่อเพิ่มรายชื่อ" : null}</StateBox>
       ) : (
@@ -276,6 +327,19 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                       title={`คิวข้างหน้า ${p.calendarMissing} คิวยังไม่ขึ้นใน Google Calendar ของคนนี้ — ส่วนใหญ่เพราะยังไม่ได้แชร์ปฏิทินให้ ${CALENDAR_SHARE_TO}`}
                     >
                       <CalendarXIcon />ปฏิทินยังไม่แชร์ · {p.calendarMissing} คิว
+                    </Badge>
+                  ) : null}
+                  {p.payDocs === "missing" ? (
+                    <Badge className="border-warning-border bg-warning text-[11px] text-warning-foreground" title="เพิ่มเข้าระบบหลังเปิดฟีเจอร์เอกสารทำเบิก ยังไม่ได้ส่งบัตรประชาชน / สมุดบัญชี">
+                      <IdCardIcon />ยังไม่ส่งเอกสารทำเบิก
+                    </Badge>
+                  ) : p.payDocs === "ok" ? (
+                    <Badge variant="outline" className="text-[11px] text-muted-foreground" title="ส่งเอกสารทำเบิกในเว็บแล้ว กดที่รายชื่อเพื่อดู">
+                      <IdCardIcon />เอกสารทำเบิก ✓
+                    </Badge>
+                  ) : p.payDocs === "drive" ? (
+                    <Badge variant="outline" className="text-[11px] text-muted-foreground" title="มีเอกสารเดิมใน Google Drive (ส่งทาง LINE) กดที่รายชื่อเพื่อเปิดโฟลเดอร์">
+                      <IdCardIcon />เอกสารใน Drive ✓
                     </Badge>
                   ) : null}
                   {dupOf.has(p.id) ? (
@@ -320,6 +384,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           canGrantPlan={canGrantPlan && data.staff.some((p) => p.can_plan_slots !== undefined)}
           viewReady={data.staff.some((p) => p.can_view_mc !== undefined)}
           notifyReady={data.staff.some((p) => p.notify_cancel_mc !== undefined)}
+          payDocsViewer={!!data.payDocsViewer}
           others={editing === "new" ? [] : data.staff.filter((p) => p.role === editing.role && p.id !== editing.id)}
           onClose={(changed) => {
             setEditing(null);
@@ -456,12 +521,14 @@ function DuplicatePanel({ role, groups, onMerged }: { role: "mc" | "admin"; grou
   );
 }
 
-function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, others, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, payDocsViewer, others, onClose }: {
   person: Person | null;
   roles: Role[];
   defaultRole: Role;
   isMe: boolean;
   canGrantPlan: boolean;
+  /** Owner คนนี้ดูเอกสารทำเบิกได้ */
+  payDocsViewer: boolean;
   /** รัน SQL 20261018000000_view_only แล้ว (มีคอลัมน์สิทธิ์ดูได้อย่างเดียว) */
   viewReady: boolean;
   /** รัน SQL 20261020000000_notify_cancel แล้ว (มีคอลัมน์รับอีเมลแจ้งยกเลิก) */
@@ -793,6 +860,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
             ) : null}
           </fieldset>
         ) : null}
+
+        {payDocsViewer && person && isCrew(person.role) && person.email ? <PayDocsPanel staffId={person.id} /> : null}
 
         {person && isCrew(person.role) && others.length ? (
           <fieldset className="space-y-2 rounded-xl border p-3">

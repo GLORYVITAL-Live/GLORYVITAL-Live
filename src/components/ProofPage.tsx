@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { computeGmv, fmtGmv, type GmvSlot } from "@/lib/gmv";
+import { shrinkImage } from "@/lib/image";
 import { cn } from "@/lib/utils";
 import type { ProofSlot, SlotGmv } from "@/lib/types";
 
@@ -473,29 +474,6 @@ function DriveBox({ tick, canRun }: { tick: number; canRun: boolean }) {
   );
 }
 
-/** ย่อรูปให้กว้างไม่เกิน 1600px เป็น JPG (ตัวหนังสือในแดชบอร์ดยังอ่านได้ ไฟล์เล็กลงมาก) */
-async function shrink(file: File): Promise<Blob> {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error("เปิดรูปนี้ไม่ได้ ลองใช้ไฟล์ JPG หรือ PNG"));
-      el.src = url;
-    });
-    const scale = Math.min(1, 1600 / img.naturalWidth);
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
-    if (!blob) throw new Error("ย่อรูปไม่สำเร็จ");
-    return blob;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
 function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved: boolean) => void }) {
   const toast = useToast();
   const [image, setImage] = useState<{ blob: Blob; url: string } | null>(null);
@@ -520,7 +498,7 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
     if (!file) return;
     if (!file.type.startsWith("image/")) return toast("กรุณาเลือกไฟล์รูป", "error");
     try {
-      const blob = await shrink(file);
+      const blob = await shrinkImage(file);
       setImage((old) => {
         if (old) URL.revokeObjectURL(old.url);
         return { blob, url: URL.createObjectURL(blob) };

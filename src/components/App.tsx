@@ -11,6 +11,7 @@ import type { Me, OwnerScope, Role } from "@/lib/types";
 import { CeoLive } from "@/components/CeoLive";
 import { LiveStats } from "@/components/LiveStats";
 import { MySchedule } from "@/components/MySchedule";
+import { PayDocs } from "@/components/PayDocs";
 import { HomeView, type Go } from "@/components/HomeView";
 import { PerformanceView } from "@/components/PerformanceView";
 import { OwnerView } from "@/components/OwnerView";
@@ -155,6 +156,7 @@ function Shell({ me }: { me: Me | null }) {
   const role: Role | null = page === "home" || page === "proof" || page === "stats" || page === "plan" || page === "ceo" ? null : page;
   const preview = isPreview(me, role);
   const [myOpen, setMyOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
   const [rulesManual, setRulesManual] = useState(false);
   const dark = useIsDark();
 
@@ -330,6 +332,8 @@ function Shell({ me }: { me: Me | null }) {
       {mode?.rule ? <Notice>{mode.rule}</Notice> : null}
 
       {me?.owner && role === "owner" ? <OwnerTabs me={me} /> : null}
+      {/* เอกสารทำเบิก: ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้ (เปิดจาก "ตารางของฉัน" ได้ด้วย) */}
+      {me && (role === "mc" || role === "admin") && !preview ? <PayDocs open={docsOpen} onOpenChange={setDocsOpen} /> : null}
       {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
       {me && registered && page === "home" ? <HomeView go={goTo} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
@@ -348,6 +352,7 @@ function Shell({ me }: { me: Me | null }) {
             role={role}
             who={displayName(me, role)}
             onOpenRules={() => setRulesManual(true)}
+            onOpenPayDocs={() => { setMyOpen(false); setDocsOpen(true); }}
           />
           <RulesDialog open={rulesOpen} onClose={closeRules} role={role} who={displayName(me, role)} />
         </>

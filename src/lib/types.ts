@@ -133,6 +133,37 @@ export type MyItem = {
   pairPhone: string;
 };
 
+/** เอกสารทำเบิกที่ส่งแล้ว (ข้อมูลกรอก + มีไฟล์หรือยัง) — เห็นเฉพาะเจ้าตัว และ Owner ที่ดูเอกสารทำเบิกได้ */
+export type PayDocsView = {
+  fullName: string;
+  idCardNo: string;
+  address: string;
+  bank: string;
+  accountNo: string;
+  accountName: string;
+  /** ไฟล์บัตร / สมุดบัญชีเป็น PDF หรือรูป */
+  idCardPdf: boolean;
+  bankBookPdf: boolean;
+  updatedAt: string;
+};
+/**
+ * GET /api/my/pay-docs — required = ต้องส่ง (เพิ่มเข้าระบบหลังเปิดฟีเจอร์นี้ ไม่ใช่ Mc / Admin ประจำ และยังไม่มีใน Drive)
+ *   onFile = ทีมงานมีเอกสารเดิมใน Google Drive แล้ว (ส่งทาง LINE)
+ */
+export type MyPayDocs = { required: boolean; onFile: boolean; docs: PayDocsView | null };
+/** โฟลเดอร์รายคนในโฟลเดอร์เอกสารทำเบิก (Drive) — usedBy = รายชื่อที่ผูกอยู่แล้ว */
+export type DocsFolder = { id: string; name: string; url: string; usedBy: string | null };
+/**
+ * GET /api/owner/pay-docs — ของคนที่เลือก + สถานะสำเนาใน Google Drive
+ *   linked = โฟลเดอร์เอกสารเดิมที่ผูกไว้ (จับคู่ชื่ออัตโนมัติ / Owner ผูกเอง) · folders = ตัวเลือกให้ผูก (?folders=1)
+ */
+export type OwnerPayDocs = {
+  docs: PayDocsView | null;
+  drive: { folders: { role: "mc" | "admin"; url: string }[]; error: string | null; syncedAt: string | null; pending: boolean };
+  linked: { id: string; name: string; url: string } | null;
+  folders?: DocsFolder[];
+};
+
 export type MyResponse = {
   ok: true;
   month: string;

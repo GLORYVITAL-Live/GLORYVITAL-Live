@@ -4,6 +4,7 @@ import { VIEW_COL_RE, VIEW_COLS } from "@/lib/auth";
 import { missingCalendarCounts } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
 import { parseTierHours } from "@/lib/pay";
+import { canViewPayDocs, payDocsStatus } from "@/lib/pay-docs-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import { processSyncJobs } from "@/lib/sync";
 import type { Me } from "@/lib/types";
@@ -164,13 +165,18 @@ export async function GET() {
   }
   // คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้บัญชีระบบ) — ดึงไม่ได้ก็แสดงรายชื่อได้ปกติ
   const noCalendar = await missingCalendarCounts().catch(() => new Map<number, number>());
+  // เอกสารทำเบิก: เห็นเฉพาะ Owner ที่ดูเอกสารได้ (ยังไม่ได้รัน SQL = ไม่แสดง)
+  const payDocsViewer = await canViewPayDocs(r.me);
+  const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
   return ok({
     staff: (staff ?? []).map((s) => ({
       ...s, upcoming: upcoming.get(s.id) ?? 0, ...(isCrew(s.role as Role) ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
+      ...(payDocs.has(s.id) ? { payDocs: payDocs.get(s.id) } : {}),
     })),
     meId: r.me.owner?.id ?? null,
     // บทบาทที่แก้รายชื่อได้ (ดูได้อย่างเดียว = false)
     canEdit: edit,
+    payDocsViewer,
   });
 }
 

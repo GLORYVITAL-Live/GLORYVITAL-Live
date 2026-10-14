@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPaidHours, tiersLabel } from "@/lib/pay";
-import { ClipboardListIcon } from "lucide-react";
+import { ClipboardListIcon, IdCardIcon } from "lucide-react";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
@@ -15,12 +15,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + ยกเลิกคิว */
-export function MySchedule({ open, onClose, role, who, onOpenRules }: {
+export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDocs }: {
   open: boolean;
   onClose: () => void;
   role: "mc" | "admin";
   who: string;
   onOpenRules: () => void;
+  /** เอกสารทำเบิก (บัตรประชาชน / สมุดบัญชี) */
+  onOpenPayDocs: () => void;
 }) {
   const toast = useToast();
   const [month, setMonth] = useState(() => monthKey());
@@ -127,9 +129,12 @@ export function MySchedule({ open, onClose, role, who, onOpenRules }: {
             <p className="rounded-xl border border-warning-border bg-warning px-3 py-2 text-xs text-warning-foreground">ยังไม่ได้ตั้งค่าจ้างต่อชั่วโมง ติดต่อทีมงานเพื่อดูยอดเงิน</p>
           )
         ) : null}
-        <div>
+        <div className="flex flex-wrap gap-x-4">
           <Button variant="link" onClick={onOpenRules} className="h-auto px-0 font-semibold">
             <ClipboardListIcon />กฎการทำงาน
+          </Button>
+          <Button variant="link" onClick={onOpenPayDocs} className="h-auto px-0 font-semibold">
+            <IdCardIcon />เอกสารทำเบิก
           </Button>
         </div>
 

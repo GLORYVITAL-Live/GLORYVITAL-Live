@@ -13,8 +13,9 @@ import { google } from "googleapis";
 const BASE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/spreadsheets", // อ่าน + เขียนชีต (ซิงค์สองทาง)
-  // Google Drive: เฉพาะไฟล์/โฟลเดอร์ที่ระบบสร้างเอง (สำเนารูปหลักฐานไลฟ์) มองไม่เห็นไฟล์อื่นในไดรฟ์
-  "https://www.googleapis.com/auth/drive.file",
+  // Google Drive แบบเต็ม: สำเนารูปหลักฐานไลฟ์ (โฟลเดอร์ที่ระบบสร้างเอง) + เอกสารทำเบิกลงโฟลเดอร์ที่ Owner สร้างแล้วแชร์ให้บัญชีระบบ
+  //   (drive.file เขียนลงโฟลเดอร์ที่คนอื่นสร้างไม่ได้) — เปลี่ยนสิทธิ์แล้วต้องรัน bun run google:auth ใหม่
+  "https://www.googleapis.com/auth/drive",
 ];
 /** สิทธิ์ที่ขอตอนเชื่อมบัญชี (bun run google:auth) = ข้างบน + ส่งอีเมลแจ้งเตือน (ส่งได้อย่างเดียว อ่านอีเมลไม่ได้) */
 export const GOOGLE_SCOPES = [...BASE_SCOPES, "https://www.googleapis.com/auth/gmail.send"];

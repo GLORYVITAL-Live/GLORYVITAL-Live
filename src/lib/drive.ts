@@ -3,6 +3,9 @@ import { Readable } from "stream";
 import { google, type drive_v3 } from "googleapis";
 import { googleAuth } from "@/lib/google";
 import { withSyncLock } from "@/lib/lock";
+import { matchDocsFolder, payInfoText } from "@/lib/pay-docs";
+import { DRIVE_LINK_SQL, PAY_DOCS_BUCKET, type CrewRow, type PayDocsRow } from "@/lib/pay-docs-db";
+import type { DocsFolder } from "@/lib/types";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -10,7 +13,7 @@ import { createAdminClient } from "@/lib/supabase/server";
  *   GLORY VITAL หลักฐานไลฟ์ > 2026 > 10 ตุลาคม > Mc กานต์ > 2026-10-01_GLORY MALL_19.30-21.30.jpg
  * รูปเดียวที่คลุมหลาย Mc = อัปไว้ในโฟลเดอร์ของแต่ละคน (คนละไฟล์) ลิงก์เก็บราย slot ใน live_proof_slots.drive_url
  * โฟลเดอร์ของ Mc เดือนนั้นเก็บใน drive_folder_id (ใช้ลิงก์ในแถวรวมของใบสรุปค่าจ้าง)
- * สิทธิ์ drive.file: ระบบเห็นเฉพาะไฟล์/โฟลเดอร์ที่ตัวเองสร้าง
+ * + เอกสารทำเบิก (บัตรประชาชน / สมุดบัญชี / ข้อมูล) ลงโฟลเดอร์ที่ Owner ตั้งใน settings (ท้ายไฟล์)
  */
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -168,6 +171,173 @@ export async function trashUnusedDriveFiles(fileIds: (string | null | undefined)
   for (const id of ids.filter((x) => !used.has(x))) {
     await drive.files.update({ fileId: id, requestBody: { trashed: true } }).catch(() => undefined);
   }
+}
+
+// ---------- เอกสารทำเบิก ----------
+
+const PAY_FOLDER_COL = { mc: "pay_docs_drive_mc", admin: "pay_docs_drive_admin" } as const;
+const mimeOf = (ext: string) =>
+  ext === "pdf" ? "application/pdf" : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+const fmtStamp = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Bangkok" });
+
+/**
+ * สำเนาเอกสารทำเบิกของอีเมลนี้ขึ้น Google Drive แทนชุดเดิม (ชุดเดิมทิ้งถังขยะ)
+ *   โฟลเดอร์ Mc (settings.pay_docs_drive_mc) > Mc กานต์ > บัตรประชาชน.jpg / สมุดบัญชี.jpg / ข้อมูลทำเบิก.txt
+ *   เป็นทั้ง Mc และ Admin = ลงทั้งสองโฟลเดอร์ · โฟลเดอร์ของ Owner ต้องแชร์ให้บัญชีระบบแก้ไขได้ (สิทธิ์ Drive เต็ม)
+ */
+export async function syncPayDocsToDrive(email: string): Promise<{ ok: boolean; error: string | null }> {
+  const run = await withSyncLock(`pay-docs:${email}`, async () => {
+    const db = createAdminClient();
+    const [docRes, settingsRes, peopleRes] = await Promise.all([
+      db.from("pay_docs").select("*").eq("email", email).maybeSingle(),
+      db.from("settings").select("pay_docs_drive_mc, pay_docs_drive_admin").eq("id", 1).single(),
+      db.from("staff").select("*").eq("email", email).in("role", ["mc", "admin"]).order("role", { ascending: false }),
+    ]);
+    const doc = docRes.data as PayDocsRow | null;
+    if (!doc) return { ok: false, error: "ยังไม่มีเอกสาร" };
+    const save = (patch: Partial<PayDocsRow>) => db.from("pay_docs").update(patch).eq("email", email);
+    const settings = (settingsRes.data ?? {}) as Partial<Record<(typeof PAY_FOLDER_COL)[keyof typeof PAY_FOLDER_COL], string | null>>;
+    // โฟลเดอร์เอกสารเดิมที่ผูกไว้ = ลงโฟลเดอร์นั้น / ไม่มี = หา (หรือสร้าง) โฟลเดอร์ "Mc ชื่อ" ในโฟลเดอร์ของฝั่งนั้น
+    const targets = ((peopleRes.data ?? []) as (CrewRow & { phone: string | null })[]).flatMap((p) => {
+      const parent = settings[PAY_FOLDER_COL[p.role]]?.trim();
+      return parent
+        ? [{ role: p.role, parent, linked: p.pay_docs_drive_folder || null, name: p.role === "mc" ? `Mc ${p.name}` : p.name, phone: p.phone }]
+        : [];
+    });
+    if (!targets.length) {
+      const error = "ยังไม่ได้ตั้งโฟลเดอร์ Google Drive ของเอกสารทำเบิก";
+      await save({ drive_error: error });
+      return { ok: false, error };
+    }
+
+    let fileIds = [...(doc.drive_file_ids ?? [])];
+    try {
+      const drive = driveClient();
+      for (const id of fileIds) await drive.files.update({ fileId: id, requestBody: { trashed: true } }).catch(() => undefined);
+      fileIds = [];
+      const files = await Promise.all(([["บัตรประชาชน", doc.id_card_path], ["สมุดบัญชี", doc.bank_book_path]] as const).map(async ([label, path]) => {
+        const { data: blob, error } = await db.storage.from(PAY_DOCS_BUCKET).download(path);
+        if (error || !blob) throw new Error("โหลดไฟล์จากที่เก็บไม่สำเร็จ: " + (error?.message ?? ""));
+        const ext = path.split(".").pop() || "jpg";
+        return { name: `${label}.${ext}`, mime: mimeOf(ext), data: Buffer.from(await blob.arrayBuffer()) };
+      }));
+      const info = {
+        fullName: doc.full_name, idCardNo: doc.id_card_no, address: doc.address, bank: doc.bank, accountNo: doc.account_no, accountName: doc.account_name,
+      };
+      const folders: PayDocsRow["drive_folders"] = {};
+      const cache = new Map<string, string>();
+      for (const t of targets) {
+        const person = t.linked ?? await folder(drive, t.name, t.parent, cache);
+        folders[t.role] = person;
+        const text = payInfoText(info, { name: t.name, email, phone: t.phone }, fmtStamp.format(new Date(doc.updated_at)));
+        for (const f of [...files, { name: "ข้อมูลทำเบิก.txt", mime: "text/plain", data: Buffer.from(text, "utf8") }]) {
+          const res = await drive.files.create({
+            requestBody: { name: f.name, parents: [person] },
+            media: { mimeType: f.mime, body: Readable.from(f.data) },
+            fields: "id",
+          });
+          fileIds.push(res.data.id!);
+        }
+      }
+      await save({ drive_file_ids: fileIds, drive_folders: folders, drive_error: null, drive_synced_at: new Date().toISOString() });
+      return { ok: true, error: null };
+    } catch (err) {
+      // โฟลเดอร์ที่ Owner สร้างเอง: ยังไม่ได้แชร์ให้บัญชีระบบ หรือบัญชีระบบยังมีสิทธิ์ Drive แค่ไฟล์ที่ตัวเองสร้าง
+      const error = /file not found/i.test((err as Error)?.message ?? "")
+        ? "บัญชีระบบเข้าโฟลเดอร์ Drive ของเอกสารทำเบิกไม่ได้ (แชร์โฟลเดอร์ให้บัญชีระบบเป็นผู้แก้ไข และเชื่อมบัญชี Google ใหม่ด้วยสิทธิ์ Drive เต็ม)"
+        : driveError(err);
+      await save({ drive_file_ids: fileIds, drive_error: error });
+      return { ok: false, error };
+    }
+  }, 10_000);
+  return run ?? { ok: false, error: "กำลังส่งขึ้น Drive อยู่ ลองใหม่อีกครั้ง" };
+}
+
+/** โฟลเดอร์ Drive ของเอกสารทำเบิกฝั่งนี้ (settings) ไม่ได้ตั้ง = null */
+export async function payDocsParent(role: "mc" | "admin") {
+  const { data } = await createAdminClient().from("settings").select("pay_docs_drive_mc, pay_docs_drive_admin").eq("id", 1).single();
+  return (data?.[PAY_FOLDER_COL[role]] as string | null | undefined)?.trim() || null;
+}
+
+/** โฟลเดอร์รายคน (โฟลเดอร์ย่อย) ในโฟลเดอร์เอกสารทำเบิก */
+async function personFolders(drive: Drive, parent: string) {
+  const out: { id: string; name: string }[] = [];
+  let pageToken: string | undefined;
+  do {
+    const { data } = await drive.files.list({
+      q: `mimeType='${FOLDER}' and ${quote(parent)} in parents and trashed=false`,
+      fields: "nextPageToken, files(id, name)", pageSize: 200, pageToken, orderBy: "name",
+    });
+    out.push(...(data.files ?? []).map((f) => ({ id: f.id!, name: f.name!.trim() })));
+    pageToken = data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return out;
+}
+
+/** ตัวเลือกให้ Owner ผูกโฟลเดอร์เอง (ฝั่งของรายชื่อนั้น) + ใครผูกโฟลเดอร์ไหนอยู่ */
+export async function docsFolderOptions(role: "mc" | "admin"): Promise<DocsFolder[]> {
+  const parent = await payDocsParent(role);
+  if (!parent) return [];
+  const db = createAdminClient();
+  const [folders, staff] = await Promise.all([
+    personFolders(driveClient(), parent),
+    db.from("staff").select("*").eq("role", role),
+  ]);
+  const usedBy = new Map(((staff.data ?? []) as CrewRow[]).filter((s) => s.pay_docs_drive_folder)
+    .map((s) => [s.pay_docs_drive_folder!, s.role === "mc" ? `Mc ${s.name}` : s.name]));
+  return folders.map((f) => ({ ...f, url: driveFolderUrl(f.id), usedBy: usedBy.get(f.id) ?? null }));
+}
+
+/** โฟลเดอร์นี้อยู่ในโฟลเดอร์เอกสารทำเบิกของฝั่งนี้จริงไหม (ก่อน Owner ผูกเอง) คืนชื่อโฟลเดอร์ */
+export async function docsFolderName(role: "mc" | "admin", folderId: string) {
+  const parent = await payDocsParent(role);
+  if (!parent) return null;
+  const { data } = await driveClient().files.get({ fileId: folderId, fields: "name, parents, mimeType, trashed" }).catch(() => ({ data: null }));
+  return data && !data.trashed && data.mimeType === FOLDER && data.parents?.includes(parent) ? data.name ?? "" : null;
+}
+
+/**
+ * จับคู่รายชื่อ Mc / Admin (ที่มีอีเมลและยังไม่ได้ผูก) กับโฟลเดอร์เอกสารเดิมใน Drive ตามชื่อ ("Mc มะนาว" = มะนาว)
+ *   ผูกแล้ว = มีเอกสาร ไม่ขึ้นป้ายเตือน · ไม่ทับที่ Owner ผูกเอง · Mc จับคู่ในโฟลเดอร์ Mc / Admin ในโฟลเดอร์ Admin
+ */
+export async function matchPayDocsFolders() {
+  const db = createAdminClient();
+  const { data, error } = await db.from("staff").select("*").in("role", ["mc", "admin"]).not("email", "is", null);
+  if (error) throw error;
+  const rows = (data ?? []) as CrewRow[];
+  if (rows.length && !("pay_docs_drive_folder" in rows[0])) throw new Error(DRIVE_LINK_SQL);
+  const drive = driveClient();
+  const label = (p: CrewRow) => (p.role === "mc" ? `Mc ${p.name}` : p.name);
+  const linked: string[] = [], missing: CrewRow[] = [];
+  const hasFolder = new Set(rows.filter((x) => x.pay_docs_drive_folder).map((x) => x.email));
+  for (const role of ["mc", "admin"] as const) {
+    const parent = await payDocsParent(role);
+    if (!parent) continue;
+    const folders = await personFolders(drive, parent);
+    for (const p of rows.filter((x) => x.role === role && !x.pay_docs_drive_folder)) {
+      const hit = matchDocsFolder(p.name, folders);
+      if (!hit) { missing.push(p); continue; }
+      const { error: upErr } = await db.from("staff").update({ pay_docs_drive_folder: hit.id }).eq("id", p.id);
+      if (upErr) throw upErr;
+      linked.push(label(p));
+      hasFolder.add(p.email);
+    }
+  }
+  // ไม่เจอ (ไม่นับพนักงานประจำ และคนที่มีโฟลเดอร์อีกฝั่งแล้ว — เอกสารเป็นของคน ไม่ใช่ของบทบาท)
+  const unmatched = missing.filter((p) => !p.is_salaried && !hasFolder.has(p.email)).map(label);
+  return { linked, unmatched };
+}
+
+/** เก็บตกเอกสารที่ยังไม่ขึ้น Drive (cron) */
+export async function syncPendingPayDocs(limit = 5) {
+  const { data, error } = await createAdminClient().from("pay_docs").select("email").is("drive_synced_at", null).limit(limit);
+  if (error) return { done: 0, failed: 0, error: error.message };
+  let done = 0, failed = 0;
+  for (const d of data ?? []) {
+    if ((await syncPayDocsToDrive(String(d.email))).ok) done++;
+    else failed++;
+  }
+  return { done, failed };
 }
 
 /** สถานะ: ค้างกี่ slot / พลาดเพราะอะไร / โฟลเดอร์หลัก */
