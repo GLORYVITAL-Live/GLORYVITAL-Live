@@ -124,6 +124,30 @@ export async function enqueueMissingCalendar(role: "mc" | "admin", personId: num
   return jobs.length;
 }
 
+/**
+ * แชร์ปฏิทินแล้วหรือยัง (Google ไม่แจ้งเราตอนมีคนแชร์ ต้องถามเอง) แชร์แล้ว = จดงานลงคิวที่ยังไม่มีนัด คืนจำนวนงาน
+ *   ยังไม่แชร์ / สิทธิ์ดูอย่างเดียว / ถาม Google ไม่ได้ = 0
+ */
+export async function enqueueIfShared(role: "mc" | "admin", personId: number, email: string | null | undefined) {
+  if ((await calendarAccess(email)) !== "ok") return 0;
+  return enqueueMissingCalendar(role, personId);
+}
+
+/** ทุกคนที่ยังมีคิวไม่ขึ้นปฏิทิน: ถามว่าแชร์แล้วหรือยัง แชร์แล้วจดงานให้ (cron ตอนเช้า เผื่อคนที่แชร์แล้วไม่ได้เปิดเว็บ) */
+export async function enqueueSharedCalendars() {
+  const missing = await missingCalendarCounts();
+  if (!missing.size) return { checked: 0, linked: 0, jobs: 0 };
+  const { data, error } = await createAdminClient().from("staff").select("id, role, email").in("id", [...missing.keys()]);
+  if (error) throw error;
+  let linked = 0, jobs = 0;
+  for (const p of data ?? []) {
+    if (p.role !== "mc" && p.role !== "admin") continue;
+    const n = await enqueueIfShared(p.role, p.id, p.email);
+    if (n) { linked++; jobs += n; }
+  }
+  return { checked: data?.length ?? 0, linked, jobs };
+}
+
 /** ปฏิทินของพนักงานไม่ได้แชร์ให้บัญชีระบบแบบ "ทำการเปลี่ยนแปลงกิจกรรม" (ลองซ้ำก็ไม่สำเร็จ) */
 const isNoAccess = (err: unknown) =>
   (err as { code?: number })?.code === 403 || /writer access|forbidden/i.test(String((err as Error)?.message ?? ""));

@@ -1,6 +1,7 @@
+import { after } from "next/server";
 import { fail, ok, requireMe } from "@/lib/api";
 import { withPlatformLabels } from "@/lib/platform";
-import { missingCalendarCounts, usesCalendar } from "@/lib/calendar";
+import { enqueueIfShared, missingCalendarCounts, processCalendarJobs, usesCalendar } from "@/lib/calendar";
 import { bookingLimits, getSettings, openAdminSlots, openMcSlots, scheduleNotice, upcomingQueues } from "@/lib/data";
 
 // หน้าแรก: ประกาศ + slot ที่ว่าง (?role=mc | admin) — แทน action "init" / "adminInit"
@@ -38,6 +39,15 @@ export async function GET(request: Request) {
     // คิวที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้ระบบ) ใช้แสดงแถบเตือน + วิธีแชร์
     personId && usesCalendar(r.me.email) ? missingCalendarCounts({ role, id: personId }).catch(() => null) : Promise.resolve(null),
   ]);
+  // เปิดหน้าครั้งแรก (?check=1) แล้วยังมีคิวไม่ขึ้นปฏิทิน: ถาม Google ว่าแชร์แล้วหรือยัง แชร์แล้วลงคิวที่ค้างให้เลย
+  //   (หลังตอบผู้ใช้ ไม่ต้องรอ — รีเฟรชรอบถัดไปของหน้าจอง ป้ายเตือนจะหายเอง) ไม่ต้องกด "แชร์แล้ว เช็กเลย"
+  const calendarMissing = personId && missing ? missing.get(personId) ?? 0 : 0;
+  if (calendarMissing && personId && new URL(request.url).searchParams.get("check") === "1") {
+    after(async () => {
+      const queued = await enqueueIfShared(role, personId, r.me.email).catch(() => 0);
+      if (queued) await processCalendarJobs(30, 20_000).catch(() => undefined);
+    });
+  }
   return ok({
     siteNotice: settings.site_notice,
     scheduleNotice: scheduleNotice(settings, role, personId),
@@ -45,6 +55,6 @@ export async function GET(request: Request) {
     slots: withPlatformLabels(slots),
     mine,
     limits: bookingLimits(settings, role),
-    calendarMissing: personId && missing ? missing.get(personId) ?? 0 : 0,
+    calendarMissing,
   });
 }

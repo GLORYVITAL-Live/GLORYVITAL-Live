@@ -91,9 +91,13 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   const dialogRef = useRef(dialog);
   useEffect(() => { pickedRef.current = picked; dialogRef.current = dialog; }, [picked, dialog]);
 
+  // โหลดครั้งแรกของหน้า: ให้ระบบเช็กว่าแชร์ปฏิทินแล้วหรือยัง (แชร์แล้วลงคิวที่ค้างให้เอง) รอบรีเฟรชอัตโนมัติไม่ต้องเช็ก
+  const firstLoad = useRef(true);
   useEffect(() => {
     let alive = true;
-    api<SlotsResponse>(`/api/slots?role=${role}`)
+    const check = firstLoad.current && !preview ? "&check=1" : "";
+    firstLoad.current = false;
+    api<SlotsResponse>(`/api/slots?role=${role}${check}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.message);
         if (!alive) return;
@@ -113,7 +117,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       .catch((err) => { if (alive) setLoadError((err as Error).message); })
       .finally(() => { if (alive) setRefreshing(false); });
     return () => { alive = false; };
-  }, [role, tick, toast, t.verb]);
+  }, [role, tick, toast, t.verb, preview]);
 
   // อัปเดตอัตโนมัติ: ทุก POLL_MS ระหว่างเปิดหน้าอยู่ + ทันทีที่กลับมาที่แท็บนี้ (ไม่รีเฟรชระหว่างเปิดหน้าต่างยืนยัน)
   useEffect(() => {
