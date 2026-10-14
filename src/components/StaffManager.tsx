@@ -863,6 +863,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
 
         {payDocsViewer && person && isCrew(person.role) && person.email ? <PayDocsPanel staffId={person.id} /> : null}
 
+        {person ? <StaffHistory staffId={person.id} /> : null}
+
         {person && isCrew(person.role) && others.length ? (
           <fieldset className="space-y-2 rounded-xl border p-3">
             <legend className="px-1 font-semibold">รวมรายชื่อซ้ำ</legend>
@@ -900,6 +902,48 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         </Button>
       </DialogActions>
     </AppDialog>
+  );
+}
+
+const fmtLogAt = new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+
+/** ประวัติการแก้รายชื่อนี้ (ค่าจ้าง / Commit / สิทธิ์ / ข้อมูลติดต่อ) — กดแล้วค่อยโหลด */
+function StaffHistory({ staffId }: { staffId: number }) {
+  const [items, setItems] = useState<{ at: string; by: string; action: string }[] | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    setBusy(true);
+    try {
+      const res = await api<{ items: { at: string; by: string; action: string }[] }>(`/api/owner/staff/history?id=${staffId}`);
+      if (!res.ok) throw new Error(res.message);
+      setItems(res.items);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <fieldset className="rounded-lg border px-3 py-2 text-sm">
+      <legend className="px-1 font-semibold">ประวัติการแก้ไข</legend>
+      {items ? (
+        items.length ? (
+          <ul className="scroll-thin max-h-48 space-y-1 overflow-y-auto text-xs">
+            {items.map((x, i) => (
+              <li key={i}>
+                <span className="text-muted-foreground tabular-nums">{fmtLogAt.format(new Date(x.at))} · {x.by}:</span>{" "}
+                {x.action.replace(/^(แก้|เพิ่ม|ลบ)พนักงาน (mc|admin|owner|marketing) "[^"]*":? ?/, (_, verb) => (verb === "แก้" ? "" : `${verb}รายชื่อ `))}
+              </li>
+            ))}
+          </ul>
+        ) : <p className="text-xs text-muted-foreground">ยังไม่มีประวัติ</p>
+      ) : (
+        <Button variant="outline" size="sm" disabled={busy} onClick={load}>{busy ? "กำลังโหลด..." : "ดูประวัติ"}</Button>
+      )}
+      {error ? <p className="mt-1 text-xs text-destructive">{error}</p> : null}
+      <p className="mt-1 text-xs text-muted-foreground">บันทึกว่าใครเปลี่ยนค่าจ้าง Commit สิทธิ์ หรือข้อมูลติดต่อ จากเท่าไรเป็นเท่าไร (ก่อน 14 ต.ค. 2569 บอกแค่ช่องที่แก้)</p>
+    </fieldset>
   );
 }
 

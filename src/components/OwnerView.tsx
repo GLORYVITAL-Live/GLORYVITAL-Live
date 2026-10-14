@@ -5,12 +5,13 @@ import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/ty
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
 import { fmtGmv } from "@/lib/gmv";
 import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, LockIcon, LockOpenIcon } from "lucide-react";
 import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
-import { LoadError, LoadingBlock, MonthNav, Notice, Stats, api } from "@/components/shared";
+import { LoadError, LoadingBlock, MonthNav, Notice, Stats, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableFooter, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
@@ -384,6 +385,8 @@ export function OwnerView({ requester = "" }: { requester?: string }) {
   }, [month, loaded, attempt]);
 
   const nav = <MonthNav label={monthLabel(month)} onPrev={() => setMonth(monthKey(-1, month))} onNext={() => setMonth(monthKey(1, month))} />;
+  /** โหลดเดือนนี้ใหม่ (หลังปิด / เปิดงวด) */
+  const reloadMonth = () => setCache((c) => Object.fromEntries(Object.entries(c).filter(([k]) => k !== month)));
   if (!data) {
     return (
       <div className="pb-10">
@@ -430,9 +433,94 @@ export function OwnerView({ requester = "" }: { requester?: string }) {
               กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · {payHiddenOf(data, type) ? "ดูได้อย่างเดียว ไม่แสดงค่าจ้าง" : "ยอดเงินหักมาสาย + รวมไลฟ์ชดเชยแล้ว"}
             </span>
           </h2>
+          <PeriodBar data={data} side={type === "Mc" ? "mc" : "admin"} onChanged={reloadMonth} />
           <SumTable data={data} type={type} rows={rows} />
         </section>
       ))}
+    </div>
+  );
+}
+
+/**
+ * ปิดงวดของฝั่งนี้: สถานะ + ปุ่มปิด / เปิดงวด (เฉพาะคนที่ปิดงวดได้) + ส่วนต่างของข้อมูลจริงหลังปิด + ประวัติ
+ *   ยังไม่ปิด และคนดูปิดไม่ได้ และไม่มีประวัติ = ไม่แสดง
+ */
+function PeriodBar({ data, side, onChanged }: { data: OwnerSummary; side: "mc" | "admin"; onChanged: () => void }) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const closed = data.periods?.[side];
+  const changes = data.changes?.[side] ?? [];
+  const log = (data.periodLog ?? []).filter((l) => l.side === side);
+  const label = side === "mc" ? "Mc" : "Admin";
+  if (!closed && !data.canClose && !log.length) return null;
+
+  async function act(action: "close" | "reopen") {
+    const ended = data.month < monthKey();
+    const ok = await confirm(action === "close"
+      ? {
+        title: `ปิดงวด ${label} ${monthLabel(data.month)}?`,
+        description: (
+          <span className="block space-y-1">
+            <span className="block">ระบบเก็บตัวเลขของฝั่ง {label} ตอนนี้ไว้ หน้าสรุปและไฟล์เบิกเดือนนี้จะใช้ตัวเลขชุดนี้เสมอ ถ้ามีคนแก้ข้อมูลย้อนหลังจะขึ้นเป็นส่วนต่างให้เห็น</span>
+            {!ended ? <b className="block text-destructive">เดือนนี้ยังไม่จบ — คิวที่เหลือของเดือนจะไม่อยู่ในตัวเลขที่ปิด</b> : null}
+          </span>
+        ),
+        confirmText: "ปิดงวด",
+      }
+      : {
+        title: `เปิดงวด ${label} ${monthLabel(data.month)} ใหม่?`,
+        description: "ตัวเลขกลับไปคิดตามข้อมูลจริง (ตัวเลขตอนปิดยังเก็บไว้ในประวัติ) แล้วปิดใหม่ได้",
+        confirmText: "เปิดงวดใหม่",
+        destructive: true,
+      });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/owner/periods", { month: data.month, side, action });
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onChanged();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className={cn("mb-2 rounded-xl border px-3 py-2 text-sm", closed ? "border-success/40 bg-success/5" : "bg-card")}>
+      <div className="flex flex-wrap items-center gap-2">
+        {closed ? <LockIcon className="size-4 shrink-0 text-success" /> : <LockOpenIcon className="size-4 shrink-0 text-muted-foreground" />}
+        <span className="min-w-0 flex-1 leading-snug">
+          {closed ? (
+            <>
+              <b>ปิดงวดแล้ว</b> · {fmtAt.format(new Date(closed.at))} โดย {closed.by}
+              <span className="block text-xs text-muted-foreground">ตัวเลขในตารางและไฟล์เบิกของฝั่ง {label} เป็นตัวเลข ณ ตอนปิดงวด</span>
+            </>
+          ) : <>ยังไม่ปิดงวด <span className="text-xs text-muted-foreground">— ตัวเลขคิดตามข้อมูลจริงตอนนี้</span></>}
+        </span>
+        {data.canClose ? (
+          <Button size="sm" variant={closed ? "outline" : "default"} disabled={busy} onClick={() => act(closed ? "reopen" : "close")}>
+            {busy ? "กำลังบันทึก..." : closed ? "เปิดงวดใหม่" : `ปิดงวด ${label}`}
+          </Button>
+        ) : null}
+      </div>
+      {changes.length ? (
+        <div className="mt-2 rounded-lg border border-warning-border bg-warning px-2.5 py-1.5 text-xs text-warning-foreground">
+          <b>ข้อมูลจริงเปลี่ยนหลังปิดงวด {changes.length} คน</b> — ไว้ปรับในงวดถัดไป หรือเปิดงวดใหม่แล้วปิดอีกครั้ง
+          <ul className="mt-1 space-y-0.5">
+            {changes.map((c) => (
+              <li key={c.name}><b>{c.name}</b>: {c.items.map((i) => `${i.label} ${i.before} → ${i.after}`).join(" · ")}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {log.length ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          ประวัติ: {log.map((l) => `ปิด ${fmtAt.format(new Date(l.closedAt))} (${l.closedBy})${l.reopenedAt ? ` → เปิดใหม่ ${fmtAt.format(new Date(l.reopenedAt))} (${l.reopenedBy})` : ""}`).join(" | ")}
+        </p>
+      ) : null}
     </div>
   );
 }

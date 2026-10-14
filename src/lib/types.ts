@@ -85,6 +85,8 @@ export type HomeData = {
   };
   /** ตรวจสุขภาพข้อมูล (src/lib/health.ts) */
   health: HealthIssues;
+  /** คนดูสำรองข้อมูลได้ (Owner ที่ตั้ง can_close_periods) = แสดงส่วน "สำรองข้อมูล" ท้ายหน้า */
+  canBackup?: boolean;
 };
 
 /** ตรวจสุขภาพข้อมูล: ต้นเดือนนี้ถึง 60 วันข้างหน้า เฉพาะฝั่งที่มีสิทธิ์ (time = "19:30–21:30") */
@@ -283,6 +285,17 @@ export type OwnerSummary = {
   mc: OwnerPerson[];
   admin: OwnerPerson[];
   details: OwnerDetail[];
+  /** ฝั่งที่ปิดงวดแล้ว: ตัวเลขของฝั่งนั้นมาจากตอนปิด (src/lib/periods.ts) */
+  periods?: Partial<Record<"mc" | "admin", { at: string; by: string }>>;
+  /** ข้อมูลจริงเปลี่ยนหลังปิดงวด (รายคน) — ไว้ปรับในงวดถัดไป */
+  changes?: Partial<Record<"mc" | "admin", PeriodChange[]>>;
+  /** ประวัติปิด / เปิดงวดของเดือนนี้ (ใหม่ก่อน) */
+  periodLog?: { side: "mc" | "admin"; closedAt: string; closedBy: string; reopenedAt: string | null; reopenedBy: string | null }[];
+  /** คนที่ดูอยู่ปิด / เปิดงวดได้ (Owner ที่ตั้ง can_close_periods) */
+  canClose?: boolean;
 };
+
+/** ส่วนต่างของคนหนึ่ง: before = ตอนปิดงวด / after = ข้อมูลตอนนี้ */
+export type PeriodChange = { name: string; items: { label: string; before: string; after: string }[] };
 
 export type ApiError = { ok: false; message: string; authError?: boolean };

@@ -24,14 +24,14 @@ const ROOT_NAME = "GLORY VITAL หลักฐานไลฟ์";
 const BUCKET = "live-proofs";
 const MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
 
-function driveClient(): Drive {
+export function driveClient(): Drive {
   const auth = googleAuth();
   if (!auth) throw new Error("ยังไม่ได้เชื่อมบัญชี Google");
   return google.drive({ version: "v3", auth });
 }
 
 /** ข้อความ error ของ Google ให้อ่านง่าย (ยังไม่ได้ให้สิทธิ์ Drive = ต้องรัน bun run google:auth ใหม่) */
-function driveError(err: unknown) {
+export function driveError(err: unknown) {
   const msg = (err as Error)?.message ?? String(err);
   if (/insufficient|scope|permission/i.test(msg)) return "บัญชีระบบยังไม่ได้ให้สิทธิ์ Google Drive (ต้องเชื่อมบัญชีใหม่)";
   if (/has not been used|is disabled|accessNotConfigured/i.test(msg)) return "ยังไม่ได้เปิด Google Drive API ใน Google Cloud";
@@ -41,7 +41,7 @@ function driveError(err: unknown) {
 const quote = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
 /** หาโฟลเดอร์ชื่อนี้ใต้ parent (ไม่มี = สร้าง) */
-async function folder(drive: Drive, name: string, parent: string, cache: Map<string, string>) {
+export async function folder(drive: Drive, name: string, parent: string, cache: Map<string, string>) {
   const key = `${parent}/${name}`;
   const hit = cache.get(key);
   if (hit) return hit;

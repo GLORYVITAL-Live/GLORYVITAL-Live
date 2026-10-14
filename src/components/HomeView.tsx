@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { AlertTriangleIcon, CalendarClockIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, RadioIcon, RefreshCwIcon, UserXIcon } from "lucide-react";
+import {
+  AlertTriangleIcon, CalendarClockIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, DatabaseBackupIcon, RadioIcon, RefreshCwIcon, UserXIcon,
+} from "lucide-react";
 import { windowText } from "@/lib/campaign";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import type { HomeData, HomeSlot } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { LoadError, LoadingBlock, api } from "@/components/shared";
+import { LoadError, LoadingBlock, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -278,7 +280,64 @@ export function HomeView({ go }: { go: Go }) {
           <p className="mt-2 text-xs text-muted-foreground">ทั้งหมดมี {data.issues.noEmailTotal} รายชื่อที่ไม่มีอีเมล (ที่ไม่มีคิวข้างหน้าไม่ได้แสดง)</p>
         ) : null}
       </Section>
+
+      {data.canBackup ? <BackupSection /> : null}
     </div>
+  );
+}
+
+type BackupFile = { name: string; at: string; sizeKB: number; url: string | null };
+const fmtBackupAt = new Intl.DateTimeFormat("th-TH", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+
+/** สำรองข้อมูลลง Google Drive: ไฟล์ล่าสุด + ปุ่มสำรองตอนนี้ (อัตโนมัติทุกวันจันทร์เช้า) */
+function BackupSection() {
+  const toast = useToast();
+  const [state, setState] = useState<{ folderUrl: string; files: BackupFile[] } | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    api<{ folderUrl: string; files: BackupFile[] }>("/api/owner/backup")
+      .then((res) => {
+        if (!alive) return;
+        if (res.ok) setState({ folderUrl: res.folderUrl, files: res.files });
+        else setError(res.message ?? "โหลดไม่สำเร็จ");
+      })
+      .catch((err) => { if (alive) setError((err as Error).message); });
+    return () => { alive = false; };
+  }, [tick]);
+
+  async function runNow() {
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/owner/backup", {});
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      setTick((n) => n + 1);
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const last = state?.files[0];
+  return (
+    <Section id="home-backup" title="สำรองข้อมูล" icon={<DatabaseBackupIcon />} action={state ? <GoButton onClick={() => window.open(state.folderUrl, "_blank", "noopener")}>เปิดโฟลเดอร์ใน Drive</GoButton> : undefined}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="min-w-0 flex-1 leading-snug">
+          {error ? <span className="text-destructive">{error}</span>
+            : !state ? <span className="text-muted-foreground">กำลังโหลด...</span>
+              : last ? <>ล่าสุด <b>{fmtBackupAt.format(new Date(last.at))}</b> <span className="text-muted-foreground">({last.sizeKB.toLocaleString("th-TH")} KB)</span></>
+                : <span className="text-warning-foreground">ยังไม่เคยสำรอง</span>}
+          <span className="block text-xs text-muted-foreground">สำรองอัตโนมัติทุกวันจันทร์เช้า ลง Google Drive ของบัญชีระบบ เก็บไว้ 12 ไฟล์ล่าสุด (ทุกตาราง ไม่รวมไฟล์รูป)</span>
+        </span>
+        <Button variant="outline" size="sm" disabled={busy} onClick={runNow}>
+          <RefreshCwIcon className={cn(busy && "animate-spin")} />{busy ? "กำลังสำรอง..." : "สำรองตอนนี้"}
+        </Button>
+      </div>
+    </Section>
   );
 }
 

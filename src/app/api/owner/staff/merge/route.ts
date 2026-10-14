@@ -94,6 +94,7 @@ export async function POST(request: Request) {
     email: r.me.email, role: "Owner", name: r.me.owner?.name ?? "",
     action: `รวมรายชื่อ ${role === "mc" ? "Mc" : "Admin"} "${source.name}" เข้ากับ "${target.name}" (ย้าย ${src.length} คิว)`,
     result: del.error ? `ย้ายคิวแล้ว แต่ลบรายชื่อเดิมไม่สำเร็จ: ${del.error.message}` : "สำเร็จ",
+    slot_table: "staff", slot_id: targetId, // ขึ้นในประวัติการแก้ของรายชื่อที่เก็บไว้
   });
   after(() => processSyncJobs().then(() => undefined));
   if (del.error) return fail(`ย้ายคิวไป ${label(target)} แล้ว แต่ลบ ${label(source)} ไม่สำเร็จ: ${del.error.message}`, 500);

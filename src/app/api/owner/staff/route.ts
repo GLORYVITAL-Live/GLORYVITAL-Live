@@ -5,6 +5,7 @@ import { missingCalendarCounts } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
 import { parseTierHours } from "@/lib/pay";
 import { canViewPayDocs, payDocsStatus } from "@/lib/pay-docs-db";
+import { staffChangeText } from "@/lib/staff-history";
 import { createAdminClient } from "@/lib/supabase/server";
 import { processSyncJobs } from "@/lib/sync";
 import type { Me } from "@/lib/types";
@@ -40,8 +41,12 @@ const canRole = (scope: Scope, role: Role) => (isCrew(role) ? scope[role] : scop
 const noRole = (role: Role) =>
   fail(isCrew(role) ? `บัญชีนี้ไม่มีสิทธิ์จัดการรายชื่อ ${ROLE_LABEL[role]}` : `จัดการรายชื่อ ${ROLE_LABEL[role]} ได้เฉพาะ Owner ที่มีสิทธิ์ทั้ง Mc และ Admin`, 403);
 
-async function log(me: Me, action: string) {
-  await createAdminClient().from("booking_logs").insert({ email: me.email, role: "Owner", name: me.owner?.name ?? "", action, result: "สำเร็จ" });
+/** ประวัติ (booking_logs) staffId = ผูกกับรายชื่อนั้น (slot_table "staff") ใช้แสดงประวัติการแก้ในหน้าต่างของคนนั้น */
+async function log(me: Me, action: string, staffId?: number) {
+  await createAdminClient().from("booking_logs").insert({
+    email: me.email, role: "Owner", name: me.owner?.name ?? "", action, result: "สำเร็จ",
+    ...(staffId ? { slot_table: "staff", slot_id: staffId } : {}),
+  });
 }
 
 /** ตรวจ/ทำความสะอาดข้อมูลจากฟอร์ม คืน error เป็นข้อความ */
@@ -200,7 +205,8 @@ export async function POST(request: Request) {
     return fail("ต้องรัน SQL 20261021000000_marketing ใน Supabase ก่อน ถึงจะเพิ่มบัญชี Marketing ได้");
   }
   if (error) return fail(needViewSql(dupMessage(error.message)));
-  after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"`));
+  const detail = staffChangeText({}, Object.fromEntries(Object.entries(c.data!).filter(([k]) => ["hourly_rate", "is_salaried", "is_extra_admin"].includes(k))));
+  after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"${detail ? ` (${detail.replace(/ว่าง → |ปิด → |ค่าเริ่มต้น → /g, "")})` : ""}`, data.id));
   return ok({ id: data.id });
 }
 
@@ -220,7 +226,7 @@ export async function PATCH(request: Request) {
     can_view_mc?: boolean; can_view_admin?: boolean; can_view_proofs?: boolean; can_view_plan?: boolean; analytics_readonly?: boolean;
   };
   const { data: cur, error: curErr } = await withPlanCol((extra) => db.from("staff")
-    .select(`id, role, name, email, phone, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics${extra}`)
+    .select(`id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, is_salaried, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics${extra}`)
     .eq("id", id).maybeSingle().overrideTypes<Cur | null, { merge: false }>());
   if (curErr) return fail(curErr.message, 500);
   if (!cur) return fail("ไม่พบรายชื่อนี้");
@@ -270,7 +276,9 @@ export async function PATCH(request: Request) {
     }
     if (renamed || contactChanged) after(() => processSyncJobs().then(() => undefined));
   }
-  after(() => log(r.me, `แก้พนักงาน ${role} "${cur.name}": ${Object.keys(changes).join(", ")}`));
+  // ประวัติ: เปลี่ยนอะไร จากเท่าไรเป็นเท่าไร (ไม่มีอะไรเปลี่ยนจริง = ไม่บันทึก)
+  const diff = staffChangeText(cur as Record<string, unknown>, changes);
+  if (diff) after(() => log(r.me, `แก้พนักงาน ${role} "${cur.name}": ${diff}`, id));
   return ok({ message: "บันทึกแล้ว" });
 }
 
@@ -308,6 +316,6 @@ export async function DELETE(request: Request) {
       ? "คนนี้มีประวัติคิวอยู่ ลบไม่ได้ ถ้าไม่ให้เข้าระบบแล้ว ให้ลบอีเมลออกแทน"
       : error.message);
   }
-  after(() => log(r.me, `ลบพนักงาน ${cur.role} "${cur.name}"`));
+  after(() => log(r.me, `ลบพนักงาน ${cur.role} "${cur.name}"`, id));
   return ok({ message: "ลบแล้ว" });
 }
