@@ -22,18 +22,20 @@ const buttonVariants = cva(
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:border-destructive/40 focus-visible:ring-destructive/30 dark:text-black",
       },
       // pointer-coarse = จอสัมผัส (มือถือ / แท็บเล็ต): ปุ่มสูงขึ้นให้กดด้วยนิ้วได้ง่าย จอคอมคงขนาดเดิม
+      //   ใช้ "อย่างน้อย" (min-h / min-w) ไม่ใช่ความสูงคงที่ — ปุ่มหลายบรรทัด (h-auto เช่น กล่องเลือกวันในหน้าจอง)
+      //   ต้องสูงตามเนื้อหา และปุ่มที่ตั้งขนาดใหญ่กว่าเอง (เช่น ปุ่มกลับขึ้นบนสุด size-11) ต้องไม่ถูกย่อ
       size: {
         default:
-          "h-8 gap-1.5 px-2.5 pointer-coarse:h-9 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
-        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs pointer-coarse:h-8 in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] pointer-coarse:h-8 in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
-        lg: "h-9 gap-1.5 px-2.5 pointer-coarse:h-10 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
-        icon: "size-8 pointer-coarse:size-9",
+          "h-8 gap-1.5 px-2.5 pointer-coarse:min-h-9 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
+        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs pointer-coarse:min-h-8 in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] pointer-coarse:min-h-8 in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+        lg: "h-9 gap-1.5 px-2.5 pointer-coarse:min-h-10 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
+        icon: "size-8 pointer-coarse:min-h-9 pointer-coarse:min-w-9",
         "icon-xs":
-          "size-6 rounded-[min(var(--radius-md),10px)] pointer-coarse:size-8 in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
+          "size-6 rounded-[min(var(--radius-md),10px)] pointer-coarse:min-h-8 pointer-coarse:min-w-8 in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
         "icon-sm":
-          "size-7 rounded-[min(var(--radius-md),12px)] pointer-coarse:size-8 in-data-[slot=button-group]:rounded-lg",
-        "icon-lg": "size-9 pointer-coarse:size-10",
+          "size-7 rounded-[min(var(--radius-md),12px)] pointer-coarse:min-h-8 pointer-coarse:min-w-8 in-data-[slot=button-group]:rounded-lg",
+        "icon-lg": "size-9 pointer-coarse:min-h-10 pointer-coarse:min-w-10",
       },
     },
     defaultVariants: {

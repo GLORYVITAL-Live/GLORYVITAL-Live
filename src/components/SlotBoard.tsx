@@ -420,10 +420,15 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
         {groups.map(([k, list]) => (
           <section key={k} id={`day-${k}`} data-date={k} className="scroll-mt-40 pt-5">
             <h2 className="mb-2 flex flex-wrap items-center gap-2 font-bold">
-              {fmtDayLong.format(parseKey(k))}
+              {/* มือถือ: วันที่แบบสั้น (แถบเลือกวันด้านบนบอกวันอยู่แล้ว) ป้ายกับจำนวน slot จะได้อยู่บรรทัดเดียวกัน */}
+              <span className="sm:hidden">{fmtDayShort.format(parseKey(k))}</span>
+              <span className="hidden sm:inline">{fmtDayLong.format(parseKey(k))}</span>
               <DayBadge label={relLabel(k)} />
               {mineByDay.get(k)?.length ? (
-                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">คุณมีคิวแล้ว {mineByDay.get(k)!.length} slot</span>
+                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+                  <span className="sm:hidden">มีคิวแล้ว {mineByDay.get(k)!.length}</span>
+                  <span className="hidden sm:inline">คุณมีคิวแล้ว {mineByDay.get(k)!.length} slot</span>
+                </span>
               ) : null}
               <span className="ml-auto text-xs font-medium text-muted-foreground">{t.countLbl} {list.length} slot</span>
             </h2>
