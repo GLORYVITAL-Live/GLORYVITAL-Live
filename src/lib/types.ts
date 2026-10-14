@@ -83,6 +83,26 @@ export type HomeData = {
     /** slot ที่ยอดที่กรอกสูงกว่า 3 เท่า (high) หรือต่ำกว่า 1/4 ของยอดประมาณจาก Export (est) */
     gmvOdd: { date: string; platform: string; time: string; mc: string; gmv: number; est: number; high: boolean }[];
   };
+  /** ตรวจสุขภาพข้อมูล (src/lib/health.ts) */
+  health: HealthIssues;
+};
+
+/** ตรวจสุขภาพข้อมูล: ต้นเดือนนี้ถึง 60 วันข้างหน้า เฉพาะฝั่งที่มีสิทธิ์ (time = "19:30–21:30") */
+export type HealthIssues = {
+  /** คนละคนอยู่ slot ช่องเดียวกันเวลาทับกัน (ชั่วโมง / ค่าจ้างนับทั้งคู่) */
+  overlap: { role: "mc" | "admin"; date: string; platform: string; time: string; names: string[] }[];
+  /** slot ข้างหน้าที่มีแถวซ้ำ (แถวว่างปน หรือคนเดิมซ้ำ) */
+  dupRows: { role: "mc" | "admin"; date: string; platform: string; time: string; rows: number; note: string }[];
+  /** slot ข้างหน้าที่มีแถวฝั่งเดียว — missing = ฝั่งที่ไม่มีแถว */
+  noPair: { missing: "mc" | "admin"; date: string; platform: string; time: string }[];
+  /** ไลฟ์ไปแล้วเดือนนี้ สถานะยัง "ไม่เฟิร์ม" แต่มีคน (นับค่าจ้างแล้ว) */
+  notFirm: { role: "mc" | "admin"; date: string; platform: string; time: string; name: string }[];
+  /** มีคิวเดือนนี้แต่ไม่มีค่าจ้าง (ไม่ใช่พนักงานประจำ) */
+  noRate: { role: "mc" | "admin"; name: string; slots: number }[];
+  /** มีคิวข้างหน้าแต่ไม่มีเบอร์โทร */
+  noPhone: { role: "mc" | "admin"; name: string; upcoming: number }[];
+  /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน */
+  calendar: { role: "mc" | "admin"; name: string; count: number }[];
 };
 
 /** slot ที่ยังว่าง (หน้าแรกของ Mc / Admin) */

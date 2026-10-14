@@ -48,7 +48,9 @@ export function HomeView({ go }: { go: Go }) {
   const liveCamp = data.campaigns.find((c) => c.status === "live");
   const gmvOver = data.issues.gmvOver ?? [];
   const gmvOdd = data.issues.gmvOdd ?? [];
-  const issueCount = data.issues.noEmail.length + data.issues.samePhone.length + gmvOver.length + gmvOdd.length;
+  const h = data.health;
+  const healthCount = h ? Object.values(h).reduce((n, list) => n + list.length, 0) : 0;
+  const issueCount = data.issues.noEmail.length + data.issues.samePhone.length + gmvOver.length + gmvOdd.length + healthCount;
   const baht = (n: number) => `฿${Math.round(n).toLocaleString("th-TH")}`;
 
   const stats: { label: string; value: string; tone: "ok" | "warn" | "info"; target: string; show: boolean }[] = [
@@ -176,6 +178,55 @@ export function HomeView({ go }: { go: Go }) {
       <Section id="home-issues" title="ข้อมูลที่ควรแก้" icon={<AlertTriangleIcon />} count={issueCount} action={<GoButton onClick={() => go("owner", "staff")}>หน้าพนักงาน</GoButton>}>
         {issueCount ? (
           <div className="space-y-3 text-sm">
+            {h?.overlap.length ? (
+              <IssueGroup
+                title="คนละคนอยู่ slot เดียวกัน" note="ชั่วโมงและค่าจ้างนับทั้งคู่ — เช็กว่าใครไลฟ์จริง แล้วลบอีกแถวในชีต"
+                items={h.overlap.map((x) => <><b>{dayText(x.date)} {x.platform} {x.time}</b>: {x.names.join(" + ")}</>)}
+                action={<GoButton onClick={() => go("owner", "slots")}>ตาราง slot</GoButton>}
+              />
+            ) : null}
+            {h?.notFirm.length ? (
+              <IssueGroup
+                title="ไลฟ์ไปแล้ว แต่สถานะยัง &quot;ไม่เฟิร์ม&quot;" note="ระบบนับชั่วโมงและค่าจ้างให้แล้ว — ไลฟ์จริงเปลี่ยนเป็น &quot;เรียบร้อย&quot; ไม่ได้ไลฟ์เปลี่ยนเป็น &quot;แคน&quot;"
+                items={h.notFirm.map((x) => <><b>{dayText(x.date)} {x.platform} {x.time}</b> · {x.name}</>)}
+                action={<GoButton onClick={() => go("owner", "slots")}>ตาราง slot</GoButton>}
+              />
+            ) : null}
+            {h?.noRate.length ? (
+              <IssueGroup
+                chips title="มีคิวเดือนนี้แต่ไม่ได้ตั้งค่าจ้าง" note="ยอดเงินในสรุปรายเดือนเป็น 0 — ตั้งค่าจ้าง หรือติ๊ก &quot;พนักงานประจำ&quot; ถ้าได้เงินเดือน"
+                items={h.noRate.map((x) => <>{x.name} · {x.slots} คิว</>)}
+                action={<GoButton onClick={() => go("owner", "staff")}>หน้าพนักงาน</GoButton>}
+              />
+            ) : null}
+            {h?.dupRows.length ? (
+              <IssueGroup
+                title="slot ข้างหน้ามีแถวซ้ำในชีต" note="ช่องและเวลาเดียวกันมีหลายแถว — หน้าแรกจะนับแถวว่างเป็น &quot;ยังไม่มีคน&quot; หรือนับชั่วโมงซ้ำ"
+                items={h.dupRows.map((x) => <><b>{dayText(x.date)} {x.platform} {x.time}</b> · {x.role === "mc" ? "แท็บ Deal Mc" : "แท็บ Admin เสริม"} {x.rows} แถว ({x.note})</>)}
+                action={<GoButton onClick={() => go("owner", "slots")}>ตาราง slot</GoButton>}
+              />
+            ) : null}
+            {h?.noPair.length ? (
+              <IssueGroup
+                title="slot ข้างหน้ามีแถวแค่ฝั่งเดียว" note="แท็บ Deal Mc กับ Admin เสริมไม่ตรงกัน — เพิ่มแถวที่ขาด หรือลบแถวที่ไม่ใช้"
+                items={h.noPair.map((x) => <><b>{dayText(x.date)} {x.platform} {x.time}</b> · ไม่มีแถว{x.missing === "mc" ? "ในแท็บ Deal Mc" : "ในแท็บ Admin เสริม"}</>)}
+                action={<GoButton onClick={() => go("owner", "slots")}>ตาราง slot</GoButton>}
+              />
+            ) : null}
+            {h?.calendar.length ? (
+              <IssueGroup
+                chips title="คิวข้างหน้ายังไม่ขึ้นปฏิทิน" note="ส่วนใหญ่ยังไม่ได้แชร์ปฏิทินให้บัญชีระบบ — ส่งวิธีแชร์ได้จากหน้าพนักงาน"
+                items={h.calendar.map((x) => <>{x.name} · {x.count} คิว</>)}
+                action={<GoButton onClick={() => go("owner", "staff")}>หน้าพนักงาน</GoButton>}
+              />
+            ) : null}
+            {h?.noPhone.length ? (
+              <IssueGroup
+                chips title="มีคิวข้างหน้าแต่ไม่มีเบอร์โทร" note="คู่ไลฟ์ติดต่อไม่ได้ (เบอร์ขึ้นในปฏิทินของคู่ไลฟ์)"
+                items={h.noPhone.map((x) => <>{x.name} · {x.upcoming} คิว</>)}
+                action={<GoButton onClick={() => go("owner", "staff")}>หน้าพนักงาน</GoButton>}
+              />
+            ) : null}
             {gmvOver.length ? (
               <div>
                 <h3 className="font-semibold">GMV ที่กรอกรวมเกินยอดไลฟ์จริง <span className="font-normal text-muted-foreground">— น่าจะมี slot ที่กรอกยอดสะสมจากแดชบอร์ดโดยไม่ได้หัก slot ก่อนหน้า (ยอด / อันดับ Mc จะสูงเกินจริง)</span></h3>
@@ -243,6 +294,29 @@ function Section({ id, title, icon, count, action, children }: { id: string; tit
       </div>
       {children}
     </section>
+  );
+}
+
+/** กลุ่มเรื่องที่ควรแก้ 1 แบบ: หัวข้อ + คำอธิบาย + รายการ (แสดงไม่เกิน LIST_LIMIT กดดูเพิ่ม) · chips = แสดงเป็นป้ายเรียงกัน */
+function IssueGroup({ title, note, items, action, chips = false }: {
+  title: string; note: string; items: ReactNode[]; action?: ReactNode; chips?: boolean;
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, LIST_LIMIT);
+  const item = "border border-warning-border bg-warning text-warning-foreground";
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-2">
+        <h3 className="font-semibold">{title} <span className="font-normal text-muted-foreground">({items.length}) — {note}</span></h3>
+        {action}
+      </div>
+      <ul className={cn("mt-1 text-xs", chips ? "flex flex-wrap gap-1.5" : "space-y-1")}>
+        {shown.map((x, i) => <li key={i} className={cn(item, chips ? "rounded-full px-2.5 py-0.5" : "rounded-lg px-2.5 py-1.5")}>{x}</li>)}
+      </ul>
+      {items.length > shown.length ? (
+        <button type="button" onClick={() => setAll(true)} className="mt-1 cursor-pointer text-xs font-semibold text-primary underline">ดูอีก {items.length - shown.length} รายการ</button>
+      ) : null}
+    </div>
   );
 }
 

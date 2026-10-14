@@ -306,6 +306,19 @@ async function closeDuplicateJobs(keys: string[], exceptId: number, maxId: numbe
   }
 }
 
+/**
+ * ปิดงานลงปฏิทินที่ระบบเลิกลองซ้ำแล้ว (พลาดครบ MAX_ATTEMPTS ครั้ง) และค้างเกิน 1 วัน — เก็บเหตุผลไว้ ไม่ลบ
+ *   ไม่กระทบปฏิทินของใคร: คิวข้างหน้าที่ยังไม่มีนัด ยังนับใน missingCalendarCounts และลงใหม่ได้ตอนเจ้าตัวกด "แชร์แล้ว เช็กเลย"
+ */
+export async function closeGivenUpCalendarJobs() {
+  const { data, error } = await createAdminClient().from("calendar_jobs")
+    .update({ done_at: new Date().toISOString() })
+    .is("done_at", null).gte("attempts", MAX_ATTEMPTS).lt("created_at", new Date(Date.now() - 86400_000).toISOString())
+    .select("id");
+  if (error) throw error;
+  return data?.length ?? 0;
+}
+
 /** จำนวนงานลงปฏิทินที่ยังค้าง */
 export async function pendingCalendarJobs() {
   const { count, error } = await createAdminClient().from("calendar_jobs")

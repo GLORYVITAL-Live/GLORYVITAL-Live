@@ -3,15 +3,16 @@ import { assignCampaigns, instLabel } from "@/lib/campaign";
 import { slotPlatformOf } from "@/lib/campaign-data";
 import { bkkToday, fetchAll, proofsBySlot } from "@/lib/data";
 import { gmvCoverage } from "@/lib/gmv";
+import { dataHealth } from "@/lib/health";
 import { loadSessions } from "@/lib/live-stats-db";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
-import type { HomeData, HomeSlot } from "@/lib/types";
+import type { HealthIssues, HomeData, HomeSlot } from "@/lib/types";
 import { addDays } from "@/lib/window";
 
 /**
  * หน้าแรกของเจ้าของ: งานที่ต้องทำ — ไลฟ์วันนี้ / slot ที่ยังไม่มีคน (7 วัน) / หลักฐาน + GMV ที่ค้าง (7 วัน)
- *   / แคมเปญถัดไป (30 วัน) / ข้อมูลที่ควรแก้ (ไม่มีอีเมลแต่มีคิว, เบอร์ซ้ำ) — เฉพาะฝั่งที่มีสิทธิ์
+ *   / แคมเปญถัดไป (30 วัน) / ข้อมูลที่ควรแก้ (ไม่มีอีเมลแต่มีคิว, เบอร์ซ้ำ, GMV ผิดปกติ + ตรวจสุขภาพข้อมูลใน health.ts) — เฉพาะฝั่งที่มีสิทธิ์
  */
 
 type Row = {
@@ -31,6 +32,11 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   const today = bkkToday(), now = Date.now();
   const from = addDays(today, -14), to = addDays(today, 45);
   const base = "id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed";
+  // ตรวจสุขภาพข้อมูล (ดึงข้อมูลชุดของตัวเอง ต้นเดือน -> 60 วันข้างหน้า) ทำคู่กันไป พลาด = ไม่แสดงส่วนนี้
+  const health = dataHealth(scope).catch((err) => {
+    console.warn("ตรวจสุขภาพข้อมูลไม่สำเร็จ:", err);
+    return { overlap: [], dupRows: [], noPair: [], notFirm: [], noRate: [], noPhone: [], calendar: [] } satisfies HealthIssues;
+  });
 
   const [mcRows, adminRows, proofs, staff] = await Promise.all([
     fetchAll<McRow>((a, b) => db.from("mc_slots")
@@ -63,6 +69,7 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   const out: HomeData = {
     today, scope, live: [], noMc: [], noAdmin: [], missingProof: [], missingGmv: [], campaigns: [],
     issues: { noEmail: [], noEmailTotal: 0, samePhone: [], gmvOver: [], gmvOdd: [] },
+    health: await health,
   };
 
   if (scope.mc || scope.proofs) {
