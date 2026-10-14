@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  createContext, useCallback, useContext, useRef, useState, type ComponentProps, type FocusEvent, type KeyboardEvent, type ReactNode,
+} from "react";
 import { toast as sonner } from "sonner";
 import { ChevronLeftIcon, ChevronRightIcon, InfoIcon, TriangleAlertIcon } from "lucide-react";
 import { platformLabel } from "@/lib/platform";
@@ -61,19 +63,21 @@ export function AppProviders({ children }: { children: ReactNode }) {
     req?.resolve(ok);
     setReq(null);
   };
+  const actionRef = useRef<HTMLButtonElement>(null);
   return (
     <ConfirmCtx.Provider value={ask}>
       {children}
       <Toaster position="top-center" offset={{ top: "calc(12px + env(safe-area-inset-top))" }} />
       <AlertDialog open={!!req} onOpenChange={(open) => { if (!open) answer(false); }}>
-        <AlertDialogContent>
+        {/* เปิดมาโฟกัสปุ่มยืนยัน (ปกติโฟกัส "ยกเลิก") -> กด Enter = ยืนยัน, Esc = ยกเลิก */}
+        <AlertDialogContent onOpenAutoFocus={(e) => { e.preventDefault(); actionRef.current?.focus({ preventScroll: true }); }}>
           <AlertDialogHeader>
             <AlertDialogTitle>{req?.title}</AlertDialogTitle>
             {req?.description ? <AlertDialogDescription>{req.description}</AlertDialogDescription> : null}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>ยกเลิก</AlertDialogCancel>
-            <AlertDialogAction variant={req?.destructive ? "danger" : "default"} onClick={() => answer(true)}>
+            <AlertDialogAction ref={actionRef} variant={req?.destructive ? "danger" : "default"} onClick={() => answer(true)}>
               {req?.confirmText ?? "ตกลง"}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -90,7 +94,71 @@ const SHEET = cn(
   "max-sm:top-auto max-sm:bottom-0 max-sm:left-0 max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl",
 );
 
-/** busy = กำลังทำงาน ปิดหน้าต่างไม่ได้ (กด Esc / คลิกนอกกล่อง / ปุ่ม X) */
+// Enter ที่ช่องเหล่านี้มีหน้าที่ของมันเอง (ขึ้นบรรทัดใหม่ / กดปุ่มนั้น / เลือกตัวเลือก / เปิดเลือกไฟล์)
+const NATIVE_ENTER = "textarea, button, a[href], select, [role=combobox], [role=listbox], [role=option], [role=menuitem], [contenteditable=true], input[type=file]";
+// ปุ่มติ๊ก / สลับ: เปลี่ยนค่าด้วย Space อยู่แล้ว Enter จึงใช้ยืนยันได้
+const TOGGLE = "[role=checkbox], [role=switch], [role=radio], [role=tab], [aria-pressed], input[type=checkbox], input[type=radio]";
+const TEXT_INPUT = "input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset])";
+const TEXT_ENTRY = `${TEXT_INPUT}, textarea, select`;
+
+/** จอสัมผัส (มือถือ / แท็บเล็ต) = พิมพ์ด้วยแป้นบนจอ */
+const isTouch = () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+/** ช่องพิมพ์ถัดไปในกล่อง (ข้ามช่องที่ปิด / มองไม่เห็น) ไม่มี = null */
+function nextField(box: HTMLElement, from: HTMLElement) {
+  const fields = [...box.querySelectorAll<HTMLElement>(`${TEXT_INPUT}, textarea`)]
+    .filter((el) => !el.matches(":disabled, [readonly]") && el.getClientRects().length > 0);
+  const i = fields.indexOf(from);
+  return i >= 0 ? fields[i + 1] ?? null : null;
+}
+
+/** มือถือ: ปุ่ม Enter บนแป้นพิมพ์ขึ้นว่า "ถัดไป" (ยังมีช่องต่อ) หรือ "เสร็จ" (ช่องสุดท้าย = กดยืนยัน) */
+function hintEnter(e: FocusEvent<HTMLDivElement>) {
+  const el = e.target as HTMLElement;
+  if (!isTouch() || !e.currentTarget.contains(el) || !el.matches(TEXT_INPUT)) return;
+  el.setAttribute("enterkeyhint", nextField(e.currentTarget, el) ? "next" : "done");
+}
+
+/** กด Enter = กดปุ่มหลักของหน้าต่าง (ปุ่มขวาสุดใน DialogActions) ถ้าปุ่มนั้นกดไม่ได้ (ยังกรอกไม่ครบ / กำลังบันทึก) ก็ไม่ทำอะไร
+ *  ในช่องหลายบรรทัด Enter = ขึ้นบรรทัดใหม่ ใช้ Ctrl+Enter แทน · มือถือ: Enter = ไปช่องถัดไป ช่องสุดท้ายค่อยยืนยัน */
+function enterToConfirm(e: KeyboardEvent<HTMLDivElement>) {
+  if (e.key !== "Enter" || e.shiftKey || e.altKey) return;
+  if (e.nativeEvent.isComposing || e.keyCode === 229) return; // กำลังเลือกคำจากคีย์บอร์ดภาษา
+  const target = e.target as HTMLElement;
+  if (!e.currentTarget.contains(target)) return; // ปฏิทิน / เมนูที่ลอยออกนอกกล่อง
+  if (isTouch() && !e.defaultPrevented && target.matches(TEXT_INPUT)) {
+    const next = nextField(e.currentTarget, target);
+    if (next) {
+      e.preventDefault();
+      next.focus();
+      return;
+    }
+  }
+  if (!target.closest(TOGGLE)) {
+    if (e.defaultPrevented) return;
+    const native = target.closest(NATIVE_ENTER);
+    if (native && !((e.ctrlKey || e.metaKey) && native.tagName === "TEXTAREA")) return;
+  }
+  const rows = e.currentTarget.querySelectorAll("[data-slot=dialog-actions]");
+  const buttons = rows[rows.length - 1]?.querySelectorAll<HTMLButtonElement>("button");
+  const primary = buttons?.[buttons.length - 1];
+  if (!primary) return;
+  e.preventDefault();
+  if (!primary.disabled) primary.click();
+}
+
+/** เปิดหน้าต่างมา ถ้าช่องแรกเป็นช่องพิมพ์ โฟกัสช่องนั้นตามเดิม ไม่งั้นโฟกัสตัวกล่อง (ไม่ใช่ปุ่ม "ยกเลิก") ให้ Enter ไปที่ปุ่มหลัก
+ *  มือถือ: โฟกัสตัวกล่องเสมอ (แป้นพิมพ์ไม่เด้งขึ้นมาบังฟอร์มก่อนได้อ่าน แตะช่องเองเมื่อจะพิมพ์) */
+function focusForEnter(e: Event) {
+  const box = e.currentTarget instanceof HTMLElement ? e.currentTarget : null;
+  if (!box) return;
+  const first = [...box.querySelectorAll<HTMLElement>("input, textarea, select, button, a[href], [tabindex]")]
+    .find((el) => el.tabIndex >= 0 && !el.matches(":disabled, [type=hidden], a[href]") && el.getClientRects().length > 0);
+  if (first?.matches(TEXT_ENTRY) && !isTouch()) return;
+  e.preventDefault();
+  box.focus({ preventScroll: true });
+}
+
+/** busy = กำลังทำงาน ปิดหน้าต่างไม่ได้ (กด Esc / คลิกนอกกล่อง / ปุ่ม X) · กด Enter = ปุ่มหลักใน DialogActions */
 export function AppDialog({ open, onClose, busy = false, title, description, children, className }: {
   open: boolean;
   onClose: () => void;
@@ -105,6 +173,9 @@ export function AppDialog({ open, onClose, busy = false, title, description, chi
       <DialogContent
         showCloseButton={!busy}
         className={cn(SHEET, className)}
+        onKeyDown={enterToConfirm}
+        onFocus={hintEnter}
+        onOpenAutoFocus={focusForEnter}
         {...(description ? {} : { "aria-describedby": undefined })}
       >
         <DialogHeader className="pr-8">
@@ -122,9 +193,9 @@ export function DialogBody({ className, ...props }: ComponentProps<"div">) {
   return <div className={cn("scroll-thin -mx-1 min-h-0 flex-1 overflow-y-auto px-1", className)} {...props} />;
 }
 
-/** แถวปุ่มท้ายหน้าต่าง */
+/** แถวปุ่มท้ายหน้าต่าง: ปุ่มหลักไว้ขวาสุด (กด Enter ในหน้าต่าง = ปุ่มนี้) */
 export function DialogActions({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("mt-1 flex flex-wrap items-center justify-end gap-2", className)} {...props} />;
+  return <div data-slot="dialog-actions" className={cn("mt-1 flex flex-wrap items-center justify-end gap-2", className)} {...props} />;
 }
 
 // ---------- ปุ่ม ----------
