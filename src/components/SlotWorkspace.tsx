@@ -1,6 +1,6 @@
 "use client";
 
-import { useLocal, writeLocal } from "@/lib/hooks";
+import { SLOT_VIEW_KEY, useLocal, writeLocal } from "@/lib/hooks";
 import type { Me, OwnerScope } from "@/lib/types";
 import { BookingWindowEditor } from "@/components/BookingWindow";
 import { PlanSlots } from "@/components/PlanSlots";
@@ -16,7 +16,6 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
  *   มุมมอง Mc / Admin = หน้าจองที่ Mc / Admin เห็น (ดูอย่างเดียว ถ้าตัวเองไม่ได้เป็น Mc / Admin)
  */
 
-export const SLOT_VIEW_KEY = "glory_slot_view";
 const ROLE_VIEW_KEY = "glory_slot_view_role";
 
 /**

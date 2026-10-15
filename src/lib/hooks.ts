@@ -4,6 +4,9 @@ import { useSyncExternalStore } from "react";
 
 // ---------- ค่าที่จำไว้ในเครื่อง ----------
 
+/** หน้าเจ้าของ > ตาราง slot: มุมมองที่เลือกล่าสุด (อยู่ที่นี่ ไม่ใช่ใน SlotWorkspace เพื่อให้หน้านั้นโหลดแยกได้) */
+export const SLOT_VIEW_KEY = "glory_slot_view";
+
 export function readLocal(key: string) {
   try { return localStorage.getItem(key); } catch { return null; }
 }

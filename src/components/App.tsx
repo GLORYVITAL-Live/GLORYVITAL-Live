@@ -6,31 +6,38 @@ import {
   ArrowUpIcon, BriefcaseIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon, PackageIcon, SunIcon,
   type LucideIcon,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import type { Me, OwnerScope, Role } from "@/lib/types";
-import { CeoLive } from "@/components/CeoLive";
-import { EquipmentPage } from "@/components/EquipmentPage";
-import { LiveStats } from "@/components/LiveStats";
-import { MySchedule } from "@/components/MySchedule";
+import dynamic from "next/dynamic";
+import type { Go } from "@/components/HomeView";
 import { NotificationBell } from "@/components/Notifications";
-import { PayDocs } from "@/components/PayDocs";
-import { HomeView, type Go } from "@/components/HomeView";
-import { PerformanceView } from "@/components/PerformanceView";
-import { OwnerView } from "@/components/OwnerView";
-import { PlanSlots } from "@/components/PlanSlots";
-import { ProofPage } from "@/components/ProofPage";
-import { RulesDialog } from "@/components/RulesDialog";
-import { RulesEditor } from "@/components/RulesEditor";
 import { SlotBoard } from "@/components/SlotBoard";
-import { SLOT_VIEW_KEY, SlotWorkspace } from "@/components/SlotWorkspace";
-import { StaffManager } from "@/components/StaffManager";
-import { AppProviders, IconButton, Notice, StateBox, useToast } from "@/components/shared";
+import { AppProviders, IconButton, LoadingBlock, Notice, StateBox, useToast } from "@/components/shared";
+
+// หน้าอื่นโหลดแยกเมื่อเปิดใช้ (แต่ละคนใช้แค่ 1–2 หน้า ไม่ต้องโหลดทั้งเว็บตอนเปิดครั้งแรก)
+// หน้าจองคิว (SlotBoard) โหลดมาเลย เพราะเป็นหน้าหลักของ Mc / Admin
+const Loading = () => <LoadingBlock />;
+const Nothing = () => null;
+const CeoLive = dynamic(() => import("@/components/CeoLive").then((m) => m.CeoLive), { loading: Loading });
+const EquipmentPage = dynamic(() => import("@/components/EquipmentPage").then((m) => m.EquipmentPage), { loading: Loading });
+const HomeView = dynamic(() => import("@/components/HomeView").then((m) => m.HomeView), { loading: Loading });
+const LiveStats = dynamic(() => import("@/components/LiveStats").then((m) => m.LiveStats), { loading: Loading });
+const OwnerView = dynamic(() => import("@/components/OwnerView").then((m) => m.OwnerView), { loading: Loading });
+const PerformanceView = dynamic(() => import("@/components/PerformanceView").then((m) => m.PerformanceView), { loading: Loading });
+const PlanSlots = dynamic(() => import("@/components/PlanSlots").then((m) => m.PlanSlots), { loading: Loading });
+const ProofPage = dynamic(() => import("@/components/ProofPage").then((m) => m.ProofPage), { loading: Loading });
+const RulesEditor = dynamic(() => import("@/components/RulesEditor").then((m) => m.RulesEditor), { loading: Loading });
+const SlotWorkspace = dynamic(() => import("@/components/SlotWorkspace").then((m) => m.SlotWorkspace), { loading: Loading });
+const StaffManager = dynamic(() => import("@/components/StaffManager").then((m) => m.StaffManager), { loading: Loading });
+// หน้าต่าง / ป้ายในหน้าจอง (ไม่ต้องมีตัวโหลด)
+const MySchedule = dynamic(() => import("@/components/MySchedule").then((m) => m.MySchedule), { loading: Nothing });
+const PayDocs = dynamic(() => import("@/components/PayDocs").then((m) => m.PayDocs), { loading: Nothing });
+const RulesDialog = dynamic(() => import("@/components/RulesDialog").then((m) => m.RulesDialog), { loading: Nothing });
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { todayKey } from "@/lib/format";
-import { useIsDark, useIsHydrated, useLocal, writeLocal } from "@/lib/hooks";
+import { SLOT_VIEW_KEY, useIsDark, useIsHydrated, useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
 export const MODES = {
@@ -218,6 +225,8 @@ function Shell({ me }: { me: Me | null }) {
   }
 
   async function signIn() {
+    // ไลบรารี Supabase โหลดตอนกดเท่านั้น (ไม่ต้องโหลดทุกครั้งที่เปิดเว็บ)
+    const { createClient } = await import("@/lib/supabase/client");
     await createClient().auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: `${location.origin}/auth/callback`, queryParams: { prompt: "select_account" } },
@@ -225,6 +234,7 @@ function Shell({ me }: { me: Me | null }) {
   }
 
   async function signOut() {
+    const { createClient } = await import("@/lib/supabase/client");
     await createClient().auth.signOut();
     toast("ออกจากระบบแล้ว");
     router.refresh();
