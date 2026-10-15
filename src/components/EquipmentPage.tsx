@@ -100,7 +100,7 @@ export function EquipmentPage() {
       <Stats items={[
         [String(items.length), "รายการ"],
         [String(items.reduce((a, x) => a + x.quantity, 0)), "ชิ้น"],
-        [money(items.reduce((a, x) => a + valueOf(x), 0)), "มูลค่ารวม (บาท)"],
+        [items.some((x) => x.price !== null) ? money(items.reduce((a, x) => a + valueOf(x), 0)) : "–", "มูลค่ารวม (บาท)"],
       ]} />
       {problems ? <p className="mt-1 text-sm font-semibold text-warning-foreground">ชำรุด / ส่งซ่อม / หาย {problems} รายการ</p> : null}
 
@@ -114,13 +114,13 @@ export function EquipmentPage() {
 
       {/* ตัวกรอง: กดปุ่มได้เลย ตัวเลข = จำนวนรายการตามตัวกรองอื่นที่เลือกอยู่ */}
       <div className="space-y-1.5 rounded-xl border bg-card p-2.5">
-        <ChipRow label="หมวด" value={cat} onChange={setCat} options={categories.map((c) => [c, catCount.get(c) ?? 0])} total={[...catCount.values()].reduce((a, b) => a + b, 0)} />
+        <ChipRow label="หมวด" value={cat} onChange={setCat} options={categories.filter((c) => catCount.has(c) || c === cat).map((c) => [c, catCount.get(c) ?? 0])} total={[...catCount.values()].reduce((a, b) => a + b, 0)} />
         <ChipRow label="สถานะ" value={status} onChange={setStatus} dot={STATUS_DOT}
           options={EQUIPMENT_STATUSES.filter((s) => statusCount.has(s) || s === status).map((s) => [s, statusCount.get(s) ?? 0])}
           total={[...statusCount.values()].reduce((a, b) => a + b, 0)} />
         {locations.length ? (
           <ChipRow label="ที่เก็บ" value={place} onChange={setPlace}
-            options={[...locations, ...(placeCount.has(NO_PLACE) ? [NO_PLACE] : [])].map((l) => [l, placeCount.get(l) ?? 0])}
+            options={[...locations, NO_PLACE].filter((l) => placeCount.has(l) || l === place).map((l) => [l, placeCount.get(l) ?? 0])}
             total={[...placeCount.values()].reduce((a, b) => a + b, 0)} />
         ) : null}
       </div>
@@ -135,8 +135,8 @@ export function EquipmentPage() {
           ) : null}
         </span>
         <ToggleGroup type="single" variant="outline" size="sm" spacing={0} value={view} onValueChange={(v) => { if (v) writeLocal(VIEW_KEY, v); }} aria-label="รูปแบบการแสดงผล" className="bg-card">
-          <ToggleGroupItem value="card" aria-label="แสดงแบบการ์ด" className="text-xs"><LayoutGridIcon />การ์ด</ToggleGroupItem>
-          <ToggleGroupItem value="table" aria-label="แสดงแบบตาราง" className="text-xs"><Rows3Icon />ตาราง</ToggleGroupItem>
+          <ToggleGroupItem value="card" aria-label="แสดงแบบการ์ด" className="text-xs pointer-coarse:min-h-9 pointer-coarse:px-3"><LayoutGridIcon />การ์ด</ToggleGroupItem>
+          <ToggleGroupItem value="table" aria-label="แสดงแบบตาราง" className="text-xs pointer-coarse:min-h-9 pointer-coarse:px-3"><Rows3Icon />ตาราง</ToggleGroupItem>
         </ToggleGroup>
         <ExportMenu label="ส่งออก" size="sm" build={() => exportBook(list)} />
       </div>
@@ -229,7 +229,7 @@ export function EquipmentPage() {
   );
 }
 
-/** แถวปุ่มกรอง: "ทั้งหมด" + ตัวเลือก (จำนวน) กดซ้ำที่ตัวที่เลือกอยู่ = กลับเป็นทั้งหมด · มือถือเลื่อนแนวนอนได้ */
+/** แถวปุ่มกรอง: "ทั้งหมด" + ตัวเลือก (จำนวน) กดซ้ำที่ตัวที่เลือกอยู่ = กลับเป็นทั้งหมด */
 function ChipRow({ label, value, onChange, options, total, dot }: {
   label: string; value: string; onChange: (v: string) => void; options: [string, number][]; total: number; dot?: Record<string, string>;
 }) {
@@ -239,7 +239,7 @@ function ChipRow({ label, value, onChange, options, total, dot }: {
       <button
         key={key} type="button" aria-pressed={on} onClick={() => onChange(on && key !== ALL ? ALL : key)}
         className={cn(
-          "flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors pointer-coarse:py-1.5",
+          "flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors pointer-coarse:min-h-9 pointer-coarse:px-3",
           on ? "border-primary bg-primary text-primary-foreground" : cn("bg-background hover:border-primary/50", n === 0 && "opacity-50"),
         )}
       >
@@ -249,9 +249,10 @@ function ChipRow({ label, value, onChange, options, total, dot }: {
     );
   };
   return (
-    <div className="flex items-center gap-2">
-      <span className="w-12 shrink-0 text-xs font-semibold text-muted-foreground">{label}</span>
-      <div className="no-scrollbar flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
+    <div className="flex items-start gap-2">
+      <span className="w-11 shrink-0 pt-1.5 text-xs font-semibold text-muted-foreground pointer-coarse:pt-2.5">{label}</span>
+      {/* ขึ้นบรรทัดใหม่แทนการเลื่อน → เห็นครบทุกตัวเลือกทีเดียว */}
+      <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
         {chip(ALL, "ทั้งหมด", total)}
         {options.map(([k, n]) => chip(k, k, n))}
       </div>
@@ -373,7 +374,7 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
           <Field label="สถานะ">
             {(id) => (
               <Select value={f.status} onValueChange={set("status")}>
-                <SelectTrigger id={id} className="w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger id={id} className="w-full data-[size=default]:h-9"><SelectValue /></SelectTrigger>
                 <SelectContent position="popper">{EQUIPMENT_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
               </Select>
             )}
