@@ -18,6 +18,17 @@ export type Me = {
   } | null;
   /** Marketing = เห็นแค่หน้า CEO Live (ดูอย่างเดียว) */
   marketing: { id: number; name: string } | null;
+  /** หน้าอุปกรณ์โปรดักชั่น (ดู / เพิ่ม / แก้ได้): Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊ก can_manage_equipment */
+  equipment: boolean;
+};
+
+export const EQUIPMENT_STATUSES = ["ใช้งานได้", "ชำรุด", "ส่งซ่อม", "หาย", "เลิกใช้"] as const;
+export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
+/** อุปกรณ์ 1 รายการ (photoUrl = ลิงก์ชั่วคราวของรูป หมดอายุใน 1 ชม.) */
+export type Equipment = {
+  id: number; code: string; name: string; category: string; quantity: number; status: EquipmentStatus; location: string;
+  brand: string; model: string; serial: string; purchaseDate: string | null; price: number | null; note: string;
+  photoUrl: string | null; updatedAt: string; updatedBy: string;
 };
 
 /** ครั้งที่มี CEO Live (จาก slot Mc ที่ชื่อแคมเปญมีคำว่า CEO) — date = วันไลฟ์ YYYY-MM-DD ตามเวลาไทย */

@@ -4,7 +4,7 @@ import type { CommitTier } from "@/lib/types";
 
 const LABEL: Record<string, string> = {
   name: "ชื่อ", email: "อีเมล", phone: "เบอร์", hourly_rate: "ค่าจ้าง", commit_tiers: "Commit",
-  is_extra_admin: "Admin เสริม", is_salaried: "พนักงานประจำ",
+  is_extra_admin: "Admin เสริม", is_salaried: "พนักงานประจำ", can_manage_equipment: "หน้าอุปกรณ์โปรดักชั่น",
   can_manage_mc: "จัดการ Mc", can_manage_admin: "จัดการ Admin", can_manage_proofs: "จัดการหลักฐานไลฟ์",
   can_view_analytics: "Data analytics", analytics_readonly: "Data analytics ดูอย่างเดียว", can_plan_slots: "Plan Slot Live",
   can_view_mc: "ดู Mc", can_view_admin: "ดู Admin", can_view_proofs: "ดูหลักฐานไลฟ์", can_view_plan: "ดู Plan Slot Live",

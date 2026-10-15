@@ -37,6 +37,8 @@ type Person = {
   notify_cancel_mc?: boolean; notify_cancel_admin?: boolean;
   /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้บัญชีระบบ) */
   calendarMissing?: number;
+  /** Admin: เข้าหน้าอุปกรณ์โปรดักชั่นได้ (ไม่มี = ยังไม่ได้รัน SQL 20261025000000_equipment) */
+  can_manage_equipment?: boolean;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
   payDocs?: "ok" | "drive" | "missing";
 };
@@ -312,6 +314,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {displayName(p)}
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
                   {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">{p.role === "mc" ? "Mc" : "Admin"} ประจำ</Badge> : null}
+                  {p.can_manage_equipment ? <Badge className="bg-p2/15 text-[11px] text-p2">อุปกรณ์</Badge> : null}
                   {p.role === "owner" ? permBadges(p).map((b) => (
                     <Badge key={b} className={cn("text-[11px]", b.startsWith("ดู") ? "bg-muted text-muted-foreground" : "bg-p2/15 text-p2")}>{b}</Badge>
                   )) : null}
@@ -546,6 +549,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
   const [salaried, setSalaried] = useState(person?.is_salaried ?? false);
+  // Admin ประจำ: เข้าหน้าอุปกรณ์โปรดักชั่น (ส่งเมื่อรัน SQL แล้ว = มีค่ามากับรายชื่อ หรือเพิ่มคนใหม่)
+  const [equipment, setEquipment] = useState(person?.can_manage_equipment ?? false);
+  const equipReady = person ? person.can_manage_equipment !== undefined : true;
   // เทียร์ Commit (กรอกเป็นข้อความ ชั่วโมงพิมพ์เป็นช่วงได้ เช่น "10-20" ระบบใช้เลขตัวแรก)
   // ตอนเปิดแก้ แสดงเป็นช่วงให้อ่านง่าย: 10-20 / 21-40 / 41
   const [tiers, setTiers] = useState<{ hours: string; rate: string }[]>(() => {
@@ -590,6 +596,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
       const fields = {
         name, email, phone, hourly_rate: rate, is_extra_admin: extra, is_salaried: salaried,
         ...(isCrew(role) ? { commit_tiers: tiers } : {}),
+        ...(role === "admin" && equipReady && (person || equipment) ? { can_manage_equipment: salaried && equipment } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { ...manage, ...view } : {}),
         // Plan Slot Live: ให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
@@ -769,6 +776,19 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
               <span className="block text-xs text-muted-foreground">
                 ไม่ต้องใส่ค่าจ้าง — ไม่คิดค่าจ้างรายชั่วโมงในสรุปรายเดือน และไม่อยู่ในไฟล์เบิก
                 {role === "mc" ? <> · ไม่ต้องแนบหลักฐานไลฟ์ (slot ของคนนี้ไม่ขึ้นในหน้าหลักฐานไลฟ์)</> : null}
+              </span>
+            </span>
+          </Label>
+        ) : null}
+
+        {/* Admin ประจำ: สิทธิ์เพิ่มเติม (ตั้งทีละคน) */}
+        {role === "admin" && salaried ? (
+          <Label className="ml-6 items-start leading-snug font-normal">
+            <Checkbox checked={equipment} disabled={!equipReady} onCheckedChange={(v) => setEquipment(v === true)} className="mt-0.5" />
+            <span>
+              จัดการอุปกรณ์โปรดักชั่น
+              <span className="block text-xs text-muted-foreground">
+                {equipReady ? "เห็นเมนู \"อุปกรณ์\" ดู / เพิ่ม / แก้ / ลบรายการอุปกรณ์ได้ (รวมราคา)" : "ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน"}
               </span>
             </span>
           </Label>

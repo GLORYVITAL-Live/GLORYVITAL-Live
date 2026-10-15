@@ -96,6 +96,8 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     out.commit_tiers = tiers;
   }
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
+  // หน้าอุปกรณ์โปรดักชั่น (SQL 20261025000000_equipment): บันทึกเฉพาะตอนส่งมา
+  if (role === "admin" && "can_manage_equipment" in body) out.can_manage_equipment = body.can_manage_equipment === true;
   // Mc ประจำ / Admin ประจำ (เงินเดือน) = ไม่คิดค่าจ้างรายชั่วโมง (Mc ประจำ ไม่ต้องแนบหลักฐานไลฟ์ด้วย)
   if (role !== "owner" && (!partial || "is_salaried" in body)) out.is_salaried = !!body.is_salaried;
   if (role === "owner") {
@@ -172,11 +174,15 @@ export async function GET() {
   const noCalendar = await missingCalendarCounts().catch(() => new Map<number, number>());
   // เอกสารทำเบิก: เห็นเฉพาะ Owner ที่ดูเอกสารได้ (ยังไม่ได้รัน SQL = ไม่แสดง)
   const payDocsViewer = await canViewPayDocs(r.me);
+  // สิทธิ์หน้าอุปกรณ์ของ Admin (ยังไม่ได้รัน SQL = ไม่มีช่องนี้)
+  const { data: equipRows, error: equipErr } = await db.from("staff").select("id, can_manage_equipment").eq("role", "admin");
+  const equip = new Map((equipErr ? [] : equipRows ?? []).map((x) => [x.id as number, x.can_manage_equipment === true]));
   const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
   return ok({
     staff: (staff ?? []).map((s) => ({
       ...s, upcoming: upcoming.get(s.id) ?? 0, ...(isCrew(s.role as Role) ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
       ...(payDocs.has(s.id) ? { payDocs: payDocs.get(s.id) } : {}),
+      ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
     })),
     meId: r.me.owner?.id ?? null,
     // บทบาทที่แก้รายชื่อได้ (ดูได้อย่างเดียว = false)
@@ -254,8 +260,15 @@ export async function PATCH(request: Request) {
     }
   }
 
+  // ค่าเดิมของสิทธิ์หน้าอุปกรณ์ (ไว้บันทึกประวัติ — ไม่อยู่ใน cur เพราะคอลัมน์อาจยังไม่มี)
+  const equipBefore = "can_manage_equipment" in changes
+    ? (await db.from("staff").select("can_manage_equipment").eq("id", id).maybeSingle()).data?.can_manage_equipment
+    : undefined;
   const { error } = await db.from("staff").update(changes).eq("id", id);
-  if (error) return fail(needViewSql(dupMessage(error.message)));
+  if (error) {
+    if (/can_manage_equipment/.test(error.message)) return fail("ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน ถึงจะตั้งสิทธิ์หน้าอุปกรณ์ได้");
+    return fail(needViewSql(dupMessage(error.message)));
+  }
 
   // ผลต่อปฏิทิน / ชีต
   if (isCrew(role)) {
@@ -277,7 +290,7 @@ export async function PATCH(request: Request) {
     if (renamed || contactChanged) after(() => processSyncJobs().then(() => undefined));
   }
   // ประวัติ: เปลี่ยนอะไร จากเท่าไรเป็นเท่าไร (ไม่มีอะไรเปลี่ยนจริง = ไม่บันทึก)
-  const diff = staffChangeText(cur as Record<string, unknown>, changes);
+  const diff = staffChangeText({ ...cur, can_manage_equipment: equipBefore }, changes);
   if (diff) after(() => log(r.me, `แก้พนักงาน ${role} "${cur.name}": ${diff}`, id));
   return ok({ message: "บันทึกแล้ว" });
 }

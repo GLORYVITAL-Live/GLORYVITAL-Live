@@ -18,7 +18,7 @@ const KEEP = 12;
 const TABLES: Record<string, string> = {
   staff: "id", settings: "id", mc_slots: "id", admin_slots: "id", agency_slots: "id", booking_logs: "id",
   live_proofs: "id", live_proof_slots: "mc_slot_id", live_sessions: "id", live_campaigns: "id", ceo_sessions: "id",
-  pay_docs: "email", pay_periods: "id",
+  pay_docs: "email", pay_periods: "id", equipment: "id",
 };
 
 async function readTable(name: string, order: string) {

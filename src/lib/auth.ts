@@ -25,7 +25,7 @@ export async function getMe(): Promise<Me | null> {
   if (error && /can_plan_slots/.test(error.message)) ({ data: rows, error } = await query(base));
   if (error) throw error;
 
-  const me: Me = { email, mc: null, admin: null, owner: null, marketing: null };
+  const me: Me = { email, mc: null, admin: null, owner: null, marketing: null, equipment: false };
   type Row = {
     id: number; role: string; name: string; is_extra_admin: boolean; can_manage_mc: boolean | null; can_manage_admin: boolean | null;
     can_manage_proofs: boolean | null; can_view_analytics: boolean | null; can_plan_slots?: boolean | null;
@@ -47,7 +47,13 @@ export async function getMe(): Promise<Me | null> {
           analytics: analyticsAccess, plan: plan || r.can_view_plan === true,
         },
       };
+      if (mc || admin) me.equipment = true; // Owner ที่จัดการ Mc หรือ Admin ได้ ใช้หน้าอุปกรณ์ได้เสมอ
     }
+  }
+  // Admin ที่ติ๊ก "จัดการอุปกรณ์โปรดักชั่น" (ถามเฉพาะคนที่เป็น Admin · ยังไม่ได้รัน SQL 20261025000000_equipment = ไม่ได้ ไม่กระทบการ login)
+  if (me.admin && !me.equipment) {
+    const { data: equip } = await createAdminClient().from("staff").select("can_manage_equipment").eq("id", me.admin.id).maybeSingle();
+    me.equipment = equip?.can_manage_equipment === true;
   }
   return me;
 }
