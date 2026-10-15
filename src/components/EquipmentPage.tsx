@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { CameraIcon, PackageIcon, PlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import { CameraIcon, LayoutGridIcon, PackageIcon, PlusIcon, Rows3Icon, SearchIcon, Trash2Icon } from "lucide-react";
+import { useLocal, writeLocal } from "@/lib/hooks";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EQUIPMENT_STATUSES, type Equipment, type EquipmentStatus } from "@/lib/types";
 import { SPEC_FIELDS, isComputer, specLine } from "@/lib/equipment";
 import { money } from "@/lib/format";
@@ -25,12 +27,18 @@ import { cn } from "@/lib/utils";
 
 const ALL = "__all";
 const NO_CAT = "ไม่ระบุหมวด";
+const NO_PLACE = "ไม่ระบุที่เก็บ";
+const VIEW_KEY = "glory_equipment_view";
 const STATUS_TONE: Record<EquipmentStatus, string> = {
   "ใช้งานได้": "bg-success/15 text-success",
   "ชำรุด": "bg-destructive/10 text-destructive",
   "ส่งซ่อม": "border-warning-border bg-warning text-warning-foreground",
   "หาย": "bg-destructive text-white",
   "เลิกใช้": "bg-muted text-muted-foreground",
+};
+/** จุดสีบนปุ่มกรองสถานะ */
+const STATUS_DOT: Record<string, string> = {
+  "ใช้งานได้": "bg-success", "ชำรุด": "bg-destructive", "ส่งซ่อม": "bg-amber-500", "หาย": "bg-destructive", "เลิกใช้": "bg-muted-foreground",
 };
 const fmtDate = new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Bangkok" });
 const dateText = (d: string | null) => (d ? fmtDate.format(new Date(`${d}T12:00:00Z`)) : "");
@@ -59,16 +67,33 @@ export function EquipmentPage() {
 
   const categories = useMemo(() => [...new Set((items ?? []).map((x) => x.category || NO_CAT))].sort((a, b) => a.localeCompare(b, "th")), [items]);
   const locations = useMemo(() => [...new Set((items ?? []).map((x) => x.location).filter(Boolean))].sort((a, b) => a.localeCompare(b, "th")), [items]);
-  const list = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (items ?? []).filter((x) => (cat === ALL || (x.category || NO_CAT) === cat) && (status === ALL || x.status === status)
-      && (!q || [x.code, x.name, x.brand, x.model, x.serial, x.location, x.note, x.category, ...Object.values(x.specs)].some((v) => v.toLowerCase().includes(q))));
-  }, [items, search, cat, status]);
+  const [place, setPlace] = useState(ALL);
+  const view = useLocal(VIEW_KEY) === "table" ? "table" : "card";
+  // ตัวกรองแต่ละแบบ (ใช้ทั้งนับจำนวนบนปุ่ม และกรองรายการ)
+  const q = search.trim().toLowerCase();
+  const match = {
+    cat: (x: Equipment) => cat === ALL || (x.category || NO_CAT) === cat,
+    status: (x: Equipment) => status === ALL || x.status === status,
+    place: (x: Equipment) => place === ALL || (x.location || NO_PLACE) === place,
+    search: (x: Equipment) => !q || [x.code, x.name, x.brand, x.model, x.serial, x.location, x.note, x.category, ...Object.values(x.specs)].some((v) => v.toLowerCase().includes(q)),
+  };
+  const passAll = (x: Equipment, skip?: keyof typeof match) => (Object.keys(match) as (keyof typeof match)[]).every((k) => k === skip || match[k](x));
+  const list = (items ?? []).filter((x) => passAll(x));
 
   if (!items) return error ? <LoadError title="โหลดรายการอุปกรณ์ไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock />;
 
   const groups = categories.map((c) => [c, list.filter((x) => (x.category || NO_CAT) === c)] as const).filter(([, l]) => l.length);
   const problems = items.filter((x) => x.status === "ชำรุด" || x.status === "ส่งซ่อม" || x.status === "หาย").length;
+  // จำนวนบนปุ่มกรอง = ตามตัวกรองอื่นที่เลือกอยู่
+  const countBy = (skip: keyof typeof match, key: (x: Equipment) => string) => {
+    const m = new Map<string, number>();
+    for (const x of items) if (passAll(x, skip)) m.set(key(x), (m.get(key(x)) ?? 0) + 1);
+    return m;
+  };
+  const catCount = countBy("cat", (x) => x.category || NO_CAT);
+  const statusCount = countBy("status", (x) => x.status);
+  const placeCount = countBy("place", (x) => x.location || NO_PLACE);
+  const filtered = cat !== ALL || status !== ALL || place !== ALL || !!q;
 
   return (
     <div className="pb-10">
@@ -82,43 +107,89 @@ export function EquipmentPage() {
       <div className="my-3 flex flex-wrap items-center gap-2">
         <InputGroup className="h-9 min-w-48 flex-1 bg-card">
           <InputGroupAddon><SearchIcon /></InputGroupAddon>
-          <InputGroupInput type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหารหัส ชื่อ ยี่ห้อ รุ่น ที่เก็บ" aria-label="ค้นหา" />
+          <InputGroupInput type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหารหัส ชื่อ ยี่ห้อ รุ่น สเปค" aria-label="ค้นหา" />
         </InputGroup>
-        <Select value={cat} onValueChange={setCat}>
-          <SelectTrigger aria-label="หมวด" className="w-auto min-w-32 bg-card"><SelectValue /></SelectTrigger>
-          <SelectContent position="popper">
-            <SelectItem value={ALL}>ทุกหมวด</SelectItem>
-            {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger aria-label="สถานะ" className="w-auto min-w-32 bg-card"><SelectValue /></SelectTrigger>
-          <SelectContent position="popper">
-            <SelectItem value={ALL}>ทุกสถานะ</SelectItem>
-            {EQUIPMENT_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="mb-3 flex flex-wrap gap-2">
         <Button size="lg" onClick={() => setEditing("new")}><PlusIcon />เพิ่มอุปกรณ์</Button>
-        <ExportMenu label="ส่งออกรายการ" build={() => exportBook(list)} />
+      </div>
+
+      {/* ตัวกรอง: กดปุ่มได้เลย ตัวเลข = จำนวนรายการตามตัวกรองอื่นที่เลือกอยู่ */}
+      <div className="space-y-1.5 rounded-xl border bg-card p-2.5">
+        <ChipRow label="หมวด" value={cat} onChange={setCat} options={categories.map((c) => [c, catCount.get(c) ?? 0])} total={[...catCount.values()].reduce((a, b) => a + b, 0)} />
+        <ChipRow label="สถานะ" value={status} onChange={setStatus} dot={STATUS_DOT}
+          options={EQUIPMENT_STATUSES.filter((s) => statusCount.has(s) || s === status).map((s) => [s, statusCount.get(s) ?? 0])}
+          total={[...statusCount.values()].reduce((a, b) => a + b, 0)} />
+        {locations.length ? (
+          <ChipRow label="ที่เก็บ" value={place} onChange={setPlace}
+            options={[...locations, ...(placeCount.has(NO_PLACE) ? [NO_PLACE] : [])].map((l) => [l, placeCount.get(l) ?? 0])}
+            total={[...placeCount.values()].reduce((a, b) => a + b, 0)} />
+        ) : null}
+      </div>
+
+      <div className="mt-3 mb-1 flex flex-wrap items-center gap-2">
+        <span className="w-full min-w-0 text-sm text-muted-foreground sm:w-auto sm:flex-1">
+          แสดง <b className="text-foreground">{list.length}</b> รายการ · {list.reduce((a, x) => a + x.quantity, 0)} ชิ้น
+          {list.some((x) => x.price !== null) ? <> · {money(list.reduce((a, x) => a + valueOf(x), 0))} บาท</> : null}
+          {filtered ? (
+            <button type="button" className="ml-2 cursor-pointer font-semibold text-primary underline-offset-2 hover:underline"
+              onClick={() => { setCat(ALL); setStatus(ALL); setPlace(ALL); setSearch(""); }}>ล้างตัวกรอง</button>
+          ) : null}
+        </span>
+        <ToggleGroup type="single" variant="outline" size="sm" spacing={0} value={view} onValueChange={(v) => { if (v) writeLocal(VIEW_KEY, v); }} aria-label="รูปแบบการแสดงผล" className="bg-card">
+          <ToggleGroupItem value="card" aria-label="แสดงแบบการ์ด" className="text-xs"><LayoutGridIcon />การ์ด</ToggleGroupItem>
+          <ToggleGroupItem value="table" aria-label="แสดงแบบตาราง" className="text-xs"><Rows3Icon />ตาราง</ToggleGroupItem>
+        </ToggleGroup>
+        <ExportMenu label="ส่งออก" size="sm" build={() => exportBook(list)} />
       </div>
 
       {!items.length ? (
         <StateBox title="ยังไม่มีอุปกรณ์">กด &quot;เพิ่มอุปกรณ์&quot; เพื่อเริ่มทำทะเบียน</StateBox>
       ) : !list.length ? (
         <StateBox title="ไม่พบอุปกรณ์">ลองค้นหาด้วยคำอื่น หรือเปลี่ยนตัวกรอง</StateBox>
+      ) : view === "table" ? (
+        <div className="mt-2 overflow-x-auto rounded-xl border bg-card">
+          {/* มือถือ: ซ่อนหมวด / ที่เก็บ / ราคา ให้ตารางพอดีจอ */}
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+              <tr className="[&>th]:px-2 [&>th]:py-2 [&>th]:font-semibold sm:[&>th]:px-3">
+                <th>รหัส</th><th>ชื่อ</th>
+                {cat === ALL ? <th className="hidden sm:table-cell">หมวด</th> : null}
+                <th className="text-right">จำนวน</th><th>สถานะ</th>
+                <th className="hidden sm:table-cell">ที่เก็บ</th><th className="hidden text-right sm:table-cell">ราคา</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.flatMap(([, rows]) => rows).map((x) => (
+                <tr key={x.id} onClick={() => setEditing(x)} className="cursor-pointer border-t hover:bg-muted/50 [&>td]:px-2 [&>td]:py-1.5 sm:[&>td]:px-3">
+                  <td className="font-mono text-xs whitespace-nowrap">{x.code || "–"}</td>
+                  <td>
+                    <span className="font-medium">{x.name}</span>
+                    {[x.brand, x.model].some(Boolean) || specLine(x.specs) ? (
+                      <span className="block text-xs text-muted-foreground">{[[x.brand, x.model].filter(Boolean).join(" "), specLine(x.specs)].filter(Boolean).join(" · ")}</span>
+                    ) : null}
+                    {/* มือถือ: ที่เก็บอยู่ใต้ชื่อแทนคอลัมน์ */}
+                    {x.location ? <span className="block text-xs text-muted-foreground sm:hidden">📍 {x.location}</span> : null}
+                  </td>
+                  {cat === ALL ? <td className="hidden whitespace-nowrap text-muted-foreground sm:table-cell">{x.category || NO_CAT}</td> : null}
+                  <td className="text-right tabular-nums">{x.quantity}</td>
+                  <td><Badge className={cn("text-[11px]", STATUS_TONE[x.status])}>{x.status}</Badge></td>
+                  <td className="hidden text-muted-foreground sm:table-cell">{x.location || "–"}</td>
+                  <td className="hidden text-right whitespace-nowrap tabular-nums sm:table-cell">{x.price !== null ? money(x.price) : "–"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : groups.map(([c, rows]) => (
         <section key={c} className="mt-4">
           <h2 className="mb-2 flex items-baseline gap-2 font-bold">
             {c}
             <span className="text-xs font-normal text-muted-foreground">{rows.length} รายการ · {rows.reduce((a, x) => a + x.quantity, 0)} ชิ้น</span>
           </h2>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {rows.map((x) => (
               <button
                 key={x.id} type="button" onClick={() => setEditing(x)}
-                className="flex w-full items-center gap-3 rounded-xl border bg-card p-2.5 text-left shadow-card transition outline-none hover:border-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="flex w-full min-w-0 items-center gap-3 rounded-xl border bg-card p-2.5 text-left shadow-card transition outline-none hover:border-primary/50 focus-visible:ring-3 focus-visible:ring-ring/50"
               >
                 {x.photoUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -128,12 +199,14 @@ export function EquipmentPage() {
                 )}
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
-                    <span className="truncate font-semibold">{x.name}</span>
+                    <span className="line-clamp-2 font-semibold leading-snug">{x.name}</span>
                     {x.quantity !== 1 ? <span className="shrink-0 text-sm text-muted-foreground">x{x.quantity}</span> : null}
                   </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {[[x.brand, x.model].filter(Boolean).join(" "), x.location].filter(Boolean).join(" · ") || "ไม่ระบุยี่ห้อ / ที่เก็บ"}
-                  </span>
+                  {[x.brand, x.model, x.location].some(Boolean) ? (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[[x.brand, x.model].filter(Boolean).join(" "), x.location].filter(Boolean).join(" · ")}
+                    </span>
+                  ) : null}
                   {specLine(x.specs) ? <span className="block truncate text-xs text-foreground/80">{specLine(x.specs)}</span> : null}
                   <span className="mt-1 flex flex-wrap items-center gap-1.5">
                     {x.code ? <Badge variant="outline" className="font-mono text-[11px]">{x.code}</Badge> : null}
@@ -152,6 +225,36 @@ export function EquipmentPage() {
       {editing ? (
         <EquipmentDialog item={editing === "new" ? null : editing} onClose={(changed) => { setEditing(null); if (changed) reload(); }} />
       ) : null}
+    </div>
+  );
+}
+
+/** แถวปุ่มกรอง: "ทั้งหมด" + ตัวเลือก (จำนวน) กดซ้ำที่ตัวที่เลือกอยู่ = กลับเป็นทั้งหมด · มือถือเลื่อนแนวนอนได้ */
+function ChipRow({ label, value, onChange, options, total, dot }: {
+  label: string; value: string; onChange: (v: string) => void; options: [string, number][]; total: number; dot?: Record<string, string>;
+}) {
+  const chip = (key: string, text: string, n: number) => {
+    const on = value === key;
+    return (
+      <button
+        key={key} type="button" aria-pressed={on} onClick={() => onChange(on && key !== ALL ? ALL : key)}
+        className={cn(
+          "flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors pointer-coarse:py-1.5",
+          on ? "border-primary bg-primary text-primary-foreground" : cn("bg-background hover:border-primary/50", n === 0 && "opacity-50"),
+        )}
+      >
+        {!on && dot?.[key] ? <span className={cn("size-2 rounded-full", dot[key])} /> : null}
+        {text}<span className={cn("tabular-nums", on ? "opacity-80" : "text-muted-foreground")}>{n}</span>
+      </button>
+    );
+  };
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-12 shrink-0 text-xs font-semibold text-muted-foreground">{label}</span>
+      <div className="no-scrollbar flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
+        {chip(ALL, "ทั้งหมด", total)}
+        {options.map(([k, n]) => chip(k, k, n))}
+      </div>
     </div>
   );
 }
