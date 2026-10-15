@@ -1,5 +1,5 @@
 import { fail, ok, requireMe } from "@/lib/api";
-import { cleanEquipment, type EquipmentInput } from "@/lib/equipment";
+import { SPEC_FIELDS, cleanEquipment, type EquipmentInput } from "@/lib/equipment";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Equipment, EquipmentStatus } from "@/lib/types";
 
@@ -16,7 +16,7 @@ const MAX_BYTES = 4 * 1024 * 1024;
 type Row = {
   id: number; code?: string; name: string; category: string; quantity: number; status: EquipmentStatus; location: string; brand: string; model: string;
   serial: string; purchase_date: string | null; price: number | string | null; note: string; photo_path: string | null;
-  updated_at: string; updated_by: string;
+  specs?: Record<string, string> | null; updated_at: string; updated_by: string;
 };
 
 async function requireEquipment() {
@@ -25,10 +25,12 @@ async function requireEquipment() {
   if (!r.me.equipment) return { res: fail("บัญชีนี้ไม่มีสิทธิ์ใช้หน้าอุปกรณ์", 403) };
   return { me: r.me, who: r.me.owner?.name || r.me.admin?.name || r.me.email };
 }
-const dbFail = (msg: string) => fail(/equipment|schema cache|does not exist/i.test(msg) ? SQL : msg, 500);
+const dbFail = (msg: string) => fail(
+  /specs/i.test(msg) ? "ต้องรัน SQL 20261027000000_equipment_specs ใน Supabase ก่อน" : /equipment|schema cache|does not exist/i.test(msg) ? SQL : msg, 500,
+);
 const toDb = (d: EquipmentInput) => ({
   code: d.code, name: d.name, category: d.category, quantity: d.quantity, status: d.status, location: d.location, brand: d.brand, model: d.model,
-  serial: d.serial, purchase_date: d.purchaseDate, price: d.price, note: d.note,
+  serial: d.serial, purchase_date: d.purchaseDate, price: d.price, note: d.note, specs: d.specs,
 });
 
 /** รูปจากฟอร์ม: ตรวจชนิดจากไบต์แรก (JPG / PNG / WebP) */
@@ -68,6 +70,7 @@ export async function GET() {
   const items: Equipment[] = rows.map((x) => ({
     id: x.id, code: x.code ?? "", name: x.name, category: x.category, quantity: x.quantity, status: x.status, location: x.location, brand: x.brand,
     model: x.model, serial: x.serial, purchaseDate: x.purchase_date, price: x.price === null ? null : Number(x.price), note: x.note,
+    specs: x.specs ?? {},
     photoUrl: x.photo_path ? urls.get(x.photo_path) ?? null : null, updatedAt: x.updated_at, updatedBy: x.updated_by,
   }));
   return ok({ items });
@@ -132,6 +135,11 @@ export async function PATCH(request: Request) {
   ];
   const curRow = cur as Record<string, unknown>;
   const diff = labels.filter(([k]) => String(curRow[k] ?? "") !== String(next[k] ?? "")).map(([k, l]) => `${l} ${curRow[k] ?? "–"} → ${next[k] ?? "–"}`);
+  // สเปค: บอกทีละช่องที่เปลี่ยน
+  const oldSpecs = (curRow.specs ?? {}) as Record<string, string>;
+  for (const [k, l] of SPEC_FIELDS) {
+    if ((oldSpecs[k] ?? "") !== (next.specs[k] ?? "")) diff.push(`${l} ${oldSpecs[k] || "–"} → ${next.specs[k] || "–"}`);
+  }
   if (old !== photoPath) diff.push(photoPath ? "เปลี่ยนรูป" : "ลบรูป");
   if (diff.length) await log(r.me, r.who, `แก้อุปกรณ์ "${c.data.name}": ${diff.join(" · ")}`, id);
   return ok({ message: "บันทึกแล้ว" });

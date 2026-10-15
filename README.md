@@ -243,6 +243,8 @@
 
 - ทะเบียนอุปกรณ์: รหัส (เช่น CM01 / LT05 · SQL `20261026000000_equipment_code`) ชื่อ หมวด จำนวน สถานะ (ใช้งานได้ / ชำรุด / ส่งซ่อม / หาย / เลิกใช้) ที่เก็บ ยี่ห้อ รุ่น Serial วันที่ซื้อ ราคาต่อชิ้น หมายเหตุ รูป
   ค้นหา / กรองหมวด + สถานะ / สรุปจำนวนชิ้น + มูลค่ารวม / ส่งออก Excel · Google Sheet (`src/components/EquipmentPage.tsx` + `/api/equipment`)
+  หมวดคอมพิวเตอร์: ส่วน "สเปคคอมพิวเตอร์" (CPU / RAM / ที่เก็บข้อมูล / การ์ดจอ / เมนบอร์ด / OS / อื่นๆ) เก็บใน `equipment.specs`
+  (SQL `20261027000000_equipment_specs` · `SPEC_FIELDS` ใน `src/lib/equipment.ts`) สเปคย่อขึ้นบนการ์ด ค้นหาด้วยสเปคได้ และอยู่ในไฟล์ส่งออก
 - SQL `20261025000000_equipment`: ตาราง `equipment` + Storage bucket `equipment` (รูป ส่วนตัว ลิงก์ชั่วคราว 1 ชม.) + `staff.can_manage_equipment`
 - ใช้ได้: Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ประจำที่ติ๊ก "จัดการอุปกรณ์โปรดักชั่น" ในหน้าพนักงาน (`Me.equipment`)
 - ทุกการเพิ่ม / แก้ / ลบ บันทึกใน `booking_logs` (`slot_table = 'equipment'`) บอกช่องที่เปลี่ยน "จาก → เป็น"

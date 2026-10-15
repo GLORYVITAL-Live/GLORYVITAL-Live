@@ -4,9 +4,32 @@ import { EQUIPMENT_STATUSES, type EquipmentStatus } from "@/lib/types";
 export type EquipmentInput = {
   code: string; name: string; category: string; quantity: number; status: EquipmentStatus; location: string;
   brand: string; model: string; serial: string; purchaseDate: string | null; price: number | null; note: string;
+  specs: Record<string, string>;
 };
 
+/** สเปคคอมพิวเตอร์ (ช่องที่กรอกได้ เรียงตามที่แสดง) */
+export const SPEC_FIELDS: [key: string, label: string, placeholder: string][] = [
+  ["cpu", "CPU", "เช่น Intel Core i5-12400"],
+  ["ram", "RAM", "เช่น 16GB DDR4"],
+  ["storage", "ที่เก็บข้อมูล", "เช่น SSD 512GB + HDD 1TB"],
+  ["gpu", "การ์ดจอ", "เช่น RTX 3060 12GB / ออนบอร์ด"],
+  ["board", "เมนบอร์ด", "เช่น B660M"],
+  ["os", "ระบบปฏิบัติการ", "เช่น Windows 11 Pro"],
+  ["other", "อื่นๆ", "เช่น Wi-Fi, การ์ดจับภาพ, พอร์ต"],
+];
+/** หมวดนี้มีสเปคคอมพิวเตอร์ */
+export const isComputer = (category: string) => /คอม|computer|pc|notebook|โน้ตบุ๊ก/i.test(category);
+/** สเปคแบบสั้นบนการ์ด เช่น "i5-12400 · 16GB DDR4 · SSD 512GB" */
+export const specLine = (specs: Record<string, string>) =>
+  SPEC_FIELDS.slice(0, 4).map(([k]) => specs[k]).filter(Boolean).join(" · ");
+
 const text = (v: unknown, max: number) => String(v ?? "").trim().replace(/\s+/g, " ").slice(0, max);
+
+/** สเปค: เก็บเฉพาะช่องที่รู้จักและมีค่า */
+export function cleanSpecs(raw: unknown) {
+  const src = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return Object.fromEntries(SPEC_FIELDS.map(([k]) => [k, text(src[k], 200)]).filter(([, v]) => v));
+}
 
 /** ตรวจ + ทำความสะอาด (ราคา: ตัด , ฿ ช่องว่าง · วันที่ YYYY-MM-DD) */
 export function cleanEquipment(raw: Record<string, unknown>): { data: EquipmentInput } | { error: string } {
@@ -25,7 +48,7 @@ export function cleanEquipment(raw: Record<string, unknown>): { data: EquipmentI
     data: {
       code: text(raw.code, 40).toUpperCase(), name, category: text(raw.category, 60), quantity, status, location: text(raw.location, 120),
       brand: text(raw.brand, 80), model: text(raw.model, 120), serial: text(raw.serial, 200),
-      purchaseDate: d || null, price, note: String(raw.note ?? "").trim().slice(0, 1000),
+      purchaseDate: d || null, price, note: String(raw.note ?? "").trim().slice(0, 1000), specs: cleanSpecs(raw.specs),
     },
   };
 }

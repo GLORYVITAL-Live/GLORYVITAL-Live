@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { CameraIcon, PackageIcon, PlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
 import { EQUIPMENT_STATUSES, type Equipment, type EquipmentStatus } from "@/lib/types";
+import { SPEC_FIELDS, isComputer, specLine } from "@/lib/equipment";
 import { money } from "@/lib/format";
 import { shrinkImage } from "@/lib/image";
 import type { ExportBook } from "@/lib/export";
@@ -61,7 +62,7 @@ export function EquipmentPage() {
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (items ?? []).filter((x) => (cat === ALL || (x.category || NO_CAT) === cat) && (status === ALL || x.status === status)
-      && (!q || [x.code, x.name, x.brand, x.model, x.serial, x.location, x.note, x.category].some((v) => v.toLowerCase().includes(q))));
+      && (!q || [x.code, x.name, x.brand, x.model, x.serial, x.location, x.note, x.category, ...Object.values(x.specs)].some((v) => v.toLowerCase().includes(q))));
   }, [items, search, cat, status]);
 
   if (!items) return error ? <LoadError title="โหลดรายการอุปกรณ์ไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock />;
@@ -133,6 +134,7 @@ export function EquipmentPage() {
                   <span className="block truncate text-xs text-muted-foreground">
                     {[[x.brand, x.model].filter(Boolean).join(" "), x.location].filter(Boolean).join(" · ") || "ไม่ระบุยี่ห้อ / ที่เก็บ"}
                   </span>
+                  {specLine(x.specs) ? <span className="block truncate text-xs text-foreground/80">{specLine(x.specs)}</span> : null}
                   <span className="mt-1 flex flex-wrap items-center gap-1.5">
                     {x.code ? <Badge variant="outline" className="font-mono text-[11px]">{x.code}</Badge> : null}
                     <Badge className={cn("text-[11px]", STATUS_TONE[x.status])}>{x.status}</Badge>
@@ -156,10 +158,11 @@ export function EquipmentPage() {
 
 function exportBook(list: Equipment[]): ExportBook {
   const rows = [
-    ["หมวด", "รหัส", "ชื่อ", "ยี่ห้อ", "รุ่น", "Serial", "จำนวน", "สถานะ", "ที่เก็บ", "วันที่ซื้อ", "ราคาต่อชิ้น", "มูลค่ารวม", "หมายเหตุ"],
+    ["หมวด", "รหัส", "ชื่อ", "ยี่ห้อ", "รุ่น", "Serial", "จำนวน", "สถานะ", "ที่เก็บ", "วันที่ซื้อ", "ราคาต่อชิ้น", "มูลค่ารวม", "หมายเหตุ",
+      ...SPEC_FIELDS.map(([, l]) => `สเปค: ${l}`)],
     ...list.map((x) => [
       x.category, x.code, x.name, x.brand, x.model, x.serial, x.quantity, x.status, x.location, x.purchaseDate ?? "",
-      x.price, x.price === null ? null : valueOf(x), x.note,
+      x.price, x.price === null ? null : valueOf(x), x.note, ...SPEC_FIELDS.map(([k]) => x.specs[k] ?? ""),
     ]),
   ];
   return { title: `GLORY อุปกรณ์โปรดักชั่น ${new Date().toISOString().slice(0, 10)}`, sheets: [{ name: "อุปกรณ์", rows }] };
@@ -176,6 +179,9 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
     purchaseDate: item?.purchaseDate ?? "", price: item?.price === null || item?.price === undefined ? "" : String(item.price), note: item?.note ?? "",
   }));
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
+  // สเปคคอมพิวเตอร์: ขึ้นเมื่อหมวดเป็นคอมพิวเตอร์ (หรือเคยกรอกไว้)
+  const [specs, setSpecs] = useState<Record<string, string>>(() => ({ ...(item?.specs ?? {}) }));
+  const showSpecs = isComputer(f.category) || Object.values(specs).some(Boolean);
   const [photo, setPhoto] = useState<{ blob: Blob; url: string } | null>(null);
   const [removePhoto, setRemovePhoto] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -201,7 +207,7 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
     setBusy(true);
     try {
       const fd = new FormData();
-      fd.append("data", JSON.stringify({ ...f, id: item?.id }));
+      fd.append("data", JSON.stringify({ ...f, specs, id: item?.id }));
       if (photo) fd.append("photo", photo.blob, "photo.jpg");
       if (removePhoto) fd.append("removePhoto", "1");
       const res = await fetch("/api/equipment", { method: item ? "PATCH" : "POST", body: fd });
@@ -275,6 +281,20 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
           <Field label="วันที่ซื้อ">{(id) => <Input id={id} type="date" value={f.purchaseDate} onChange={(e) => set("purchaseDate")(e.target.value)} />}</Field>
           <Field label="ราคาต่อชิ้น (บาท)">{(id) => <Input id={id} inputMode="decimal" value={f.price} onChange={(e) => set("price")(e.target.value)} placeholder="ไม่ทราบ = ว่าง" />}</Field>
         </div>
+        {showSpecs ? (
+          <fieldset className="rounded-lg border px-3 pt-1 pb-3">
+            <legend className="px-1 font-semibold">สเปคคอมพิวเตอร์ <span className="font-normal text-muted-foreground">(ไม่บังคับ)</span></legend>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {SPEC_FIELDS.map(([k, label, placeholder]) => (
+                <Field key={k} label={label}>
+                  {(id) => k === "other"
+                    ? <Textarea id={id} rows={2} value={specs[k] ?? ""} onChange={(e) => setSpecs({ ...specs, [k]: e.target.value })} placeholder={placeholder} />
+                    : <Input id={id} value={specs[k] ?? ""} onChange={(e) => setSpecs({ ...specs, [k]: e.target.value })} placeholder={placeholder} autoComplete="off" />}
+                </Field>
+              ))}
+            </div>
+          </fieldset>
+        ) : null}
         <Field label="หมายเหตุ">{(id) => <Textarea id={id} rows={2} value={f.note} onChange={(e) => set("note")(e.target.value)} />}</Field>
       </DialogBody>
       <DialogActions>

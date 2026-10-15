@@ -28,6 +28,8 @@ export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 export type Equipment = {
   id: number; code: string; name: string; category: string; quantity: number; status: EquipmentStatus; location: string;
   brand: string; model: string; serial: string; purchaseDate: string | null; price: number | null; note: string;
+  /** สเปค (หมวดคอมพิวเตอร์) key ตาม SPEC_FIELDS ใน src/lib/equipment.ts */
+  specs: Record<string, string>;
   photoUrl: string | null; updatedAt: string; updatedBy: string;
 };
 
