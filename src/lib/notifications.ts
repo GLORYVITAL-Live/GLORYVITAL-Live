@@ -1,10 +1,10 @@
 import "server-only";
 import webpush from "web-push";
-import { bookingRange, getSettings } from "@/lib/data";
+import { bookingRange, getSettings, type Settings } from "@/lib/data";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
-import { addDays } from "@/lib/window";
+import { addDays, rangeText, type BookRange } from "@/lib/window";
 
 /**
  * แจ้งเตือนในเว็บ (กระดิ่ง) + เด้งเข้ามือถือ (Web Push) — SQL 20261028000000_notifications
@@ -15,7 +15,8 @@ import { addDays } from "@/lib/window";
  * เรื่องที่แจ้ง
  *   booked     มีคนจองคิว / รับคิว                → Owner ที่จัดการฝั่งนั้น
  *   cancelled  Mc / Admin เสริมกดยกเลิกคิว         → Owner ฝั่งนั้น + คู่ไลฟ์ของ slot นั้น
- *   slot_open  slot ว่างเพราะมีคนยกเลิก            → Mc (ที่จองวันนั้นได้) / Admin เสริม คนอื่น
+ *   slot_open  slot ว่างเพราะมีคนยกเลิก / เจ้าของสร้าง slot ใหม่ / เปิดช่วงจอง
+ *                                                  → Mc (ที่จองวันนั้นได้) / Admin เสริม
  *   changed    Owner เปลี่ยนคน / แคนคิว (เว็บ / ชีต) → คนที่ได้ / เสียคิว
  *   reminder   คืนก่อนวันไลฟ์ (20:00) + ก่อนเริ่ม ~1 ชม. → เจ้าของคิว (cron ทุก 15 นาที)
  *   open_soon  slot ยังว่างใน 48 ชม. (เช้า)           → Owner ฝั่งนั้น
@@ -282,6 +283,84 @@ export async function notifySlotChanges(table: Table, changes: SlotChange[], act
     return notifyMany(items);
   } catch (err) {
     console.error("แจ้งเตือนเปลี่ยนคิวไม่สำเร็จ:", err);
+    return 0;
+  }
+}
+
+// ---------- slot ใหม่ / เปิดช่วงจอง ----------
+
+const inRange = (r: BookRange, day: string) => !r.empty && day >= r.from && (r.to === null || day <= r.to);
+
+/** slot ว่างที่ยังไม่เริ่ม (Admin = เฉพาะที่เปิดรับ Admin เสริม) · ids = เฉพาะ slot เหล่านี้ / ไม่ใส่ = ทั้งหมดตั้งแต่วันนี้ */
+async function openFutureSlots(side: Side, ids?: number[]) {
+  const now = Date.now();
+  const cols = `id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, person:${personCol(side)}${side === "admin" ? ", needs_extra_admin" : ""}`;
+  let q = createAdminClient().from(tableOf(side)).select(cols)
+    .is(personCol(side), null).eq("is_cancelled", false).gte("live_date", bkkDay(now));
+  if (ids) q = q.in("id", ids.slice(0, 1000));
+  const { data, error } = await q.order("starts_at").limit(3000).overrideTypes<(Slot & { needs_extra_admin?: boolean })[], { merge: false }>();
+  if (error) throw error;
+  return (data ?? []).filter((s) => Date.parse(s.starts_at) > now && (side === "mc" || s.needs_extra_admin === true));
+}
+
+/** คนที่จองผ่านเว็บได้ของฝั่งนั้น (มีอีเมล · Admin = เฉพาะ Admin เสริม) */
+async function bookers(side: Side) {
+  let q = createAdminClient().from("staff").select("id, email").eq("role", side).not("email", "is", null);
+  if (side === "admin") q = q.eq("is_extra_admin", true);
+  const { data } = await q;
+  return (data ?? []).map((p) => ({ id: p.id as number, email: String(p.email).trim().toLowerCase() }));
+}
+
+/**
+ * เจ้าของสร้าง slot ว่างใหม่ (ปุ่มสร้าง slot / Plan Slot Live / พิมพ์แถวใหม่ในชีต / เปิดรับ Admin เสริม)
+ *   → Mc ที่ช่วงเปิดจองครอบวันนั้น / Admin เสริม · คนละ 1 ข้อความ (สร้างทีละเยอะ = รวมเป็นข้อความเดียว)
+ *   slot นอกช่วงเปิดจองของคนนั้น = ไม่แจ้ง (จะได้แจ้งตอนเปิดช่วงจอง ดู notifyWindowOpened)
+ */
+export async function notifyNewSlots(side: Side, slotIds: number[], actorEmail = "") {
+  try {
+    if (!slotIds.length) return 0;
+    const slots = await openFutureSlots(side, slotIds);
+    if (!slots.length) return 0;
+    const [people, settings] = await Promise.all([bookers(side), getSettings()]);
+    const verb = side === "mc" ? "จอง" : "รับคิว";
+    const items: (Note & { email: string })[] = [];
+    for (const p of people) {
+      if (p.email === actorEmail.toLowerCase()) continue;
+      const range = bookingRange(settings, side, p.id);
+      const mine = slots.filter((s) => inRange(range, s.live_date));
+      if (mine.length) items.push({ email: p.email, kind: "slot_open", page: side, title: `มี slot ใหม่เปิดให้${verb} ${mine.length} slot`, body: listText(mine) });
+    }
+    return notifyMany(items);
+  } catch (err) {
+    console.error("แจ้งเตือน slot ใหม่ไม่สำเร็จ:", err);
+    return 0;
+  }
+}
+
+/**
+ * เจ้าของเปลี่ยนช่วงเปิดจอง / เดือนสุดท้ายที่เปิดจอง → คนที่ได้จองวันเพิ่ม และวันที่เพิ่มมามี slot ว่าง
+ *   before / after = ค่าตั้งก่อน-หลังแก้ (เทียบช่วงของแต่ละคน รวมรายชื่อ "จองก่อน")
+ */
+export async function notifyWindowOpened(side: Side, before: Settings, after: Settings, actorEmail = "") {
+  try {
+    const [people, slots] = await Promise.all([bookers(side), openFutureSlots(side)]);
+    if (!slots.length) return 0;
+    const verb = side === "mc" ? "จอง" : "รับคิว";
+    const items: (Note & { email: string })[] = [];
+    for (const p of people) {
+      if (p.email === actorEmail.toLowerCase()) continue;
+      const was = bookingRange(before, side, p.id), now = bookingRange(after, side, p.id);
+      const mine = slots.filter((s) => inRange(now, s.live_date) && !inRange(was, s.live_date));
+      if (!mine.length) continue;
+      items.push({
+        email: p.email, kind: "slot_open", page: side,
+        title: `เปิดให้${verb}แล้ว: slot ว่าง ${mine.length} slot`,
+        body: `ช่วงที่${verb}ได้: ${rangeText(now)}\n${listText(mine)}`,
+      });
+    }
+    return notifyMany(items);
+  } catch (err) {
+    console.error("แจ้งเตือนเปิดช่วงจองไม่สำเร็จ:", err);
     return 0;
   }
 }

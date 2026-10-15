@@ -1,4 +1,6 @@
+import { after } from "next/server";
 import { fail, ok, requireOwner } from "@/lib/api";
+import { notifyWindowOpened } from "@/lib/notifications";
 import { bkkToday, bookWindow, cutoffDate, getSettings } from "@/lib/data";
 import { createAdminClient } from "@/lib/supabase/server";
 import { cleanWindow, isDate, rangeText, type Period } from "@/lib/window";
@@ -53,9 +55,16 @@ export async function PUT(request: Request) {
     if (!r.scope.full) return fail("เดือนสุดท้ายที่เปิดจองใช้ทั้งสองฝั่ง ต้องมีสิทธิ์ทั้ง Mc และ Admin", 403);
     const month = String(body.cutoffMonth ?? "").trim();
     if (month && !/^\d{4}-\d{2}$/.test(month)) return fail("รูปแบบเดือนไม่ถูกต้อง");
+    const before = await getSettings();
     const { error } = await db.from("settings").update({ schedule_cutoff_month: month || null }).eq("id", 1);
     if (error) return fail(error.message, 500);
     await writeLog(`ตั้งเดือนสุดท้ายที่เปิดจอง: ${month || "ไม่จำกัด"}`);
+    // เปิดเดือนเพิ่ม → แจ้ง Mc / Admin เสริม ที่มี slot ว่างให้จองเพิ่ม
+    after(async () => {
+      const now = await getSettings();
+      await notifyWindowOpened("mc", before, now, r.me.email);
+      await notifyWindowOpened("admin", before, now, r.me.email);
+    });
     return ok({ message: "บันทึกแล้ว" });
   }
 
@@ -83,8 +92,11 @@ export async function PUT(request: Request) {
     names = valid.map((id) => list.find((p) => p.id === id)!.name);
   }
 
+  const before = await getSettings();
   const { error } = await db.from("settings").update({ [`book_window_${role}`]: w }).eq("id", 1);
   if (error) return fail(error.message, 500);
+  // เปิดช่วงจองเพิ่ม → แจ้งคนที่ได้จองวันเพิ่ม และวันนั้นมี slot ว่าง
+  after(async () => notifyWindowOpened(role, before, await getSettings(), r.me.email).then(() => undefined));
   const when = (p: Period | null | undefined) =>
     !p || p.mode === "off" ? "ไม่จำกัดวัน" : p.mode === "closed" ? "ปิดจอง" : p.mode === "week" ? "สัปดาห์นี้ (อัตโนมัติ)"
       : p.from ? rangeText({ from: p.from, to: p.to }) : `ถึง ${rangeText({ from: p.to!, to: p.to })}`;

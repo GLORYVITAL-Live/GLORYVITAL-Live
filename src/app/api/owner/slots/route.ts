@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { canTable, fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
 import { platformRaw } from "@/lib/platform";
-import { notifySlotChanges } from "@/lib/notifications";
+import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -159,6 +159,9 @@ export async function POST(request: Request) {
   after(async () => {
     await log(r.me, "สร้าง slot", "mc_slots", (insMc.data ?? []).map((x) => x.id), "สำเร็จ");
     await log(r.me, "สร้าง slot", "admin_slots", (insAdmin.data ?? []).map((x) => x.id), "สำเร็จ");
+    // แจ้ง Mc / Admin เสริม ที่จอง slot ใหม่ได้
+    await notifyNewSlots("mc", (insMc.data ?? []).map((x) => x.id), r.me.email);
+    if (extraAdmin) await notifyNewSlots("admin", (insAdmin.data ?? []).map((x) => x.id), r.me.email);
   });
   const created = r.scope.mc ? newMc.length : newAdmin.length;
   return ok({ created, skipped: wanted.length - created, adminCreated: newAdmin.length });
@@ -216,6 +219,8 @@ export async function PATCH(request: Request) {
         id, oldPerson: old, newPerson: personCol in changes ? (changes[personCol] as number | null) : old, oldCancelled: !!before.is_cancelled,
       }], r.me.email);
     }
+    // เพิ่งเปิดรับ Admin เสริม = slot ว่างให้ Admin เสริมรับคิว
+    if (table === "admin_slots" && body?.extraAdmin === true) await notifyNewSlots("admin", [id], r.me.email);
   });
   return ok({ message: "บันทึกแล้ว" });
 }

@@ -814,6 +814,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     let updated = 0, created = 0, paired = 0;
     // แก้รายแถว: เปลี่ยนคน / สถานะ → แจ้งเตือนคนที่ได้ / เสียคิว (ซิงค์ทั้งหมดไม่แจ้ง กันแจ้งรัว)
     const changes: SlotChange[] = [];
+    const newOpen: number[] = []; // แถวใหม่ที่ยังไม่มีคน = slot ว่างใหม่ → แจ้งคนที่จองได้
     const calendar: { slot_table: Table; slot_id: number }[] = [];
     const idWrites: sheets_v4.Schema$ValueRange[] = [];
     // แถวคัดลอกที่ติดรหัสของแถวอื่นมา = slot ใหม่ (สร้างใหม่แล้วเขียนรหัสใหม่ทับ) ไม่ใช่การแก้ slot เดิม
@@ -840,6 +841,8 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         calendar.push({ slot_table: table, slot_id: p.id });
         touched.push(p.id);
         updated++;
+        // แก้หมายเหตุเป็น "Admin เสริม" ใน slot Admin ที่ยังว่าง = เปิดรับ Admin เสริม (notifyNewSlots ตรวจ needs_extra_admin เอง)
+        if (rowNumbers && tab === "admin" && "remark" in row && row.remark !== s.remark && !s.personId && !row[personCol]) newOpen.push(p.id);
         if (rowNumbers && (personCol in row || "status" in row)) {
           changes.push({ id: p.id, oldPerson: s.personId, newPerson: personCol in row ? (row[personCol] as number | null) : s.personId, oldCancelled: s.cancelled });
         }
@@ -864,6 +867,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
           created++;
           const person = p.person ? staffId.get(p.person) ?? null : null;
           if (rowNumbers && person) changes.push({ id, oldPerson: null, newPerson: person, oldCancelled: false });
+          else if (rowNumbers) newOpen.push(id);
           if (rowNumbers) paired += await mirrorNewSlot(table, p);
         }
         present.ids.add(id);
@@ -894,7 +898,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     // = ตรวจหา slot ที่ไม่มีแถวในชีตแล้วลบออก
     const cleared = rowNumbers?.some((r) => isBlankRow(tab, all[r - 1] ?? [])) ?? true;
     const removed = cleared ? (await removeMissing(tab, all)) + (await cancelPastMissing(tab, all)) : 0;
-    return { updated, created, removed, paired, changes };
+    return { updated, created, removed, paired, changes, newOpen };
   });
   if (!result) throw new Error("ระบบกำลังซิงค์ชีตอยู่ กรุณาลองใหม่อีกครั้ง");
   return result;

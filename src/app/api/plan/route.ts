@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { platformRaw } from "@/lib/platform";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
 import { canonicalCampaign } from "@/lib/campaign";
+import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -299,6 +300,12 @@ export async function POST(request: Request) {
       await log(r.me, "Plan Slot Live: สร้าง slot", "admin_slots", adminIds);
       if (updated) await log(r.me, "Plan Slot Live: แก้ Campaign", "mc_slots", campaigns.map((c) => c.mcId));
       if (withPerson.length) await log(r.me, "Plan Slot Live: ลงชื่อ Mc ประจำ", "mc_slots", withPerson);
+      // แจ้งเตือน: slot ว่างใหม่ → Mc ที่จองได้ · ลงชื่อ Mc ประจำ → Mc คนนั้น "ได้รับคิวใหม่"
+      await notifyNewSlots("mc", mcIds, r.me.email);
+      const personOf = new Map<number, number>();
+      mcIds.forEach((id, i) => { const p = (newMc[i] as { mc_id?: number }).mc_id; if (p) personOf.set(id, p); });
+      for (const a of assigns) if (assigned.includes(a.slotId)) personOf.set(a.slotId, a.personId);
+      await notifySlotChanges("mc_slots", [...personOf].map(([id, p]) => ({ id, oldPerson: null, newPerson: p, oldCancelled: false })), r.me.email);
     });
     return ok({
       created: mcIds.length, adminCreated: adminIds.length, skipped: create.length - Math.max(mcIds.length, adminIds.length), updated, agencyAdded, agencyRemoved,

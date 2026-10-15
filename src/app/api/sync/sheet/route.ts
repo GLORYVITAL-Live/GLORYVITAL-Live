@@ -1,5 +1,5 @@
 import { after, NextResponse } from "next/server";
-import { notifySlotChanges } from "@/lib/notifications";
+import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
 import { TABLE_OF, TABS, type TabKey } from "@/lib/sheet";
 import { applySheetEdits, removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
@@ -34,11 +34,16 @@ export async function POST(request: Request) {
   const cols: [number, number] | undefined = Number.isInteger(first) && Number.isInteger(last) ? [first, last] : undefined;
 
   try {
-    const { changes, ...res } = await applySheetEdits(tab, rows, cols);
+    const { changes, newOpen, ...res } = await applySheetEdits(tab, rows, cols);
     after(async () => {
       await processSyncJobs();
-      // แก้คน / แคนคิวในชีต → แจ้งเตือนคนที่ได้ / เสียคิว
+      // แก้คน / แคนคิวในชีต → แจ้งเตือนคนที่ได้ / เสียคิว · แถวใหม่ที่ยังว่าง → คนที่จองได้
       await notifySlotChanges(TABLE_OF[tab], changes);
+      // แถวใหม่: มักพิมพ์วัน/เวลาก่อนแล้วค่อยใส่ชื่อ → รอ 30 วิ แล้วแจ้งเฉพาะที่ยังว่างอยู่ (notifyNewSlots ตรวจซ้ำตอนส่ง)
+      if (newOpen.length) {
+        await new Promise((ok) => setTimeout(ok, 30_000));
+        await notifyNewSlots(tab, newOpen);
+      }
     });
     return NextResponse.json({ ok: true, ...res });
   } catch (err) {
