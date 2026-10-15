@@ -255,7 +255,12 @@ function Shell({ me }: { me: Me | null }) {
           <span className="hidden text-[13px] font-medium text-muted-foreground sm:inline">{mode?.sub ?? "Live booking"}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {registered ? <NotificationBell onGo={(p) => { if (pages.includes(p as Page)) { writeLocal(ROLE_KEY, p); window.scrollTo({ top: 0 }); } }} /> : null}
+          {registered ? (
+            <NotificationBell onGo={(p) => {
+              if (p === "guide") router.push("/guide"); // วิธีแชร์ปฏิทิน
+              else if (pages.includes(p as Page)) { writeLocal(ROLE_KEY, p); window.scrollTo({ top: 0 }); }
+            }} />
+          ) : null}
           <IconButton label={dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด"} onClick={toggleTheme} className="bg-card shadow-card">
             {dark ? <SunIcon /> : <MoonIcon />}
           </IconButton>

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlarmClockIcon, BellIcon, BellRingIcon, CalendarPlusIcon, CalendarXIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon,
+  AlarmClockIcon, BellIcon, BellRingIcon, CalendarCheckIcon, CalendarPlusIcon, CameraIcon, CalendarXIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon,
   type LucideIcon,
 } from "lucide-react";
 import { api, useToast } from "@/components/shared";
@@ -24,7 +24,7 @@ function withTimeout<T>(p: Promise<T>, sec: number, message: string) {
 
 const KIND_ICON: Record<string, LucideIcon> = {
   booked: CalendarPlusIcon, cancelled: CalendarXIcon, slot_open: SparklesIcon, changed: RefreshCwIcon,
-  reminder: AlarmClockIcon, open_soon: TriangleAlertIcon,
+  reminder: AlarmClockIcon, open_soon: TriangleAlertIcon, proof: CameraIcon, calendar: CalendarCheckIcon,
 };
 
 /** "เมื่อสักครู่" / "5 นาทีที่แล้ว" / "3 ชม.ที่แล้ว" / "17 ต.ค. 09:30" */
@@ -238,7 +238,7 @@ export function NotificationBell({ onGo }: { onGo: (page: string) => void }) {
                 onClick={() => { if (n.page) onGo(n.page); onOpenChange(false); }}
                 className={cn("flex w-full cursor-pointer gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted", !n.read && "bg-primary/8")}
               >
-                <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground [&_svg]:size-3.5", !n.read && "bg-primary text-primary-foreground", n.title.startsWith("[ด่วน]") && "bg-destructive text-white")}>
+                <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground [&_svg]:size-3.5", !n.read && "bg-primary text-primary-foreground", /^\[(ด่วน|ค้าง)\]/.test(n.title) && "bg-destructive text-white")}>
                   <Icon />
                 </span>
                 <span className="min-w-0 flex-1">

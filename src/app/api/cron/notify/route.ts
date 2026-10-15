@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { pruneNotifications, sendPreLiveReminders } from "@/lib/notifications";
+import { pruneNotifications, sendPreLiveReminders, sendWorkReminders } from "@/lib/notifications";
 
 export const maxDuration = 60;
 
@@ -13,8 +13,10 @@ export async function GET(request: Request) {
   }
   try {
     const reminders = await sendPreLiveReminders();
+    // งานค้าง (หลักฐาน / GMV / ยังไม่แชร์ปฏิทิน) — พลาดไม่กระทบเตือนก่อนไลฟ์
+    const work = await sendWorkReminders().then((x) => ({ sent: x.sent })).catch((err) => ({ error: String((err as Error)?.message ?? err) }));
     await pruneNotifications().catch(() => undefined);
-    return NextResponse.json({ ok: true, reminders });
+    return NextResponse.json({ ok: true, reminders, work });
   } catch (err) {
     return NextResponse.json({ ok: false, message: String((err as Error)?.message ?? err) }, { status: 500 });
   }

@@ -1,6 +1,8 @@
 import "server-only";
 import webpush from "web-push";
-import { bookingRange, getSettings, type Settings } from "@/lib/data";
+import { missingCalendarCounts } from "@/lib/calendar";
+import { bookingRange, getSettings, proofsBySlot, type Settings } from "@/lib/data";
+import { gmvCoverage } from "@/lib/gmv";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -20,10 +22,13 @@ import { addDays, rangeText, type BookRange } from "@/lib/window";
  *   changed    Owner เปลี่ยนคน / แคนคิว (เว็บ / ชีต) → คนที่ได้ / เสียคิว
  *   reminder   คืนก่อนวันไลฟ์ (20:00) + ก่อนเริ่ม ~1 ชม. → เจ้าของคิว (cron ทุก 15 นาที)
  *   open_soon  slot ยังว่างใน 48 ชม. (เช้า)           → Owner ฝั่งนั้น
+ *   proof      หลังไลฟ์ ~2 ชม. ยังไม่แนบหลักฐาน / GMV → Admin ของ slot · ค้างเกิน 24 ชม. (10:00) → Admin + Owner
+ *   calendar   คิวยังไม่ขึ้นปฏิทิน (จันทร์ / พฤหัส 10:00) → คนนั้น พร้อมลิงก์วิธีแชร์
  */
 
-export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "test";
-export type NotePage = "home" | "owner" | "mc" | "admin";
+export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "test";
+/** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide) */
+export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide";
 export type Note = { kind: NoteKind; title: string; body: string; page?: NotePage | null; dedupe?: string };
 type Side = "mc" | "admin";
 type Table = "mc_slots" | "admin_slots";
@@ -102,7 +107,7 @@ async function pushTo(rows: Pushed[]) {
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
         // urgent = [ด่วน] / ใกล้ไลฟ์ → สั่นยาว + ค้างบนจอจนกว่าจะกดปิด (public/sw.js)
         JSON.stringify({
-          title: n.title, body: n.body, url: n.page ? `/?go=${n.page}` : "/", tag: `n${n.id}`,
+          title: n.title, body: n.body, url: n.page === "guide" ? "/guide" : n.page ? `/?go=${n.page}` : "/", tag: `n${n.id}`,
           urgent: n.title.startsWith("[ด่วน]") || n.title.startsWith("อีก "),
         }),
         { TTL: 6 * 3600, urgency: "high" },
@@ -435,6 +440,145 @@ export async function sendPreLiveReminders(now = Date.now(), dryRun = false) {
   // dryRun = ดูว่าจะส่งอะไร (ไม่ส่งจริง) ใช้ตรวจก่อน
   if (dryRun) return { sent: 0, checked: slots.length, items };
   return { sent: await notifyMany(items), checked: slots.length };
+}
+
+// ---------- งานค้างของแต่ละคน (cron ทุก 15 นาที) ----------
+
+/** เตือนแนบหลักฐาน / กรอก GMV หลังไลฟ์จบกี่ชั่วโมง */
+const PROOF_AFTER_H = 2;
+/** สรุปงานค้างรายวัน / เตือนแชร์ปฏิทิน ตั้งแต่กี่โมง (เวลาไทย) */
+const DAILY_HOUR = 10;
+
+/**
+ * หลักฐานไลฟ์ / GMV ที่ยังค้าง (เกณฑ์เดียวกับหน้าแรก: slot Mc ที่จบแล้วใน 7 วัน มีคน
+ *   หลักฐาน = ไม่นับ Mc ประจำ · GMV = นับยอดที่กรอกรวมไว้ใน slot ถัดไปของ Mc คนเดียวกันแล้ว)
+ *   คนรับผิดชอบ = Admin ของ slot นั้น (คนที่แนบหลักฐาน / กรอก GMV ในหน้าหลักฐานไลฟ์)
+ */
+async function overdueWork(now: number) {
+  const db = createAdminClient();
+  const today = bkkDay(now), from = addDays(today, -7);
+  type McRow = Slot & { gmv: number | string | null; mc: { name: string; is_salaried: boolean | null } | null };
+  const [mcRes, adminRes, proofs] = await Promise.all([
+    db.from("mc_slots")
+      .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, gmv, person:mc_id, mc:staff!mc_id(name, is_salaried)")
+      .eq("is_cancelled", false).not("mc_id", "is", null).gte("live_date", from).lte("live_date", today)
+      .order("starts_at").limit(3000).overrideTypes<McRow[], { merge: false }>(),
+    db.from("admin_slots").select("platform, starts_at, ends_at, admin_id, is_cancelled")
+      .eq("is_cancelled", false).not("admin_id", "is", null).gte("live_date", from).lte("live_date", today).limit(3000),
+    proofsBySlot(db, from, today),
+  ]);
+  if (mcRes.error) throw mcRes.error;
+  const assigned = (mcRes.data ?? []).filter((r) => r.confirmed !== false);
+  const covered = gmvCoverage(assigned.map((r) => ({
+    id: r.id, platform: r.platform, startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at), gmv: r.gmv === null ? null : Number(r.gmv), who: r.person,
+  })));
+  const key = (x: { platform: string; starts_at: string; ends_at: string }) => `${x.platform}|${Date.parse(x.starts_at)}|${Date.parse(x.ends_at)}`;
+  const adminOf = new Map((adminRes.data ?? []).map((a) => [key(a), a.admin_id as number]));
+  return assigned.filter((r) => Date.parse(r.ends_at) <= now).map((r) => ({
+    ...r,
+    admin: adminOf.get(key(r)) ?? null,
+    needProof: !r.mc?.is_salaried && !proofs.has(r.id),
+    needGmv: r.gmv === null && !covered.has(r.id),
+  }));
+}
+type Work = Awaited<ReturnType<typeof overdueWork>>[number];
+const missText = (w: Work) => [w.needProof ? "หลักฐาน" : "", w.needGmv ? "GMV" : ""].filter(Boolean).join(" + ");
+
+/** Owner ที่ดูแลหลักฐาน / GMV (จัดการฝั่ง Mc ได้ หรือติ๊กจัดการหลักฐานไลฟ์) */
+async function proofOwnerEmails() {
+  type Row = { email: string | null; can_manage_mc: boolean | null; can_manage_proofs: boolean | null };
+  const { data } = await createAdminClient().from("staff").select("email, can_manage_mc, can_manage_proofs")
+    .eq("role", "owner").not("email", "is", null).overrideTypes<Row[], { merge: false }>();
+  return cleanEmails((data ?? []).filter((r) => r.can_manage_mc !== false || r.can_manage_proofs === true).map((r) => r.email));
+}
+
+/**
+ * งานค้างของแต่ละคน (cron ทุก 15 นาที)
+ *   หลังไลฟ์จบ ~2 ชม. ยังไม่แนบหลักฐาน / กรอก GMV → Admin ของ slot (ไลฟ์ต่อกันหลาย slot = เตือนครั้งเดียวตอนจบช่วง)
+ *   ทุกวัน 10:00: ค้างเกิน 24 ชม. → Admin คนนั้น + สรุปรวมถึง Owner
+ *   จันทร์ / พฤหัส 10:00: คิวยังไม่ขึ้นปฏิทิน (ยังไม่แชร์) → คนนั้น พร้อมลิงก์วิธีแชร์
+ */
+export async function sendWorkReminders(now = Date.now(), dryRun = false) {
+  const today = bkkDay(now);
+  const bkk = new Date(now + 7 * 3600_000);
+  const daily = bkk.getUTCHours() >= DAILY_HOUR;
+  const items: (Note & { email: string })[] = [];
+
+  // ---- หลักฐาน / GMV ----
+  const work = await overdueWork(now);
+  const emails = await emailsOf(work.map((w) => w.admin));
+  // ช่วงไลฟ์ต่อกันของ Admin คนเดียวกัน (ช่องเดียวกัน slot จบ = slot ถัดไปเริ่ม)
+  const chains: Work[][] = [];
+  const open = new Map<string, Work[]>();
+  for (const w of [...work].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))) {
+    const k = `${w.admin}|${w.platform}`, cur = open.get(k);
+    if (cur && Date.parse(cur[cur.length - 1].ends_at) === Date.parse(w.starts_at)) cur.push(w);
+    else { const c = [w]; chains.push(c); open.set(k, c); }
+  }
+  const line = (w: Work) => `${slotText(w)} · ขาด ${missText(w)}`;
+  const late: Work[] = []; // ค้างเกิน 24 ชม.
+  for (const c of chains) {
+    const missing = c.filter((w) => w.needProof || w.needGmv);
+    if (!missing.length) continue;
+    const ago = now - Date.parse(c[c.length - 1].ends_at);
+    if (ago >= 24 * 3600_000) late.push(...missing);
+    const email = c[0].admin ? emails.get(c[0].admin) : undefined;
+    if (!email || ago < PROOF_AFTER_H * 3600_000 || ago >= 24 * 3600_000) continue;
+    items.push({
+      email, kind: "proof", page: "proof", dedupe: `proof:${c[c.length - 1].id}`,
+      title: `อย่าลืมแนบหลักฐาน / กรอก GMV ${missing.length} slot`,
+      body: missing.map(line).join("\n"),
+    });
+  }
+  if (daily && late.length) {
+    // Admin แต่ละคน
+    const per = new Map<string, Work[]>();
+    for (const w of late) {
+      const email = w.admin ? emails.get(w.admin) : undefined;
+      if (email) per.set(email, [...(per.get(email) ?? []), w]);
+    }
+    for (const [email, mine] of per) {
+      items.push({
+        email, kind: "proof", page: "proof", dedupe: `proofday:${today}`,
+        title: `[ค้าง] หลักฐาน / GMV เกิน 24 ชม. ${mine.length} slot`,
+        body: mine.slice(0, 6).map(line).join("\n") + (mine.length > 6 ? `\nและอีก ${mine.length - 6} slot` : ""),
+      });
+    }
+    // สรุปถึง Owner (แยกตาม Admin)
+    const { data: staff } = await createAdminClient().from("staff").select("id, name").in("id", [...new Set(late.map((w) => w.admin).filter((x): x is number => !!x))]);
+    const nameOf = new Map((staff ?? []).map((s) => [s.id as number, String(s.name)]));
+    const byAdmin = new Map<string, number>();
+    for (const w of late) {
+      const n = w.admin ? nameOf.get(w.admin) ?? "–" : "(ยังไม่มี Admin)";
+      byAdmin.set(n, (byAdmin.get(n) ?? 0) + 1);
+    }
+    for (const email of await proofOwnerEmails()) {
+      items.push({
+        email, kind: "proof", page: "home", dedupe: `proofowner:${today}`,
+        title: `หลักฐาน / GMV ค้างเกิน 24 ชม. ${late.length} slot`,
+        body: [...byAdmin].sort((a, b) => b[1] - a[1]).map(([n, k]) => `${n}: ${k} slot`).join("\n"),
+      });
+    }
+  }
+
+  // ---- ยังไม่แชร์ปฏิทิน (จันทร์ / พฤหัส) ----
+  const weekday = bkk.getUTCDay();
+  if (daily && (weekday === 1 || weekday === 4)) {
+    const counts = await missingCalendarCounts();
+    const calEmails = await emailsOf([...counts.keys()]);
+    for (const [id, n] of counts) {
+      const email = calEmails.get(id);
+      if (!email) continue;
+      items.push({
+        email, kind: "calendar", page: "guide", dedupe: `cal:${today}`,
+        title: `คิวของคุณ ${n} คิวยังไม่ขึ้น Google Calendar`,
+        body: "เพราะยังไม่ได้แชร์ปฏิทินให้ระบบ แตะเพื่อดูวิธีแชร์ (ใช้เวลา 2 นาที) แชร์แล้วคิวทั้งหมดจะขึ้นปฏิทินเอง",
+      });
+    }
+  }
+
+  if (dryRun) return { sent: 0, items };
+  return { sent: await notifyMany(items), items: [] };
 }
 
 /** เช้า: slot ยังว่างใน 48 ชม. → Owner ฝั่งนั้น (คนละ 1 ข้อความ ติ๊กสองฝั่ง = รวมกัน) */

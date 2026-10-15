@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { CalendarXIcon, CopyIcon, IdCardIcon, MailIcon, PlusIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
+import { BellRingIcon, CalendarXIcon, CopyIcon, IdCardIcon, MailIcon, PlusIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { copyText } from "@/components/CalendarGuide";
 import { PayDocsPanel } from "@/components/PayDocs";
 import { CALENDAR_SHARE_TO, calendarShareMessage } from "@/lib/calendar-share";
@@ -23,6 +23,15 @@ import { parseTierHours, tiersLabel } from "@/lib/pay";
 import type { CommitTier, OwnerScope } from "@/lib/types";
 
 type Role = "mc" | "admin" | "owner" | "marketing";
+
+/** ข้อความวิธีเปิดแจ้งเตือนในมือถือ (คัดลอกส่ง LINE) */
+const pushHowTo = (site: string) => `📢 เปิดแจ้งเตือนเว็บ GLORY VITAL Live ในมือถือ (ทำครั้งเดียว)
+จะเตือน: คืนก่อนวันไลฟ์ · ก่อนไลฟ์ ~1 ชม. · มี slot ว่าง / slot ใหม่ · คิวของเราถูกเปลี่ยน · หลักฐาน / GMV ที่ยังค้าง
+
+Android: เปิด ${site} ใน Chrome → เข้าสู่ระบบ → กด 🔔 มุมขวาบน → "เปิดแจ้งเตือน" → อนุญาต
+iPhone: เปิดใน Safari → ปุ่มแชร์ → "เพิ่มไปยังหน้าจอโฮม" → เปิดเว็บจากไอคอนนั้น → เข้าสู่ระบบ → 🔔 → "เปิดแจ้งเตือน" → อนุญาต
+
+กด "ทดสอบ" ได้ ถ้ามีแจ้งเตือนเด้งขึ้น = ใช้ได้แล้ว ✅`;
 /** Mc / Admin = มีคิว ค่าจ้าง ปฏิทิน (Owner / Marketing ไม่มี) */
 const isCrew = (role: Role) => role === "mc" || role === "admin";
 type Person = {
@@ -37,6 +46,8 @@ type Person = {
   notify_cancel_mc?: boolean; notify_cancel_admin?: boolean;
   /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้บัญชีระบบ) */
   calendarMissing?: number;
+  /** เปิดแจ้งเตือนเด้งไว้กี่เครื่อง (ไม่มี = ไม่มีอีเมล / ยังไม่ได้รัน SQL 20261028000000_notifications) */
+  pushDevices?: number;
   /** Admin: เข้าหน้าอุปกรณ์โปรดักชั่นได้ (ไม่มี = ยังไม่ได้รัน SQL 20261025000000_equipment) */
   can_manage_equipment?: boolean;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
@@ -170,6 +181,9 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   // คนในบทบาทนี้ที่คิวข้างหน้ายังไม่ขึ้นปฏิทิน (มากไปน้อย)
   const noCalendar = (data?.staff ?? []).filter((p) => p.role === role && p.calendarMissing)
     .sort((a, b) => (b.calendarMissing ?? 0) - (a.calendarMissing ?? 0));
+  // แจ้งเตือนเด้งในมือถือ: คนในบทบาทนี้ที่มีอีเมล เปิดแล้ว / ยังไม่เปิด
+  const pushPeople = (data?.staff ?? []).filter((p) => p.role === role && p.pushDevices !== undefined);
+  const pushOff = pushPeople.filter((p) => !p.pushDevices);
   // เอกสารทำเบิก (เห็นเฉพาะ Owner ที่ดูเอกสารได้): คนใหม่ที่ยังไม่ส่ง + จำนวนที่มีแล้ว
   const noPayDocs = (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "missing");
   const payDocsCount = {
@@ -274,6 +288,27 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
         </div>
       ) : null}
 
+      {pushPeople.length ? (
+        <div className="my-2 flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm leading-snug">
+          <BellRingIcon className={cn("size-4 shrink-0", pushOff.length ? "text-muted-foreground" : "text-success")} />
+          <span className="min-w-56 flex-1">
+            แจ้งเตือนในมือถือ {ROLE_LABEL[role]}: <b>เปิดแล้ว {pushPeople.length - pushOff.length} / {pushPeople.length} คน</b>
+            {pushOff.length ? <span className="block text-xs text-muted-foreground">ยังไม่เปิด: {pushOff.map(displayName).join(", ")}</span> : null}
+          </span>
+          {pushOff.length ? (
+            <Button
+              size="sm" variant="outline" className="bg-card"
+              onClick={async () => {
+                if (await copyText(pushHowTo(location.origin))) toast("คัดลอกข้อความแล้ว วางส่งใน LINE ได้เลย");
+                else toast("คัดลอกไม่ได้", "error");
+              }}
+            >
+              <CopyIcon />คัดลอกวิธีเปิด (ส่ง LINE)
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       {data.payDocsViewer && isCrew(role) ? (
         <div
           className={cn(
@@ -324,6 +359,11 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                     </Badge>
                   ) : null}
                   {p.id === data.meId ? <Badge variant="secondary" className="text-[11px]">คุณ</Badge> : null}
+                  {p.pushDevices ? (
+                    <Badge className="bg-success/15 text-[11px] text-success" title={`เปิดแจ้งเตือนเด้งไว้ ${p.pushDevices} เครื่อง`}>
+                      <BellRingIcon />แจ้งเตือน
+                    </Badge>
+                  ) : null}
                   {p.calendarMissing ? (
                     <Badge
                       className="bg-destructive/10 text-[11px] text-destructive"

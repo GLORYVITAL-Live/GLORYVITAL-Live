@@ -178,11 +178,17 @@ export async function GET() {
   const { data: equipRows, error: equipErr } = await db.from("staff").select("id, can_manage_equipment").eq("role", "admin");
   const equip = new Map((equipErr ? [] : equipRows ?? []).map((x) => [x.id as number, x.can_manage_equipment === true]));
   const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
+  // เปิดแจ้งเตือนเด้งในมือถือ / เบราว์เซอร์แล้วกี่เครื่อง (ตามอีเมล · ยังไม่ได้รัน SQL notifications = ไม่แสดง)
+  const { data: subs, error: subErr } = await db.from("push_subscriptions").select("email");
+  const devices = new Map<string, number>();
+  for (const s of subErr ? [] : subs ?? []) devices.set(String(s.email), (devices.get(String(s.email)) ?? 0) + 1);
+  const pushOf = (email: unknown) => (subErr ? {} : { pushDevices: devices.get(String(email ?? "").trim().toLowerCase()) ?? 0 });
   return ok({
     staff: (staff ?? []).map((s) => ({
       ...s, upcoming: upcoming.get(s.id) ?? 0, ...(isCrew(s.role as Role) ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
       ...(payDocs.has(s.id) ? { payDocs: payDocs.get(s.id) } : {}),
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
+      ...(s.email ? pushOf(s.email) : {}),
     })),
     meId: r.me.owner?.id ?? null,
     // บทบาทที่แก้รายชื่อได้ (ดูได้อย่างเดียว = false)
