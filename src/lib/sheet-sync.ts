@@ -4,6 +4,7 @@ import { deleteCalendarEvent } from "@/lib/calendar";
 import { canonicalCampaign } from "@/lib/campaign";
 import { bkkToday } from "@/lib/data";
 import { withSyncLock } from "@/lib/lock";
+import type { SlotChange } from "@/lib/notifications";
 import { addDays } from "@/lib/window";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
@@ -35,6 +36,8 @@ type DbSlot = {
   id: number; platform: string; live_date: string; start_time: string; end_time: string;
   campaign?: string; confirmed: boolean | null; status: string; remark: string; late: number | null; bonus: number | null;
   personId: number | null; personName: string;
+  /** ยกเลิกแล้ว (คิดจากสถานะในฐานข้อมูล) — ใช้แจ้งเตือนตอนแคนคิวในชีต */
+  cancelled: boolean;
 };
 
 const hm = (t: string) => t.slice(0, 5);
@@ -49,8 +52,8 @@ const withSheetLock = <T>(fn: () => Promise<T>, waitMs = 25_000) => withSyncLock
 async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSlot>> {
   const db = createAdminClient();
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
-  const cols = `id, platform, live_date, start_time, end_time, ${table === "mc_slots" ? "campaign, " : ""}confirmed, status, remark, late_minutes, bonus_minutes, ${personCol}, person:staff!${personCol}(name)`;
-  type Raw = Omit<DbSlot, "personId" | "personName" | "late" | "bonus"> & Record<string, unknown> & { person: { name: string } | null };
+  const cols = `id, platform, live_date, start_time, end_time, ${table === "mc_slots" ? "campaign, " : ""}confirmed, status, remark, late_minutes, bonus_minutes, is_cancelled, ${personCol}, person:staff!${personCol}(name)`;
+  type Raw = Omit<DbSlot, "personId" | "personName" | "late" | "bonus" | "cancelled"> & Record<string, unknown> & { person: { name: string } | null };
   const out = new Map<number, DbSlot>();
   const add = (rows: Raw[]) => {
     for (const r of rows) {
@@ -60,6 +63,7 @@ async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSl
         late: (r.late_minutes as number | null) ?? null,
         bonus: (r.bonus_minutes as number | null) ?? null,
         personId: (r[personCol] as number | null) ?? null, personName: r.person?.name ?? "",
+        cancelled: r.is_cancelled === true,
       });
     }
   };
@@ -808,6 +812,8 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     });
 
     let updated = 0, created = 0, paired = 0;
+    // แก้รายแถว: เปลี่ยนคน / สถานะ → แจ้งเตือนคนที่ได้ / เสียคิว (ซิงค์ทั้งหมดไม่แจ้ง กันแจ้งรัว)
+    const changes: SlotChange[] = [];
     const calendar: { slot_table: Table; slot_id: number }[] = [];
     const idWrites: sheets_v4.Schema$ValueRange[] = [];
     // แถวคัดลอกที่ติดรหัสของแถวอื่นมา = slot ใหม่ (สร้างใหม่แล้วเขียนรหัสใหม่ทับ) ไม่ใช่การแก้ slot เดิม
@@ -834,6 +840,9 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         calendar.push({ slot_table: table, slot_id: p.id });
         touched.push(p.id);
         updated++;
+        if (rowNumbers && (personCol in row || "status" in row)) {
+          changes.push({ id: p.id, oldPerson: s.personId, newPerson: personCol in row ? (row[personCol] as number | null) : s.personId, oldCancelled: s.cancelled });
+        }
         if (rowNumbers) await mirrorKeyChange(table, p.id, s, row);
       } else {
         // มี slot นี้อยู่แล้วแต่ยังไม่มีแถวในชีต (เช่น ระบบเพิ่งสร้างเป็นแถวคู่ให้ แต่ยังเขียนลงชีตไม่ทัน)
@@ -853,6 +862,8 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
           if (error) throw error;
           id = data.id;
           created++;
+          const person = p.person ? staffId.get(p.person) ?? null : null;
+          if (rowNumbers && person) changes.push({ id, oldPerson: null, newPerson: person, oldCancelled: false });
           if (rowNumbers) paired += await mirrorNewSlot(table, p);
         }
         present.ids.add(id);
@@ -883,7 +894,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     // = ตรวจหา slot ที่ไม่มีแถวในชีตแล้วลบออก
     const cleared = rowNumbers?.some((r) => isBlankRow(tab, all[r - 1] ?? [])) ?? true;
     const removed = cleared ? (await removeMissing(tab, all)) + (await cancelPastMissing(tab, all)) : 0;
-    return { updated, created, removed, paired };
+    return { updated, created, removed, paired, changes };
   });
   if (!result) throw new Error("ระบบกำลังซิงค์ชีตอยู่ กรุณาลองใหม่อีกครั้ง");
   return result;

@@ -13,6 +13,7 @@ export async function POST() {
   if (!r.me.owner || !(r.me.owner.mc || r.me.owner.admin)) return fail("บัญชีนี้ไม่มีสิทธิ์ซิงค์ชีต", 403);
   try {
     await processSheetJobs();
+    // ซิงค์ทั้งหมดไม่แจ้งเตือนรายคน (changes ว่างเสมอ กันแจ้งรัว)
     const mc = await applySheetEdits("mc");
     const admin = await applySheetEdits("admin");
     after(() => processSyncJobs().then(() => undefined));

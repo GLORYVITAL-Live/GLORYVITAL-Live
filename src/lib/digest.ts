@@ -26,7 +26,7 @@ const hm = (t: string) => t.slice(0, 5);
 const bkkDay = (t: number) => new Date(t + 7 * 3600_000).toISOString().slice(0, 10);
 
 /** slot ที่ยังไม่มีคน เริ่มภายใน 48 ชม. (ไม่นับแถวที่ยกเลิก / ไม่นับ) */
-async function openSlots(side: Side, now: number) {
+export async function openSlots(side: Side, now: number) {
   const db = createAdminClient();
   const table = side === "mc" ? "mc_slots" : "admin_slots", col = side === "mc" ? "mc_id" : "admin_id";
   const today = bkkDay(now);

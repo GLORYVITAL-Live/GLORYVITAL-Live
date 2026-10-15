@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { canTable, fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
 import { platformRaw } from "@/lib/platform";
+import { notifySlotChanges } from "@/lib/notifications";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -199,13 +200,23 @@ export async function PATCH(request: Request) {
   }
   if (!what.length) return fail("ไม่มีอะไรเปลี่ยน");
 
+  // ค่าก่อนแก้ (ใช้แจ้งเตือนคนที่ได้ / เสียคิว)
+  const { data: before } = await createAdminClient().from(table).select(`${personCol}, is_cancelled`).eq("id", id).maybeSingle();
   const { error } = await createAdminClient().from(table).update(changes).eq("id", id);
   if (error) return fail(error.message, 500);
 
   // มีผลกับปฏิทินเมื่อเปลี่ยนคนหรือสถานะ (เช่น แคน = ลบ event)
   if (personCol in changes || "status" in changes) await queueCalendar([{ slot_table: table, slot_id: id }]);
   syncLater();
-  after(() => log(r.me, `แก้ slot: ${what.join(", ")}`, table, [id], "สำเร็จ"));
+  after(async () => {
+    await log(r.me, `แก้ slot: ${what.join(", ")}`, table, [id], "สำเร็จ");
+    if (before && (personCol in changes || "status" in changes)) {
+      const old = (before as Record<string, unknown>)[personCol] as number | null;
+      await notifySlotChanges(table, [{
+        id, oldPerson: old, newPerson: personCol in changes ? (changes[personCol] as number | null) : old, oldCancelled: !!before.is_cancelled,
+      }], r.me.email);
+    }
+  });
   return ok({ message: "บันทึกแล้ว" });
 }
 

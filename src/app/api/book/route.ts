@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { fail, ok, requireMe } from "@/lib/api";
 import { processSyncJobs } from "@/lib/sync";
 import { bookingRange, getSettings, personPeriod, writeLogs } from "@/lib/data";
+import { notifyBooked } from "@/lib/notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import { rangeText } from "@/lib/window";
 import type { ActionResult } from "@/lib/types";
@@ -68,7 +69,14 @@ export async function POST(request: Request) {
     await writeLogs(results.map((x) => ({
       email: r.me.email, ...log, slot_id: x.id, result: x.success ? "สำเร็จ" : x.message,
     })));
-    if (results.some((x) => x.success)) await processSyncJobs();
+    const booked = results.filter((x) => x.success).map((x) => x.id);
+    if (booked.length) {
+      await Promise.all([
+        processSyncJobs(),
+        // แจ้งเตือนในเว็บ / มือถือ: Owner ฝั่งนั้น
+        notifyBooked(role, role === "mc" ? r.me.mc!.name : r.me.admin!.name, r.me.email, booked),
+      ]);
+    }
   });
   return ok({ results });
 }

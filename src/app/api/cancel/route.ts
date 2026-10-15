@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { fail, ok, requireMe } from "@/lib/api";
 import { processSyncJobs } from "@/lib/sync";
 import { getSettings, writeLogs } from "@/lib/data";
+import { notifyCancelled } from "@/lib/notifications";
 import { notifyCancel } from "@/lib/notify";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -42,10 +43,12 @@ export async function POST(request: Request) {
   after(async () => {
     await writeLogs([{ email: r.me.email, ...log, slot_table: table, slot_id: id, result: res.ok ? "สำเร็จ" : res.message }]);
     if (!res.ok) return;
-    // แจ้งเตือนทางอีเมล (kunraroj.d@glorythailand.com) — ส่งไม่ได้ก็ไม่กระทบการยกเลิก
+    // แจ้งเตือนทางอีเมล (kunraroj.d@glorythailand.com) + ในเว็บ / มือถือ (Owner, คู่ไลฟ์, คนที่จองแทนได้) — ส่งไม่ได้ก็ไม่กระทบการยกเลิก
+    const side = table === "mc_slots" ? "mc" : "admin";
     await Promise.all([
       processSyncJobs(),
-      notifyCancel({ role: table === "mc_slots" ? "mc" : "admin", name: who, email: r.me.email, slotId: id, at }),
+      notifyCancel({ role: side, name: who, email: r.me.email, slotId: id, at }),
+      notifyCancelled(side, who, r.me.email, personId, id, at),
     ]);
   });
   if (!res.ok) return fail(res.message);

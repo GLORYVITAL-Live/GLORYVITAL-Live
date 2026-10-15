@@ -12,6 +12,7 @@ import { CeoLive } from "@/components/CeoLive";
 import { EquipmentPage } from "@/components/EquipmentPage";
 import { LiveStats } from "@/components/LiveStats";
 import { MySchedule } from "@/components/MySchedule";
+import { NotificationBell } from "@/components/Notifications";
 import { PayDocs } from "@/components/PayDocs";
 import { HomeView, type Go } from "@/components/HomeView";
 import { PerformanceView } from "@/components/PerformanceView";
@@ -183,6 +184,16 @@ function Shell({ me }: { me: Me | null }) {
     if (new URLSearchParams(location.search).has("authError")) toast("เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่", "error");
   }, [toast]);
 
+  // กดแจ้งเตือนเด้ง (public/sw.js) เปิด /?go=<หน้า> → ไปหน้านั้น แล้วล้างพารามิเตอร์ออกจากลิงก์
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const go = params.get("go");
+    if (!go) return;
+    if (pageKey.split(",").includes(go)) writeLocal(ROLE_KEY, go);
+    params.delete("go");
+    history.replaceState(null, "", location.pathname + (params.size ? `?${params}` : "") + location.hash);
+  }, [pageKey]);
+
   const mode = page ? MODES[page] : null;
   useEffect(() => {
     document.title = mode ? `${mode.title} | GLORY VITAL` : "GLORY VITAL Live";
@@ -244,6 +255,7 @@ function Shell({ me }: { me: Me | null }) {
           <span className="hidden text-[13px] font-medium text-muted-foreground sm:inline">{mode?.sub ?? "Live booking"}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {registered ? <NotificationBell onGo={(p) => { if (pages.includes(p as Page)) { writeLocal(ROLE_KEY, p); window.scrollTo({ top: 0 }); } }} /> : null}
           <IconButton label={dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด"} onClick={toggleTheme} className="bg-card shadow-card">
             {dark ? <SunIcon /> : <MoonIcon />}
           </IconButton>

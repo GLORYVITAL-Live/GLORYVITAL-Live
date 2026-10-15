@@ -1,5 +1,6 @@
 import { after, NextResponse } from "next/server";
-import { TABS, type TabKey } from "@/lib/sheet";
+import { notifySlotChanges } from "@/lib/notifications";
+import { TABLE_OF, TABS, type TabKey } from "@/lib/sheet";
 import { applySheetEdits, removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
 
@@ -33,8 +34,12 @@ export async function POST(request: Request) {
   const cols: [number, number] | undefined = Number.isInteger(first) && Number.isInteger(last) ? [first, last] : undefined;
 
   try {
-    const res = await applySheetEdits(tab, rows, cols);
-    after(() => processSyncJobs().then(() => undefined));
+    const { changes, ...res } = await applySheetEdits(tab, rows, cols);
+    after(async () => {
+      await processSyncJobs();
+      // แก้คน / แคนคิวในชีต → แจ้งเตือนคนที่ได้ / เสียคิว
+      await notifySlotChanges(TABLE_OF[tab], changes);
+    });
     return NextResponse.json({ ok: true, ...res });
   } catch (err) {
     return NextResponse.json({ ok: false, message: String((err as Error)?.message ?? err) }, { status: 500 });

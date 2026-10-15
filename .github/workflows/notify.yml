@@ -1,0 +1,21 @@
+# เตือนก่อนไลฟ์: เรียกเว็บทุก 15 นาที (Vercel cron แบบฟรีรันได้วันละครั้ง)
+# ต้องตั้ง Secret ชื่อ CRON_SECRET (ค่าเดียวกับใน Vercel) ที่ GitHub > Settings > Secrets and variables > Actions
+# GitHub อาจเริ่มช้ากว่าเวลาที่ตั้ง 5–15 นาทีตอนคนใช้เยอะ · กดรันเองได้ที่แท็บ Actions > เตือนก่อนไลฟ์ > Run workflow
+name: เตือนก่อนไลฟ์
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: เรียก /api/cron/notify
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "ยังไม่ได้ตั้ง Secret CRON_SECRET"; exit 1; fi
+          curl -fsS --max-time 90 -H "Authorization: Bearer $CRON_SECRET" https://glory-vital-live.vercel.app/api/cron/notify

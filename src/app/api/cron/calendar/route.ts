@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { closeGivenUpCalendarJobs, enqueueSharedCalendars } from "@/lib/calendar";
-import { sendMorningDigest } from "@/lib/digest";
+import { openSlots, sendMorningDigest } from "@/lib/digest";
+import { notifyOpenSoon } from "@/lib/notifications";
 import { matchPayDocsFolders, syncPendingPayDocs } from "@/lib/drive";
 import { removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
@@ -9,7 +10,7 @@ export const maxDuration = 60;
 
 // งานประจำวัน (vercel.json: ทุกเช้า ~07:00 เวลาไทย) ต้องส่ง header  Authorization: Bearer <CRON_SECRET>
 //   1. ลบ slot ที่ถูกลบแถวในชีตแล้วแต่เว็บยังไม่รู้ (เช่น Apps Script ส่งไม่สำเร็จ)
-//   2. เมลสรุปเช้า "slot ยังว่างใน 48 ชม." (ทำก่อนงานยาว ไม่ให้หมดเวลาก่อนส่ง)
+//   2. เมลสรุปเช้า + แจ้งเตือนในเว็บ "slot ยังว่างใน 48 ชม." (ทำก่อนงานยาว ไม่ให้หมดเวลาก่อนส่ง)
 //   3. ปิดงานลงปฏิทินที่ระบบเลิกลองแล้ว + คนที่เพิ่งแชร์ปฏิทิน ลงคิวที่ค้างให้
 //      + เอกสารทำเบิก (ขึ้น Drive ที่ค้าง / จับคู่โฟลเดอร์เอกสารเดิม)
 //   4. เก็บตกงานที่ค้าง (ลงปฏิทิน + เขียนชีต) เช่น Google ขัดข้องชั่วคราว
@@ -24,6 +25,10 @@ export async function GET(request: Request) {
     removed[tab] = await removeSlotsDeletedInSheet(tab).catch(errorOf);
   }
   const digest = await sendMorningDigest().catch(errorOf);
+  // แจ้งเตือนในเว็บ / มือถือ: slot ยังว่างใน 48 ชม. → Owner ฝั่งนั้น
+  const now = Date.now();
+  const openSoon = await Promise.all([openSlots("mc", now), openSlots("admin", now)])
+    .then(([mc, admin]) => notifyOpenSoon({ mc, admin }, now)).catch(errorOf);
   const calendarClosed = await closeGivenUpCalendarJobs().catch(errorOf);
   // คนที่แชร์ปฏิทินแล้วแต่ยังไม่ได้เปิดเว็บ / กด "แชร์แล้ว เช็กเลย": จดงานลงคิวที่ค้าง (ลงจริงตอน processSyncJobs ท้ายสุด)
   const calendarShared = await enqueueSharedCalendars().catch(errorOf);
@@ -31,5 +36,5 @@ export async function GET(request: Request) {
     sync: await syncPendingPayDocs().catch(errorOf),
     match: await matchPayDocsFolders().then((m) => ({ linked: m.linked.length })).catch(errorOf),
   };
-  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, calendarClosed, calendarShared, payDocs });
+  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs });
 }
