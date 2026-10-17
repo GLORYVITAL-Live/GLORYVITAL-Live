@@ -34,6 +34,8 @@ export type Equipment = {
   /** สเปค (หมวดคอมพิวเตอร์) key ตาม SPEC_FIELDS ใน src/lib/equipment.ts */
   specs: Record<string, string>;
   photoUrl: string | null; updatedAt: string; updatedBy: string;
+  /** สำเนารูปใน Google Drive (ยังไม่ได้อัป = null) / อัปไม่สำเร็จเพราะอะไร */
+  driveUrl: string | null; driveError: string | null;
 };
 
 /** ครั้งที่มี CEO Live (จาก slot Mc ที่ชื่อแคมเปญมีคำว่า CEO) — date = วันไลฟ์ YYYY-MM-DD ตามเวลาไทย */

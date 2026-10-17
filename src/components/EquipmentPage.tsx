@@ -383,6 +383,12 @@ function EquipmentDialog({ item, items, onClose }: { item: Equipment | null; ite
               </label>
             </Button>
             {shown ? <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setPhoto(null); setRemovePhoto(!!item?.photoUrl); }}>เอารูปออก</Button> : null}
+            {/* สำเนารูปใน Google Drive (ระบบอัปให้หลังบันทึก) */}
+            {item?.driveUrl && !photo && !removePhoto ? (
+              <a href={item.driveUrl} target="_blank" rel="noopener noreferrer" className="basis-full text-xs text-primary underline-offset-2 hover:underline">เปิดรูปใน Google Drive</a>
+            ) : item?.driveError && !photo && !removePhoto ? (
+              <span className="basis-full text-xs text-muted-foreground">สำเนารูปขึ้น Drive ยังไม่สำเร็จ: {item.driveError} (ระบบลองใหม่ทุกเช้า)</span>
+            ) : null}
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">

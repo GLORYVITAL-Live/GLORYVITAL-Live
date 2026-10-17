@@ -1,4 +1,6 @@
+import { after } from "next/server";
 import { fail, ok, requireMe } from "@/lib/api";
+import { syncEquipmentPhotosToDrive, trashDriveFile } from "@/lib/drive";
 import { SPEC_FIELDS, cleanEquipment, type EquipmentInput } from "@/lib/equipment";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Equipment, EquipmentStatus } from "@/lib/types";
@@ -9,6 +11,7 @@ import type { Equipment, EquipmentStatus } from "@/lib/types";
 //   PATCH  multipart  แก้ (data = JSON มี id, photo = รูปใหม่, removePhoto = "1" ลบรูป)
 //   DELETE { id }     ลบ (รวมรูป)
 // ทุกการเปลี่ยนบันทึกใน booking_logs (slot_table = "equipment")
+// รูปมีสำเนาใน Google Drive (src/lib/drive.ts · SQL 20261103000000_equipment_drive) อัปหลังบันทึก ไม่ต้องรอ
 
 const BUCKET = "equipment";
 const SQL = "ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน";
@@ -17,6 +20,8 @@ type Row = {
   id: number; code?: string; name: string; category: string; quantity: number; status: EquipmentStatus; location: string; brand: string; model: string;
   serial: string; purchase_date: string | null; price: number | string | null; note: string; photo_path: string | null;
   specs?: Record<string, string> | null; updated_at: string; updated_by: string;
+  /** ยังไม่ได้รัน SQL 20261103000000_equipment_drive = ไม่มีช่องเหล่านี้ */
+  drive_file_id?: string | null; drive_url?: string | null; drive_error?: string | null;
 };
 
 async function requireEquipment() {
@@ -58,6 +63,9 @@ async function dupeWarning(code: string, id: number) {
   const same = ((data ?? []) as { id: number; name: string; code: string | null }[]).filter((x) => (x.code ?? "").trim().toUpperCase() === key);
   return same.length ? `รหัส ${key} ซ้ำกับ ${same.map((x) => `"${x.name}"`).join(", ")} — ตรวจว่าใส่รหัสถูกไหม` : "";
 }
+/** สำเนารูปขึ้น Drive หลังตอบกลับ (ยังไม่ได้เชื่อม Google / ยังไม่ได้รัน SQL = ข้าม cron ทุกเช้าเก็บตกให้) */
+const syncDriveLater = () => after(() => syncEquipmentPhotosToDrive().then(() => undefined, () => undefined));
+
 async function log(me: { email: string }, who: string, action: string, id: number) {
   await createAdminClient().from("booking_logs").insert({ email: me.email, role: "อุปกรณ์", name: who, action, slot_table: "equipment", slot_id: id, result: "สำเร็จ" });
 }
@@ -80,6 +88,7 @@ export async function GET() {
     model: x.model, serial: x.serial, purchaseDate: x.purchase_date, price: x.price === null ? null : Number(x.price), note: x.note,
     specs: x.specs ?? {},
     photoUrl: x.photo_path ? urls.get(x.photo_path) ?? null : null, updatedAt: x.updated_at, updatedBy: x.updated_by,
+    driveUrl: x.photo_path ? x.drive_url ?? null : null, driveError: x.photo_path && !x.drive_file_id ? x.drive_error ?? null : null,
   }));
   return ok({ items });
 }
@@ -104,6 +113,7 @@ export async function POST(request: Request) {
     return dbFail(error?.message ?? "");
   }
   await log(r.me, r.who, `เพิ่มอุปกรณ์ "${c.data.name}" (${c.data.quantity} ชิ้น)`, data.id);
+  if (up.path) syncDriveLater();
   return ok({ id: data.id, message: "เพิ่มอุปกรณ์แล้ว", warning: await dupeWarning(c.data.code, data.id) });
 }
 
@@ -128,23 +138,35 @@ export async function PATCH(request: Request) {
   if ("error" in up) return fail(up.error!, 500);
   const removing = form.get("removePhoto") === "1";
   const photoPath = up.path ?? (removing ? null : (cur as Row).photo_path);
-  const next = { ...toDb(c.data), photo_path: photoPath, updated_by: r.who, updated_at: new Date().toISOString() };
+  const curRow = cur as Row;
+  // สำเนาใน Drive: เปลี่ยนรูป / รหัส / ชื่อ / หมวด (ชื่อไฟล์ + โฟลเดอร์) = อัปใหม่ ไฟล์เดิมทิ้งถังขยะ
+  const hasDrive = "drive_file_id" in curRow;
+  const driveStale = hasDrive && (curRow.photo_path !== photoPath
+    || (curRow.code ?? "") !== c.data.code || curRow.name !== c.data.name || curRow.category !== c.data.category);
+  const next = {
+    ...toDb(c.data), photo_path: photoPath, updated_by: r.who, updated_at: new Date().toISOString(),
+    ...(driveStale ? { drive_file_id: null, drive_url: null, drive_error: null } : {}),
+  };
   const { error } = await db.from("equipment").update(next).eq("id", id);
   if (error) {
     if (up.path) await db.storage.from(BUCKET).remove([up.path]);
     return dbFail(error.message);
   }
-  const old = (cur as Row).photo_path;
+  const old = curRow.photo_path;
   if (old && old !== photoPath) await db.storage.from(BUCKET).remove([old]);
+  if (driveStale) {
+    after(() => trashDriveFile(curRow.drive_file_id));
+    if (photoPath) syncDriveLater();
+  }
   // ประวัติ: ช่องที่เปลี่ยน
   const labels: [keyof ReturnType<typeof toDb>, string][] = [
     ["code", "รหัส"], ["name", "ชื่อ"], ["category", "หมวด"], ["quantity", "จำนวน"], ["status", "สถานะ"], ["location", "ที่เก็บ"], ["brand", "ยี่ห้อ"],
     ["model", "รุ่น"], ["serial", "Serial"], ["purchase_date", "วันที่ซื้อ"], ["price", "ราคา"], ["note", "หมายเหตุ"],
   ];
-  const curRow = cur as Record<string, unknown>;
-  const diff = labels.filter(([k]) => String(curRow[k] ?? "") !== String(next[k] ?? "")).map(([k, l]) => `${l} ${curRow[k] ?? "–"} → ${next[k] ?? "–"}`);
+  const curRec = cur as Record<string, unknown>;
+  const diff = labels.filter(([k]) => String(curRec[k] ?? "") !== String(next[k] ?? "")).map(([k, l]) => `${l} ${curRec[k] ?? "–"} → ${next[k] ?? "–"}`);
   // สเปค: บอกทีละช่องที่เปลี่ยน
-  const oldSpecs = (curRow.specs ?? {}) as Record<string, string>;
+  const oldSpecs = (curRec.specs ?? {}) as Record<string, string>;
   for (const [k, l] of SPEC_FIELDS) {
     if ((oldSpecs[k] ?? "") !== (next.specs[k] ?? "")) diff.push(`${l} ${oldSpecs[k] || "–"} → ${next.specs[k] || "–"}`);
   }
@@ -159,11 +181,12 @@ export async function DELETE(request: Request) {
   const id = Number((await request.json().catch(() => ({})))?.id);
   if (!Number.isInteger(id) || id <= 0) return fail("ไม่พบอุปกรณ์นี้");
   const db = createAdminClient();
-  const { data: cur } = await db.from("equipment").select("name, photo_path").eq("id", id).maybeSingle();
+  const { data: cur } = await db.from("equipment").select("*").eq("id", id).maybeSingle<Row>();
   if (!cur) return fail("ไม่พบอุปกรณ์นี้ (อาจถูกลบไปแล้ว)", 404);
   const { error } = await db.from("equipment").delete().eq("id", id);
   if (error) return dbFail(error.message);
   if (cur.photo_path) await db.storage.from(BUCKET).remove([cur.photo_path]);
+  if (cur.drive_file_id) after(() => trashDriveFile(cur.drive_file_id));
   await log(r.me, r.who, `ลบอุปกรณ์ "${cur.name}"`, id);
   return ok({ message: "ลบแล้ว" });
 }

@@ -2,6 +2,7 @@ import "server-only";
 import { Readable } from "stream";
 import { google, type drive_v3 } from "googleapis";
 import { googleAuth } from "@/lib/google";
+import { equipmentFileName } from "@/lib/equipment";
 import { withSyncLock } from "@/lib/lock";
 import { matchDocsFolder, payInfoText } from "@/lib/pay-docs";
 import { DRIVE_LINK_SQL, PAY_DOCS_BUCKET, type CrewRow, type PayDocsRow } from "@/lib/pay-docs-db";
@@ -13,7 +14,8 @@ import { createAdminClient } from "@/lib/supabase/server";
  *   GLORY VITAL หลักฐานไลฟ์ > 2026 > 10 ตุลาคม > Mc กานต์ > 2026-10-01_GLORY MALL_19.30-21.30.jpg
  * รูปเดียวที่คลุมหลาย Mc = อัปไว้ในโฟลเดอร์ของแต่ละคน (คนละไฟล์) ลิงก์เก็บราย slot ใน live_proof_slots.drive_url
  * โฟลเดอร์ของ Mc เดือนนั้นเก็บใน drive_folder_id (ใช้ลิงก์ในแถวรวมของใบสรุปค่าจ้าง)
- * + เอกสารทำเบิก (บัตรประชาชน / สมุดบัญชี / ข้อมูล) ลงโฟลเดอร์ที่ Owner ตั้งใน settings (ท้ายไฟล์)
+ * + เอกสารทำเบิก (บัตรประชาชน / สมุดบัญชี / ข้อมูล) ลงโฟลเดอร์ที่ Owner ตั้งใน settings
+ * + รูปอุปกรณ์โปรดักชั่น ลงโฟลเดอร์ "GLORY VITAL อุปกรณ์" (ท้ายไฟล์)
  */
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -351,6 +353,67 @@ export async function syncPendingPayDocs(limit = 5) {
     else failed++;
   }
   return { done, failed };
+}
+
+// ---------- รูปอุปกรณ์โปรดักชั่น ----------
+
+const EQUIPMENT_ROOT = "GLORY VITAL อุปกรณ์";
+const EQUIPMENT_BUCKET = "equipment";
+export const EQUIPMENT_DRIVE_SQL = "ต้องรัน SQL 20261103000000_equipment_drive ใน Supabase ก่อน";
+
+/**
+ * สำเนารูปอุปกรณ์ที่ยังไม่มีใน Drive (ทีละไม่เกิน limit ชิ้น) คืนจำนวนที่ทำได้ / พลาด / ที่ยังเหลือ
+ *   GLORY VITAL อุปกรณ์ > หมวด > CM01_Nanlite FS-150.jpg · อันที่เคยพลาดทำทีหลังสุด (ไม่บังอันใหม่)
+ */
+export async function syncEquipmentPhotosToDrive(limit = 20) {
+  const run = await withSyncLock("equipment-drive", async () => {
+    const db = createAdminClient();
+    const { data, error, count } = await db.from("equipment")
+      .select("id, code, name, category, photo_path", { count: "exact" })
+      .not("photo_path", "is", null).is("drive_file_id", null)
+      .order("drive_error", { nullsFirst: true }).order("id").limit(limit);
+    if (error) throw new Error(/drive_/.test(error.message) ? EQUIPMENT_DRIVE_SQL : error.message);
+    const rows = (data ?? []) as { id: number; code: string | null; name: string; category: string; photo_path: string }[];
+    let done = 0, failed = 0;
+    if (!rows.length) return { done, failed, remaining: 0 };
+
+    const drive = driveClient();
+    const cache = new Map<string, string>();
+    const root = await folder(drive, EQUIPMENT_ROOT, "root", cache);
+    for (const r of rows) {
+      try {
+        const parent = await folder(drive, r.category.trim() || "ไม่มีหมวด", root, cache);
+        const { data: blob, error: dlErr } = await db.storage.from(EQUIPMENT_BUCKET).download(r.photo_path);
+        if (dlErr || !blob) throw new Error("โหลดรูปจากที่เก็บไม่สำเร็จ: " + (dlErr?.message ?? ""));
+        const ext = r.photo_path.split(".").pop() || "jpg";
+        const res = await drive.files.create({
+          requestBody: { name: equipmentFileName(r.code ?? "", r.name, r.photo_path), parents: [parent] },
+          media: { mimeType: mimeOf(ext), body: Readable.from(Buffer.from(await blob.arrayBuffer())) },
+          fields: "id, webViewLink",
+        });
+        // ระหว่างอัปมีคนเปลี่ยนรูป / รหัส / ชื่อ / หมวด หรือลบอุปกรณ์ = ไฟล์นี้ไม่ใช้แล้ว (รอบถัดไปอัปชื่อใหม่)
+        const { data: saved } = await db.from("equipment")
+          .update({ drive_file_id: res.data.id, drive_url: res.data.webViewLink, drive_error: null })
+          .eq("id", r.id).eq("photo_path", r.photo_path).eq("code", r.code ?? "").eq("name", r.name).eq("category", r.category)
+          .is("drive_file_id", null).select("id");
+        if (!saved?.length) await trashDriveFile(res.data.id);
+        done++;
+      } catch (err) {
+        failed++;
+        await db.from("equipment").update({ drive_error: driveError(err) }).eq("id", r.id);
+      }
+    }
+    return { done, failed, remaining: Math.max(0, (count ?? 0) - rows.length) };
+  }, 5_000);
+  return run ?? { done: 0, failed: 0, remaining: -1, busy: true as const };
+}
+
+/** ไฟล์ใน Drive ไปถังขยะ (เปลี่ยนรูป / ลบอุปกรณ์) ไม่สำเร็จ = ข้าม */
+export async function trashDriveFile(fileId: string | null | undefined) {
+  if (!fileId) return;
+  let drive: Drive;
+  try { drive = driveClient(); } catch { return; }
+  await drive.files.update({ fileId, requestBody: { trashed: true } }).catch(() => undefined);
 }
 
 /** สถานะ: ค้างกี่ slot / พลาดเพราะอะไร / โฟลเดอร์หลัก */

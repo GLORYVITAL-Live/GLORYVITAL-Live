@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { closeGivenUpCalendarJobs, enqueueSharedCalendars } from "@/lib/calendar";
 import { openSlots, sendMorningDigest } from "@/lib/digest";
 import { notifyOpenSoon } from "@/lib/notifications";
-import { matchPayDocsFolders, syncPendingPayDocs } from "@/lib/drive";
+import { matchPayDocsFolders, syncEquipmentPhotosToDrive, syncPendingPayDocs } from "@/lib/drive";
 import { removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
 import { scanReceiptFiles } from "@/lib/receipts-db";
 import { scanTawi } from "@/lib/tawi";
@@ -16,6 +16,7 @@ export const maxDuration = 60;
 //   3. ปิดงานลงปฏิทินที่ระบบเลิกลองแล้ว + คนที่เพิ่งแชร์ปฏิทิน ลงคิวที่ค้างให้
 //      + เอกสารทำเบิก (ขึ้น Drive ที่ค้าง / จับคู่โฟลเดอร์เอกสารเดิม) + ใบ 50 ทวิ (ไฟล์ใหม่ใน Drive / จับคู่ / แจ้งเจ้าของ)
 //      + เอกสารรับเงินเดิมใน Drive (ไฟล์ใหม่ / จับคู่ — ไม่แจ้งเตือน)
+//      + รูปอุปกรณ์ที่ยังไม่ขึ้น Drive (ทีละ 20)
 //   4. เก็บตกงานที่ค้าง (ลงปฏิทิน + เขียนชีต) เช่น Google ขัดข้องชั่วคราว
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -47,5 +48,6 @@ export async function GET(request: Request) {
   const receipts = await scanReceiptFiles()
     .then((s) => (s.configured ? { added: s.added, removed: s.removed, matched: s.matched, unmatched: s.unmatched, synced: s.synced } : { skipped: "no folder" }))
     .catch(errorOf);
-  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs, tawi, receipts });
+  const equipment = await syncEquipmentPhotosToDrive(20).catch(errorOf);
+  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs, tawi, receipts, equipment });
 }

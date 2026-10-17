@@ -25,6 +25,13 @@ export const specLine = (specs: Record<string, string>) =>
 
 const text = (v: unknown, max: number) => String(v ?? "").trim().replace(/\s+/g, " ").slice(0, max);
 
+/** ชื่อไฟล์รูปใน Google Drive เช่น "CM01_Nanlite FS-150.jpg" (ตัดอักขระที่ใช้ในชื่อไฟล์ไม่ได้ · นามสกุลตามไฟล์ใน Storage) */
+export function equipmentFileName(code: string, name: string, photoPath: string) {
+  const ext = photoPath.split(".").pop()?.toLowerCase() || "jpg";
+  const base = [code, name].map((s) => s.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean).join("_");
+  return `${base.slice(0, 150) || "อุปกรณ์"}.${ext}`;
+}
+
 /** สเปค: เก็บเฉพาะช่องที่รู้จักและมีค่า */
 export function cleanSpecs(raw: unknown) {
   const src = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};

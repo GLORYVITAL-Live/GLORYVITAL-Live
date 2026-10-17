@@ -7,7 +7,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 /**
  * สำรองข้อมูลลง Google Drive ของบัญชีระบบ (cron ทุกวันจันทร์ ~04:00 เวลาไทย + ปุ่ม "สำรองตอนนี้" ในหน้าแรก)
  *   ไฟล์เดียว: GLORY VITAL สำรองข้อมูล / glory-vital-backup-YYYY-MM-DD-HHmm.json.gz = ทุกตารางที่เป็นข้อมูลจริง (JSON บีบอัด)
- *   ไม่รวมงานชั่วคราว (sheet_jobs / calendar_jobs / sync_locks) และไฟล์รูป (หลักฐานไลฟ์อยู่ใน Drive แล้ว / เอกสารทำเบิกมีสำเนาใน Drive)
+ *   ไม่รวมงานชั่วคราว (sheet_jobs / calendar_jobs / sync_locks) และไฟล์รูป (หลักฐานไลฟ์ / เอกสารทำเบิก / รูปอุปกรณ์ มีสำเนาใน Drive แล้ว)
  *   เก็บไว้ KEEP ไฟล์ล่าสุด ที่เก่ากว่าทิ้งถังขยะ
  */
 
