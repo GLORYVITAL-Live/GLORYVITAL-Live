@@ -1,5 +1,6 @@
 import "server-only";
 import { periodChanges, snapshotOf, type PeriodSnapshot, type Side } from "@/lib/period-diff";
+import { isTestAccount } from "@/lib/staff-check";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me, OwnerSummary } from "@/lib/types";
 
@@ -44,7 +45,12 @@ export async function applyPeriods(s: Summary, month: string, sides: Side[]) {
   for (const side of sides) {
     const row = rows.find((r) => r.side === side && !r.reopened_at);
     if (!row) continue;
-    const snap = row.snapshot;
+    // บัญชีทดสอบไม่นับในสรุป: ตัดออกจากตัวเลขตอนปิดด้วย (งวดที่ปิดก่อนมีกฎนี้จะไม่ขึ้นเป็นส่วนต่างปลอม)
+    const snap: PeriodSnapshot = {
+      ...row.snapshot,
+      people: row.snapshot.people.filter((p) => !isTestAccount(p.name)),
+      details: row.snapshot.details.filter((d) => !isTestAccount(d.name)),
+    };
     changes[side] = periodChanges(snap, snapshotOf(s, side));
     periods[side] = { at: row.closed_at, by: row.closed_by };
     s[side] = snap.people;

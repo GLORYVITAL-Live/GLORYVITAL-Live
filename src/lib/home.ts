@@ -1,7 +1,7 @@
 import "server-only";
 import { assignCampaigns, instLabel } from "@/lib/campaign";
 import { slotPlatformOf } from "@/lib/campaign-data";
-import { bkkToday, fetchAll, proofsBySlot } from "@/lib/data";
+import { bkkToday, fetchAll, getSettings, proofsBySlot, windowAlerts } from "@/lib/data";
 import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { loadSessions } from "@/lib/live-stats-db";
@@ -35,8 +35,12 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   // ตรวจสุขภาพข้อมูล (ดึงข้อมูลชุดของตัวเอง ต้นเดือน -> 60 วันข้างหน้า) ทำคู่กันไป พลาด = ไม่แสดงส่วนนี้
   const health = dataHealth(scope).catch((err) => {
     console.warn("ตรวจสุขภาพข้อมูลไม่สำเร็จ:", err);
-    return { overlap: [], dupRows: [], noPair: [], notFirm: [], noRate: [], noPhone: [], calendar: [] } satisfies HealthIssues;
+    return { overlap: [], selfOverlap: [], dupRows: [], noPair: [], notFirm: [], noRate: [], noPhone: [], calendar: [] } satisfies HealthIssues;
   });
+  // ช่วงเปิดจองที่ใกล้หมด / หมดแล้ว (การ์ดเตือนบนหน้าแรก) พลาด = ไม่แสดง
+  const windows = getSettings(db)
+    .then((s) => windowAlerts(s, [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : [])]))
+    .catch(() => []);
 
   const [mcRows, adminRows, proofs, staff] = await Promise.all([
     fetchAll<McRow>((a, b) => db.from("mc_slots")
@@ -70,6 +74,7 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
     today, scope, live: [], noMc: [], noAdmin: [], missingProof: [], missingGmv: [], campaigns: [],
     issues: { noEmail: [], noEmailTotal: 0, samePhone: [], gmvOver: [], gmvOdd: [] },
     health: await health,
+    windows: await windows,
   };
 
   if (scope.mc || scope.proofs) {

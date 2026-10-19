@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
-import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPaidHours, tiersLabel } from "@/lib/pay";
+import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPay, sumPay, tiersLabel } from "@/lib/pay";
 import { ClipboardListIcon, IdCardIcon } from "lucide-react";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
@@ -62,9 +62,9 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const rate = commit.rate;
   const hoursText = (h: number) => (Number.isInteger(h) ? String(h) : h.toFixed(1));
   // ชั่วโมงที่ได้เงิน = หลังหักมาสาย + ไลฟ์ชดเชย (ปัดขึ้นทีละ 15 นาที)
-  const paidOf = (list: MyItem[]) => list.reduce((a, i) => a + slotPaidHours(i.hours, i.lateMinutes, i.bonusMinutes), 0);
-  const total = Math.round(paidOf(active) * rate);
-  const earned = Math.round(paidOf(active.filter((i) => i.endMs <= now)) * rate);
+  // เงินปัดทีละคิวแล้วรวม (ตัวเลขเดียวกับสรุปของเจ้าของ / ไฟล์เบิก)
+  const total = sumPay(active, rate);
+  const earned = sumPay(active.filter((i) => i.endMs <= now), rate);
   const lateCutMoney = Math.round(active.reduce((a, i) => a + i.hours - paidHours(i.hours, i.lateMinutes), 0) * rate);
   const bonusMin = active.reduce((a, i) => a + bonusPaidMinutes(i.bonusMinutes), 0);
   const bonusMoney = Math.round((bonusMin / 60) * rate);
@@ -161,7 +161,10 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                   <DayBadge label={relLabel(k)} />
                 </h3>
                 {list.map((i) => {
-                  const canCancel = !!data?.canCancel && !i.cancelled && i.startMs - now >= (data?.cancelMinHours ?? 6) * 3600_000;
+                  const minH = data?.cancelMinHours ?? 6;
+                  const canCancel = !!data?.canCancel && !i.cancelled && i.startMs - now >= minH * 3600_000;
+                  // ยังไม่เริ่มแต่เหลือไม่ถึง N ชม. = ไม่มีปุ่มยกเลิก บอกเหตุผล + ทางติดต่อ
+                  const tooLate = !!data?.canCancel && !i.cancelled && !canCancel && i.startMs > now;
                   return (
                     <div
                       key={i.id}
@@ -179,13 +182,18 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                                     สาย {i.lateMinutes} นาที −{Math.round(lateCut(i.lateMinutes) * 100)}%{i.lateFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                                   </Badge>
                                 ) : null}
+                                {i.checkIn ? (
+                                  <Badge variant="outline" className="mr-1.5 font-semibold" title="เวลาเข้างานจริงที่ทีมงานบันทึก ชั่วโมงและเงินคิดจากเวลานี้">
+                                    เข้า {i.checkIn.time}
+                                  </Badge>
+                                ) : null}
                                 {fmtHours(i.hours)}
                                 {bonusPaidMinutes(i.bonusMinutes) > 0 ? (
                                   <Badge className="mx-1.5 bg-success/15 font-semibold text-success">
                                     ชดเชย +{i.bonusMinutes} นาที{i.bonusFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                                   </Badge>
                                 ) : null}
-                                {rate ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(slotPaidHours(i.hours, i.lateMinutes, i.bonusMinutes) * rate)} บาท</span> : null}
+                                {rate ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rate))} บาท</span> : null}
                               </>}
                         </span>
                       </div>
@@ -201,6 +209,15 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                             <Button variant="destructive" size="xs" className="rounded-full font-semibold" onClick={() => setCancelItem(i)}>
                               ยกเลิกคิว
                             </Button>
+                          ) : tooLate ? (
+                            <span className="shrink-0 text-right text-[11px] leading-tight">
+                              ยกเลิกผ่านเว็บไม่ได้แล้ว (เหลือไม่ถึง {minH} ชม.)
+                              <span className="block">
+                                {data?.adminChatUrl
+                                  ? <a className="font-semibold text-primary underline" href={data.adminChatUrl} target="_blank" rel="noopener">ติดต่อแอดมิน</a>
+                                  : "ติดต่อแอดมิน"}
+                              </span>
+                            </span>
                           ) : null}
                         </div>
                       ) : null}
@@ -240,7 +257,7 @@ function CancelDialog({ item, role, cancelMinHours, adminChatUrl, onClose }: {
   const [state, setState] = useState<"confirm" | "busy" | "done">("confirm");
   const [note, setNote] = useState(() => {
     const who = role === "admin" ? "Admin เสริมคนอื่นรับ" : "Mc คนอื่นจอง";
-    return `ยกเลิกผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${cancelMinHours} ชั่วโมง ระบบจะลบ event ในปฏิทินและเปิด slot นี้ให้${who}ทันที หลังยกเลิกกรุณาทักแชทแจ้งแอดมินด้วย`;
+    return `ยกเลิกผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${cancelMinHours} ชั่วโมง ระบบจะลบ event ในปฏิทินและเปิด slot นี้ให้ ${who}ทันที หลังยกเลิกกรุณาทักแชทแจ้งแอดมินด้วย`;
   });
   const [chatUrl, setChatUrl] = useState(adminChatUrl);
 

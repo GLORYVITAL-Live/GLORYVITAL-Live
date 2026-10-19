@@ -27,7 +27,11 @@ const bkkHm = (iso: string) => new Date(Date.parse(iso) + 7 * 3600_000).toISOStr
  *   (เดิมแก้ยอด slot ก่อนหน้าแล้ว slot ถัดไปยังหักยอดเก่าอยู่ = ยอดเพี้ยนต่อกันเป็นทอด)
  */
 async function shiftNext(db: ReturnType<typeof createAdminClient>, me: Me, ids: number[]) {
-  const shifted = await recomputeAfterSave(db, ids).catch(() => []);
+  const { changes: shifted, negative } = await recomputeAfterSave(db, ids).catch(() => ({ changes: [], negative: [] }));
+  // slot ถัดไปติดลบหลังหักยอดใหม่ = คงยอดเดิมไว้ (ไม่บล็อก) แต่แจ้งให้ไปแก้ ไม่งั้นยอดค้างของเก่าเงียบๆ
+  const warning = negative.length
+    ? `คำเตือน: slot ถัดไป ${negative.map((c) => `${c.slot.live_date.slice(8, 10)}/${c.slot.live_date.slice(5, 7)} ${bkkHm(c.slot.starts_at)}–${bkkHm(c.slot.ends_at)}`).join(", ")} ยอดติดลบหลังหักยอดสะสมใหม่ ระบบคงยอดเดิมไว้ — ต้องเข้าไปแก้ GMV ของ slot นั้น`
+    : "";
   if (shifted.length) {
     await db.from("booking_logs").insert(shifted.map((c) => ({
       email: me.email, role: me.owner ? "Owner" : "Admin", name: me.owner?.name || me.admin?.name || me.email,
@@ -35,7 +39,7 @@ async function shiftNext(db: ReturnType<typeof createAdminClient>, me: Me, ids: 
       platform: c.slot.platform, live_date: c.slot.live_date, time_range: `${bkkHm(c.slot.starts_at)}-${bkkHm(c.slot.ends_at)}`, result: "สำเร็จ",
     })));
   }
-  return shifted.length;
+  return { count: shifted.length, warning };
 }
 const DT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -77,13 +81,18 @@ export async function GET(request: Request) {
   const { key, first, last } = monthRange(sp.get("month"));
   const today = bkkToday();
   const until = last < today ? last : today;
-  const days = new Map<string, { date: string; total: number; done: number }>();
+  const now = Date.now();
+  // total / done = slot ที่ต้องแนบหลักฐาน · gmvMissing = slot ที่ยังไม่กรอก GMV (รวม Mc ประจำ)
+  const days = new Map<string, { date: string; total: number; done: number; gmvMissing: number }>();
   if (first <= until) {
     for (const s of await proofSlots(r.me, first, until)) {
-      if (s.salaried) continue; // Mc ประจำ ไม่ต้องแนบหลักฐาน ไม่นับว่าขาด
-      const d = days.get(s.date) ?? { date: s.date, total: 0, done: 0 };
-      d.total++;
-      if (s.proof) d.done++;
+      if (s.endMs > now) continue; // ยังไลฟ์ไม่จบ = ยังไม่นับว่าขาด
+      const d = days.get(s.date) ?? { date: s.date, total: 0, done: 0, gmvMissing: 0 };
+      if (!s.gmv && !s.gmvCoveredBy) d.gmvMissing++;
+      if (!s.salaried) { // Mc ประจำ ไม่ต้องแนบหลักฐาน ไม่นับว่าขาด
+        d.total++;
+        if (s.proof) d.done++;
+      }
       days.set(s.date, d);
     }
   }
@@ -127,6 +136,13 @@ export async function POST(request: Request) {
   if (picked.length !== ids.length) return fail("มี slot ที่คุณแนบหลักฐานไม่ได้ (ไม่ใช่ slot ของคุณ หรือถูกยกเลิกแล้ว)", 403);
   if (new Set(picked.map((s) => s.platform)).size > 1) return fail("เลือกได้ทีละแพลตฟอร์ม (ไลฟ์ 1 ครั้ง = 1 แพลตฟอร์ม)");
   if (picked.some((s) => s.salaried)) return fail("slot ของ Mc ประจำไม่ต้องแนบหลักฐาน (กรอก GMV ได้จากปุ่ม \"กรอก GMV\")");
+  const now = Date.now();
+  const notYet = picked.filter((s) => s.startMs > now);
+  if (notYet.length) return fail(`slot ${notYet.map((s) => `${s.start}–${s.end}`).join(", ")} ยังไม่ถึงเวลาไลฟ์ แนบหลักฐานได้หลังเริ่มไลฟ์`);
+  // เตือน (ไม่บล็อก): เวลาในหลักฐานไม่ทับ slot ที่เลือกเลย / เป็นเวลาในอนาคต = น่าจะกรอกเวลาหรือเลือก slot ผิด
+  const timeWarn = endedAt.getTime() > now + 5 * 60_000 ? "เวลาจบไลฟ์ที่กรอกเป็นเวลาในอนาคต ตรวจเวลาอีกครั้ง"
+    : !picked.some((s) => startedAt.getTime() < s.endMs && endedAt.getTime() > s.startMs) ? "เวลาเริ่ม–จบที่กรอกไม่ทับเวลา slot ที่เลือกเลย ตรวจเวลา / slot อีกครั้ง"
+      : "";
 
   // ยอด GMV ต่อ slot (ไม่บังคับ) คิดใหม่ฝั่ง server
   let gmvRaw: unknown = [];
@@ -164,7 +180,7 @@ export async function POST(request: Request) {
   }
   // GMV เก็บที่ slot (หลักฐานบันทึกแล้ว ถ้า GMV พลาดแจ้งให้กรอกใหม่ทีหลังได้)
   const gmvFail = gmv.some((g) => g.gmv !== null || g.input) ? await saveGmv(db, gmv) : "";
-  const shifted = !gmvFail && gmv.length ? await shiftNext(db, r.me, gmv.map((g) => g.id)) : 0;
+  const { count: shifted, warning: shiftWarn } = !gmvFail && gmv.length ? await shiftNext(db, r.me, gmv.map((g) => g.id)) : { count: 0, warning: "" };
 
   // หลักฐานเก่าที่ถูกแทนที่จนไม่เหลือ slot ไหนแล้ว -> ลบทิ้ง (รวมไฟล์รูป)
   const replaced = [...new Set(picked.map((s) => s.proof?.id).filter((x): x is number => !!x))];
@@ -185,6 +201,8 @@ export async function POST(request: Request) {
     message: gmvFail
       ? `แนบหลักฐานให้ ${ids.length} slot แล้ว แต่บันทึก GMV ไม่สำเร็จ: ${gmvFail}`
       : `แนบหลักฐานให้ ${ids.length} slot แล้ว${shifted ? ` · ปรับยอด GMV ของ slot ถัดไปตามให้ ${shifted} slot` : ""}`,
+    // คำเตือนที่ไม่บล็อกการบันทึก (หน้าเว็บแสดงแยกเป็นสีแดง)
+    warning: [timeWarn, shiftWarn].filter(Boolean).join(" · "),
   });
 }
 
@@ -215,7 +233,10 @@ export async function PATCH(request: Request) {
     slot_table: "mc_slots", slot_id: s.mcSlotId, platform: s.platform, live_date: s.date, time_range: `${s.start}-${s.end}`, result: "สำเร็จ",
   })));
   const shifted = await shiftNext(db, r.me, gmv.map((g) => g.id));
-  return ok({ message: `บันทึก GMV ${gmv.length} slot แล้ว${shifted ? ` · ปรับยอดของ slot ถัดไปตามให้ ${shifted} slot` : ""}` });
+  return ok({
+    message: `บันทึก GMV ${gmv.length} slot แล้ว${shifted.count ? ` · ปรับยอดของ slot ถัดไปตามให้ ${shifted.count} slot` : ""}`,
+    warning: shifted.warning,
+  });
 }
 
 export async function DELETE(request: Request) {

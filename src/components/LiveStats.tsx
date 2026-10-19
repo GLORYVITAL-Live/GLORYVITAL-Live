@@ -292,7 +292,16 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
   const totals = new Map(months13.map((m) => [m, totalsOf(byMonth.get(m)!)]));
   const cur = totals.get(month)!;
   const prevKey = monthKey(-1, month), yoyKey = monthKey(-12, month);
-  const prev = totals.get(prevKey)!, yoy = totals.get(yoyKey)!;
+  // เดือนที่ยังไม่จบ: เทียบเดือนก่อน / ปีก่อน ถึงวันเดียวกัน (เดิมเทียบทั้งเดือน = ขึ้นแดงเกินจริง)
+  //   นับถึงวันของไลฟ์ล่าสุดที่อัปโหลดแล้วในเดือนนี้ (ทุกบัญชี) — แบบเดียวกับหน้า "ทั้งปี" ที่ตัดปีก่อนถึงวันเดียวกัน
+  const ongoing = month === monthKey();
+  const lastDay = ongoing
+    ? Math.max(0, ...data.filter((s) => monthOf(s.startedAt) === month).map((s) => bkkParts(s.startedAt).d))
+    : 0;
+  const upTo = (l: LiveSession[]) => (ongoing && lastDay ? l.filter((s) => bkkParts(s.startedAt).d <= lastDay) : l);
+  const prevList = upTo(byMonth.get(prevKey)!);
+  const prev = totalsOf(prevList), yoy = totalsOf(upTo(byMonth.get(yoyKey)!));
+  const cutText = ongoing && lastDay ? ` 1–${lastDay}` : "";
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
 
@@ -308,10 +317,17 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
       {!cur.lives ? (
         <StateBox title={`ไม่มีข้อมูลไลฟ์ ${monthLabel(month)}`}>ลองเปลี่ยนเดือน / แพลตฟอร์ม หรืออัปโหลดไฟล์ของเดือนนี้</StateBox>
       ) : (
-        <KpiGrid cur={cur} compare={[
-          { totals: prev, label: `MoM vs ${shortMonth(prevKey)}` },
-          { totals: yoy, label: `YoY vs ${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}` },
-        ]} />
+        <>
+          {ongoing ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              ข้อมูลถึงวันที่ {lastDay} {shortMonth(month).split(" ")[0]} (ยังไม่จบเดือน) · MoM / YoY เทียบวันที่ 1–{lastDay} ของเดือนก่อน / ปีก่อน
+            </p>
+          ) : null}
+          <KpiGrid cur={cur} compare={[
+            { totals: prev, label: `MoM vs ${shortMonth(prevKey)}${cutText}` },
+            { totals: yoy, label: `YoY vs ${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}${cutText}` },
+          ]} />
+        </>
       )}
 
       <section className="my-4 rounded-2xl border bg-card p-3">
@@ -321,24 +337,27 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
         </div>
         <BarChart
           label={`${def.label} รายเดือน`}
-          categories={months13.map(shortMonth)}
-          tooltipTitles={months13.map(monthLabel)}
+          categories={months13.map((m) => `${shortMonth(m)}${ongoing && m === month ? "*" : ""}`)}
+          tooltipTitles={months13.map((m) => `${monthLabel(m)}${ongoing && m === month ? ` (ยังไม่จบเดือน ถึงวันที่ ${lastDay})` : ""}`)}
           series={[{ name: def.label, color: CUR, values: months13.map((m) => (totals.get(m)!.lives ? def.value(totals.get(m)!) : null)) }]}
           format={fmt}
           formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
           highlight={12}
         />
+        {ongoing ? <p className="mt-1 text-xs text-muted-foreground">* {monthLabel(month)} ยังไม่จบเดือน (ข้อมูลถึงวันที่ {lastDay}) แท่งจึงยังต่ำกว่าเดือนเต็ม</p> : null}
         <TableView title="ดูเป็นตาราง">
           <Table>
             <TableHeader><TableRow><TableHead>เดือน</TableHead><TableHead className="text-right">{def.label}</TableHead><TableHead className="text-right">MoM</TableHead><TableHead className="text-right">ไลฟ์</TableHead></TableRow></TableHeader>
             <TableBody>
               {months13.slice().reverse().map((m) => {
                 const t = totals.get(m)!;
+                const open = ongoing && m === month; // เดือนนี้ยังไม่จบ = เทียบเดือนก่อนถึงวันเดียวกัน
+                const before = open ? prev : totals.get(monthKey(-1, m)) ?? totalsOf([]);
                 return (
                   <TableRow key={m}>
-                    <TableCell>{monthLabel(m)}</TableCell>
+                    <TableCell>{monthLabel(m)}{open ? <span className="text-xs text-muted-foreground"> (ถึงวันที่ {lastDay})</span> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{t.lives ? fmt(def.value(t)) : "-"}</TableCell>
-                    <TableCell className="text-right">{t.lives ? <ChangeText cur={def.value(t)} prev={def.value(totals.get(monthKey(-1, m)) ?? totalsOf([]))} /> : null}</TableCell>
+                    <TableCell className="text-right">{t.lives ? <ChangeText cur={def.value(t)} prev={before.lives ? def.value(before) : null} /> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{t.lives}</TableCell>
                   </TableRow>
                 );
@@ -348,7 +367,7 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
         </TableView>
       </section>
 
-      {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={byMonth.get(prevKey)!} prevLabel={shortMonth(prevKey)} /> : null}
+      {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
   );
 }
@@ -552,13 +571,14 @@ function AccountTable({ cur, prev, prevLabel }: { cur: LiveSession[]; prev: Live
   return (
     <section className="my-4">
       <h2 className="mb-2 text-lg font-bold">แยกตามบัญชี</h2>
+      {/* มือถือ: ซ่อนคอลัมน์ ไลฟ์ / ชม. / GMV/ชม. / CO ย้ายไปใต้ชื่อบัญชี ให้เห็น GMV + vs เดือนก่อน โดยไม่ต้องเลื่อน */}
       <div className="overflow-x-auto rounded-xl border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>บัญชี</TableHead><TableHead className="text-right">ไลฟ์</TableHead><TableHead className="text-right">ชม.</TableHead>
+              <TableHead>บัญชี</TableHead><TableHead className="hidden text-right sm:table-cell">ไลฟ์</TableHead><TableHead className="hidden text-right sm:table-cell">ชม.</TableHead>
               <TableHead className="text-right">GMV</TableHead><TableHead className="text-right">vs {prevLabel}</TableHead>
-              <TableHead className="text-right">GMV/ชม.</TableHead><TableHead className="text-right">CO</TableHead>
+              <TableHead className="hidden text-right sm:table-cell">GMV/ชม.</TableHead><TableHead className="hidden text-right sm:table-cell">CO</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -567,26 +587,34 @@ function AccountTable({ cur, prev, prevLabel }: { cur: LiveSession[]; prev: Live
               const p = totalsOf(prev.filter((s) => `${s.platform}|${s.accountId}` === a.key));
               return (
                 <TableRow key={a.key}>
-                  <TableCell>{a.name !== a.platform ? <><span className="text-xs text-muted-foreground">{a.platform}</span><br /></> : null}{a.name}</TableCell>
-                  <TableCell className="text-right tabular-nums">{t.lives}</TableCell>
-                  <TableCell className="text-right tabular-nums">{(t.durationSec / 3600).toFixed(1)}</TableCell>
+                  <TableCell className="whitespace-normal sm:whitespace-nowrap">
+                    {a.name !== a.platform ? <><span className="text-xs text-muted-foreground">{a.platform}</span><br /></> : null}{a.name}
+                    <span className="block text-xs text-muted-foreground tabular-nums sm:hidden">
+                      {t.lives} ไลฟ์ · {(t.durationSec / 3600).toFixed(1)} ชม. · CO {fmtMetric("pct", co.value(t))}
+                    </span>
+                  </TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">{t.lives}</TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">{(t.durationSec / 3600).toFixed(1)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMetric("baht", t.gmv)}</TableCell>
                   <TableCell className="text-right"><ChangeText cur={t.lives ? t.gmv : null} prev={p.lives ? p.gmv : null} /></TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtMetric("baht", perHour.value(t))}</TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtMetric("pct", co.value(t))}</TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">{fmtMetric("baht", perHour.value(t))}</TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">{fmtMetric("pct", co.value(t))}</TableCell>
                 </TableRow>
               );
             })}
           </TableBody>
           <TableFooter>
             <TableRow>
-              <TableCell>รวม</TableCell>
-              <TableCell className="text-right tabular-nums">{all.lives}</TableCell>
-              <TableCell className="text-right tabular-nums">{(all.durationSec / 3600).toFixed(1)}</TableCell>
+              <TableCell>
+                รวม
+                <span className="block text-xs font-normal text-muted-foreground tabular-nums sm:hidden">{all.lives} ไลฟ์ · {(all.durationSec / 3600).toFixed(1)} ชม.</span>
+              </TableCell>
+              <TableCell className="hidden text-right tabular-nums sm:table-cell">{all.lives}</TableCell>
+              <TableCell className="hidden text-right tabular-nums sm:table-cell">{(all.durationSec / 3600).toFixed(1)}</TableCell>
               <TableCell className="text-right tabular-nums">{fmtMetric("baht", gmv.value(all))}</TableCell>
               <TableCell className="text-right"><ChangeText cur={all.gmv} prev={prev.length ? totalsOf(prev).gmv : null} /></TableCell>
-              <TableCell className="text-right tabular-nums">{fmtMetric("baht", perHour.value(all))}</TableCell>
-              <TableCell className="text-right tabular-nums">{fmtMetric("pct", co.value(all))}</TableCell>
+              <TableCell className="hidden text-right tabular-nums sm:table-cell">{fmtMetric("baht", perHour.value(all))}</TableCell>
+              <TableCell className="hidden text-right tabular-nums sm:table-cell">{fmtMetric("pct", co.value(all))}</TableCell>
             </TableRow>
           </TableFooter>
         </Table>
@@ -1496,16 +1524,22 @@ function UploadView({ months, onChanged }: { months: MonthRow[]; onChanged: () =
     }
   }
 
-  async function removeMonth(platform: string, month: string, lives: number) {
+  // ลบข้อมูลเดือน: เลือกได้ว่าทุกบัญชี หรือเฉพาะบัญชีเดียว (เดิมลบทุกบัญชีของแพลตฟอร์มโดยไม่บอก)
+  const [removing, setRemoving] = useState<{ platform: string; month: string; lives: number } | null>(null);
+  async function removeMonth(platform: string, month: string, lives: number, account: { id: string; name: string } | null, all: string[]) {
     if (!(await confirm({
-      title: `ลบข้อมูล ${platform} ${monthLabel(month)}?`,
-      description: `ลบ ${lives} ไลฟ์ของเดือนนี้ (ใช้เมื่ออัปไฟล์ผิด แล้วอัปไฟล์ที่ถูกใหม่) กู้คืนไม่ได้`,
+      title: account ? `ลบข้อมูล ${platform} บัญชี ${account.name} ${monthLabel(month)}?` : `ลบข้อมูล ${platform} ทุกบัญชี ${monthLabel(month)}?`,
+      description: account
+        ? `ลบ ${lives} ไลฟ์ของบัญชีนี้ในเดือนนี้ (บัญชีอื่นไม่หาย) กู้คืนไม่ได้`
+        : `ลบ ${lives} ไลฟ์ของทุกบัญชี${all.length ? ` (${all.join(", ")})` : ""} ในเดือนนี้ (ใช้เมื่ออัปไฟล์ผิด แล้วอัปไฟล์ที่ถูกใหม่) กู้คืนไม่ได้`,
       confirmText: "ลบ", destructive: true,
     }))) return;
     try {
-      const res = await api<{ deleted: number }>("/api/live-stats", { platform, month }, "DELETE");
+      const res = await api<{ deleted: number }>("/api/live-stats", { platform, month, ...(account ? { accountId: account.id, accountName: account.name } : {}) }, "DELETE");
       if (!res.ok) throw new Error(res.message);
       toast(`ลบแล้ว ${res.deleted} ไลฟ์`);
+      sessionCache.clear(); // ข้อมูลที่โหลดเก็บไว้ (รวมรายชื่อบัญชีในหน้าต่างลบ) ไม่ตรงแล้ว
+      setRemoving(null);
       onChanged();
     } catch (err) { toast((err as Error).message, "error"); }
   }
@@ -1549,7 +1583,7 @@ function UploadView({ months, onChanged }: { months: MonthRow[]; onChanged: () =
                           <span className="inline-flex items-center gap-1.5 tabular-nums">
                             {row.lives} ไลฟ์ · {fmtMetric("baht", row.gmv, true)}
                             <Button variant="ghost" size="icon-sm" aria-label={`ลบข้อมูล ${p} ${monthLabel(m)}`} title="ลบข้อมูลเดือนนี้"
-                              className="text-muted-foreground hover:text-destructive" onClick={() => removeMonth(p, m, row.lives)}>
+                              className="text-muted-foreground hover:text-destructive" onClick={() => setRemoving({ platform: p, month: m, lives: row.lives })}>
                               <Trash2Icon />
                             </Button>
                           </span>
@@ -1563,7 +1597,53 @@ function UploadView({ months, onChanged }: { months: MonthRow[]; onChanged: () =
           </Table>
         </div>
       ) : <StateBox title="ยังไม่มีข้อมูล">เลือกไฟล์ด้านบนแล้วกดบันทึก</StateBox>}
+      {removing ? <RemoveMonthDialog {...removing} onClose={() => setRemoving(null)} onPick={removeMonth} /> : null}
     </>
+  );
+}
+
+/** เลือกว่าจะลบข้อมูลเดือนนี้ของทุกบัญชี หรือเฉพาะบัญชีเดียว (โหลดรายชื่อบัญชีของเดือนนั้นก่อน) */
+function RemoveMonthDialog({ platform, month, lives, onClose, onPick }: {
+  platform: string; month: string; lives: number; onClose: () => void;
+  onPick: (platform: string, month: string, lives: number, account: { id: string; name: string } | null, all: string[]) => Promise<void>;
+}) {
+  const { from, to } = monthWindow(month);
+  const { data, error, retry } = useSessions(from, to, 0);
+  const [busy, setBusy] = useState(false);
+  const accounts = data
+    ? accountsOf(data.filter((s) => s.platform === platform)).map((a) => ({
+      id: a.key.slice(platform.length + 1), name: a.name, lives: data.filter((s) => `${s.platform}|${s.accountId}` === a.key).length,
+    }))
+    : [];
+  const names = accounts.map((a) => a.name);
+  const run = async (account: { id: string; name: string; lives: number } | null) => {
+    setBusy(true);
+    try { await onPick(platform, month, account ? account.lives : lives, account, names); } finally { setBusy(false); }
+  };
+  return (
+    <AppDialog open onClose={onClose} busy={busy} title={`ลบข้อมูล ${platform} ${monthLabel(month)}`} description="เลือกว่าจะลบของบัญชีไหน (กู้คืนไม่ได้)">
+      <DialogBody className="space-y-2">
+        {!data ? (error ? <LoadError title="โหลดรายชื่อบัญชีไม่สำเร็จ" message={error} onRetry={retry} /> : <LoadingBlock />) : (
+          <>
+            {accounts.length > 1 ? accounts.map((a) => (
+              <Button key={a.id} variant="outline" className="h-auto w-full justify-between py-2 text-left whitespace-normal pointer-coarse:min-h-10"
+                disabled={busy} onClick={() => run(a)}>
+                <span>ลบเฉพาะบัญชี <strong>{a.name}</strong></span>
+                <span className="shrink-0 text-muted-foreground tabular-nums">{a.lives} ไลฟ์</span>
+              </Button>
+            )) : null}
+            <Button variant="destructive" className="h-auto w-full justify-between py-2 text-left whitespace-normal pointer-coarse:min-h-10"
+              disabled={busy} onClick={() => run(null)}>
+              <span>ลบทุกบัญชี{names.length ? <span className="block text-xs font-normal">{names.join(", ")}</span> : null}</span>
+              <span className="shrink-0 tabular-nums">{lives} ไลฟ์</span>
+            </Button>
+          </>
+        )}
+      </DialogBody>
+      <DialogActions>
+        <Button variant="outline" size="lg" disabled={busy} onClick={onClose}>ยกเลิก</Button>
+      </DialogActions>
+    </AppDialog>
   );
 }
 

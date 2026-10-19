@@ -6,7 +6,7 @@ import { useLocal, writeLocal } from "@/lib/hooks";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EQUIPMENT_STATUSES, type Equipment, type EquipmentStatus } from "@/lib/types";
 import { SPEC_FIELDS, isComputer, specLine } from "@/lib/equipment";
-import { money } from "@/lib/format";
+import { money, parseKey } from "@/lib/format";
 import { shrinkImage } from "@/lib/image";
 import type { ExportBook } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
@@ -40,9 +40,15 @@ const STATUS_TONE: Record<EquipmentStatus, string> = {
 const STATUS_DOT: Record<string, string> = {
   "ใช้งานได้": "bg-success", "ชำรุด": "bg-destructive", "ส่งซ่อม": "bg-amber-500", "หาย": "bg-destructive", "เลิกใช้": "bg-muted-foreground",
 };
-const fmtDate = new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Bangkok" });
-const dateText = (d: string | null) => (d ? fmtDate.format(new Date(`${d}T12:00:00Z`)) : "");
+// ปี ค.ศ. แบบทั้งเว็บ (th-TH เฉยๆ = ปี พ.ศ.)
+const fmtDate = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+const dateText = (d: string | null) => (d ? fmtDate.format(parseKey(d)) : "");
+/** เวลา ISO -> วันที่ตามเวลาไทย "YYYY-MM-DD" (slice ตรงๆ = วันตาม UTC แก้หลังเที่ยงคืนไทยจะได้วันก่อนหน้า) */
+const bkkDay = (iso: string) => new Date(Date.parse(iso) + 7 * 3600_000).toISOString().slice(0, 10);
 const valueOf = (x: Equipment) => (x.price ?? 0) * x.quantity;
+/** ลิงก์รูปจาก API หมดอายุใน 1 ชม. -> กลับมาที่แท็บหลังนานกว่านี้ = โหลดรายการใหม่ */
+const PHOTO_REFRESH_MS = 50 * 60_000;
+const codeKey = (c: string) => c.trim().toUpperCase();
 
 export function EquipmentPage() {
   const [items, setItems] = useState<Equipment[] | null>(null);
@@ -54,16 +60,29 @@ export function EquipmentPage() {
   const [editing, setEditing] = useState<Equipment | "new" | null>(null);
   const reload = () => setTick((n) => n + 1);
 
+  const loadedAt = useRef(0);
   useEffect(() => {
     let alive = true;
     api<{ items: Equipment[] }>("/api/equipment")
       .then((res) => {
         if (!alive) return;
-        if (res.ok) { setItems(res.items); setError(""); } else setError(res.message ?? "โหลดไม่สำเร็จ");
+        if (res.ok) { setItems(res.items); setError(""); loadedAt.current = Date.now(); } else setError(res.message ?? "โหลดไม่สำเร็จ");
       })
       .catch((err) => { if (alive) setError((err as Error).message); });
     return () => { alive = false; };
   }, [tick]);
+
+  // เปิดหน้าทิ้งไว้แล้วกลับมาที่แท็บ: ลิงก์รูปใกล้หมดอายุ = โหลดใหม่ (ไม่งั้นรูปขึ้นไม่ได้)
+  useEffect(() => {
+    const onShow = () => {
+      if (document.visibilityState === "visible" && loadedAt.current && Date.now() - loadedAt.current > PHOTO_REFRESH_MS) {
+        loadedAt.current = Date.now(); // กันโหลดซ้ำระหว่างรอ
+        setTick((n) => n + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", onShow);
+    return () => document.removeEventListener("visibilitychange", onShow);
+  }, []);
 
   const categories = useMemo(() => [...new Set((items ?? []).map((x) => x.category || NO_CAT))].sort((a, b) => a.localeCompare(b, "th")), [items]);
   const locations = useMemo(() => [...new Set((items ?? []).map((x) => x.location).filter(Boolean))].sort((a, b) => a.localeCompare(b, "th")), [items]);
@@ -223,7 +242,7 @@ export function EquipmentPage() {
       <datalist id="equip-categories">{categories.filter((c) => c !== NO_CAT).map((c) => <option key={c} value={c} />)}</datalist>
       <datalist id="equip-locations">{locations.map((l) => <option key={l} value={l} />)}</datalist>
       {editing ? (
-        <EquipmentDialog item={editing === "new" ? null : editing} onClose={(changed) => { setEditing(null); if (changed) reload(); }} />
+        <EquipmentDialog item={editing === "new" ? null : editing} items={items} onClose={(changed) => { setEditing(null); if (changed) reload(); }} />
       ) : null}
     </div>
   );
@@ -274,7 +293,7 @@ function exportBook(list: Equipment[]): ExportBook {
 
 // ---------- เพิ่ม / แก้ ----------
 
-function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (changed?: boolean) => void }) {
+function EquipmentDialog({ item, items, onClose }: { item: Equipment | null; items: Equipment[]; onClose: (changed?: boolean) => void }) {
   const toast = useToast();
   const confirm = useConfirm();
   const [f, setF] = useState(() => ({
@@ -292,6 +311,8 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
   const urls = useRef<string[]>([]);
   useEffect(() => () => urls.current.forEach((u) => URL.revokeObjectURL(u)), []);
   const shown = photo?.url ?? (removePhoto ? null : item?.photoUrl ?? null);
+  // รหัสซ้ำกับรายการอื่น (เช็กจากรายการที่โหลดไว้) = เตือน ไม่บล็อก
+  const dupes = codeKey(f.code) ? items.filter((x) => x.id !== item?.id && codeKey(x.code) === codeKey(f.code)) : [];
 
   async function pick(file: File | undefined) {
     if (!file) return;
@@ -315,9 +336,10 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
       if (photo) fd.append("photo", photo.blob, "photo.jpg");
       if (removePhoto) fd.append("removePhoto", "1");
       const res = await fetch("/api/equipment", { method: item ? "PATCH" : "POST", body: fd });
-      const json = await res.json().catch(() => null) as { ok?: boolean; message?: string } | null;
+      const json = await res.json().catch(() => null) as { ok?: boolean; message?: string; warning?: string } | null;
       if (!json?.ok) throw new Error(json?.message ?? `บันทึกไม่สำเร็จ (HTTP ${res.status})`);
       toast(json.message ?? "บันทึกแล้ว");
+      if (json.warning) toast(json.warning, "error");
       onClose(true);
     } catch (err) {
       toast((err as Error).message, "error");
@@ -343,7 +365,7 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
     <AppDialog
       open onClose={() => onClose()} busy={busy}
       title={item ? `แก้ไข ${item.name}` : "เพิ่มอุปกรณ์"}
-      description={item?.updatedBy ? `แก้ล่าสุด ${dateText(item.updatedAt.slice(0, 10))} โดย ${item.updatedBy}` : undefined}
+      description={item?.updatedBy ? `แก้ล่าสุด ${dateText(bkkDay(item.updatedAt))} โดย ${item.updatedBy}` : undefined}
     >
       <DialogBody className="space-y-3 text-sm">
         <div className="flex items-center gap-3">
@@ -364,9 +386,14 @@ function EquipmentDialog({ item, onClose }: { item: Equipment | null; onClose: (
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
-          <Field label="รหัส">{(id) => <Input id={id} value={f.code} onChange={(e) => set("code")(e.target.value.toUpperCase())} placeholder="เช่น CM01" autoComplete="off" className="font-mono" />}</Field>
+          <Field label="รหัส">{(id) => <Input id={id} value={f.code} onChange={(e) => set("code")(e.target.value.toUpperCase())} placeholder="เช่น CM01" autoComplete="off" className="font-mono" aria-invalid={dupes.length > 0} />}</Field>
           <Field label="ชื่ออุปกรณ์ *">{(id) => <Input id={id} value={f.name} onChange={(e) => set("name")(e.target.value)} placeholder="เช่น Nanlite FS-150" />}</Field>
         </div>
+        {dupes.length ? (
+          <p role="alert" className="rounded-md border border-warning-border bg-warning px-2 py-1.5 text-xs font-semibold text-warning-foreground">
+            รหัส {codeKey(f.code)} ซ้ำกับ {dupes.map((x) => `"${x.name}"`).join(", ")} — ตรวจว่าใส่รหัสถูกไหม (ยังบันทึกได้)
+          </p>
+        ) : null}
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="หมวด">{(id) => <Input id={id} list="equip-categories" value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="เช่น ไฟ / กล้อง / ไมค์" />}</Field>
           <Field label="ที่เก็บ">{(id) => <Input id={id} list="equip-locations" value={f.location} onChange={(e) => set("location")(e.target.value)} placeholder="เช่น ห้องไลฟ์ GLORY VITAL" />}</Field>

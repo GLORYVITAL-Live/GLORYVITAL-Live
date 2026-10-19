@@ -2,7 +2,11 @@
  * ข้อความ "กฎการทำงาน" ส่วน "อื่นๆ" (Owner แก้ได้ที่หน้าเจ้าของ > กฎการทำงาน เก็บใน settings.rules_mc / rules_admin)
  * ยังไม่เคยแก้ = ใช้ข้อความเริ่มต้นด้านล่าง
  */
-export function defaultRules(role: "mc" | "admin", cancelMinHours = 6): string[] {
+export function defaultRules(
+  role: "mc" | "admin", cancelMinHours = 6,
+  // โควต้าต่อวันของ Admin เสริม (จาก settings ตัวเดียวกับที่ฐานข้อมูลใช้ตรวจตอนรับคิว)
+  admin: { slotsPerDay: number; hoursPerDay: number; blocksPerDay: number | null } = { slotsPerDay: 4, hoursPerDay: 8, blocksPerDay: 2 },
+): string[] {
   const calendar = "ปฏิทิน Google จะแจ้งเตือนก่อนไลฟ์ 1 วัน และก่อนไลฟ์ 10 นาที (ตั้งค่าการแจ้งเตือนในปฏิทินของตัวเองตามที่ทีมงานแนะนำ)";
   return role === "mc"
     ? [
@@ -11,7 +15,7 @@ export function defaultRules(role: "mc" | "admin", cancelMinHours = 6): string[]
         calendar,
       ]
     : [
-        "รับได้สูงสุด 4 slot (8 ชม.) ต่อวัน แบ่งได้ไม่เกิน 2 ช่วง (ช่วง = slot ที่ต่อกัน) และเวลาห้ามทับกันแม้คนละแพลตฟอร์ม",
+        `รับได้สูงสุด ${admin.slotsPerDay} slot (${admin.hoursPerDay} ชม.) ต่อวัน${admin.blocksPerDay ? ` แบ่งได้ไม่เกิน ${admin.blocksPerDay} ช่วง (ช่วง = slot ที่ต่อกัน)` : ""} และเวลาห้ามทับกันแม้คนละแพลตฟอร์ม`,
         `Admin เสริม ยกเลิกคิวผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${cancelMinHours} ชั่วโมง (ใน "ตารางของฉัน") และต้องทักแชทแจ้งแอดมินทุกครั้ง`,
         `ถ้าเหลือน้อยกว่า ${cancelMinHours} ชั่วโมง หรือเป็น Admin ประจำ ต้องติดต่อทีมงานโดยตรง`,
         calendar,

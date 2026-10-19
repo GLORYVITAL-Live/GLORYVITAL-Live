@@ -1,13 +1,13 @@
 import "server-only";
 import webpush from "web-push";
 import { missingCalendarCounts } from "@/lib/calendar";
-import { bookingRange, getSettings, proofsBySlot, type Settings } from "@/lib/data";
+import { bookingRange, getSettings, proofsBySlot, windowAlerts, type Settings } from "@/lib/data";
 import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
-import { addDays, rangeText, type BookRange } from "@/lib/window";
+import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
 
 /**
  * แจ้งเตือนในเว็บ (กระดิ่ง) + เด้งเข้ามือถือ (Web Push) — SQL 20261028000000_notifications
@@ -26,11 +26,12 @@ import { addDays, rangeText, type BookRange } from "@/lib/window";
  *   proof      หลังไลฟ์ ~2 ชม. ยังไม่แนบหลักฐาน / GMV → Admin ของ slot · ค้างเกิน 24 ชม. (10:00) → Admin + Owner
  *   calendar   คิวยังไม่ขึ้นปฏิทิน (จันทร์ / พฤหัส 10:00) → คนนั้น พร้อมลิงก์วิธีแชร์
  *   open_soon  [ด่วน] slot ว่างเหลือไม่ถึง 6 ชม. ก่อนไลฟ์ → Owner ฝั่งนั้น (ทุก 15 นาที)
- *   data       ข้อมูลผิด (คนซ้อน slot / แถวซ้ำ / ขาดแถวคู่) → Owner (ทันที ไม่แจ้งซ้ำเรื่องเดิม)
+ *   data       ข้อมูลผิด (คนซ้อน slot / คนเดียวกัน 2 slot เวลาทับ / แถวซ้ำ / ขาดแถวคู่) → Owner (ทันที ไม่แจ้งซ้ำเรื่องเดิม)
+ *   window     ช่วงเปิดจองหมดภายใน 2 วัน / หมดแล้ว (วันละครั้ง ตั้งแต่ 10:00) → Owner ฝั่งนั้น
  *   weekly     อาทิตย์ 18:00 สรุปคิวสัปดาห์หน้า → ทุกคนที่มีคิว
  */
 
-export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "test";
+export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "test";
 /** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide) */
 export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide";
 export type Note = { kind: NoteKind; title: string; body: string; page?: NotePage | null; dedupe?: string };
@@ -634,6 +635,20 @@ export async function sendOwnerAlerts(now = Date.now(), dryRun = false) {
     }
   }
 
+  // ---- ช่วงเปิดจองใกล้หมด / หมดแล้ว (วันละครั้ง ตั้งแต่ 10:00 ไม่ปลุกกลางคืน) ----
+  if (new Date(now + 7 * 3600_000).getUTCHours() >= DAILY_HOUR) {
+    for (const w of windowAlerts(await getSettings(db), ["mc", "admin"])) {
+      const when = w.ended ? `หมดแล้ว (วันสุดท้าย ${fmtDay(w.to)})` : w.daysLeft === 0 ? `หมดวันนี้ (${fmtDay(w.to)})` : `จะหมดในอีก ${w.daysLeft} วัน (วันสุดท้าย ${fmtDay(w.to)})`;
+      for (const email of owners[w.role]) {
+        items.push({
+          email, kind: "window", page: "home", dedupe: `window:${w.role}:${today}`,
+          title: `ช่วงเปิดจอง ${roleLabel(w.role)} ${when}`,
+          body: `${w.ended ? `${roleLabel(w.role)} จองคิวใหม่ผ่านเว็บไม่ได้แล้ว` : `หลังวันสุดท้าย ${roleLabel(w.role)} จะจองคิวใหม่ผ่านเว็บไม่ได้`} — ตั้งช่วงเปิดจองรอบถัดไปที่หน้าเจ้าของ > ตาราง slot > รายวัน`,
+        });
+      }
+    }
+  }
+
   // ---- ข้อมูลผิด ----
   const health = await dataHealth({ mc: true, admin: true });
   const day = (d: string) => fmtDayShort.format(parseKey(d));
@@ -644,6 +659,10 @@ export async function sendOwnerAlerts(now = Date.now(), dryRun = false) {
   for (const x of health.overlap) {
     toOwners([x.role], `overlap:${x.role}|${x.date}|${x.platform}|${x.time}|${x.names.join(",")}`,
       `ข้อมูลผิด: คนซ้อน slot ${roleLabel(x.role)}`, `${day(x.date)} ${x.time} ${x.platform}\n${x.names.join(" + ")} อยู่ช่องเดียวกันเวลาทับกัน (ชั่วโมง / ค่าจ้างนับทั้งคู่)`);
+  }
+  for (const x of health.selfOverlap) {
+    toOwners([x.role], `self:${x.role}|${x.date}|${x.name}|${x.slots.join(",")}`,
+      `ข้อมูลผิด: ${x.name} อยู่ ${x.slots.length} slot เวลาทับกัน`, `${day(x.date)}\n${x.slots.join("\n")}\nคนเดียวไลฟ์พร้อมกันไม่ได้ (ชั่วโมง / ค่าจ้างนับทุก slot) — เปลี่ยนคนใน slot ที่ไม่ได้ไลฟ์จริง`);
   }
   for (const x of health.dupRows) {
     toOwners([x.role], `dup:${x.role}|${x.date}|${x.platform}|${x.time}|${x.rows}`,

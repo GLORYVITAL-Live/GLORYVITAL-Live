@@ -2,6 +2,8 @@ import "server-only";
 import { missingCalendarCounts } from "@/lib/calendar";
 import { bkkToday, fetchAll } from "@/lib/data";
 import { platformLabel } from "@/lib/platform";
+import { checkInOf } from "@/lib/pay";
+import { samePersonOverlaps } from "@/lib/staff-check";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { HealthIssues } from "@/lib/types";
 import { addDays } from "@/lib/window";
@@ -10,6 +12,8 @@ import { addDays } from "@/lib/window";
  * ตรวจสุขภาพข้อมูล (ส่วน "ข้อมูลที่ควรแก้" ในหน้าแรกของเจ้าของ) — เฉพาะฝั่งที่มีสิทธิ์
  *   ช่วงที่ตรวจ: ต้นเดือนนี้ (ค่าจ้างเดือนนี้) ถึง 60 วันข้างหน้า
  *   overlap  = คนละคนอยู่ slot ช่องเดียวกันเวลาทับกัน (มักเป็นแถวซ้ำในชีต) -> ชั่วโมง / ค่าจ้างนับทั้งคู่
+ *   selfOverlap = คนเดียวกันอยู่ 2 slot เวลาทับกัน (ไลฟ์พร้อมกันไม่ได้) -> ชั่วโมง / ค่าจ้างนับทุก slot
+ *   badCheckIn  = หมายเหตุ "เข้า ..." อ่านเวลาไม่ได้ / อยู่นอกช่วง slot -> ระบบจ่ายเต็ม slot
  *   dupRows  = slot ข้างหน้าที่มีแถวซ้ำ (ช่อง + เวลาเดียวกัน) มีแถวว่างปน หรือคนเดิมซ้ำ -> หน้าแรกนับว่ายังไม่มีคน / ชั่วโมงซ้ำ
  *   noPair   = slot ข้างหน้าที่มีแถวแค่ฝั่งเดียว (แท็บ Deal Mc กับ Admin เสริมไม่ตรงกัน)
  *   notFirm  = ไลฟ์ไปแล้วเดือนนี้แต่สถานะยัง "ไม่เฟิร์ม" ทั้งที่มีคน -> ระบบนับชั่วโมง / ค่าจ้างให้แล้ว
@@ -21,7 +25,7 @@ import { addDays } from "@/lib/window";
 type Role = "mc" | "admin";
 type Row = {
   id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
-  status: string | null; confirmed: boolean | null; is_cancelled: boolean; pid: number | null;
+  status: string | null; confirmed: boolean | null; is_cancelled: boolean; pid: number | null; remark: string | null;
 };
 type Person = { id: number; role: string; name: string; phone: string | null; hourly_rate: number | string | null; is_salaried: boolean | null };
 
@@ -36,7 +40,7 @@ export async function dataHealth(scope: { mc: boolean; admin: boolean }): Promis
   const db = createAdminClient();
   const today = bkkToday(), now = Date.now();
   const month = today.slice(0, 7), monthStart = `${month}-01`, to = addDays(today, 60);
-  const cols = "id, platform, live_date, start_time, end_time, starts_at, ends_at, status, confirmed, is_cancelled";
+  const cols = "id, platform, live_date, start_time, end_time, starts_at, ends_at, status, confirmed, is_cancelled, remark";
   const load = (table: "mc_slots" | "admin_slots", col: string) => fetchAll<Row>((a, b) => db.from(table)
     .select(`${cols}, pid:${col}`).gte("live_date", monthStart).lte("live_date", to).order("id").range(a, b) as never);
   const [mcRows, adminRows, staff, settings, noCal] = await Promise.all([
@@ -53,7 +57,7 @@ export async function dataHealth(scope: { mc: boolean; admin: boolean }): Promis
   };
   const rowsOf: Record<Role, Row[]> = { mc: mcRows, admin: adminRows };
   const roles = (["mc", "admin"] as const).filter((r) => scope[r]);
-  const out: HealthIssues = { overlap: [], dupRows: [], noPair: [], notFirm: [], noRate: [], noPhone: [], calendar: [] };
+  const out: HealthIssues = { overlap: [], selfOverlap: [], badCheckIn: [], dupRows: [], noPair: [], notFirm: [], noRate: [], noPhone: [], calendar: [] };
 
   for (const role of roles) {
     const rows = rowsOf[role].filter(counted);
@@ -72,6 +76,23 @@ export async function dataHealth(scope: { mc: boolean; admin: boolean }): Promis
       if (group.length < 2) continue;
       group.forEach((g) => used.add(g.id));
       out.overlap.push({ role, date: a.live_date, platform: platformLabel(a.platform), time: timeOf(a), names: group.map((g) => nameOf(role, g.pid)) });
+    }
+    // คนเดียวกัน 2 slot เวลาทับกัน (คนละช่อง / ช่องเดียวกันคนละเวลา) — แถวซ้ำเวลาเดียวกันเป๊ะไปอยู่ใน dupRows
+    const spans = rows.map((r) => ({ ...r, startMs: ms(r.starts_at), endMs: ms(r.ends_at) }));
+    for (const g of samePersonOverlaps(spans)) {
+      out.selfOverlap.push({
+        role, date: g[0].live_date, name: nameOf(role, g[0].pid),
+        slots: g.map((r) => `${platformLabel(r.platform)} ${timeOf(r)}`),
+      });
+    }
+    // หมายเหตุ "เข้า ..." ที่ใช้ไม่ได้ (ระบบจ่ายเต็ม slot) — เฉพาะ slot ที่มีคน
+    for (const r of rows) {
+      const c = r.pid ? checkInOf(r.remark, ms(r.starts_at), ms(r.ends_at)) : null;
+      if (c?.bad) {
+        out.badCheckIn!.push({
+          role, date: r.live_date, platform: platformLabel(r.platform), time: timeOf(r), name: nameOf(role, r.pid), text: c.time, reason: c.reason,
+        });
+      }
     }
     // แถวซ้ำข้างหน้า (ที่ไม่ใช่กรณีคนละคนข้างบน)
     const groups = new Map<string, Row[]>();
@@ -124,6 +145,7 @@ export async function dataHealth(scope: { mc: boolean; admin: boolean }): Promis
 
   const byDate = <T extends { date: string; time: string }>(a: T, b: T) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time);
   out.overlap.sort(byDate);
+  out.selfOverlap.sort((a, b) => a.date.localeCompare(b.date) || a.slots[0].localeCompare(b.slots[0]));
   out.dupRows.sort(byDate);
   out.noPair.sort(byDate);
   out.notFirm.sort(byDate);
@@ -135,4 +157,4 @@ export async function dataHealth(scope: { mc: boolean; admin: boolean }): Promis
 
 /** จำนวนเรื่องที่ควรแก้ทั้งหมด */
 export const healthCount = (h: HealthIssues) =>
-  h.overlap.length + h.dupRows.length + h.noPair.length + h.notFirm.length + h.noRate.length + h.noPhone.length + h.calendar.length;
+  h.overlap.length + (h.selfOverlap?.length ?? 0) + (h.badCheckIn?.length ?? 0) + h.dupRows.length + h.noPair.length + h.notFirm.length + h.noRate.length + h.noPhone.length + h.calendar.length;

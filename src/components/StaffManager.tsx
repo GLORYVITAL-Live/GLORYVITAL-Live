@@ -20,6 +20,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { money } from "@/lib/format";
 import { parseTierHours, tiersLabel } from "@/lib/pay";
+import { isTestAccount } from "@/lib/staff-check";
 import type { CommitTier, OwnerScope } from "@/lib/types";
 
 type Role = "mc" | "admin" | "owner" | "marketing";
@@ -32,6 +33,8 @@ Android: เปิด ${site} ใน Chrome → เข้าสู่ระบ�
 iPhone: เปิดใน Safari → ปุ่มแชร์ → "เพิ่มไปยังหน้าจอโฮม" → เปิดเว็บจากไอคอนนั้น → เข้าสู่ระบบ → 🔔 → "เปิดแจ้งเตือน" → อนุญาต
 
 กด "ทดสอบ" ได้ ถ้ามีแจ้งเตือนเด้งขึ้น = ใช้ได้แล้ว ✅`;
+/** ค่าจ้าง/ชม. เกินเท่านี้ = ถามยืนยันก่อนบันทึก */
+const RATE_ALERT = 5000;
 /** Mc / Admin = มีคิว ค่าจ้าง ปฏิทิน (Owner / Marketing ไม่มี) */
 const isCrew = (role: Role) => role === "mc" || role === "admin";
 type Person = {
@@ -347,6 +350,11 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-1.5 font-semibold">
                   {displayName(p)}
+                  {isCrew(p.role) && isTestAccount(p.name) ? (
+                    <Badge variant="outline" className="text-[11px] text-muted-foreground" title="ชื่อมีคำว่า ทดสอบ / test — ไม่นับในสรุปรายเดือนและไฟล์เบิก">
+                      บัญชีทดสอบ
+                    </Badge>
+                  ) : null}
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
                   {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">{p.role === "mc" ? "Mc" : "Admin"} ประจำ</Badge> : null}
                   {p.can_manage_equipment ? <Badge className="bg-p2/15 text-[11px] text-p2">อุปกรณ์</Badge> : null}
@@ -622,6 +630,16 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   const anyNotify = notifyOn.mc || notifyOn.admin;
 
   async function save() {
+    // ค่าจ้าง/ชม. สูงผิดปกติ (พิมพ์ 0 เกิน / ใส่ค่าจ้างทั้งวันหรือทั้งเดือน) ถามก่อนบันทึก — เฉพาะค่าที่เพิ่งพิมพ์ใหม่
+    if (isCrew(role) && !salaried) {
+      const saved = new Set([Number(person?.hourly_rate) || 0, ...(person?.commit_tiers ?? []).map((t) => Number(t.rate))]);
+      const high = [Number(rate.replace(/[,\s]/g, "")) || 0, ...filledTiers.map((t) => t.rate)].filter((n) => n > RATE_ALERT && !saved.has(n));
+      if (high.length && !(await confirm({
+        title: `ค่าจ้าง ${money(Math.max(...high))} บาท/ชม. สูงผิดปกติ`,
+        description: `ปกติไม่เกิน ${money(RATE_ALERT)} บาท/ชม. — ตรวจว่าไม่ได้พิมพ์ 0 เกิน หรือใส่ค่าจ้างทั้งวัน / ทั้งเดือน (ยอดเงินในสรุปและไฟล์เบิกคิดจากค่านี้)`,
+        confirmText: "ถูกต้อง บันทึก",
+      }))) return;
+    }
     setSaving(true);
     try {
       const manage = {

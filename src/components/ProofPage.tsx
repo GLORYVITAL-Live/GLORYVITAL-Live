@@ -19,7 +19,8 @@ import type { ProofSlot, SlotGmv } from "@/lib/types";
 
 /** canEdit = แนบ / กรอก GMV ได้ · editable = slot ที่แก้ได้ (null = ทุก slot / [] = ดูได้อย่างเดียว) */
 type DayData = { date: string; all: boolean; canEdit?: boolean; editable?: number[] | null; slots: ProofSlot[] };
-type MonthDay = { date: string; total: number; done: number };
+/** gmvMissing = slot ที่จบแล้วแต่ยังไม่กรอก GMV (เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง) */
+type MonthDay = { date: string; total: number; done: number; gmvMissing?: number };
 
 const addDays = (k: string, n: number) => new Date(parseKey(k).getTime() + n * 86400_000).toISOString().slice(0, 10);
 const hms = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
@@ -61,11 +62,15 @@ function previewGmv(slots: ProofSlot[], drafts: Record<number, GmvDraft>) {
   return new Map(res.map((r) => [r.id, r]));
 }
 
-/** ยอด GMV ที่บันทึกไว้: "82,058 (205,564 − 123,506)" */
+/** ตัวเลขในข้อความที่พิมพ์ไว้ ใส่จุลภาคให้เหมือนกันทั้งหมด: "123506 - 60540" -> "123,506 - 60,540" */
+const fmtTyped = (t: string) =>
+  t.replace(/บาท|฿/gi, "").trim().replace(/\d[\d,]*(\.\d+)?/g, (m) => fmtGmv(Number(m.replace(/,/g, ""))));
+
+/** ยอด GMV ที่บันทึกไว้: "82,058 (205,564 − 123,506)" (minus 0 = ติ๊กหักยอดไว้แต่ไม่มียอดก่อนหน้า ไม่ต้องแสดง) */
 function gmvText(g: SlotGmv) {
-  const typed = g.input && g.input !== String(g.value) ? g.input : "";
-  const detail = g.minus !== null ? `${typed || fmtGmv(g.value + g.minus)} − ${fmtGmv(g.minus)}` : typed;
-  return `${fmtGmv(g.value)}${detail ? ` (${detail})` : ""}`;
+  const typed = g.input && g.input !== String(g.value) ? fmtTyped(g.input) : "";
+  const detail = g.minus ? `${typed || fmtGmv(g.value + g.minus)} − ${fmtGmv(g.minus)}` : typed;
+  return `${fmtGmv(g.value)}${detail && detail !== fmtGmv(g.value) ? ` (${detail})` : ""}`;
 }
 
 /** ค่าเริ่มต้นในช่องกรอก: ค่าที่บันทึกไว้ (ไม่มี = ว่าง ติ๊กหักยอดไว้) */
@@ -109,9 +114,11 @@ function GmvField({ slot, draft, result, before, disabled, onChange, showSlot, b
         <Label className="mt-2 items-start leading-snug font-normal">
           <Checkbox checked={draft.auto} disabled={disabled} onCheckedChange={(v) => onChange({ ...draft, auto: v === true })} className="mt-0.5" />
           <span>
-            ไลฟ์ต่อจาก slot ก่อนหน้า: หักยอดสะสม {hm.format(before.fromMs)}–{hm.format(before.toMs)}{" "}
+            หักยอดสะสม {hm.format(before.fromMs)}–{hm.format(before.toMs)}{" "}
             <strong className="tabular-nums">{fmtGmv(before.amount)}</strong> ให้อัตโนมัติ
-            <span className="block text-xs text-muted-foreground">เอาติ๊กออกถ้าเริ่มไลฟ์ใหม่ (ยอดในแดชบอร์ดเริ่มนับใหม่)</span>
+            <span className="block text-xs text-muted-foreground">
+              ติ๊กไว้ = ตัวเลขนี้เป็นยอดสะสมจากแดชบอร์ด (ไลฟ์ต่อจาก slot ก่อนหน้า) · เอาติ๊กออกถ้าเป็นยอดของ slot นี้อย่างเดียว หรือเริ่มไลฟ์ใหม่
+            </span>
           </span>
         </Label>
       ) : null}
@@ -119,7 +126,7 @@ function GmvField({ slot, draft, result, before, disabled, onChange, showSlot, b
         {!value ? "ไม่บังคับ · พิมพ์บวก/ลบกันได้ เช่น 123506 - 60540"
           : value.error ? value.error
             : <>GMV {block && block.length > 1 ? `${block[0].start}–${slot.end}` : "ของ slot นี้"} <strong className="text-foreground tabular-nums">{fmtGmv(value.gmv ?? 0)}</strong>
-                {value.minus !== null ? <span className="tabular-nums"> ({fmtGmv((value.gmv ?? 0) + value.minus)} − {fmtGmv(value.minus)})</span> : null}</>}
+                {value.minus ? <span className="tabular-nums"> ({fmtGmv((value.gmv ?? 0) + value.minus)} − {fmtGmv(value.minus)})</span> : null}</>}
       </p>
       {value?.warning && !value.error ? (
         <p className="mt-1.5 rounded-md border border-warning-border bg-warning px-2 py-1.5 text-xs font-semibold text-warning-foreground">{value.warning}</p>
@@ -138,7 +145,10 @@ function beforeOf(
     // slot ก่อนหน้าว่าง: คนเดียวกัน = ยอดรวมอยู่ใน slot นี้ ดูต่อไปข้างหน้า / คนละคน = ไม่มียอดให้หัก
     if (g === null || g === undefined) return sameLive(prev, s) ? beforeOf(slots, i - 1, preview) : null;
     const chain = beforeOf(slots, i - 1, preview);
-    return { amount: (chain?.amount ?? 0) + g, fromMs: chain?.fromMs ?? prev.startMs, toMs: prev.endMs };
+    // ไม่มียอดก่อนหน้าอีก: ยอดของ prev รวม slot ว่างของ Mc คนเดียวกันที่ไลฟ์ต่อกันมาด้วย = เริ่มนับจาก slot แรกของช่วงนั้น
+    let from = i - 1;
+    while (!chain && from > 0 && sameLive(slots[from - 1], slots[from]) && preview.get(slots[from - 1].mcSlotId)?.gmv == null) from--;
+    return { amount: (chain?.amount ?? 0) + g, fromMs: chain?.fromMs ?? slots[from].startMs, toMs: prev.endMs };
   }
   return s.gmvBefore;
 }
@@ -158,9 +168,12 @@ export function ProofPage() {
   const [tick, setTick] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
   const [onlyMissing, setOnlyMissing] = useState(false);
+  const [onlyNoGmv, setOnlyNoGmv] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [gmvSlot, setGmvSlot] = useState<ProofSlot | null>(null);
   const [busy, setBusy] = useState(false);
+  // เวลาตอนโหลดข้อมูลล่าสุด: slot ที่ยังไม่จบไม่นับว่าขาด / ยังไม่เริ่มแนบหลักฐานไม่ได้
+  const [now, setNow] = useState(() => Date.now());
   const reload = () => setTick((n) => n + 1);
   const monthOf = date.slice(0, 7);
 
@@ -169,7 +182,7 @@ export function ProofPage() {
     api<DayData>(`/api/proofs?date=${date}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.message);
-        if (alive) { setData(res); setFailed(null); }
+        if (alive) { setData(res); setFailed(null); setNow(Date.now()); }
       })
       .catch((err) => { if (alive) setFailed({ date, message: (err as Error).message }); });
     return () => { alive = false; };
@@ -189,9 +202,16 @@ export function ProofPage() {
   const canEditSlot = (s: ProofSlot) => day?.canEdit !== false && (day?.editable == null || day.editable.includes(s.mcSlotId));
   const viewOnly = !!day && (day.canEdit === false || (day.editable != null && !day.editable.length));
   const missingDays = month?.key === monthOf ? month.days.filter((d) => d.done < d.total) : [];
+  const noGmvDays = month?.key === monthOf ? month.days.filter((d) => (d.gmvMissing ?? 0) > 0) : [];
+  const ended = (s: ProofSlot) => s.endMs <= now;
+  const started = (s: ProofSlot) => s.startMs <= now;
+  const noGmv = (s: ProofSlot) => ended(s) && !s.gmv && !s.gmvCoveredBy;
   // Mc ประจำ ไม่ต้องแนบหลักฐาน: ไม่นับในจำนวน "มีหลักฐาน" และไม่อยู่ใน "เฉพาะที่ยังไม่มีหลักฐาน"
-  const need = day ? day.slots.filter((s) => !s.salaried) : [];
-  const shown = day ? day.slots.filter((s) => !onlyMissing || (!s.salaried && !s.proof)) : [];
+  // slot ที่ยังไลฟ์ไม่จบ ยังไม่นับว่าขาด (เดิมนับ ทำให้ขึ้น "มีหลักฐาน 0/9" ทั้งที่ยังไม่ถึงเวลา)
+  const need = day ? day.slots.filter((s) => !s.salaried && ended(s)) : [];
+  const shown = day
+    ? day.slots.filter((s) => (!onlyMissing || (!s.salaried && !s.proof && ended(s))) && (!onlyNoGmv || noGmv(s)))
+    : [];
   const picked = day ? day.slots.filter((s) => selected.includes(s.mcSlotId)) : [];
   const done = need.filter((s) => s.proof).length;
 
@@ -208,6 +228,7 @@ export function ProofPage() {
   function toggle(s: ProofSlot) {
     if (s.salaried || !canEditSlot(s)) return; // Mc ประจำ ไม่ต้องแนบหลักฐาน / ดูได้อย่างเดียว
     if (selected.includes(s.mcSlotId)) return setSelected(selected.filter((x) => x !== s.mcSlotId));
+    if (!started(s)) return toast("slot นี้ยังไม่ถึงเวลาไลฟ์ แนบหลักฐานได้หลังเริ่มไลฟ์");
     // ไลฟ์ 1 ครั้ง = 1 แพลตฟอร์ม เลือกคนละแพลตฟอร์ม = เริ่มเลือกใหม่
     if (picked.length && picked[0].platform !== s.platform) {
       toast(`เลือกได้ทีละแพลตฟอร์ม เริ่มเลือกใหม่ที่ ${s.platform}`);
@@ -273,7 +294,23 @@ export function ProofPage() {
                 </Button>
               ))}
             </>
-          ) : month.days.length ? <span className="font-semibold text-success">เดือนนี้แนบหลักฐานครบทุก slot แล้ว ✓</span> : null}
+          ) : month.days.some((d) => d.total) ? <span className="font-semibold text-success">เดือนนี้แนบหลักฐานครบทุก slot แล้ว ✓</span> : null}
+        </div>
+      ) : null}
+      {noGmvDays.length ? (
+        <div className="my-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="font-semibold text-warning-foreground">ยังไม่กรอก GMV:</span>
+          {noGmvDays.map((d) => (
+            <Button
+              key={d.date}
+              variant="outline"
+              size="xs"
+              onClick={() => { goTo(d.date); setOnlyNoGmv(true); }}
+              className={cn("rounded-full bg-card font-semibold", d.date === date && onlyNoGmv && "border-primary bg-secondary text-primary")}
+            >
+              {fmtDayMonth.format(parseKey(d.date))} · {d.gmvMissing} slot
+            </Button>
+          ))}
         </div>
       ) : null}
 
@@ -282,15 +319,21 @@ export function ProofPage() {
         <DayBadge label={relLabel(date)} />
         {day?.slots.length ? (
           <span className={cn("ml-auto text-xs font-medium", done === need.length ? "text-success" : "text-muted-foreground")}>
-            มีหลักฐาน {done}/{need.length} slot
+            {need.length ? `มีหลักฐาน ${done}/${need.length} slot ที่จบแล้ว` : "ยังไม่มี slot ที่ไลฟ์จบ"}
           </span>
         ) : null}
       </h2>
       {day?.slots.length ? (
-        <Label className="mt-2 cursor-pointer font-normal text-muted-foreground">
-          <Checkbox checked={onlyMissing} onCheckedChange={(v) => setOnlyMissing(v === true)} />
-          เฉพาะที่ยังไม่มีหลักฐาน
-        </Label>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+          <Label className="cursor-pointer font-normal text-muted-foreground pointer-coarse:min-h-9">
+            <Checkbox checked={onlyMissing} onCheckedChange={(v) => setOnlyMissing(v === true)} />
+            เฉพาะที่ยังไม่มีหลักฐาน
+          </Label>
+          <Label className="cursor-pointer font-normal text-muted-foreground pointer-coarse:min-h-9">
+            <Checkbox checked={onlyNoGmv} onCheckedChange={(v) => setOnlyNoGmv(v === true)} />
+            เฉพาะที่ยังไม่กรอก GMV
+          </Label>
+        </div>
       ) : null}
 
       {error && !day ? (
@@ -302,7 +345,9 @@ export function ProofPage() {
           {day.all ? "ไม่มี slot ที่มี Mc ไลฟ์ในวันนี้" : "วันนี้คุณไม่ได้เป็น Admin ใน slot ไหน"}
         </StateBox>
       ) : !groups.length ? (
-        <StateBox title="แนบหลักฐานครบทุก slot แล้ว ✓" />
+        <StateBox
+          title={onlyMissing && onlyNoGmv ? "ไม่มี slot ที่ขาดทั้งหลักฐานและ GMV ✓" : onlyNoGmv ? "กรอก GMV ครบทุก slot ที่จบแล้ว ✓" : "แนบหลักฐานครบทุก slot ที่จบแล้ว ✓"}
+        />
       ) : (
         <div className="mt-3 space-y-4">
           {groups.map((g) => (
@@ -317,7 +362,7 @@ export function ProofPage() {
                       key={s.mcSlotId}
                       className={cn("flex items-start gap-3 rounded-xl border bg-card p-3 shadow-card", on && "border-primary ring-1 ring-primary")}
                     >
-                      {s.salaried || !canEdit ? <span aria-hidden className="mt-0.5 size-5 shrink-0" /> : (
+                      {s.salaried || !canEdit || !started(s) ? <span aria-hidden className="mt-0.5 size-5 shrink-0" /> : (
                         <Checkbox
                           checked={on}
                           onCheckedChange={() => toggle(s)}
@@ -326,7 +371,7 @@ export function ProofPage() {
                         />
                       )}
                       <div className="min-w-0 flex-1 text-sm">
-                        <button type="button" onClick={() => toggle(s)} disabled={s.salaried || !canEdit} className="text-left disabled:cursor-default">
+                        <button type="button" onClick={() => toggle(s)} disabled={s.salaried || !canEdit || !started(s)} className="text-left disabled:cursor-default">
                           <span className="font-bold tabular-nums">{s.start}–{s.end}</span>
                           <span className="ml-2">{s.mcName || "—"}</span>
                           {day.all && s.adminName ? <span className="ml-2 text-muted-foreground">Admin {s.adminName}</span> : null}
@@ -348,21 +393,25 @@ export function ProofPage() {
                             ) : null}
                             <span className="text-muted-foreground">แนบโดย {s.proof.by}</span>
                             {s.proof.canDelete ? (
-                              <Button variant="link" size="xs" disabled={busy} onClick={() => remove(s)} className="h-auto p-0 text-destructive">
-                                ลบ
+                              // ปุ่มลบอยู่ชิดขวา ห่างจากปุ่ม "แก้ GMV" กันกดพลาดบนจอสัมผัส
+                              <Button variant="ghost" size="sm" disabled={busy} onClick={() => remove(s)} className="ml-auto text-destructive pointer-coarse:min-h-9">
+                                ลบหลักฐาน
                               </Button>
                             ) : null}
                           </div>
                         ) : s.salaried ? <div className="mt-1 text-xs text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</div>
-                          : <div className="mt-1 text-xs font-semibold text-destructive">ยังไม่มีหลักฐาน</div>}
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                          : !started(s) ? <div className="mt-1 text-xs text-muted-foreground">ยังไม่ถึงเวลาไลฟ์ (แนบหลักฐานได้หลังเริ่มไลฟ์)</div>
+                            : !ended(s) ? <div className="mt-1 text-xs text-muted-foreground">กำลังไลฟ์ · แนบหลักฐานได้เมื่อจบไลฟ์</div>
+                              : <div className="mt-1 text-xs font-semibold text-destructive">ยังไม่มีหลักฐาน</div>}
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs pointer-coarse:mt-2">
                           {s.gmv ? (
                             <span className="font-semibold tabular-nums">GMV {gmvText(s.gmv)}</span>
                           ) : s.gmvCoveredBy ? (
                             <span className="font-semibold text-success">✓ GMV รวมอยู่ในช่วง {s.gmvCoveredBy} (ไลฟ์ต่อเนื่อง {s.mcName})</span>
-                          ) : <span className="font-semibold text-warning-foreground">ยังไม่ได้กรอก GMV</span>}
-                          {canEdit ? (
-                            <Button variant="link" size="xs" disabled={busy} onClick={() => setGmvSlot(s)} className="h-auto p-0">
+                          ) : ended(s) ? <span className="font-semibold text-warning-foreground">ยังไม่ได้กรอก GMV</span>
+                            : <span className="text-muted-foreground">ยังไม่ได้กรอก GMV</span>}
+                          {canEdit && (started(s) || s.gmv) ? (
+                            <Button variant="outline" size="sm" disabled={busy} onClick={() => setGmvSlot(s)} className="bg-card pointer-coarse:min-h-9">
                               {s.gmv ? "แก้ GMV" : s.gmvCoveredBy ? "กรอกแยก" : "กรอก GMV"}
                             </Button>
                           ) : null}
@@ -479,6 +528,8 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
   const [image, setImage] = useState<{ blob: Blob; url: string } | null>(null);
   const [start, setStart] = useState(() => toInput(slots[0].startMs));
   const [end, setEnd] = useState(() => toInput(slots[slots.length - 1].endMs));
+  // ยังไม่ได้แก้เวลา = ยังเป็นเวลาตาม slot ที่ระบบเติมไว้ (ไฮไลต์ให้ตรวจกับแดชบอร์ด)
+  const [timeTouched, setTimeTouched] = useState({ start: false, end: false });
   const [busy, setBusy] = useState(false);
   const replacing = slots.filter((s) => s.proof).length;
   // GMV ต่อ slot: กรอกไว้แล้ว = เริ่มจากค่าเดิม
@@ -526,6 +577,14 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
     const s = Math.round(span / 1000);
     return `${Math.floor(s / 3600)} ชม. ${Math.floor((s % 3600) / 60)} นาที ${s % 60} วินาที`;
   })();
+  // เตือน (ไม่บล็อก): เวลาในอนาคต / ไม่ทับเวลา slot ที่เลือกเลย = น่าจะกรอกวันที่หรือเลือก slot ผิด
+  const [openedAt] = useState(() => Date.now());
+  const timeWarn = invalid ? ""
+    : endMs > openedAt + 5 * 60_000 ? "เวลาจบไลฟ์ที่กรอกเป็นเวลาในอนาคต ตรวจเวลาอีกครั้ง"
+      : !slots.some((s) => startMs < s.endMs && endMs > s.startMs) ? "เวลาเริ่ม–จบที่กรอกไม่ทับเวลา slot ที่เลือกเลย ตรวจวันที่ / เวลา หรือ slot ที่เลือกอีกครั้ง"
+        : "";
+  const untouched = !timeTouched.start || !timeTouched.end;
+  const prefillCls = "border-warning-border bg-warning/40";
 
   async function save() {
     if (!image || invalid || gmvError) return;
@@ -538,9 +597,10 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
       fd.append("endedAt", end);
       fd.append("gmv", JSON.stringify(slots.map((s) => ({ id: s.mcSlotId, ...drafts[s.mcSlotId] }))));
       const res = await fetch("/api/proofs", { method: "POST", body: fd });
-      const json = await res.json().catch(() => null) as { ok?: boolean; message?: string } | null;
+      const json = await res.json().catch(() => null) as { ok?: boolean; message?: string; warning?: string } | null;
       if (!json?.ok) throw new Error(json?.message ?? `อัปโหลดไม่สำเร็จ (HTTP ${res.status})`);
       toast(json.message ?? "แนบหลักฐานแล้ว");
+      if (json.warning) toast(json.warning, "error");
       onClose(true);
     } catch (err) {
       toast((err as Error).message, "error");
@@ -561,7 +621,9 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
         <div>
           <Label htmlFor="proof-file" className="mb-1.5">รูปแดชบอร์ด TikTok LIVE</Label>
           <Input id="proof-file" type="file" accept="image/*" disabled={busy} onChange={(e) => takeFile(e.target.files?.[0])} />
-          <p className="mt-1 text-xs text-muted-foreground">เลือกไฟล์ หรือแคปหน้าจอแล้วกด Ctrl + V ที่หน้านี้ · ต้องเห็นวันที่และเวลาเริ่ม–จบไลฟ์ในรูป</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            เลือกไฟล์<span className="pointer-coarse:hidden"> หรือแคปหน้าจอแล้วกด Ctrl + V ที่หน้านี้</span> · ต้องเห็นวันที่และเวลาเริ่ม–จบไลฟ์ในรูป
+          </p>
           {image ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={image.url} alt="ตัวอย่างรูปหลักฐาน" className="mt-2 max-h-72 w-full rounded-lg border object-contain" />
@@ -571,16 +633,32 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
             <Label htmlFor="proof-start" className="mb-1.5">เริ่มไลฟ์จริง</Label>
-            <Input id="proof-start" type="datetime-local" step={1} value={start} disabled={busy} onChange={(e) => setStart(e.target.value)} />
+            <Input
+              id="proof-start" type="datetime-local" step={1} value={start} disabled={busy}
+              className={cn(!timeTouched.start && prefillCls)}
+              onChange={(e) => { setStart(e.target.value); setTimeTouched((t) => ({ ...t, start: true })); }}
+            />
           </div>
           <div>
             <Label htmlFor="proof-end" className="mb-1.5">จบไลฟ์จริง</Label>
-            <Input id="proof-end" type="datetime-local" step={1} value={end} disabled={busy} onChange={(e) => setEnd(e.target.value)} />
+            <Input
+              id="proof-end" type="datetime-local" step={1} value={end} disabled={busy}
+              className={cn(!timeTouched.end && prefillCls)}
+              onChange={(e) => { setEnd(e.target.value); setTimeTouched((t) => ({ ...t, end: true })); }}
+            />
           </div>
         </div>
-        <Notice variant={invalid ? "warning" : "info"}>
-          {invalid || <>ไลฟ์จริง <strong>{spanText}</strong> · แก้ให้ตรงกับในรูป (ระบบใส่เวลาตาม slot ไว้ให้ก่อน)</>}
+        <Notice variant={invalid || untouched ? "warning" : "info"}>
+          {invalid || (
+            <>
+              ไลฟ์จริง <strong>{spanText}</strong>
+              {untouched
+                ? <> · <strong>ช่องสีเหลืองยังเป็นเวลาตาม slot ที่ระบบเติมไว้</strong> ตรวจ / แก้ให้ตรงกับเวลาเริ่ม–จบในแดชบอร์ด</>
+                : " · ตรวจให้ตรงกับเวลาในรูป"}
+            </>
+          )}
         </Notice>
+        {timeWarn ? <Notice variant="warning" className="font-semibold">{timeWarn}</Notice> : null}
         <div className="space-y-2">
           {slots.map((s, i) => isHidden(s) ? null : (
             <GmvField
@@ -605,6 +683,12 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
           <Notice variant="warning">มี {replacing} slot ที่แนบหลักฐานไว้แล้ว จะถูกแทนที่ด้วยรูปนี้</Notice>
         ) : null}
       </DialogBody>
+      {/* ปุ่มบันทึกกดไม่ได้ = บอกเหตุผล (เดิมเป็นปุ่มเทาเฉยๆ) */}
+      {!busy && (!image || invalid || gmvError) ? (
+        <p className="text-right text-xs font-semibold text-destructive">
+          {!image ? "เลือกรูปแดชบอร์ดก่อน จึงจะบันทึกได้" : invalid ? `แก้เวลา: ${invalid}` : "แก้ช่อง GMV ที่ขึ้นสีแดงก่อน"}
+        </p>
+      ) : null}
       <DialogActions>
         <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>
         <Button size="lg" disabled={busy || !image || !!invalid || !!gmvError} onClick={save}>
@@ -626,9 +710,10 @@ function GmvDialog({ slot, onClose }: { slot: ProofSlot; onClose: (saved: boolea
     if (result?.error) return;
     setBusy(true);
     try {
-      const res = await api<{ message: string }>("/api/proofs", { items: [{ id: slot.mcSlotId, ...draft }] }, "PATCH");
+      const res = await api<{ message: string; warning?: string }>("/api/proofs", { items: [{ id: slot.mcSlotId, ...draft }] }, "PATCH");
       if (!res.ok) throw new Error(res.message);
       toast(res.message);
+      if (res.warning) toast(res.warning, "error"); // slot ถัดไปติดลบหลังหัก = ต้องไปแก้
       onClose(true);
     } catch (err) {
       toast((err as Error).message, "error");

@@ -7,7 +7,7 @@ import {
   fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, parseKey, platformOf, relLabel,
 } from "@/lib/format";
 import {
-  AppDialog, DayBadge, DialogActions, DialogBody, LoadError, Notice, PlatformBadge, StateBox, api, useToast,
+  AppDialog, DayBadge, DialogActions, DialogBody, LoadError, Notice, NoticeStrip, PlatformBadge, StateBox, api, useToast,
 } from "@/components/shared";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,11 @@ function blocksOf(list: Span[]) {
   const sorted = [...list].sort((a, b) => a.startMs - b.startMs);
   return sorted.filter((x, i) => i === 0 || sorted[i - 1].endMs !== x.startMs).length;
 }
+/** "25 นาที" / "1 ชม. 5 นาที" */
+const durText = (ms: number) => {
+  const m = Math.max(1, Math.floor(ms / 60_000));
+  return m >= 60 ? `${Math.floor(m / 60)} ชม.${m % 60 ? ` ${m % 60} นาที` : ""}` : `${m} นาที`;
+};
 const VIEW_KEY = "glory_booking_view";
 const POLL_MS = 15_000; // โหลด slot ใหม่อัตโนมัติระหว่างเปิดหน้าอยู่ (แก้/ลบในชีต มีคนจองไปแล้ว)
 const fmtClock = new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Bangkok" });
@@ -69,6 +74,8 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   // แชร์ปฏิทิน: คู่มือ + ปุ่ม "แชร์แล้ว เช็กเลย"
   const [guideOpen, setGuideOpen] = useState(false);
   const [checking, setChecking] = useState(false);
+  // วันที่จองครบโควต้าแล้ว: แถว slot พับไว้ กดเพื่อดู
+  const [openFull, setOpenFull] = useState<Set<string>>(new Set());
 
   async function checkCalendar() {
     setChecking(true);
@@ -162,10 +169,15 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
     return idx;
   }, [slots]);
   const platforms = Object.keys(platformIndex);
+  // ตัวกรองที่ยังใช้ได้: แพลตฟอร์มที่เลือกไว้แต่ไม่มี slot แล้ว (มีคนจองหมด / ทีมงานลบ) ล้างออกเอง ไม่ค้างจนหน้าว่าง
+  const activeFilters = useMemo(
+    () => new Set(platforms.length > 1 ? [...filters].filter((p) => p in platformIndex) : []),
+    [filters, platformIndex, platforms.length],
+  );
 
   const visible = useMemo(
-    () => slots.filter((s) => filters.size === 0 || filters.has(platformOf(s))),
-    [slots, filters],
+    () => slots.filter((s) => activeFilters.size === 0 || activeFilters.has(platformOf(s))),
+    [slots, activeFilters],
   );
   const groups = useMemo(() => {
     const g = new Map<string, OpenSlot[]>();
@@ -197,25 +209,57 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
     if (chip && strip) strip.scrollTo({ left: chip.offsetLeft - strip.clientWidth / 2 + chip.clientWidth / 2, behavior: "smooth" });
   }, [activeDate]);
 
-  /** เหตุผลที่เลือก slot นี้ไม่ได้ ("" = เลือกได้) นับทั้ง slot ที่เลือกอยู่และคิวที่จองไว้แล้วของวันนั้น */
-  function blockReason(s: OpenSlot) {
-    if (isLocked) return t.lockMsg;
+  /** เกินโควต้าต่อวันไหม (sameDay = คิวของวันนั้นที่นับแล้ว) "" = ยังไม่เกิน */
+  function quotaReason(s: OpenSlot, sameDay: Span[]) {
+    if (sameDay.length >= limits.slotsPerDay) return `${role === "admin" ? "รับ" : "จอง"}ได้สูงสุด ${limits.slotsPerDay} slot ต่อวัน`;
+    if (sameDay.reduce((a, x) => a + spanHours(x), 0) + spanHours(s) > limits.hoursPerDay) return `รวมแล้วเกิน ${limits.hoursPerDay} ชม. ต่อวัน`;
+    if (limits.blocksPerDay && blocksOf([...sameDay, s]) > limits.blocksPerDay) {
+      return `แบ่งได้ไม่เกิน ${limits.blocksPerDay} ช่วงต่อวัน เลือก slot ที่ต่อกับช่วงเดิม`;
+    }
+    return "";
+  }
+
+  /**
+   * เหตุผลที่เลือก slot นี้ไม่ได้ ("" = เลือกได้) นับทั้ง slot ที่เลือกอยู่และคิวที่จองไว้แล้วของวันนั้น
+   *   full = ข้อความเต็ม (แจ้งตอนกด) / short = ใต้แถว (หัววันบอก "มีคิวแล้ว N" อยู่แล้ว ไม่ต้องซ้ำทุกแถว)
+   */
+  function blockReason(s: OpenSlot): { full: string; short: string } {
+    const same = (x: string) => ({ full: x, short: x });
+    if (isLocked) return same(t.lockMsg);
     const chosen = [...selected.values()];
     const booked = mineByDay.get(s.date) ?? [];
     const hit = (x: Span) => s.startMs < x.endMs && s.endMs > x.startMs;
     // ทับกับคิวเดิม (ดูทุกวัน เผื่อ slot ข้ามเที่ยงคืน)
-    if ((data?.mine ?? []).some(hit)) return `เวลานี้ทับกับคิวที่คุณ${t.verb}ไว้แล้ว`;
-    if (chosen.some(hit)) return "เวลานี้ทับกับ slot ที่เลือกไว้แล้ว";
-    if (chosen.length >= limits.perRequest) return `เลือกได้ครั้งละไม่เกิน ${limits.perRequest} slot`;
-    const sameDay: Span[] = [...chosen.filter((x) => x.date === s.date), ...booked];
-    const had = booked.length ? ` (คุณมีคิววันนี้แล้ว ${booked.length} slot)` : "";
-    if (sameDay.length >= limits.slotsPerDay) return `${role === "admin" ? "รับ" : "จอง"}ได้สูงสุด ${limits.slotsPerDay} slot ต่อวัน${had}`;
-    if (sameDay.reduce((a, x) => a + spanHours(x), 0) + spanHours(s) > limits.hoursPerDay) return `รวมแล้วเกิน ${limits.hoursPerDay} ชม. ต่อวัน${had}`;
-    if (limits.blocksPerDay && blocksOf([...sameDay, s]) > limits.blocksPerDay) {
-      return `แบ่งได้ไม่เกิน ${limits.blocksPerDay} ช่วงต่อวัน เลือก slot ที่ต่อกับช่วงเดิม${had}`;
-    }
-    return "";
+    if ((data?.mine ?? []).some(hit)) return same(`เวลานี้ทับกับคิวที่คุณ${t.verb}ไว้แล้ว`);
+    if (chosen.some(hit)) return same("เวลานี้ทับกับ slot ที่เลือกไว้แล้ว");
+    if (chosen.length >= limits.perRequest) return same(`เลือกได้ครั้งละไม่เกิน ${limits.perRequest} slot`);
+    const q = quotaReason(s, [...chosen.filter((x) => x.date === s.date), ...booked]);
+    if (!q) return same("");
+    return { full: `${q}${booked.length ? ` (คุณมีคิววันนี้แล้ว ${booked.length} slot)` : ""}`, short: q };
   }
+
+  /** วันที่คิวที่จองไว้แล้วเต็มโควต้า (ทุก slot ของวันนั้นเลือกไม่ได้เพราะโควต้า) -> เหตุผล บอกครั้งเดียวที่หัววัน + พับแถว */
+  const fullDays = new Map<string, string>();
+  if (!isLocked && !preview) {
+    for (const [k, list] of groups) {
+      const booked = mineByDay.get(k) ?? [];
+      if (!booked.length) continue;
+      const reasons = list.map((s) => quotaReason(s, booked));
+      if (reasons.every(Boolean)) fullDays.set(k, `${reasons[0]} (คุณมีคิวในวันนั้นแล้ว ${booked.length} slot)`);
+    }
+  }
+
+  // เวลาอ้างอิง = ตอนโหลดล่าสุด (โหลดใหม่ทุก 15 วินาที) ใช้ป้าย "ใกล้เริ่ม" / "เริ่มไปแล้ว"
+  const now = updatedAt;
+  const cancelH = data?.cancelMinHours ?? 6;
+  /** ป้ายเวลา: เริ่มไปแล้ว (ยังไม่จบ = ยังจองได้ มาช่วยกลางไลฟ์) / ใกล้เริ่ม (จองแล้วยกเลิกผ่านเว็บไม่ได้) */
+  const timeTag = (s: OpenSlot): { text: string; started: boolean } | null => {
+    if (!now) return null;
+    if (s.startMs <= now && now < s.endMs) return { text: `เริ่มไปแล้ว ${durText(now - s.startMs)}`, started: true };
+    const left = s.startMs - now;
+    if (left > 0 && left <= cancelH * 3600_000) return { text: `ใกล้เริ่ม · อีก ${durText(left)}`, started: false };
+    return null;
+  };
 
   function toggle(s: OpenSlot) {
     if (preview) { toast("โหมดดูอย่างเดียว (เจ้าของ) จองแทนไม่ได้"); return; }
@@ -225,13 +269,13 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       setSelected(next);
       return;
     }
-    const reason = blockReason(s);
+    const reason = blockReason(s).full;
     if (reason) { toast(reason, "error"); return; }
     setSelected(new Map(selected).set(s.id, s));
   }
 
   function toggleFilter(p: string | null) {
-    const next = new Set(filters);
+    const next = new Set(activeFilters);
     if (p === null) next.clear();
     else if (next.has(p)) next.delete(p);
     else next.add(p);
@@ -267,30 +311,50 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
     setDialog("done");
   }
 
+  function openConfirm() {
+    setResults(null);
+    setLostResponse(false);
+    setDialog("confirm");
+  }
+
   function closeDialog() {
     const wasDone = dialog === "done";
     setDialog("closed");
+    // ผลการจองเก็บไว้จนเปิดหน้าต่างครั้งถัดไป: ระหว่างหน้าต่างค่อยๆ ปิด หัวข้อไม่แวบเป็น "ยืนยันการจอง 0 slot"
     if (wasDone) {
       setSelected(new Map());
-      setResults(null);
       reload();
     }
   }
 
   const okCount = results?.filter((r) => r.success).length ?? 0;
-  const dlgTitle = dialog === "done"
+  const showDone = dialog === "done" || (dialog === "closed" && (results !== null || lostResponse));
+  // slot ที่เลือกซึ่งใกล้เริ่ม / เริ่มไปแล้ว: จองแล้วยกเลิกผ่านเว็บไม่ได้
+  const lateCount = sorted.filter((s) => timeTag(s)).length;
+  const dlgTitle = showDone
     ? lostResponse
       ? "ไม่ได้รับคำตอบจากระบบ"
       : okCount === results!.length ? `${t.verb}สำเร็จ ${okCount} slot`
         : okCount === 0 ? `${t.verb}ไม่สำเร็จ` : `${t.verb}สำเร็จ ${okCount} จาก ${results!.length} slot`
     : `ยืนยันการ${t.verb} ${selected.size} slot`;
-  const dlgNote = dialog === "done"
+  const dlgNote = showDone
     ? lostResponse
       ? `การ${t.verb}อาจสำเร็จแล้ว กด "เสร็จสิ้น" เพื่อโหลดรายการใหม่ ถ้า slot หายไปจากรายการแปลว่าสำเร็จ`
       : okCount > 0 ? t.doneNote : "ดูเหตุผลด้านล่าง แล้วเลือก slot อื่น"
-    : role === "admin"
-      ? `รับคิวในชื่อ ${me.admin?.name} ระบบจะใส่ชื่อและเบอร์โทรในปฏิทินของ Mc ให้`
-      : `จองในนาม Mc ${me.mc?.name} ระบบจะลงปฏิทินให้อัตโนมัติ`;
+    : (
+      <>
+        <span className="block">
+          {role === "admin"
+            ? `รับคิวในชื่อ ${me.admin?.name} ระบบจะใส่ชื่อและเบอร์โทรในปฏิทินของ Mc ให้`
+            : `จองในนาม Mc ${me.mc?.name} ระบบจะลงปฏิทินให้อัตโนมัติ`}
+        </span>
+        {/* ย้ำกฎยกเลิก (ค่าเดียวกับที่ระบบใช้ตอนกดยกเลิก) */}
+        <span className="mt-1 block font-semibold text-foreground">
+          ยกเลิกผ่านเว็บได้ก่อนไลฟ์อย่างน้อย {cancelH} ชม. เท่านั้น
+          {lateCount ? ` — ${lateCount} slot ที่เลือกใกล้เริ่ม / เริ่มไปแล้ว จองแล้วยกเลิกผ่านเว็บไม่ได้ ต้องติดต่อแอดมิน` : " หลังจากนั้นต้องติดต่อแอดมิน"}
+        </span>
+      </>
+    );
   const resultById = new Map((results ?? []).map((r) => [r.id, r]));
 
   return (
@@ -312,21 +376,27 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       ) : null}
 
       {data?.siteNotice ? <Notice variant="warning" icon className="font-medium">{data.siteNotice}</Notice> : null}
-      {data?.scheduleNotice ? <Notice>{data.scheduleNotice}</Notice> : null}
+      {/* ป้ายแจ้งแบบแถบเล็ก (มือถือ: รายละเอียดกดดูได้) จอแรกจะได้เห็น slot */}
+      {data?.scheduleNotice ? <NoticeStrip title={<span className="font-medium">{data.scheduleNotice}</span>} /> : null}
       {!preview && data?.calendarMissing ? (
-        <Notice variant="warning" icon title={`คิวของคุณ ${data.calendarMissing} คิว ยังไม่ขึ้นใน Google Calendar`}>
-          <span className="block">แชร์ปฏิทินให้ระบบครั้งเดียว ต่อไปทุกคิวที่จอง / ยกเลิก จะขึ้นในปฏิทินของคุณเองภายใน 1–2 นาที</span>
-          <span className="mt-2 flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" className="bg-card" onClick={() => setGuideOpen(true)}>ดูวิธีแชร์ (มีรูป)</Button>
-            <Button size="sm" disabled={checking} onClick={checkCalendar}>{checking ? "กำลังเช็ก..." : "แชร์แล้ว เช็กเลย"}</Button>
-          </span>
-        </Notice>
+        <NoticeStrip
+          variant="warning" title={`คิว ${data.calendarMissing} คิวยังไม่ขึ้น Google Calendar`}
+          action={(
+            <>
+              <Button size="xs" variant="outline" className="bg-card" onClick={() => setGuideOpen(true)}>วิธีแชร์</Button>
+              <Button size="xs" disabled={checking} onClick={checkCalendar}>{checking ? "กำลังเช็ก..." : "แชร์แล้ว เช็กเลย"}</Button>
+            </>
+          )}
+        >
+          แชร์ปฏิทินให้ระบบครั้งเดียว ต่อไปทุกคิวที่จอง / ยกเลิก จะขึ้นในปฏิทินของคุณเองภายใน 1–2 นาที (กด &quot;วิธีแชร์&quot; มีรูปประกอบ)
+        </NoticeStrip>
       ) : null}
       <CalendarGuideDialog open={guideOpen} onClose={() => setGuideOpen(false)} onCheck={checkCalendar} checking={checking} />
       {data && slots.length ? (
         <p className="my-1 text-xs text-muted-foreground">
           {role === "admin" ? "รับคิว" : "จอง"}ได้ไม่เกิน {limits.slotsPerDay} slot และ {limits.hoursPerDay} ชม. ต่อวัน
-          {limits.blocksPerDay ? ` · แบ่งได้ไม่เกิน ${limits.blocksPerDay} ช่วงต่อวัน` : ""} (นับรวมคิวที่{t.verb}ไว้แล้ว)
+          {limits.blocksPerDay ? ` · แบ่งได้ไม่เกิน ${limits.blocksPerDay} ช่วงต่อวัน` : ""} (นับรวมคิวที่มีอยู่แล้ว)
+          {role === "admin" ? " · เวลาห้ามทับกันแม้คนละแพลตฟอร์ม" : ""}
         </p>
       ) : null}
       {data && updatedAt ? (
@@ -369,7 +439,9 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                   <span className="text-[11px]">{relLabel(k) || fmtWeekShort.format(d)}</span>
                   <span className="text-lg font-bold">{d.getUTCDate()}</span>
                   <span className="text-[11px]">{fmtMonthShort.format(d)}</span>
-                  <span className={cn("text-[10px]", !active && "text-muted-foreground")}>{list.length} slot</span>
+                  <span className={cn("text-[10px]", !active && (fullDays.has(k) ? "font-semibold text-destructive" : "text-muted-foreground"))}>
+                    {fullDays.has(k) ? "ครบแล้ว" : `${list.length} slot`}
+                  </span>
                 </Button>
               );
             })}
@@ -382,7 +454,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                     key={p ?? "all"}
                     variant="outline"
                     size="sm"
-                    pressed={p === null ? filters.size === 0 : filters.has(p)}
+                    pressed={p === null ? activeFilters.size === 0 : activeFilters.has(p)}
                     onPressedChange={() => toggleFilter(p)}
                     className="rounded-full bg-card text-xs font-semibold"
                   >
@@ -417,7 +489,10 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       ) : null}
 
       <main className={barOpen ? "pb-28" : "pb-8"}>
-        {groups.map(([k, list]) => (
+        {groups.map(([k, list]) => {
+          const full = fullDays.get(k);
+          const folded = !!full && !openFull.has(k);
+          return (
           <section key={k} id={`day-${k}`} data-date={k} className="scroll-mt-40 pt-5">
             <h2 className="mb-2 flex flex-wrap items-center gap-2 font-bold">
               {/* มือถือ: วันที่แบบสั้น (แถบเลือกวันด้านบนบอกวันอยู่แล้ว) ป้ายกับจำนวน slot จะได้อยู่บรรทัดเดียวกัน */}
@@ -432,11 +507,24 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
               ) : null}
               <span className="ml-auto text-xs font-medium text-muted-foreground">{t.countLbl} {list.length} slot</span>
             </h2>
-            <div className={view === "card" ? "grid grid-cols-1 gap-2 sm:grid-cols-2" : "overflow-hidden rounded-xl border bg-card"}>
+            {/* จองครบโควต้าของวันนี้แล้ว: บอกครั้งเดียวที่หัววัน แล้วพับแถว (กดดูได้) */}
+            {full ? (
+              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                <span className="min-w-0 flex-1"><b className="text-foreground">{t.verb}ครบโควต้าแล้ว</b> — {full}</span>
+                <Button
+                  variant="link" size="xs" className="h-auto px-0"
+                  onClick={() => setOpenFull((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; })}
+                >
+                  {folded ? `ดู ${list.length} slot` : "ซ่อน"}
+                </Button>
+              </div>
+            ) : null}
+            <div className={cn(view === "card" ? "grid grid-cols-1 gap-2 sm:grid-cols-2" : "overflow-hidden rounded-xl border bg-card", folded && "hidden")}>
               {list.map((s) => {
                 const isSel = selected.has(s.id);
-                const reason = isSel || preview ? "" : blockReason(s);
+                const reason = isSel || preview ? "" : blockReason(s).short;
                 const blocked = !!reason;
+                const tag = timeTag(s);
                 return (
                   <button
                     key={s.id}
@@ -458,9 +546,10 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                         <PlatformBadge name={platformOf(s)} index={platformIndex[platformOf(s)]} />
                         <span>{fmtHours(hoursOf(s))}</span>
                         {role === "admin" && s.pairName ? <span className="font-medium text-foreground">{s.pairName}</span> : null}
+                        {tag ? <TimeTag {...tag} /> : null}
                       </span>
-                      {/* บอกเหตุผลที่เลือกไม่ได้เลย ไม่ต้องกดก่อนถึงรู้ */}
-                      {blocked && !isLocked ? <span className="mt-0.5 block text-[11px] text-muted-foreground">{reason}</span> : null}
+                      {/* บอกเหตุผลที่เลือกไม่ได้เลย ไม่ต้องกดก่อนถึงรู้ (วันที่ครบโควต้าบอกที่หัววันแล้ว) */}
+                      {blocked && !isLocked && !full ? <span className="mt-0.5 block text-[11px] text-muted-foreground">{reason}</span> : null}
                     </span>
                     <span
                       aria-hidden
@@ -476,7 +565,8 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
               })}
             </div>
           </section>
-        ))}
+          );
+        })}
       </main>
 
       <div
@@ -493,7 +583,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
             <div className="text-sm text-muted-foreground">รวม {fmtHours(totalHours)}</div>
           </div>
           <Button variant="outline" size="lg" className="rounded-full px-4" onClick={() => setSelected(new Map())}>ล้าง</Button>
-          <Button size="lg" className="rounded-full px-4" onClick={() => setDialog("confirm")}>{t.verb} {selected.size} slot</Button>
+          <Button size="lg" className="rounded-full px-4" onClick={openConfirm}>{t.verb} {selected.size} slot</Button>
         </div>
       </div>
 
@@ -505,7 +595,12 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                 <li key={s?.id ?? i} className="flex items-center justify-between gap-3 border-b py-2.5 last:border-b-0">
                   <div>
                     <div className="font-semibold tabular-nums">{s ? `${s.start} – ${s.end}` : "slot"}</div>
-                    {s ? <div className="text-xs text-muted-foreground">{fmtDayShort.format(parseKey(s.date))} | {platformOf(s)}</div> : null}
+                    {s ? (
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                        {fmtDayShort.format(parseKey(s.date))} | {platformOf(s)}
+                        {!r && timeTag(s) ? <TimeTag {...timeTag(s)!} /> : null}
+                      </div>
+                    ) : null}
                   </div>
                   <div className={cn("text-right text-sm", r ? (r.success ? "font-semibold text-success" : "text-destructive") : "text-muted-foreground")}>
                     {r ? (r.success ? t.done : r.message) : s ? fmtHours(hoursOf(s)) : ""}
@@ -528,6 +623,20 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
         </DialogActions>
       </AppDialog>
     </>
+  );
+}
+
+/** ป้ายเวลา: เริ่มไปแล้ว (แดง) / ใกล้เริ่ม (ส้ม) */
+function TimeTag({ text, started }: { text: string; started: boolean }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-1.5 py-0.5 text-[11px] font-semibold",
+        started ? "bg-destructive/10 text-destructive" : "border border-warning-border bg-warning text-warning-foreground",
+      )}
+    >
+      {text}
+    </span>
   );
 }
 

@@ -4,7 +4,8 @@
  */
 export const LATE_TIERS = [
   { max: 5, cut: 0, label: "สายไม่เกิน 5 นาที" },
-  { max: 30, cut: 0.3, label: "สาย 5 – 30 นาที" },
+  // นาทีเป็นจำนวนเต็ม: 5 นาที = ไม่หัก, 6 นาทีขึ้นไป = หัก 30% (ตรงกับ lateCut)
+  { max: 30, cut: 0.3, label: "สายเกิน 5 นาที ถึง 30 นาที" },
   { max: 60, cut: 0.5, label: "สายเกิน 30 นาที ถึง 1 ชั่วโมง" },
   { max: Infinity, cut: 1, label: "สายเกิน 1 ชั่วโมง" },
 ] as const;
@@ -100,6 +101,42 @@ export function bonusPaidMinutes(minutes: number | null | undefined) {
 /** ชั่วโมงที่ได้เงินของ slot = ชั่วโมงหลังหักมาสาย + ไลฟ์ชดเชย (คิดเทียร์แล้ว) */
 export const slotPaidHours = (hours: number, lateMinutes: number | null | undefined, bonusMinutes?: number | null) =>
   paidHours(hours, lateMinutes) + bonusPaidMinutes(bonusMinutes) / 60;
+
+/**
+ * เวลาเข้างานจริงที่ Owner พิมพ์ในหมายเหตุของ slot (คนที่รับคิวกลางไลฟ์ ทำงานไม่เต็ม slot)
+ *   รูปแบบ "เข้า 10:00" / "เข้า10.00" / "เข้างาน 9:45" มีข้อความอื่นปนได้ (เช่น "Admin เสริม เข้า 10:00")
+ *   ชั่วโมงที่จ่าย = เวลาเข้า ถึงเวลาจบ slot (slot ข้ามเที่ยงคืน: เวลาเข้าหลังเที่ยงคืนนับเป็นวันถัดไป)
+ *   คืน null = ไม่มี "เข้า + ตัวเลข" (จ่ายตามปกติ)
+ *   bad = มี "เข้า + ตัวเลข" แต่อ่านเวลาไม่ได้ / อยู่นอกช่วง slot -> ไม่ใช้ (จ่ายเต็ม slot) และเตือน Owner
+ */
+export type CheckIn = { time: string; hours: number; bad: false } | { time: string; bad: true; reason: string };
+export function checkInOf(remark: string | null | undefined, startMs: number, endMs: number): CheckIn | null {
+  const s = String(remark ?? "");
+  if (!/เข้า(?:งาน)?\s*\d/.test(s)) return null;
+  const m = s.match(/เข้า(?:งาน)?\s*(\d{1,2})\s*[:.]\s*(\d{2})(?!\d)/);
+  const raw = s.match(/เข้า(?:งาน)?\s*[\d:.]+/)?.[0] ?? "เข้า";
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return { time: raw, bad: true, reason: "อ่านเวลาไม่ได้ (ใช้รูปแบบ เข้า 10:00)" };
+  const hh = Number(m[1]), mm = Number(m[2]);
+  const time = `${String(hh).padStart(2, "0")}:${m[2]}`;
+  // เวลานั้นในวันที่ slot เริ่ม (เวลาไทย) ถ้าก่อนเวลาเริ่ม = วันถัดไป (slot ข้ามเที่ยงคืน)
+  const d = new Date(startMs + 7 * 3600_000);
+  let at = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hh, mm) - 7 * 3600_000;
+  if (at < startMs) at += 86400_000;
+  if (at >= endMs) return { time, bad: true, reason: "เวลาเข้าอยู่นอกช่วง slot" };
+  return { time, hours: (endMs - at) / 3600_000, bad: false };
+}
+
+/**
+ * เงินของคิว (บาท ปัดทีละคิว) = ชั่วโมง (ปัด 2 ตำแหน่ง) หลังหักมาสาย + ไลฟ์ชดเชย x ค่าจ้าง/ชม.
+ *   ทุกที่ที่แสดงเงิน (หน้าจอ / สรุป / ใบสรุปรายคน / ไฟล์เบิก / Advance Payment / ตารางของฉัน) ใช้ตัวนี้
+ *   ยอดรวม = ผลรวมของคิว (ไม่คูณชั่วโมงรวมทีเดียว) ตัวเลขจึงตรงกันทุกที่ ไม่ต่างกัน ±1 บาท
+ */
+export const slotPay = (hours: number, lateMinutes: number | null | undefined, bonusMinutes: number | null | undefined, rate: number) =>
+  rate ? Math.round(slotPaidHours(Math.round(hours * 100) / 100, lateMinutes, bonusMinutes) * rate) : 0;
+
+/** ยอดเงินรวมของหลายคิว (ปัดทีละคิวแล้วรวม) */
+export const sumPay = (items: { hours: number; lateMinutes: number | null; bonusMinutes: number | null }[], rate: number) =>
+  items.reduce((a, d) => a + slotPay(d.hours, d.lateMinutes, d.bonusMinutes, rate), 0);
 
 /**
  * อ่านนาทีที่ไลฟ์ชดเชย: "ชดเชย 10" / "ชดเชย10นาที" / "+10" / "+10 นาที" / "+1 ชม." (= 60)

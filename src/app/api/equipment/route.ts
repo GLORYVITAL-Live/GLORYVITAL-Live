@@ -50,6 +50,14 @@ async function upload(file: File, type: string) {
   const { error } = await createAdminClient().storage.from(BUCKET).upload(path, file, { contentType: type });
   return error ? { error: "อัปโหลดรูปไม่สำเร็จ: " + error.message } : { path };
 }
+/** รหัสซ้ำกับอุปกรณ์อื่น = คำเตือน (ไม่บล็อก ไม่ต้องมี unique ในฐานข้อมูล) · เช็กไม่ได้ = ไม่เตือน */
+async function dupeWarning(code: string, id: number) {
+  const key = code.trim().toUpperCase();
+  if (!key) return "";
+  const { data } = await createAdminClient().from("equipment").select("id, name, code").neq("id", id);
+  const same = ((data ?? []) as { id: number; name: string; code: string | null }[]).filter((x) => (x.code ?? "").trim().toUpperCase() === key);
+  return same.length ? `รหัส ${key} ซ้ำกับ ${same.map((x) => `"${x.name}"`).join(", ")} — ตรวจว่าใส่รหัสถูกไหม` : "";
+}
 async function log(me: { email: string }, who: string, action: string, id: number) {
   await createAdminClient().from("booking_logs").insert({ email: me.email, role: "อุปกรณ์", name: who, action, slot_table: "equipment", slot_id: id, result: "สำเร็จ" });
 }
@@ -96,7 +104,7 @@ export async function POST(request: Request) {
     return dbFail(error?.message ?? "");
   }
   await log(r.me, r.who, `เพิ่มอุปกรณ์ "${c.data.name}" (${c.data.quantity} ชิ้น)`, data.id);
-  return ok({ id: data.id, message: "เพิ่มอุปกรณ์แล้ว" });
+  return ok({ id: data.id, message: "เพิ่มอุปกรณ์แล้ว", warning: await dupeWarning(c.data.code, data.id) });
 }
 
 export async function PATCH(request: Request) {
@@ -142,7 +150,7 @@ export async function PATCH(request: Request) {
   }
   if (old !== photoPath) diff.push(photoPath ? "เปลี่ยนรูป" : "ลบรูป");
   if (diff.length) await log(r.me, r.who, `แก้อุปกรณ์ "${c.data.name}": ${diff.join(" · ")}`, id);
-  return ok({ message: "บันทึกแล้ว" });
+  return ok({ message: "บันทึกแล้ว", warning: await dupeWarning(c.data.code, id) });
 }
 
 export async function DELETE(request: Request) {

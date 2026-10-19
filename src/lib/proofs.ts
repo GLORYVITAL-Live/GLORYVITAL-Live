@@ -154,13 +154,15 @@ export async function saveGmv(db: Db, results: Awaited<ReturnType<typeof resolve
 
 /**
  * หลังบันทึก GMV: slot ถัดไปในสายไลฟ์เดียวกันที่หักยอดอัตโนมัติไว้ คิดใหม่ตามยอดก่อนหน้าที่เปลี่ยน (downstreamGmv)
- *   คืนรายการที่ปรับ (ไว้ลงประวัติ) · พลาด = คืน [] (ยอดที่เพิ่งบันทึกไม่กระทบ)
+ *   คืนรายการที่ปรับ (ไว้ลงประวัติ) + slot ที่ติดลบหลังหัก (ไม่ปรับ แจ้งให้แก้) · พลาด = คืนว่าง (ยอดที่เพิ่งบันทึกไม่กระทบ)
  */
 export async function recomputeAfterSave(db: Db, ids: number[]) {
-  if (!ids.length) return [];
   type Row = { id: number; platform: string; live_date: string; starts_at: string; ends_at: string; mc_id: number | null };
+  type Change = { id: number; gmv: number; minus: number; slot: Row };
+  const none: { changes: Change[]; negative: Change[] } = { changes: [], negative: [] };
+  if (!ids.length) return none;
   const { data: targets, error } = await db.from("mc_slots").select("id, platform, live_date, starts_at, ends_at, mc_id").in("id", ids);
-  if (error || !targets?.length) return [];
+  if (error || !targets?.length) return none;
   const dates = (targets as Row[]).map((r) => r.live_date).sort();
   const [ctx, gmvs] = await Promise.all([
     fetchAll<Row>((from, to) =>
@@ -178,13 +180,14 @@ export async function recomputeAfterSave(db: Db, ids: number[]) {
       gmv: g?.value ?? null, input: g?.input ?? null, minus: g?.minus ?? null, who: r.mc_id === null ? null : Number(r.mc_id),
     };
   });
-  const changes = downstreamGmv(ids, all);
+  const { changes, negative } = downstreamGmv(ids, all);
+  const info = new Map(ctx.map((r) => [Number(r.id), r]));
+  const withSlot = (list: typeof changes) => list.map((c) => ({ ...c, slot: info.get(c.id)! }));
   for (const c of changes) {
     const { error: e } = await db.from("mc_slots").update({ gmv: c.gmv, gmv_minus: c.minus }).eq("id", c.id);
-    if (e) return [];
+    if (e) return { changes: [], negative: withSlot(negative) };
   }
-  const info = new Map(ctx.map((r) => [Number(r.id), r]));
-  return changes.map((c) => ({ ...c, slot: info.get(c.id)! }));
+  return { changes: withSlot(changes), negative: withSlot(negative) };
 }
 
 /** ลบหลักฐานที่ไม่ได้ผูกกับ slot ไหนแล้ว (ทั้งแถวและไฟล์รูป) */

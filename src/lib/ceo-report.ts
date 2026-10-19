@@ -87,6 +87,11 @@ export function ceoBlocks(days: CeoDay[], scope: CeoScope): CeoBlock[] {
   const dayGmv = days.map((d) => (d.day.length ? totalsOf(d.day).gmv : null));
   const beforeGmv = days.map((d) => (d.before.length ? totalsOf(d.before).gmv : null));
   const num = (label: string, kind: Kind, values: (number | null)[], avg: number | null = mean(values)): CeoRow => ({ label, kind, values, avg });
+  // CTR / CO เฉลี่ยรอบ CEO: คิดจากยอดรวม (ถ่วงตาม Impressions / คลิก) แบบเดียวกับยอดทั้งวันใน live-stats ไม่ใช่เฉลี่ย % ตรงๆ
+  //   คลิก = CTR × Impressions · CO = ออเดอร์ ÷ คลิก -> CO รวม = Σ(CO × คลิก) ÷ Σคลิก · ไม่มี Impressions = ใช้ค่าเฉลี่ยแบบเดิม
+  const clicks = s.map((x) => (x && x.ctr !== null && x.impressions !== null ? x.ctr * x.impressions : null));
+  const ctrAvg = ratio(sumOf(clicks), sumOf(s.map((x, i) => (clicks[i] !== null ? x!.impressions : null))));
+  const coAvg = ratio(sumOf(s.map((x, i) => (x?.co != null && clicks[i] !== null ? x.co * clicks[i]! : null))), sumOf(s.map((x, i) => (x?.co != null ? clicks[i] : null))));
   const text = (label: string, values: (string | null)[]): CeoRow => ({ label, kind: "text", values: values.map((v) => v || null), avg: null });
   return [
     { key: "before", title: `ก่อน CEO Live: ทั้งวันของวันก่อน · ${where}`, rows: dayRows(days.map((d) => d.before)) },
@@ -104,8 +109,8 @@ export function ceoBlocks(days: CeoDay[], scope: CeoScope): CeoBlock[] {
         text("เวลา Peak", pick("peakTime") as string[]),
         text("ช่วงเวลา", pick("timeRange") as string[]),
         num("Product Impressions", "int", pick("impressions") as (number | null)[]),
-        num("CTR", "pct", pick("ctr") as (number | null)[]),
-        num("CO", "pct", pick("co") as (number | null)[]),
+        num("CTR", "pct", pick("ctr") as (number | null)[], ctrAvg ?? mean(pick("ctr") as (number | null)[])),
+        num("CO", "pct", pick("co") as (number | null)[], coAvg ?? mean(pick("co") as (number | null)[])),
         num(`GMV รอบ CEO ÷ ทั้งวัน`, "pct", gmv.map((g, i) => ratio(g, dayGmv[i])), ratio(sumOf(gmv.map((g, i) => (dayGmv[i] ? g : null))), sumOf(dayGmv.map((g, i) => (gmv[i] !== null ? g : null))))),
       ],
     },

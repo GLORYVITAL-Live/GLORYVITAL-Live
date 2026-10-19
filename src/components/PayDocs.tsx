@@ -7,7 +7,7 @@ import {
   BANKS, PAY_DOC_LABEL, PAY_DOC_MAX_BYTES, cleanPayInfo, formatThaiId, type PayDocKind,
 } from "@/lib/pay-docs";
 import { shrinkImage } from "@/lib/image";
-import { AppDialog, DialogActions, DialogBody, LoadingBlock, Notice, api, useToast } from "@/components/shared";
+import { AppDialog, DialogActions, DialogBody, LoadingBlock, Notice, NoticeStrip, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,12 +45,12 @@ export function PayDocs({ open, onOpenChange }: { open: boolean; onOpenChange: (
   return (
     <>
       {state?.required && !state.docs ? (
-        <Notice variant="warning" icon title="ยังไม่ได้ส่งเอกสารทำเบิก">
-          <span className="block">ส่งรูปบัตรประชาชน รูปหน้าสมุดบัญชี และข้อมูลสำหรับโอนค่าจ้าง (ส่งครั้งเดียว แก้ทีหลังได้) — เห็นเฉพาะคุณและเจ้าของ</span>
-          <span className="mt-2 flex">
-            <Button size="sm" onClick={() => onOpenChange(true)}><FileUpIcon />ส่งเอกสาร</Button>
-          </span>
-        </Notice>
+        <NoticeStrip
+          variant="warning" title="ยังไม่ได้ส่งเอกสารทำเบิก"
+          action={<Button size="xs" onClick={() => onOpenChange(true)}><FileUpIcon />ส่งเอกสาร</Button>}
+        >
+          ส่งรูปบัตรประชาชน รูปหน้าสมุดบัญชี และข้อมูลสำหรับโอนค่าจ้าง (ส่งครั้งเดียว แก้ทีหลังได้) — เห็นเฉพาะคุณและเจ้าของ
+        </NoticeStrip>
       ) : null}
       {open ? (
         state ? (

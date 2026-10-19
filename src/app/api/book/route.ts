@@ -35,17 +35,21 @@ export async function POST(request: Request) {
 
   // ช่วงเปิดจองของคนนี้ (เจ้าของตั้งไว้) slot นอกช่วงไม่ส่งไปจอง (กันหน้าเว็บที่ยังไม่รีเฟรช)
   // ส่วนวันที่ผ่านไปแล้ว / วันสุดท้ายที่จองได้ ฐานข้อมูลตรวจอีกชั้นอยู่แล้ว
-  let blocked: ActionResult[] = [];
+  // slot ที่เริ่มไปแล้วแต่ยังไม่จบ จองได้ตามเดิม (มาช่วยกลางไลฟ์)
+  // slot ที่ "แคน" ในชีต (is_cancelled) ไม่ส่งไปจองเช่นกัน (ฟังก์ชันจองในฐานข้อมูลยังไม่ได้ตรวจเรื่องนี้)
   const personId: number = role === "mc" ? r.me.mc!.id : r.me.admin!.id;
   const range = bookingRange(settings, role, personId);
-  if (personPeriod(settings, role, personId).mode !== "off") {
-    const { data, error } = await db.from(table).select("id, live_date").in("id", ids);
-    if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
-    const message = range.empty ? "ตอนนี้ยังไม่เปิดจอง" : `ตอนนี้เปิดจองเฉพาะ ${rangeText(range)}`;
-    blocked = (data ?? [])
-      .filter((s) => range.empty || s.live_date < range.from || (range.to !== null && s.live_date > range.to))
-      .map((s) => ({ id: Number(s.id), success: false, message }));
-  }
+  const { data: rows, error: rowsError } = await db.from(table).select("id, live_date, is_cancelled").in("id", ids);
+  if (rowsError) return fail("เกิดข้อผิดพลาด: " + rowsError.message, 500);
+  const limited = personPeriod(settings, role, personId).mode !== "off";
+  const outside = range.empty ? "ตอนนี้ยังไม่เปิดจอง" : `ตอนนี้เปิดจองเฉพาะ ${rangeText(range)}`;
+  const blocked: ActionResult[] = (rows ?? []).flatMap((s) => {
+    if (s.is_cancelled) return [{ id: Number(s.id), success: false, message: "slot นี้ถูกยกเลิกแล้ว" }];
+    if (limited && (range.empty || s.live_date < range.from || (range.to !== null && s.live_date > range.to))) {
+      return [{ id: Number(s.id), success: false, message: outside }];
+    }
+    return [];
+  });
   const allowed = ids.filter((id) => !blocked.some((b) => b.id === id));
 
   let results: ActionResult[] = [];

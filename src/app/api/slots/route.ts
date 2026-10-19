@@ -55,6 +55,8 @@ export async function GET(request: Request) {
     slots: withPlatformLabels(slots),
     mine,
     limits: bookingLimits(settings, role),
+    // หน้าต่างยืนยันการจองย้ำกฎยกเลิก (ค่าเดียวกับ /api/my / ฟังก์ชันยกเลิกในฐานข้อมูล)
+    cancelMinHours: Number(settings.cancel_min_hours) || 6,
     calendarMissing,
   });
 }

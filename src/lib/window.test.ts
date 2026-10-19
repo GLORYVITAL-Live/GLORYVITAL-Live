@@ -1,6 +1,6 @@
 // เทสช่วงเปิดจอง (bun test)
 import { describe, expect, test } from "bun:test";
-import { bookRange, cleanWindow, periodFor, weekEnd, weekStart } from "@/lib/window";
+import { bookRange, cleanWindow, periodFor, weekEnd, weekStart, windowEnding, type Period } from "@/lib/window";
 
 const today = "2026-10-09"; // วันศุกร์
 const cutoff = "2026-10-31"; // เดือนสุดท้ายที่เปิดจอง = ต.ค.
@@ -31,6 +31,30 @@ describe("ช่วงที่จองได้จริง (bookRange)", () =
   });
   test("ช่วงที่ผ่านไปแล้วทั้งหมด = จองไม่ได้", () => {
     expect(bookRange({ mode: "range", from: "2026-10-01", to: "2026-10-05" }, today, cutoff).empty).toBe(true);
+  });
+});
+
+describe("เตือนช่วงเปิดจองใกล้หมด (windowEnding)", () => {
+  const end = (p: Period, t = today, c: string | null = cutoff) => windowEnding(p, bookRange(p, t, c), t, c);
+  test("ช่วงวันที่หมดภายใน 2 วัน = เตือน", () => {
+    expect(end({ mode: "range", from: "2026-10-01", to: "2026-10-11" })).toEqual({ ended: false, to: "2026-10-11", daysLeft: 2 });
+    expect(end({ mode: "range", from: "2026-10-01", to: "2026-10-09" })).toEqual({ ended: false, to: "2026-10-09", daysLeft: 0 });
+  });
+  test("ยังเหลือหลายวัน = ไม่เตือน", () => expect(end({ mode: "range", from: "2026-10-01", to: "2026-10-20" })).toBeNull());
+  test("หมดแล้ว = เตือนว่าหมด", () => {
+    expect(end({ mode: "range", from: "2026-10-01", to: "2026-10-05" })).toMatchObject({ ended: true, to: "2026-10-05" });
+  });
+  test("ไม่จำกัด: ดูเดือนสุดท้ายที่เปิดจอง", () => {
+    expect(end({ mode: "off", from: null, to: null }, "2026-10-30")).toEqual({ ended: false, to: cutoff, daysLeft: 1 });
+    expect(end({ mode: "off", from: null, to: null }, "2026-11-02")).toMatchObject({ ended: true, to: cutoff });
+    expect(end({ mode: "off", from: null, to: null }, today, null)).toBeNull();
+  });
+  test("ปิดจองตั้งใจ / สัปดาห์นี้ที่เลื่อนเอง = ไม่เตือน", () => {
+    expect(end({ mode: "closed", from: null, to: null })).toBeNull();
+    expect(end({ mode: "week", from: null, to: null }, "2026-10-10")).toBeNull();
+  });
+  test("สัปดาห์นี้ที่ถูกตัดด้วยเดือนสุดท้าย = เตือน", () => {
+    expect(end({ mode: "week", from: null, to: null }, "2026-10-29")).toEqual({ ended: false, to: cutoff, daysLeft: 2 });
   });
 });
 

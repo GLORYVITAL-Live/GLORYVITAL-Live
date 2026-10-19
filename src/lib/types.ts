@@ -100,12 +100,18 @@ export type HomeData = {
   health: HealthIssues;
   /** คนดูสำรองข้อมูลได้ (Owner ที่ตั้ง can_close_periods) = แสดงส่วน "สำรองข้อมูล" ท้ายหน้า */
   canBackup?: boolean;
+  /** ช่วงเปิดจอง (ทั่วไป) ของฝั่งที่มีสิทธิ์ ที่หมดภายใน 2 วัน / หมดแล้ว — to = วันสุดท้าย, daysLeft 0 = วันนี้ */
+  windows?: { role: "mc" | "admin"; ended: boolean; to: string; daysLeft: number }[];
 };
 
 /** ตรวจสุขภาพข้อมูล: ต้นเดือนนี้ถึง 60 วันข้างหน้า เฉพาะฝั่งที่มีสิทธิ์ (time = "19:30–21:30") */
 export type HealthIssues = {
   /** คนละคนอยู่ slot ช่องเดียวกันเวลาทับกัน (ชั่วโมง / ค่าจ้างนับทั้งคู่) */
   overlap: { role: "mc" | "admin"; date: string; platform: string; time: string; names: string[] }[];
+  /** คนเดียวกันอยู่ 2 slot ขึ้นไปเวลาทับกัน (ไลฟ์พร้อมกันไม่ได้ แต่ชั่วโมง / ค่าจ้างนับทุก slot) — slots = "GLORY VITAL 19:30–21:30" */
+  selfOverlap: { role: "mc" | "admin"; date: string; name: string; slots: string[] }[];
+  /** หมายเหตุมี "เข้า ..." แต่ใช้ไม่ได้ (อ่านเวลาไม่ได้ / นอกช่วง slot) = ยังจ่ายเต็ม slot */
+  badCheckIn?: { role: "mc" | "admin"; date: string; platform: string; time: string; name: string; text: string; reason: string }[];
   /** slot ข้างหน้าที่มีแถวซ้ำ (แถวว่างปน หรือคนเดิมซ้ำ) */
   dupRows: { role: "mc" | "admin"; date: string; platform: string; time: string; rows: number; note: string }[];
   /** slot ข้างหน้าที่มีแถวฝั่งเดียว — missing = ฝั่งที่ไม่มีแถว */
@@ -143,6 +149,8 @@ export type SlotsResponse = {
   /** คิวที่จองไว้แล้วตั้งแต่วันนี้ (เซิร์ฟเวอร์เก่าไม่ส่ง = ไม่รู้) ใช้เช็กโควต้าก่อนกดจอง */
   mine?: { date: string; startMs: number; endMs: number }[];
   limits?: BookingLimits;
+  /** ยกเลิกผ่านเว็บได้ก่อนไลฟ์อย่างน้อยกี่ชั่วโมง (ค่าเดียวกับที่ /api/cancel ใช้) */
+  cancelMinHours?: number;
   /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทินของคนนี้ (> 0 = แสดงแถบเตือนให้แชร์ปฏิทิน) */
   calendarMissing?: number;
 };
@@ -166,6 +174,8 @@ export type MyItem = {
   bonusFromProof: boolean;
   pairName: string;
   pairPhone: string;
+  /** เข้างานกลาง slot ("เข้า 10:00" ในหมายเหตุ) hours = ชั่วโมงจากเวลาเข้าแล้ว */
+  checkIn?: { time: string; slotHours: number } | null;
 };
 
 /** เอกสารทำเบิกที่ส่งแล้ว (ข้อมูลกรอก + มีไฟล์หรือยัง) — เห็นเฉพาะเจ้าตัว และ Owner ที่ดูเอกสารทำเบิกได้ */
@@ -237,6 +247,12 @@ export type OwnerDetail = {
   gmvCoveredBy: string | null; // ยังไม่มี GMV แต่ยอดรวมอยู่ใน slot ถัดไปของ Mc คนเดียวกัน เช่น "21:30–23:30"
   campaign: string; // Campaign ของ slot ตามที่พิมพ์ในชีต (ตั้งในหน้า Plan Slot Live) ว่าง = วันปกติ
   remark?: string; // หมายเหตุของ slot ในชีต (ใช้ในไฟล์เบิก)
+  /**
+   * เวลาเข้างานจริงจากหมายเหตุ ("เข้า 10:00") — มีค่า = hours เป็นชั่วโมงจากเวลาเข้าถึงจบ slot แล้ว (slotHours = ชั่วโมงเต็มของ slot)
+   *   checkInBad = พิมพ์ "เข้า" แต่ใช้ไม่ได้ (อ่านไม่ได้ / นอกช่วง slot) จ่ายเต็ม slot · ไม่มีทั้งคู่ = ไม่ได้ใส่ (งวดที่ปิดก่อนมีฟีเจอร์นี้ก็ไม่มี)
+   */
+  checkIn?: { time: string; slotHours: number } | null;
+  checkInBad?: string | null;
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */

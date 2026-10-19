@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { LoadingBlock, Notice, StateBox, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { BONUS_TIERS, LATE_TIERS } from "@/lib/pay";
 import type { OwnerScope } from "@/lib/types";
@@ -21,6 +23,7 @@ export function RulesEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
           : "ข้อความที่ Mc / Admin เห็นในหน้า \"กฎการทำงาน\" (บัญชีนี้ดูได้อย่างเดียว)"}
       </Notice>
       {roles.map((r) => <RoleRules key={r} role={r} readOnly={!edit[r]} />)}
+      {roles.length ? <AdminChatLink role={roles[0]} readOnly={!(edit.mc || edit.admin)} /> : null}
       <Card size="sm">
         <CardHeader>
           <CardTitle className="font-bold">การมาสาย / ไลฟ์ชดเชย (แก้ที่นี่ไม่ได้)</CardTitle>
@@ -45,6 +48,76 @@ export function RulesEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** ลิงก์แชทแอดมิน (settings.admin_chat_url): ปุ่ม "ทักแชทแอดมิน" หลัง Mc / Admin เสริมยกเลิกคิว + ในตารางของฉัน */
+function AdminChatLink({ role, readOnly }: { role: "mc" | "admin"; readOnly: boolean }) {
+  const toast = useToast();
+  const [saved, setSaved] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputId = useId();
+
+  useEffect(() => {
+    let alive = true;
+    api<{ adminChatUrl: string }>(`/api/rules?role=${role}`)
+      .then((res) => { if (alive && res.ok) { setSaved(res.adminChatUrl ?? ""); setText(res.adminChatUrl ?? ""); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [role]);
+
+  const value = text.trim();
+  // ตรวจในหน้าเว็บก่อน (เซิร์ฟเวอร์ตรวจซ้ำ): ว่าง = ไม่มีปุ่ม / ต้องเป็น https://
+  const valid = !value || /^https:\/\/[^\s]+\.[^\s]+/i.test(value);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await api<{ message: string; adminChatUrl: string }>("/api/rules", { adminChatUrl: value }, "PATCH");
+      if (!res.ok) throw new Error(res.message);
+      setSaved(res.adminChatUrl);
+      setText(res.adminChatUrl);
+      toast(res.message);
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle className="font-bold">ลิงก์แชทแอดมิน</CardTitle>
+        <CardDescription className="text-xs">
+          ปุ่ม &quot;ทักแชทแอดมิน&quot; ที่ Mc / Admin เสริมเห็นหลังกดยกเลิกคิว และตอนยกเลิกผ่านเว็บไม่ได้แล้ว (เช่น ลิงก์ LINE OA / กลุ่ม LINE) · ว่าง = ไม่มีปุ่ม
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {saved === null ? <LoadingBlock className="my-0 h-9 rounded-lg" /> : readOnly ? (
+          <p className="text-sm break-all text-muted-foreground">{saved || "ยังไม่ได้ตั้ง"}</p>
+        ) : (
+          <>
+            <Label htmlFor={inputId} className="sr-only">ลิงก์แชทแอดมิน</Label>
+            <Input
+              id={inputId} type="url" inputMode="url" value={text} disabled={saving}
+              onChange={(e) => setText(e.target.value)} placeholder="https://line.me/..." aria-invalid={!valid}
+            />
+            {!valid ? <p className="mt-1 text-xs text-destructive">ลิงก์ต้องขึ้นต้นด้วย https://</p> : null}
+            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+              {saved ? (
+                <Button variant="link" asChild className="mr-auto h-auto px-0 text-xs">
+                  <a href={saved} target="_blank" rel="noopener noreferrer">ลองเปิดลิงก์ปัจจุบัน</a>
+                </Button>
+              ) : null}
+              <Button variant="outline" disabled={saving || value === saved} onClick={() => setText(saved)}>ยกเลิกที่แก้</Button>
+              <Button disabled={saving || value === saved || !valid} onClick={save}>{saving ? "กำลังบันทึก..." : "บันทึก"}</Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

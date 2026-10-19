@@ -6,6 +6,8 @@ import {
 } from "lucide-react";
 import { windowText } from "@/lib/campaign";
 import { fmtDayShort, parseKey } from "@/lib/format";
+import { SLOT_VIEW_KEY, writeLocal } from "@/lib/hooks";
+import { fmtDay } from "@/lib/window";
 import type { HomeData, HomeSlot } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { LoadError, LoadingBlock, api, useToast } from "@/components/shared";
@@ -51,7 +53,8 @@ export function HomeView({ go }: { go: Go }) {
   const gmvOver = data.issues.gmvOver ?? [];
   const gmvOdd = data.issues.gmvOdd ?? [];
   const h = data.health;
-  const healthCount = h ? Object.values(h).reduce((n, list) => n + list.length, 0) : 0;
+  const healthCount = h ? Object.values(h).reduce((n, list) => n + (list?.length ?? 0), 0) : 0;
+  const windows = data.windows ?? [];
   const issueCount = data.issues.noEmail.length + data.issues.samePhone.length + gmvOver.length + gmvOdd.length + healthCount;
   const baht = (n: number) => `฿${Math.round(n).toLocaleString("th-TH")}`;
 
@@ -77,6 +80,23 @@ export function HomeView({ go }: { go: Go }) {
           <RefreshCwIcon className={cn(busy && "animate-spin")} />รีเฟรช
         </Button>
       </div>
+
+      {/* ช่วงเปิดจองใกล้หมด / หมดแล้ว: เตือนให้เปิดรอบถัดไปก่อน Mc / Admin จองไม่ได้ */}
+      {windows.length ? (
+        <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-warning-border bg-warning px-3 py-2.5 text-sm text-warning-foreground">
+          <CalendarClockIcon className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 leading-snug">
+            {windows.map((w) => (
+              <span key={w.role} className="block">
+                <b>ช่วงเปิดจอง {w.role === "mc" ? "Mc" : "Admin เสริม"}</b>{" "}
+                {w.ended ? `หมดแล้ว (วันสุดท้าย ${fmtDay(w.to)}) — จองคิวใหม่ผ่านเว็บไม่ได้`
+                  : w.daysLeft === 0 ? `หมดวันนี้ (${fmtDay(w.to)})` : `จะหมดในอีก ${w.daysLeft} วัน (วันสุดท้าย ${fmtDay(w.to)})`}
+              </span>
+            ))}
+          </span>
+          <GoButton onClick={() => { writeLocal(SLOT_VIEW_KEY, "daily"); go("owner", "slots"); }}>ตั้งช่วงเปิดจอง</GoButton>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {stats.filter((s) => s.show).map((s) => (
@@ -185,6 +205,20 @@ export function HomeView({ go }: { go: Go }) {
                 title="คนละคนอยู่ slot เดียวกัน" note="ชั่วโมงและค่าจ้างนับทั้งคู่ — เช็กว่าใครไลฟ์จริง แล้วลบอีกแถวในชีต"
                 items={h.overlap.map((x) => <><b>{dayText(x.date)} {x.platform} {x.time}</b>: {x.names.join(" + ")}</>)}
                 action={<GoButton onClick={() => go("owner", "slots")}>ตาราง slot</GoButton>}
+              />
+            ) : null}
+            {h?.selfOverlap?.length ? (
+              <IssueGroup
+                title="คนเดียวกันอยู่หลาย slot เวลาทับกัน" note="ไลฟ์พร้อมกันไม่ได้ แต่ชั่วโมงและค่าจ้างนับทุก slot — เปลี่ยนคนใน slot ที่ไม่ได้ไลฟ์จริง"
+                items={h.selfOverlap.map((x) => <><b>{dayText(x.date)} {x.name}</b>: {x.slots.join(" + ")}</>)}
+                action={<GoButton onClick={() => go("owner", "slots")}>ตาราง slot</GoButton>}
+              />
+            ) : null}
+            {h?.badCheckIn?.length ? (
+              <IssueGroup
+                title="หมายเหตุเวลาเข้างานใช้ไม่ได้" note="ระบบยังจ่ายเต็ม slot — แก้หมายเหตุในชีตเป็นรูปแบบ &quot;เข้า 10:00&quot; และเวลาต้องอยู่ในช่วง slot"
+                items={h.badCheckIn.map((x) => <><b>{dayText(x.date)} {x.platform} {x.time}</b> · {x.name} · &quot;{x.text}&quot; {x.reason}</>)}
+                action={<GoButton onClick={() => go("owner", "summary")}>สรุปรายเดือน</GoButton>}
               />
             ) : null}
             {h?.notFirm.length ? (

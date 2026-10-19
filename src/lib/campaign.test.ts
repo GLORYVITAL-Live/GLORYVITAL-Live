@@ -1,7 +1,7 @@
 // เทสชื่อแคมเปญ + GMV ต่อ slot (bun test)
 import { describe, expect, test } from "bun:test";
 import { assignCampaigns, canonicalCampaign, standardCampaigns } from "@/lib/campaign";
-import { computeGmv, downstreamGmv, evalGmv, gmvBeforeMap, gmvCoverage, type GmvSlot } from "@/lib/gmv";
+import { computeGmv, downstreamGmv, evalGmv, gmvBeforeMap, gmvCoverage, parseGmv, type GmvSlot } from "@/lib/gmv";
 import { isStandby } from "@/lib/campaign";
 
 test("isStandby: Remark สแตนด์บาย / สำรอง / สแปร์ = ไม่นับเป็นผลงาน Mc (หมายเหตุอื่นที่ทีมใช้ไม่โดน)", () => {
@@ -85,7 +85,58 @@ describe("GMV ต่อ slot (ไลฟ์ต่อกันหลาย slot �
       stored(3, 6, 8, 32367, "32367", null, "B"),
       stored(4, 8, 10, 0, "552542", 552542, "D"),
     ];
-    expect(downstreamGmv([1], all)).toEqual([{ id: 2, gmv: 32649, minus: 410366 }, { id: 4, gmv: 77160, minus: 475382 }]);
+    expect(downstreamGmv([1], all).changes).toEqual([{ id: 2, gmv: 32649, minus: 410366 }, { id: 4, gmv: 77160, minus: 475382 }]);
+  });
+
+  const stored = (id: number, from: number, to: number, gmv: number | null, input: string | null, minus: number | null, who: string) =>
+    ({ ...slot(id, from, to, gmv, who), input, minus });
+
+  test("กรอกไม่เรียงลำดับ: slot หลังกรอกก่อน (ติ๊กหักยอด ยังไม่มียอดก่อนหน้า) -> เก็บ minus 0 แล้ว slot ก่อนหน้ากรอกทีหลังก็หักให้", () => {
+    const [late] = computeGmv([{ slot: slot(2, 2, 4, null, "B"), input: "123506", auto: true }], [slot(1, 0, 2, null, "A")]);
+    expect(late.gmv).toBe(123506);
+    expect(late.minus).toBe(0); // ไม่ใช่ null ไม่งั้น downstreamGmv ข้าม = ยอดนับซ้ำ
+    const all = [stored(1, 0, 2, 60540, "60540", 0, "A"), stored(2, 2, 4, late.gmv, late.input, late.minus, "B")];
+    expect(downstreamGmv([1], all).changes).toEqual([{ id: 2, gmv: 62966, minus: 60540 }]);
+  });
+
+  test("กรอกเองไม่ติ๊กหักยอด = minus null (slot ก่อนหน้าเปลี่ยนก็ไม่แตะ)", () => {
+    const [x] = computeGmv([{ slot: slot(2, 2, 4, null, "B"), input: "5000", auto: false }], []);
+    expect(x.minus).toBeNull();
+  });
+
+  test("แก้ slot ก่อนหน้าจน slot ถัดไปติดลบ = คงค่าเดิม แต่คืนใน negative ให้แจ้งเตือน", () => {
+    const all = [stored(1, 0, 2, 900, "900", 0, "A"), stored(2, 2, 4, 500, "600", 100, "B")];
+    const r = downstreamGmv([1], all);
+    expect(r.changes).toEqual([]);
+    expect(r.negative).toEqual([{ id: 2, gmv: -300, minus: 900 }]);
+  });
+
+  test("ติดลบใน slot ที่ไม่มียอดก่อนหน้า = ข้อความว่าติดลบไม่ได้ (ไม่ชี้ไป slot ก่อนหน้า)", () => {
+    const [x] = computeGmv([{ slot: slot(1, 0, 2, null), input: "-500", auto: true }], []);
+    expect(x.error).toBe("ยอด GMV ติดลบไม่ได้");
+  });
+
+  test("ป้ายช่วงยอดที่หัก: slot ก่อนหน้าเป็นช่วงที่ Mc คนเดียวไลฟ์ต่อกัน = นับจาก slot แรกของช่วง", () => {
+    const list = [slot(1, 0, 2, null, "A"), slot(2, 2, 4, 900, "A"), slot(3, 4, 6, null, "B")];
+    const b = gmvBeforeMap(list).get(3);
+    expect(b?.amount).toBe(900);
+    expect(b?.fromMs).toBe(h(0));
+    expect(b?.toMs).toBe(h(4));
+  });
+
+  test.each([["20,245 บาท", 20245], ["฿ 1 000", 1000], ["1,234.5", 1234.5], ["12.50", 12.5]] as const)("อ่าน %p -> %p", (t, v) => {
+    expect(parseGmv(t)).toEqual({ value: v });
+  });
+
+  test.each(["60.540", "1.234.567", "60540.500"])("จุดตามด้วย 3 หลัก %p = กำกวม ให้พิมพ์ใหม่ (ไม่เดา)", (t) => {
+    expect(parseGmv(t).error).toContain("กำกวม");
+    expect(computeGmv([{ slot: slot(1, 0, 2, null), input: t, auto: true }], [])[0].error).toContain("กำกวม");
+  });
+
+  test("ยอดสูงผิดปกติ = เตือน (ยังบันทึกได้)", () => {
+    const [x] = computeGmv([{ slot: slot(1, 0, 2, null), input: "60540000", auto: true }], []);
+    expect(x.error).toBeUndefined();
+    expect(x.warning).toContain("สูงผิดปกติ");
   });
 
   test("Mc คนเดียวไลฟ์ต่อกัน กรอกแค่ slot สุดท้าย = slot ก่อนหน้านับว่ารวมอยู่แล้ว", () => {

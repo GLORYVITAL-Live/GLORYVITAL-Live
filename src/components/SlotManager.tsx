@@ -106,9 +106,30 @@ export function SlotManager({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
   const day = data?.date === date ? data : null;
   const error = failed?.date === date ? failed.message : "";
 
-  async function patch(slot: Slot, table: "mc_slots" | "admin_slots", id: number, change: object) {
+  async function patch(slot: Slot, table: "mc_slots" | "admin_slots", id: number, change: Record<string, unknown>) {
     setBusy(slot.key);
     try {
+      // ใส่คน: ตรวจก่อนว่าคนนั้นมีคิวเวลาทับ / เกินโควต้าต่อวันไหม -> เตือนให้ยืนยัน (ไม่บล็อก)
+      const pid = typeof change.personId === "number" ? change.personId : null;
+      if (pid) {
+        const chk = await api<{ warnings: string[] }>("/api/owner/slots", { table, id, personId: pid, check: true }, "PATCH");
+        if (chk.ok && chk.warnings?.length) {
+          const people = table === "mc_slots" ? day?.staff.mc : day?.staff.admin;
+          const p = people?.find((x) => x.id === pid);
+          const who = p ? (table === "mc_slots" ? `Mc ${p.name}` : p.name) : "คนนี้";
+          const go = await confirm({
+            title: `ใส่ ${who} ใน slot ${platformLabel(slot.platform)} ${slot.start}–${slot.end}?`,
+            description: (
+              <span className="block space-y-1">
+                {chk.warnings.map((w) => <span key={w} className="block font-semibold text-destructive">• {w}</span>)}
+                <span className="block">ยังใส่ได้ถ้าตั้งใจ (เช่น ตกลงกับคนนั้นแล้ว)</span>
+              </span>
+            ),
+            confirmText: "ใส่ชื่อต่อ",
+          });
+          if (!go) return;
+        }
+      }
       const res = await api("/api/owner/slots", { table, id, ...change }, "PATCH");
       if (!res.ok) throw new Error(res.message);
       toast("บันทึกแล้ว ระบบจะอัปเดตปฏิทินให้ภายใน 1 นาที");
@@ -266,7 +287,7 @@ function SlotRow({ slot, scope, edit, staff, tagIndex, busy, onPatch, onDelete }
   staff: DayData["staff"];
   tagIndex: number;
   busy: boolean;
-  onPatch: (table: "mc_slots" | "admin_slots", id: number, change: object) => void;
+  onPatch: (table: "mc_slots" | "admin_slots", id: number, change: Record<string, unknown>) => void;
   onDelete: () => void;
 }) {
   const empty = !slot.mc?.personId && !slot.admin?.personId && !slot.mc?.onCalendar && !slot.admin?.onCalendar;

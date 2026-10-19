@@ -1,6 +1,9 @@
 import { after } from "next/server";
 import { canTable, fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
-import { platformRaw } from "@/lib/platform";
+import { bookingLimits, getSettings } from "@/lib/data";
+import { platformLabel, platformRaw } from "@/lib/platform";
+import { assignWarnings } from "@/lib/staff-check";
+import { addDays } from "@/lib/window";
 import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
@@ -167,6 +170,33 @@ export async function POST(request: Request) {
   return ok({ created, skipped: wanted.length - created, adminCreated: newAdmin.length });
 }
 
+/**
+ * คำเตือนก่อนใส่คนนี้ใน slot นี้ (ไม่บล็อก): เวลาทับกับคิวอื่นของคนนั้น (ดูวันก่อน / วันถัดไปด้วย เผื่อ slot ข้ามเที่ยงคืน)
+ *   + เกินโควต้าต่อวัน (bookingLimits ตัวเดียวกับหน้าจอง) เฉพาะ Mc และ Admin เสริม — Admin ประจำทำงานทั้งวันได้ จึงเช็กแค่เวลาทับ
+ */
+async function assignCheck(table: Table, id: number, pid: number) {
+  const db = createAdminClient();
+  const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
+  const role = table === "mc_slots" ? "mc" : "admin";
+  type Row = { id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string; is_cancelled: boolean; confirmed: boolean | null };
+  const cols = "id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed";
+  const { data: s } = await db.from(table).select(cols).eq("id", id).maybeSingle<Row>();
+  if (!s) return [];
+  const [{ data: others }, { data: person }, settings] = await Promise.all([
+    db.from(table).select(cols).eq(personCol, pid).neq("id", id)
+      .gte("live_date", addDays(s.live_date, -1)).lte("live_date", addDays(s.live_date, 1)).overrideTypes<Row[], { merge: false }>(),
+    db.from("staff").select("is_extra_admin").eq("id", pid).maybeSingle(),
+    getSettings(db),
+  ]);
+  const span = (r: Row) => ({
+    date: r.live_date, startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at),
+    label: `${platformLabel(r.platform)} ${hm(r.start_time)}–${hm(r.end_time)}`,
+  });
+  const live = (others ?? []).filter((r) => !r.is_cancelled && r.confirmed !== false).map(span);
+  const quota = role === "mc" || person?.is_extra_admin ? bookingLimits(settings, role) : null;
+  return assignWarnings(span(s), live, quota);
+}
+
 // ---------- PATCH: แก้ slot ----------
 
 export async function PATCH(request: Request) {
@@ -180,6 +210,14 @@ export async function PATCH(request: Request) {
 
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
   const role = table === "mc_slots" ? "mc" : "admin";
+
+  // ตรวจก่อนใส่คน (ไม่บันทึก): เวลาทับกับคิวอื่นของคนนั้น / เกินโควต้าต่อวัน -> หน้าเว็บถามยืนยัน (ไม่บล็อก)
+  if (body?.check === true) {
+    const pid = Number(body?.personId);
+    if (!Number.isInteger(pid) || pid < 1) return ok({ warnings: [] });
+    return ok({ warnings: await assignCheck(table, id, pid) });
+  }
+
   const changes: Record<string, unknown> = {};
   const what: string[] = [];
 
@@ -198,7 +236,9 @@ export async function PATCH(request: Request) {
     what.push(`สถานะ "${changes.status}"`);
   }
   if (table === "admin_slots" && typeof body?.extraAdmin === "boolean") {
-    changes.remark = body.extraAdmin ? EXTRA : "";
+    // เปิดรับ = หมายเหตุต้องเป็น "Admin เสริม" พอดี (ฐานข้อมูลใช้เป็นธง) / ปิดรับ = เอาเฉพาะคำนั้นออก หมายเหตุอื่น (เช่น "เข้า 10:00") คงไว้
+    const { data: cur } = await createAdminClient().from(table).select("remark").eq("id", id).maybeSingle();
+    changes.remark = body.extraAdmin ? EXTRA : String(cur?.remark ?? "").replace(/^\s*Admin เสริม\s*/, "").trim();
     what.push(body.extraAdmin ? "เปิดรับ Admin เสริม" : "ปิดรับ Admin เสริม");
   }
   if (!what.length) return fail("ไม่มีอะไรเปลี่ยน");

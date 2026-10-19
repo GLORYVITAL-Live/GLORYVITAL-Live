@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   bonusPaidMinutes, cleanTiers, lateCut, monthRate, paidHours, parseBonusMinutes, parseLateMinutes, parseTierHours,
-  resolveLateBonus, slotPaidHours,
+  checkInOf, resolveLateBonus, slotPaidHours, slotPay, sumPay,
 } from "@/lib/pay";
 
 describe("หักเงินมาสาย", () => {
@@ -60,5 +60,57 @@ describe("สาย / ชดเชย: ค่าในชีตก่อน ช�
   });
   test("ชีตใส่ 0 = ไม่นับ แม้หลักฐานจะมี", () => {
     expect(resolveLateBonus({ late: 0, bonus: 0 }, { late: 7, bonus: 12 })).toEqual({ lateMinutes: 0, bonusMinutes: 0, lateFromProof: false, bonusFromProof: false });
+  });
+});
+
+describe("ปัดเงินทีละคิวแล้วรวม (ทุกหน้าใช้สูตรเดียวกับไฟล์เบิก)", () => {
+  test("คิวเดียว = ปัดเป็นบาท", () => {
+    expect(slotPay(2, null, null, 333)).toBe(666);
+    expect(slotPay(1.5, 10, null, 333)).toBe(350); // 1.05 ชม. x 333 = 349.65
+    expect(slotPay(2, null, null, 0)).toBe(0);
+  });
+  test("ยอดรวม = ผลรวมของคิวที่ปัดแล้ว (ไม่ใช่ปัดจากชั่วโมงรวม)", () => {
+    const items = [1.5, 1.5, 1.5].map((hours) => ({ hours, lateMinutes: 10, bonusMinutes: null }));
+    expect(sumPay(items, 333)).toBe(350 * 3); // ปัดจากชั่วโมงรวม 3.15 x 333 = 1048.95 -> 1049 (ต่าง 1 บาท)
+  });
+  test("ชั่วโมงเศษยาวปัด 2 ตำแหน่งก่อน (ตรงกับไฟล์เบิกเดิม)", () => {
+    expect(slotPay(5 / 3, null, null, 600)).toBe(Math.round(1.67 * 600));
+  });
+});
+
+describe("เวลาเข้างานจริงจากหมายเหตุ (เข้า HH:MM)", () => {
+  const at = (d: string, t: string) => Date.parse(`${d}T${t}:00+07:00`);
+  const s0 = at("2026-10-19", "09:30"), s1 = at("2026-10-19", "11:30");
+  test.each([
+    ["เข้า 10:00", 1.5], ["เข้า10.00", 1.5], ["Admin เสริม เข้า 10:00", 1.5], ["เข้างาน 11:00", 0.5], ["เข้า 9:30", 2],
+  ] as const)("%p ใน slot 09:30–11:30 = %p ชม.", (remark, hours) => {
+    expect(checkInOf(remark, s0, s1)).toMatchObject({ bad: false, hours });
+  });
+  test("ไม่มีคำว่า เข้า + ตัวเลข = ไม่ใช้ (จ่ายตามปกติ)", () => {
+    expect(checkInOf("", s0, s1)).toBeNull();
+    expect(checkInOf(null, s0, s1)).toBeNull();
+    expect(checkInOf("Admin เสริม", s0, s1)).toBeNull();
+    expect(checkInOf("เข้าช้า ติดรถ", s0, s1)).toBeNull();
+  });
+  test("เวลานอกช่วง slot / อ่านไม่ได้ = ใช้ไม่ได้ (เตือน)", () => {
+    expect(checkInOf("เข้า 9:00", s0, s1)).toMatchObject({ bad: true, reason: "เวลาเข้าอยู่นอกช่วง slot" });
+    expect(checkInOf("เข้า 11:30", s0, s1)).toMatchObject({ bad: true });
+    expect(checkInOf("เข้า 12:15", s0, s1)).toMatchObject({ bad: true });
+    expect(checkInOf("เข้า 10", s0, s1)).toMatchObject({ bad: true, reason: "อ่านเวลาไม่ได้ (ใช้รูปแบบ เข้า 10:00)" });
+    expect(checkInOf("เข้า 25:00", s0, s1)).toMatchObject({ bad: true });
+  });
+  test("slot ข้ามเที่ยงคืน: เวลาเข้าหลังเที่ยงคืนนับเป็นวันถัดไป", () => {
+    const n0 = at("2026-10-19", "23:00"), n1 = at("2026-10-20", "01:00");
+    expect(checkInOf("เข้า 0:30", n0, n1)).toMatchObject({ bad: false, hours: 0.5, time: "00:30" });
+    expect(checkInOf("เข้า 23:45", n0, n1)).toMatchObject({ bad: false, hours: 1.25 });
+    expect(checkInOf("เข้า 9:45", n0, n1)).toMatchObject({ bad: true });
+  });
+  test("slot เช้าที่เริ่มหลังเที่ยงคืน (00:30–02:30) เข้า 1:00 = 1.5 ชม.", () => {
+    expect(checkInOf("เข้า 1:00", at("2026-10-20", "00:30"), at("2026-10-20", "02:30"))).toMatchObject({ bad: false, hours: 1.5 });
+  });
+  test("ข้อความเวลาเข้าไม่ถูกอ่านเป็นนาทีสาย / ชดเชย (Mc ใช้ช่องเดียวกัน)", () => {
+    expect(parseLateMinutes("เข้า 10:00")).toBeNull();
+    expect(parseBonusMinutes("เข้า 10:00")).toBeNull();
+    expect(parseLateMinutes("เข้า10.00")).toBeNull();
   });
 });

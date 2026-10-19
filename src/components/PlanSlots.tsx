@@ -832,9 +832,12 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
           <ToggleGroupItem value="tiktok" className="font-semibold">TikTok</ToggleGroupItem>
           <ToggleGroupItem value="shopee" className="font-semibold">Shopee</ToggleGroupItem>
         </ToggleGroup>
-        <IconButton label="เดือนก่อนหน้า" onClick={() => setMonth(monthKey(-1, month))}><ChevronLeftIcon /></IconButton>
-        <MonthPicker value={month} onChange={setMonth} aria-label="เลือกเดือน" className="w-auto rounded-full" />
-        <IconButton label="เดือนถัดไป" onClick={() => setMonth(monthKey(1, month))}><ChevronRightIcon /></IconButton>
+        {/* < เดือน > อยู่ด้วยกันเสมอ (จอแคบขึ้นบรรทัดใหม่ทั้งชุด ไม่ให้ปุ่ม > ตกบรรทัดคนเดียว) */}
+        <div className="flex items-center gap-1.5">
+          <IconButton label="เดือนก่อนหน้า" onClick={() => setMonth(monthKey(-1, month))}><ChevronLeftIcon /></IconButton>
+          <MonthPicker value={month} onChange={setMonth} aria-label="เลือกเดือน" className="w-auto rounded-full" />
+          <IconButton label="เดือนถัดไป" onClick={() => setMonth(monthKey(1, month))}><ChevronRightIcon /></IconButton>
+        </div>
         {mode === "tiktok" ? (
           <ToggleGroup
             type="single"
@@ -1387,8 +1390,9 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
           <Button variant="outline" onClick={onCopyPrev}><CopyIcon />คัดลอกรูปแบบจาก {monthLabel(monthKey(-1, month))}</Button>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-4">
+        {/* grid-cols-1 + min-w-0: คอลัมน์ grid ไม่ขยายตามความกว้างเนื้อหา (เดิมล้นขวาบนจอ 375px) */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="min-w-0 space-y-4">
             <div>
               <Label htmlFor={ids.platform} className="mb-1.5 font-semibold">แพลตฟอร์ม</Label>
               <Input
@@ -1423,7 +1427,8 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
             </div>
             <div>
               <span className="mb-1.5 block font-semibold">วันที่</span>
-              <div className="flex items-center gap-2">
+              {/* มือถือ: วางเรียงลงมา ไม่งั้นวันที่ถูกตัดเหลือ "จันทร์ 19 ..." */}
+              <div className="grid min-w-0 grid-cols-1 gap-1.5 sm:flex sm:items-center sm:gap-2">
                 <DatePicker value={from} min={first} onChange={(v) => { if (v) { setFrom(v < first ? first : v > last ? last : v); if (v > to) setTo(v > last ? last : v); } }} aria-label="ตั้งแต่วันที่" className="flex-1" />
                 <span className="text-muted-foreground">ถึง</span>
                 <DatePicker value={to} min={from} onChange={(v) => { if (v) setTo(v > last ? last : v); }} aria-label="ถึงวันที่" className="flex-1" />
@@ -1456,7 +1461,7 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
             </div>
           </div>
 
-          <div>
+          <div className="min-w-0">
             <span className="mb-1.5 block font-semibold">ช่วงเวลา ({valid.length})</span>
             <div className="space-y-2">
               {times.map((t, i) => (

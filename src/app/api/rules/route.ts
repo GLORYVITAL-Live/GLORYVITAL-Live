@@ -1,5 +1,5 @@
 import { fail, ok, requireMe, requireOwner } from "@/lib/api";
-import { getSettings } from "@/lib/data";
+import { bookingLimits, getSettings } from "@/lib/data";
 import { cleanTiers } from "@/lib/pay";
 import { defaultRules, splitRules } from "@/lib/rules";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -29,14 +29,37 @@ export async function GET(request: Request) {
     hasCommit = !data?.is_salaried && cleanTiers(data?.commit_tiers).length > 0;
   }
 
+  const defaults = defaultRules(role, Number(s.cancel_min_hours) || 6, bookingLimits(s, "admin"));
   return ok({
     role,
-    items: saved.length ? saved : defaultRules(role, Number(s.cancel_min_hours) || 6),
+    items: saved.length ? saved : defaults,
     custom: saved.length > 0,
-    defaults: defaultRules(role, Number(s.cancel_min_hours) || 6),
+    defaults,
     rate,
     hasCommit,
+    // ลิงก์แชทแอดมิน (ปุ่ม "ทักแชทแอดมิน" หลังยกเลิกคิว) — Owner แก้ได้ในหน้ากฎการทำงาน
+    adminChatUrl: s.admin_chat_url ?? "",
   });
+}
+
+/** ลิงก์แชทแอดมิน — PATCH { adminChatUrl } ว่าง = ไม่มีปุ่ม · Owner ที่จัดการได้อย่างน้อยหนึ่งฝั่ง */
+export async function PATCH(request: Request) {
+  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์แก้ลิงก์แชทแอดมิน");
+  if ("res" in r) return r.res;
+  const body = await request.json().catch(() => null);
+  if (typeof body?.adminChatUrl !== "string") return fail("ข้อมูลไม่ถูกต้อง");
+  const url = body.adminChatUrl.trim();
+  if (url) {
+    let valid = false;
+    try { valid = new URL(url).protocol === "https:"; } catch { /* ไม่ใช่ลิงก์ */ }
+    if (!valid || url.length > 500) return fail("ลิงก์ต้องขึ้นต้นด้วย https:// (เช่น https://line.me/...)");
+  }
+  const { error } = await createAdminClient().from("settings").update({ admin_chat_url: url }).eq("id", 1);
+  if (error) return fail(error.message, 500);
+  await createAdminClient().from("booking_logs").insert({
+    email: r.me.email, role: "Owner", name: r.me.owner?.name ?? "", action: url ? "แก้ลิงก์แชทแอดมิน" : "ลบลิงก์แชทแอดมิน", result: "สำเร็จ",
+  });
+  return ok({ message: url ? "บันทึกลิงก์แชทแอดมินแล้ว" : "ลบลิงก์แชทแอดมินแล้ว", adminChatUrl: url });
 }
 
 export async function PUT(request: Request) {

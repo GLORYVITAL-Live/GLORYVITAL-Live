@@ -288,6 +288,49 @@ export function Notice({ variant = "info", title, icon = false, children, classN
   );
 }
 
+/**
+ * แถบแจ้งแบบกะทัดรัด (หน้าจองบนมือถือ: ป้ายหลายอันไม่กินจอแรก) — หัวข้อบรรทัดเดียว + ปุ่ม
+ *   children = รายละเอียด: มือถือซ่อนไว้ กด "รายละเอียด" เพื่อดู / จอกว้างแสดงเลย (ข้อมูลไม่หาย)
+ */
+export function NoticeStrip({ variant = "info", title, action, children }: {
+  variant?: "info" | "warning";
+  title: ReactNode;
+  action?: ReactNode;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const Icon = variant === "warning" ? TriangleAlertIcon : InfoIcon;
+  return (
+    <div
+      role={variant === "warning" ? "alert" : "status"}
+      className={cn(
+        "my-1.5 rounded-xl border px-3 py-1.5 text-sm",
+        variant === "warning" ? "border-warning-border bg-warning text-warning-foreground" : "border-transparent bg-secondary text-secondary-foreground",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Icon className="size-4 shrink-0" aria-hidden />
+        {/* หัวข้อกว้างอย่างน้อย ~12rem: ปุ่มไม่พอที่ = ขึ้นบรรทัดใหม่ชิดขวา (หัวข้อไม่ถูกบีบเป็นหลายบรรทัด) */}
+        <span className="min-w-48 flex-1 leading-snug font-semibold">{title}</span>
+        {children || action ? (
+          <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+            {children ? (
+              <button
+                type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+                className="cursor-pointer px-1 text-xs font-medium underline pointer-coarse:min-h-8 sm:hidden"
+              >
+                {open ? "ซ่อน" : "รายละเอียด"}
+              </button>
+            ) : null}
+            {action}
+          </span>
+        ) : null}
+      </div>
+      {children ? <div className={cn("mt-1 pl-6 text-xs leading-relaxed sm:block", !open && "hidden")}>{children}</div> : null}
+    </div>
+  );
+}
+
 export function MonthNav({ label, onPrev, onNext }: { label: string; onPrev: () => void; onNext: () => void }) {
   return (
     <div className="my-2 flex items-center justify-between gap-3">

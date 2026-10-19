@@ -83,6 +83,21 @@ export function bookRange(p: Period | null, today: string, cutoff: string | null
   return { from, to, empty: p?.mode === "closed" || (!!to && to < from) };
 }
 
+/**
+ * ช่วงเปิดจองใกล้หมด / หมดแล้ว (เตือนเจ้าของให้เปิดรอบใหม่) — null = ไม่ต้องเตือน
+ *   ปิดจอง (closed) = เจ้าของตั้งใจปิด ไม่เตือน · ไม่มีวันสุดท้าย = ไม่เตือน
+ *   สัปดาห์นี้ (week) เลื่อนเองทุกวันจันทร์ = เตือนเฉพาะตอนที่ถูกตัดด้วยเดือนสุดท้ายที่เปิดจอง (cutoff)
+ *   daysLeft = อีกกี่วันถึงวันสุดท้าย (0 = วันนี้วันสุดท้าย)
+ */
+export function windowEnding(p: Period, r: BookRange, today: string, cutoff: string | null, withinDays = 2):
+  { ended: boolean; to: string; daysLeft: number } | null {
+  if (p.mode === "closed" || !r.to) return null;
+  if (p.mode === "week" && r.to !== cutoff) return null;
+  const daysLeft = Math.round((day(r.to) - day(today)) / 86400_000);
+  if (r.empty || daysLeft < 0) return { ended: true, to: r.to, daysLeft: Math.min(0, daysLeft) };
+  return daysLeft <= withinDays ? { ended: false, to: r.to, daysLeft } : null;
+}
+
 /** "3 ต.ค." / "3 ต.ค. 2026" */
 export function fmtDay(d: string, year = false) {
   return new Intl.DateTimeFormat("th-TH-u-ca-gregory", {

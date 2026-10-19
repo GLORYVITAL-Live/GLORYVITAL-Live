@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
 import { fmtGmv } from "@/lib/gmv";
-import { bonusPaidMinutes, lateCut, tiersLabel } from "@/lib/pay";
+import { bonusPaidMinutes, lateCut, slotPay, sumPay, tiersLabel } from "@/lib/pay";
 import { ChevronRightIcon, LockIcon, LockOpenIcon } from "lucide-react";
 import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
@@ -123,7 +123,7 @@ function summaryBook(data: OwnerSummary) {
       need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "ไม่ต้องแนบ",
       gmv.count ? round2(gmv.total) : "", gmvPerHour(items),
       round2(items.filter((d) => d.campaign).reduce((a, d) => a + d.hours, 0)) || "",
-      r.paidHours, commit, rate || (r.salaried ? "เงินเดือน" : ""), rate ? Math.round(r.paidHours * rate) : "",
+      r.paidHours, commit, rate || (r.salaried ? "เงินเดือน" : ""), rate ? sumPay(items, rate) : "",
     ]);
   }
   return book(`GLORY สรุป ${data.month}`, "สรุป", payHiddenAll(data) ? dropCols(rows, [13, 14, 15]) : rows);
@@ -139,25 +139,25 @@ function payrollBook(data: OwnerSummary) {
       const items = slotsOf(data, type, p.name);
       if (!items.length) continue;
       const gmv = gmvOf(items);
-      let h = 0, paid = 0;
+      let h = 0, m = 0;
       for (const d of items) {
         const hrs = round2(d.hours);
         const cut = lateCut(d.lateMinutes);
         const bonus = bonusPaidMinutes(d.bonusMinutes);
-        const slotPaid = hrs * (1 - cut) + bonus / 60;
+        // ปัดเงินทีละคิวแล้วรวม (ตัวเลขเดียวกับไฟล์เบิก / หน้าจอ)
+        const pay = slotPay(d.hours, d.lateMinutes, d.bonusMinutes, rate);
         h += hrs;
-        paid += slotPaid;
+        m += pay;
         rows.push([
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), d.campaign, hrs,
           lateText(d), cut ? `${Math.round(cut * 100)}%` : "",
-          bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? Math.round(slotPaid * rate) : "",
+          bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? pay : "",
           d.gmv ?? (d.gmvCoveredBy ? `รวมในคิว ${d.gmvCoveredBy}` : ""),
           d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "ยังไม่มีหลักฐาน",
           d.proof?.by ?? "",
           d.proof ? d.proof.driveUrl ?? "ยังไม่ได้อัปขึ้น Drive" : "",
         ]);
       }
-      const m = rate ? Math.round(paid * rate) : 0;
       rows.push([
         `รวม ${p.name}`, `${items.length} slot`, "", "", "", "", round2(h), "", "", "", "", rate ? m : "",
         gmv.count ? round2(gmv.total) : "", "", "",
@@ -199,12 +199,14 @@ const CHANNEL_STYLE: Record<string, RowStyle> = {
 };
 const channelStyle = (p: string) => CHANNEL_STYLE[p.trim()] ?? { bg: "EFEFEF", border: true, align: "center" as const };
 
-/** เงินของคิว (หักมาสาย + ไลฟ์ชดเชย) ปัดเป็นบาท */
-const slotMoney = (d: OwnerDetail, rate: number) =>
-  Math.round((round2(d.hours) * (1 - lateCut(d.lateMinutes)) + bonusPaidMinutes(d.bonusMinutes) / 60) * rate);
-/** หมายเหตุของคิว: หมายเหตุในชีต + สาย / ชดเชย */
+/** เงินของคิว (หักมาสาย + ไลฟ์ชดเชย) ปัดเป็นบาท — สูตรเดียวกับทุกที่ (src/lib/pay.ts slotPay) */
+const slotMoney = (d: OwnerDetail, rate: number) => slotPay(d.hours, d.lateMinutes, d.bonusMinutes, rate);
+/** เข้างานกลาง slot: "เข้า 10:00 (คิด 1.5 ชม.)" */
+const checkInText = (d: OwnerDetail) => (d.checkIn ? `เข้า ${d.checkIn.time} (คิด ${num(d.hours)} ชม. จาก slot ${num(d.checkIn.slotHours)} ชม.)` : "");
+/** หมายเหตุของคิว: หมายเหตุในชีต + เวลาเข้า + สาย / ชดเชย */
 const claimRemark = (d: OwnerDetail) => [
   d.remark ?? "",
+  d.checkIn ? `คิด ${num(d.hours)} ชม. ตามเวลาเข้า` : "",
   d.lateMinutes && lateCut(d.lateMinutes) ? `สาย ${d.lateMinutes} นาที หัก ${Math.round(lateCut(d.lateMinutes) * 100)}%` : "",
   bonusPaidMinutes(d.bonusMinutes) ? `ชดเชย +${d.bonusMinutes} นาที` : "",
 ].filter(Boolean).join(" · ");
@@ -348,7 +350,7 @@ function dailyBook(data: OwnerSummary) {
 }
 
 function detailBook(data: OwnerSummary) {
-  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "Campaign", "ชั่วโมง", "GMV", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)", "ยกเลิก"]];
+  const rows: unknown[][] = [["ประเภท", "ชื่อ", "วันที่", "เริ่ม", "จบ", "Platform", "Campaign", "ชั่วโมง", "GMV", "คู่ (Admin/Mc)", "สถานะ", "สาย (นาที)", "ชดเชย (นาที)", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)", "ยกเลิก", "เวลาเข้า (หมายเหตุ)"]];
   for (const d of data.details) {
     rows.push([
       d.type, d.name, d.date, d.start, d.end, d.platform, d.campaign, d.hours,
@@ -356,6 +358,7 @@ function detailBook(data: OwnerSummary) {
       d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
       lateText(d), d.bonusMinutes ? `+${d.bonusMinutes}${d.bonusFromProof ? " (จากหลักฐาน)" : ""}` : "", d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "", d.proof?.by ?? "", d.proof?.driveUrl ?? "",
       d.cancelled ? cancelText(d) : "",
+      d.checkIn ? checkInText(d) : d.checkInBad ? `ใช้ไม่ได้ (${d.checkInBad}) คิดเต็ม slot` : "",
     ]);
   }
   return book(`GLORY รายละเอียด ${data.month}`, "รายละเอียด", rows);
@@ -455,17 +458,13 @@ function PeriodBar({ data, side, onChanged }: { data: OwnerSummary; side: "mc" |
   const label = side === "mc" ? "Mc" : "Admin";
   if (!closed && !data.canClose && !log.length) return null;
 
+  // เดือนที่ยังไม่จบ (เดือนนี้ / เดือนหน้า) ปิดงวดไม่ได้: สรุปรวมคิวที่ยังไม่ถึงวันไลฟ์ด้วย (เซิร์ฟเวอร์ตรวจซ้ำ)
+  const ended = data.month < monthKey();
   async function act(action: "close" | "reopen") {
-    const ended = data.month < monthKey();
     const ok = await confirm(action === "close"
       ? {
         title: `ปิดงวด ${label} ${monthLabel(data.month)}?`,
-        description: (
-          <span className="block space-y-1">
-            <span className="block">ระบบเก็บตัวเลขของฝั่ง {label} ตอนนี้ไว้ หน้าสรุปและไฟล์เบิกเดือนนี้จะใช้ตัวเลขชุดนี้เสมอ ถ้ามีคนแก้ข้อมูลย้อนหลังจะขึ้นเป็นส่วนต่างให้เห็น</span>
-            {!ended ? <b className="block text-destructive">เดือนนี้ยังไม่จบ — คิวที่เหลือของเดือนจะไม่อยู่ในตัวเลขที่ปิด</b> : null}
-          </span>
-        ),
+        description: "ระบบเก็บตัวเลขของฝั่งนี้ตอนนี้ไว้ หน้าสรุปและไฟล์เบิกเดือนนี้จะใช้ตัวเลขชุดนี้เสมอ ถ้ามีคนแก้ข้อมูลย้อนหลังจะขึ้นเป็นส่วนต่างให้เห็น",
         confirmText: "ปิดงวด",
       }
       : {
@@ -498,10 +497,22 @@ function PeriodBar({ data, side, onChanged }: { data: OwnerSummary; side: "mc" |
               <b>ปิดงวดแล้ว</b> · {fmtAt.format(new Date(closed.at))} โดย {closed.by}
               <span className="block text-xs text-muted-foreground">ตัวเลขในตารางและไฟล์เบิกของฝั่ง {label} เป็นตัวเลข ณ ตอนปิดงวด</span>
             </>
-          ) : <>ยังไม่ปิดงวด <span className="text-xs text-muted-foreground">— ตัวเลขคิดตามข้อมูลจริงตอนนี้</span></>}
+          ) : (
+            <>
+              ยังไม่ปิดงวด <span className="text-xs text-muted-foreground">— ตัวเลขคิดตามข้อมูลจริงตอนนี้</span>
+              {data.canClose && !ended ? (
+                <span className="block text-xs text-muted-foreground">
+                  เดือนนี้ยังไม่จบ ยังปิดงวดไม่ได้ (ตัวเลขยังรวมคิวที่ยังไม่ถึงวันไลฟ์) — ปิดได้ตั้งแต่ 1 {monthLabel(monthKey(1, data.month))}
+                </span>
+              ) : null}
+            </>
+          )}
         </span>
         {data.canClose ? (
-          <Button size="sm" variant={closed ? "outline" : "default"} disabled={busy} onClick={() => act(closed ? "reopen" : "close")}>
+          <Button
+            size="sm" variant={closed ? "outline" : "default"} disabled={busy || (!closed && !ended)}
+            onClick={() => act(closed ? "reopen" : "close")}
+          >
             {busy ? "กำลังบันทึก..." : closed ? "เปิดงวดใหม่" : `ปิดงวด ${label}`}
           </Button>
         ) : null}
@@ -556,7 +567,7 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
       }
       case "pay": {
         const rate = rateOf(data, type, r.name);
-        return rate ? rate * r.paidHours : null;
+        return rate ? sumPay(items, rate) : null;
       }
       default: return null;
     }
@@ -569,7 +580,9 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
   };
   const ts = rows.reduce((a, r) => a + r.slots, 0);
   const th = rows.reduce((a, r) => a + r.hours, 0);
-  const tm = rows.reduce((a, r) => a + rateOf(data, type, r.name) * r.paidHours, 0);
+  // ยอดเงิน = ปัดทีละคิวแล้วรวม (ตรงกับไฟล์เบิก / ใบสรุปรายคน)
+  const payOf = (r: OwnerPerson) => sumPay(slotsOf(data, type, r.name), rateOf(data, type, r.name));
+  const tm = rows.reduce((a, r) => a + payOf(r), 0);
   const tl = rows.reduce((a, r) => a + r.lateSlots, 0);
   const tb = rows.reduce((a, r) => a + r.bonusMinutes, 0);
   const num_ = "text-right tabular-nums";
@@ -602,9 +615,13 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.name); } }}
                   className="cursor-pointer data-[state=selected]:bg-secondary"
                 >
-                  <TableCell className={cn("px-3", STICKY_CELL)}>
+                  <TableCell className={cn("px-3 max-sm:max-w-44 max-sm:whitespace-normal", STICKY_CELL)}>
                     <ChevronRightIcon className={cn("mr-0.5 inline size-4 text-muted-foreground transition-transform", isOpen && "rotate-90 text-primary")} />
                     {r.name}
+                    {/* มือถือ: ยอดเงิน + ชั่วโมงอยู่ใต้ชื่อ (คอลัมน์ชื่อค้างไว้) ไม่ต้องเลื่อนขวาไปคอลัมน์สุดท้าย */}
+                    <span className="mt-0.5 block text-xs font-semibold text-primary tabular-nums sm:hidden">
+                      {num(r.hours)} ชม.{showPay ? ` · ${r.salaried ? "เงินเดือน" : rate ? `${money(payOf(r))} บาท` : "ไม่มีค่าจ้าง"}` : ""}
+                    </span>
                     {r.salaried ? (
                       <Badge title={`${type} ประจำ (ได้เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง และไม่อยู่ในไฟล์เบิก`} className="ml-1.5 bg-p2/15 text-[11px] text-p2">
                         ประจำ
@@ -655,7 +672,7 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                   </TableCell>
                   {showPay ? (
                     <TableCell className={cn(num_, "px-3", r.salaried && "text-xs text-muted-foreground")}>
-                      {r.salaried ? "เงินเดือน" : rate ? money(r.paidHours * rate) : "–"}
+                      {r.salaried ? "เงินเดือน" : rate ? money(payOf(r)) : "–"}
                     </TableCell>
                   ) : null}
                 </TableRow>
@@ -688,6 +705,13 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                                 {fmtDayShort.format(parseKey(d.date))} {shortTime(d.start)}–{shortTime(d.end)}
                               </span>
                               <span className="text-muted-foreground">{d.platform}</span>
+                              {d.checkIn ? (
+                                <span className="font-semibold text-p2" title="เวลาเข้างานจริงจากหมายเหตุในชีต ชั่วโมงและเงินคิดจากเวลานี้ถึงจบ slot">
+                                  {checkInText(d)}
+                                </span>
+                              ) : d.checkInBad ? (
+                                <span className="font-semibold text-destructive">หมายเหตุ {d.checkInBad} — ใช้ไม่ได้ คิดเต็ม slot</span>
+                              ) : null}
                               {lateCut(d.lateMinutes) > 0 ? (
                                 <span className="font-semibold text-destructive">
                                   สาย {d.lateMinutes} น. −{Math.round(lateCut(d.lateMinutes) * 100)}%{d.lateFromProof ? " (จากหลักฐาน)" : ""}
@@ -733,7 +757,10 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
         </TableBody>
         <TableFooter className="bg-transparent font-bold">
           <TableRow className="hover:bg-transparent">
-            <TableCell className={cn("px-3", STICKY_CELL)}>รวม {rows.length} คน</TableCell>
+            <TableCell className={cn("px-3", STICKY_CELL)}>
+              รวม {rows.length} คน
+              <span className="block text-xs text-primary tabular-nums sm:hidden">{num(th)} ชม.{showPay && tm ? ` · ${money(tm)} บาท` : ""}</span>
+            </TableCell>
             <TableCell className={num_}>{ts}</TableCell>
             <TableCell className={num_}>{num(th)}</TableCell>
             <TableCell />

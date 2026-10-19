@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ceoInsights, formatOf, planSheet, targetText } from "@/lib/ceo-insights";
-import type { CeoDay } from "@/lib/ceo-report";
+import { ceoBlocks, type CeoDay } from "@/lib/ceo-report";
 import type { LiveSession } from "@/lib/live-stats";
 import type { CeoSession } from "@/lib/types";
 
@@ -76,4 +76,16 @@ describe("ceoInsights", () => {
 
 test("ไม่มีข้อมูล = ไม่มีแผน", () => {
   expect(ceoInsights([])).toEqual({ findings: [], actions: [], targets: [] });
+});
+
+test("ceoBlocks: CTR / CO เฉลี่ยรอบ CEO คิดจากยอดรวม (ถ่วงตาม Impressions / คลิก) ไม่ใช่เฉลี่ย %", () => {
+  // CTR 10% ของ 100,000 = 10,000 คลิก · CTR 50% ของ 10,000 = 5,000 คลิก -> 15,000 / 110,000
+  // CO 2% ของ 10,000 คลิก = 200 · CO 10% ของ 5,000 คลิก = 500 -> 700 / 15,000
+  const days = [
+    cday("2026-03-03", "CEO Live", 300_000, 100_000, session("2026-03-03", 60_000, 0.1, 0.02, { impressions: 100_000 })),
+    cday("2026-05-23", "CEO Live", 200_000, 100_000, session("2026-05-23", 40_000, 0.5, 0.1, { impressions: 10_000 })),
+  ];
+  const rows = ceoBlocks(days, "tiktok").find((b) => b.key === "session")!.rows;
+  expect(rows.find((r) => r.label === "CTR")!.avg as number).toBeCloseTo(15_000 / 110_000);
+  expect(rows.find((r) => r.label === "CO")!.avg as number).toBeCloseTo(700 / 15_000);
 });

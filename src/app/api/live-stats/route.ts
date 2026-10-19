@@ -7,7 +7,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 //   GET    ?from=ISO&to=ISO   ไลฟ์ที่เริ่มในช่วง [from, to) (ไม่เกิน 800 วัน)
 //   GET    ?months=1          เดือนที่มีข้อมูลแล้ว แยกแพลตฟอร์ม
 //   POST   { fileName, sessions }  บันทึกไลฟ์จากไฟล์ Export (บัญชี + เวลาเริ่มเดิม = อัปเดตแถวเดิม)
-//   DELETE { platform, month }     ลบข้อมูลทั้งเดือนของแพลตฟอร์มนั้น (อัปไฟล์ผิด)
+//   DELETE { platform, month, accountId? }  ลบข้อมูลทั้งเดือนของแพลตฟอร์มนั้น (อัปไฟล์ผิด) ส่ง accountId = เฉพาะบัญชีนั้น
 
 const MAX_DAYS = 800;
 
@@ -112,14 +112,19 @@ export async function DELETE(request: Request) {
   const platform = PLATFORMS.find((p) => p === body?.platform);
   const month = String(body?.month ?? "");
   if (!platform || !/^\d{4}-\d{2}$/.test(month)) return fail("ระบุแพลตฟอร์มและเดือนให้ถูกต้อง");
+  // accountId (ไม่บังคับ) = ลบเฉพาะบัญชีนั้น / ไม่ส่ง = ทุกบัญชีของแพลตฟอร์ม
+  const accountId = typeof body?.accountId === "string" ? body.accountId.trim().slice(0, 200) : "";
+  const accountName = typeof body?.accountName === "string" ? body.accountName.slice(0, 200) : "";
   const { from, to } = monthWindow(month);
   const db = createAdminClient();
-  const { count, error } = await db.from("live_sessions").delete({ count: "exact" })
+  let q = db.from("live_sessions").delete({ count: "exact" })
     .eq("platform", platform).gte("started_at", from).lt("started_at", to);
+  if (accountId) q = q.eq("account_id", accountId);
+  const { count, error } = await q;
   if (error) return fail(error.message, 500);
   await db.from("booking_logs").insert({
     email: r.me.email, role: "Owner", name: r.me.owner?.name ?? "",
-    action: `ลบสถิติไลฟ์ ${platform} เดือน ${month} (${count ?? 0} ไลฟ์)`, result: "สำเร็จ",
+    action: `ลบสถิติไลฟ์ ${platform}${accountId ? ` บัญชี ${accountName || accountId}` : " ทุกบัญชี"} เดือน ${month} (${count ?? 0} ไลฟ์)`, result: "สำเร็จ",
   });
   return ok({ deleted: count ?? 0 });
 }

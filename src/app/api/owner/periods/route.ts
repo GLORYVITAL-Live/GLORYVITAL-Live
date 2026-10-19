@@ -20,6 +20,8 @@ export async function POST(request: Request) {
   const log = (action: string) => db.from("booking_logs").insert({ email: r.me.email, role: "Owner", name: who, action, result: "สำเร็จ" });
 
   if (body?.action === "close") {
+    // เดือนที่ยังไม่จบ (เดือนนี้ / เดือนหน้า ตามเวลาไทย) ปิดไม่ได้: สรุปรวมคิวที่ยังไม่ถึงวันไลฟ์ด้วย ตัวเลขที่ปิดจะไม่ใช่ยอดจริง
+    if (key >= monthRange(null).key) return fail(`ปิดงวด ${label} ไม่ได้ เดือนนี้ยังไม่จบ — ปิดได้ตั้งแต่วันที่ 1 ของเดือนถัดไป`);
     const snapshot = snapshotOf(await ownerSummary(key, first, last), side);
     const { error } = await db.from("pay_periods").insert({ month: key, side, closed_by: who, closed_email: r.me.email, snapshot });
     if (error) {

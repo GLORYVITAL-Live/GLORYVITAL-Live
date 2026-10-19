@@ -1,8 +1,11 @@
 import "server-only";
 import { gmvCoverage } from "@/lib/gmv";
-import { bonusPaidMinutes, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours } from "@/lib/pay";
+import {
+  bonusPaidMinutes, checkInOf, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours,
+} from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
-import { addDays, bookRange, cleanWindow, periodFor, windowNotice } from "@/lib/window";
+import { isTestAccount } from "@/lib/staff-check";
+import { addDays, bookRange, cleanWindow, periodFor, windowEnding, windowNotice } from "@/lib/window";
 import type { BookingLimits, MyItem, OpenSlot, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo, SlotGmv } from "@/lib/types";
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -123,6 +126,22 @@ function mcLateBonus(r: SlotRow, proof: { startedAt: string; endedAt: string; fi
 const hm = (t: string) => t.slice(0, 5);
 const ms = (ts: string) => Date.parse(ts);
 const hoursOf = (r: SlotRow) => (ms(r.ends_at) - ms(r.starts_at)) / 3600_000;
+
+type LateBonus = ReturnType<typeof resolveLateBonus>;
+/**
+ * เวลาเข้างานจริงจากหมายเหตุ ("เข้า 10:00") -> ชั่วโมงที่ใช้คิดเงิน + สาย / ชดเชย
+ *   ใช้ได้: ชั่วโมง = เวลาเข้า ถึงจบ slot และไม่หักสายที่คิดจากหลักฐานไลฟ์ (สายนับจากเวลาเริ่ม slot ซึ่งเวลาเข้าตัดชั่วโมงให้แล้ว)
+ *     ค่าสายที่ Owner ใส่ในชีตเองยังหักตามเดิม (ตั้งใจหักเพิ่ม) · ไลฟ์ชดเชยท้าย slot คิดตามเดิม
+ *   ใช้ไม่ได้ (bad) = ชั่วโมงเต็ม slot ตามเดิม + ข้อความเตือน
+ */
+function withCheckIn(r: SlotRow & { remark?: string | null }, lb: LateBonus) {
+  const full = hoursOf(r);
+  const c = checkInOf(r.remark, ms(r.starts_at), ms(r.ends_at));
+  if (!c) return { hours: full, lb, checkIn: null, bad: null };
+  if (c.bad) return { hours: full, lb, checkIn: null, bad: `${c.time}: ${c.reason}` };
+  const late = lb.lateFromProof ? { lateMinutes: null, lateFromProof: false } : {};
+  return { hours: c.hours, lb: { ...lb, ...late }, checkIn: { time: c.time, slotHours: full }, bad: null };
+}
 /** key จับคู่ slot ข้ามตาราง Mc <-> Admin (platform + เวลาเริ่ม + เวลาจบ) */
 const slotKey = (r: Pick<SlotRow, "platform" | "starts_at" | "ends_at">) =>
   `${r.platform}|${ms(r.starts_at)}|${ms(r.ends_at)}`;
@@ -155,6 +174,15 @@ export const personPeriod = (s: Settings, role: "mc" | "admin", personId?: numbe
 export const bookingRange = (s: Settings, role: "mc" | "admin", personId?: number | null) =>
   bookRange(personPeriod(s, role, personId), bkkToday(), cutoffDate(s));
 
+/** ช่วงเปิดจอง (ทั่วไป) ของแต่ละฝั่งที่หมดภายใน 2 วัน / หมดแล้ว — หน้าแรก + กระดิ่งของ Owner */
+export function windowAlerts(s: Settings, roles: ("mc" | "admin")[]) {
+  const today = bkkToday();
+  return roles.flatMap((role) => {
+    const w = windowEnding(personPeriod(s, role), bookingRange(s, role), today, cutoffDate(s));
+    return w ? [{ role, ...w }] : [];
+  });
+}
+
 /** ข้อความแจ้งบนหน้าจอง: ตั้งช่วงเปิดจองไว้ = บอกช่วงนั้น / ไม่ได้ตั้ง = "เปิดจองถึงสิ้นเดือน ..." */
 export function scheduleNotice(s: Settings, role: "mc" | "admin", personId?: number | null) {
   const p = personPeriod(s, role, personId);
@@ -180,7 +208,8 @@ export async function openMcSlots(settings: Settings, personId?: number | null) 
   const r = bookingRange(settings, "mc", personId);
   if (r.empty) return [];
   const rows = await fetchAll<SlotRow>((from, to) => {
-    let q = db.from("mc_slots").select(SLOT_COLS).is("mc_id", null).gte("live_date", r.from);
+    // slot ที่ "แคน" ในชีต (is_cancelled) ไม่เปิดให้จอง · slot ที่เริ่มไปแล้วแต่ยังไม่จบยังจองได้ (มาช่วยกลางไลฟ์)
+    let q = db.from("mc_slots").select(SLOT_COLS).is("mc_id", null).eq("is_cancelled", false).gte("live_date", r.from);
     if (r.to) q = q.lte("live_date", r.to);
     return q.order("starts_at").range(from, to);
   });
@@ -211,7 +240,8 @@ export async function openAdminSlots(settings: Settings, personId?: number | nul
   const r = bookingRange(settings, "admin", personId);
   if (r.empty) return [];
   const rows = await fetchAll<SlotRow>((from, to) => {
-    let q = db.from("admin_slots").select(SLOT_COLS).is("admin_id", null).eq("needs_extra_admin", true).gte("live_date", r.from);
+    let q = db.from("admin_slots").select(SLOT_COLS).is("admin_id", null).eq("needs_extra_admin", true).eq("is_cancelled", false)
+      .gte("live_date", r.from);
     if (r.to) q = q.lte("live_date", r.to);
     return q.order("starts_at").range(from, to);
   });
@@ -250,8 +280,8 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
   const db = createAdminClient();
   const table = role === "mc" ? "mc_slots" : "admin_slots";
   const personCol = role === "mc" ? "mc_id" : "admin_id";
-  const rows = await fetchAll<SlotRow>((from, to) =>
-    db.from(table).select(SLOT_COLS).eq(personCol, personId)
+  const rows = await fetchAll<SlotRow & { remark: string | null }>((from, to) =>
+    db.from(table).select(`${SLOT_COLS}, remark`).eq(personCol, personId)
       .gte("live_date", first).lte("live_date", last)
       .or("confirmed.is.null,confirmed.eq.true")
       .order("starts_at").range(from, to),
@@ -266,12 +296,15 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
     const lb = role === "mc"
       ? mcLateBonus(r, proofs?.get(Number(r.id)))
       : { lateMinutes: r.late_minutes ?? null, bonusMinutes: r.bonus_minutes ?? null, lateFromProof: false, bonusFromProof: false };
+    // เข้างานกลาง slot ("เข้า 10:00") = ชั่วโมง / เงินตามเวลาที่ทำจริง (ตรงกับสรุปของเจ้าของ)
+    const ci = withCheckIn(r, lb);
     return {
       ...toOpenSlot(r),
-      hours: hoursOf(r),
+      hours: ci.hours,
       status: r.status,
       cancelled: r.is_cancelled,
-      ...lb,
+      ...ci.lb,
+      checkIn: ci.checkIn,
       pairName: p ? (role === "admin" ? `Mc ${p.name}` : p.name) : "",
       pairPhone: p?.phone ?? "",
     };
@@ -362,10 +395,14 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         .or("confirmed.is.null,confirmed.eq.true")
         .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
     );
-  const [mcRows, adminRows, proofs, gmvs, cancels] = await Promise.all([
+  const [mcAll, adminAll, proofs, gmvs, cancelAll] = await Promise.all([
     load("mc_slots", "mc_id"), load("admin_slots", "admin_id"), proofsBySlot(db, first, last), gmvBySlot(db, first, last),
     webCancels(db, first, last),
   ]);
+  // บัญชีทดสอบ (ชื่อมี "ทดสอบ" / "test") ไม่นับในสรุปรายเดือน / ไฟล์เบิก
+  const real = (r: Row) => !r.person || !isTestAccount(r.person.name);
+  const mcRows = mcAll.filter(real), adminRows = adminAll.filter(real);
+  const cancels = cancelAll.filter((c) => !isTestAccount(c.name));
   // หลักฐานไลฟ์ผูกกับ slot ของ Mc -> ฝั่ง Admin ของ slot เดียวกันใช้หลักฐานเดียวกัน
   const proofOf = new Map<string, ProofInfo>();
   const gmvOf = new Map<string, number>();
@@ -403,20 +440,22 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
       const name = type === "Mc" ? `Mc ${r.person.name}` : r.person.name;
       persons.set(`${type}|${name}`, r.person);
       // Mc: สาย / ชดเชยในชีตก่อน ช่องว่าง = คิดจากหลักฐานไลฟ์ / Admin: จากชีตอย่างเดียว
-      const lb = type === "Mc"
+      const lb0 = type === "Mc"
         ? mcLateBonus(r, proofs.get(Number(r.id)))
         : { lateMinutes: r.late_minutes ?? null, bonusMinutes: r.bonus_minutes ?? null, lateFromProof: false, bonusFromProof: false };
+      // เข้างานกลาง slot ("เข้า 10:00" ในหมายเหตุ): ชั่วโมง = เวลาเข้า ถึงจบ slot (ทุกที่ที่ใช้ชั่วโมง / เงินใช้ค่านี้)
+      const ci = withCheckIn(r, lb0);
       details.push({
         type, name, date: r.live_date, start: hm(r.start_time), end: hm(r.end_time), platform: r.platform,
-        hours: hoursOf(r), startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
-        ...lb,
+        hours: ci.hours, startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
+        ...ci.lb, checkIn: ci.checkIn, checkInBad: ci.bad,
         proof: proofOf.get(slotKey(r)) ?? null,
         noProof: salaried.has(slotKey(r)),
         gmv: gmvOf.get(slotKey(r)) ?? null,
         gmvCoveredBy: coveredBy.get(slotKey(r)) ?? null,
         campaign: (type === "Mc" ? r.campaign?.trim() : campaignOf.get(slotKey(r))) || "",
         // หมายเหตุในชีต ("Admin เสริม" เป็นป้ายเปิดรับ Admin ไม่ใช่หมายเหตุ)
-        remark: r.remark?.trim() === "Admin เสริม" ? "" : r.remark?.trim() ?? "",
+        remark: String(r.remark ?? "").replace(/^\s*Admin เสริม\s*/, "").trim(),
       });
     }
   };
