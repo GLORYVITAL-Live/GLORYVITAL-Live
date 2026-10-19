@@ -29,9 +29,11 @@ import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
  *   data       ข้อมูลผิด (คนซ้อน slot / คนเดียวกัน 2 slot เวลาทับ / แถวซ้ำ / ขาดแถวคู่) → Owner (ทันที ไม่แจ้งซ้ำเรื่องเดิม)
  *   window     ช่วงเปิดจองหมดภายใน 2 วัน / หมดแล้ว (วันละครั้ง ตั้งแต่ 10:00) → Owner ฝั่งนั้น
  *   weekly     อาทิตย์ 18:00 สรุปคิวสัปดาห์หน้า → ทุกคนที่มีคิว
+ *   tawi       ใบ 50 ทวิ พร้อมดาวน์โหลด (ไฟล์ได้เจ้าของครั้งแรก — src/lib/tawi.ts) → เจ้าของไฟล์
+ *              เจ้าตัวกรอกชื่อยืนยันตัวตนไม่ตรง (วันละครั้งต่อคน) → Owner ที่ดูเอกสารทำเบิกได้
  */
 
-export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "test";
+export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "tawi" | "test";
 /** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide) */
 export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide";
 export type Note = { kind: NoteKind; title: string; body: string; page?: NotePage | null; dedupe?: string };

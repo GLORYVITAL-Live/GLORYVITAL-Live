@@ -8,6 +8,7 @@ import { ClipboardListIcon, IdCardIcon } from "lucide-react";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
+import { MyTawi } from "@/components/MyTawi";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -137,6 +138,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             <IdCardIcon />เอกสารทำเบิก
           </Button>
         </div>
+        <MyTawi open={open} />
 
         <DialogBody>
           {error && !items ? (

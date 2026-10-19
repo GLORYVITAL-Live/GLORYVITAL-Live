@@ -4,6 +4,7 @@ import { openSlots, sendMorningDigest } from "@/lib/digest";
 import { notifyOpenSoon } from "@/lib/notifications";
 import { matchPayDocsFolders, syncPendingPayDocs } from "@/lib/drive";
 import { removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
+import { scanTawi } from "@/lib/tawi";
 import { processSyncJobs } from "@/lib/sync";
 
 export const maxDuration = 60;
@@ -12,7 +13,7 @@ export const maxDuration = 60;
 //   1. ลบ slot ที่ถูกลบแถวในชีตแล้วแต่เว็บยังไม่รู้ (เช่น Apps Script ส่งไม่สำเร็จ)
 //   2. เมลสรุปเช้า + แจ้งเตือนในเว็บ "slot ยังว่างใน 48 ชม." (ทำก่อนงานยาว ไม่ให้หมดเวลาก่อนส่ง)
 //   3. ปิดงานลงปฏิทินที่ระบบเลิกลองแล้ว + คนที่เพิ่งแชร์ปฏิทิน ลงคิวที่ค้างให้
-//      + เอกสารทำเบิก (ขึ้น Drive ที่ค้าง / จับคู่โฟลเดอร์เอกสารเดิม)
+//      + เอกสารทำเบิก (ขึ้น Drive ที่ค้าง / จับคู่โฟลเดอร์เอกสารเดิม) + ใบ 50 ทวิ (ไฟล์ใหม่ใน Drive / จับคู่ / แจ้งเจ้าของ)
 //   4. เก็บตกงานที่ค้าง (ลงปฏิทิน + เขียนชีต) เช่น Google ขัดข้องชั่วคราว
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -36,5 +37,9 @@ export async function GET(request: Request) {
     sync: await syncPendingPayDocs().catch(errorOf),
     match: await matchPayDocsFolders().then((m) => ({ linked: m.linked.length })).catch(errorOf),
   };
-  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs });
+  // ยังไม่ได้ตั้งโฟลเดอร์ = ข้าม · ยังไม่ได้รัน SQL / Drive ขัดข้อง = บันทึก error ไม่กระทบงานอื่น
+  const tawi = await scanTawi()
+    .then((s) => (s.configured ? { added: s.added, removed: s.removed, matched: s.matched, unmatched: s.unmatched, notified: s.notified } : { skipped: "no folder" }))
+    .catch(errorOf);
+  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs, tawi });
 }

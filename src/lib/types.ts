@@ -209,6 +209,38 @@ export type OwnerPayDocs = {
   folders?: DocsFolder[];
 };
 
+/** ใบ 50 ทวิ 1 ไฟล์ (เดือน "YYYY-MM") · verified = เจ้าตัวยืนยันชื่อของใบนี้แล้ว (ดาวน์โหลดได้) */
+export type TawiDoc = { id: number; month: string; verified: boolean };
+/**
+ * GET /api/my/tawi — ready = รัน SQL 20261029000000_tawi50 แล้ว (ไม่พร้อม = ซ่อนส่วนนี้)
+ *   verifyReady = รัน SQL 20261030000000_tawi_verify แล้ว (ยัง = ดาวน์โหลดไม่ได้ชั่วคราว)
+ *   locked = กรอกชื่อไม่ตรงครบจำนวนของวันนี้แล้ว
+ */
+export type MyTawi = { ready: boolean; verifyReady: boolean; locked: boolean; docs: TawiDoc[] };
+/** สถานะยืนยันตัวตนของเจ้าของไฟล์: ok = ยืนยันแล้ว / wait = รอเจ้าตัวยืนยัน / fail = กรอกไม่ตรง */
+export type TawiVerifyState = { status: "ok" | "wait" | "fail"; fails: number; failedAt: string | null };
+/**
+ * ไฟล์ในหน้าจับคู่ของ Owner — matchedBy: auto = ระบบ / owner = Owner จับคู่ / self = เจ้าตัวกรอกชื่อ (แบบเดิม เลิกใช้แล้ว)
+ *   verify = สถานะยืนยันตัวตน (ยังไม่จับคู่ / ยังไม่ได้รัน SQL ยืนยันตัวตน = null)
+ */
+export type TawiOwnerDoc = {
+  id: number; month: string; realName: string; fileName: string;
+  staffId: number | null; matchedBy: "auto" | "owner" | "self" | null;
+  suggest: { id: number; score: number }[];
+  verify: TawiVerifyState | null;
+};
+export type TawiPerson = { id: number; role: "mc" | "admin"; label: string; legalName: string | null; hasEmail: boolean };
+/**
+ * GET /api/owner/tawi — ready = รัน SQL แล้ว · folderSet = ตั้งโฟลเดอร์ Drive แล้ว
+ *   verifyReady = รัน SQL ยืนยันตัวตน (20261030000000_tawi_verify) แล้ว
+ *   months = ทุกเดือนที่มีไฟล์ (ใหม่ก่อน) · docs = ไฟล์ของเดือนที่เลือก
+ */
+export type OwnerTawi = {
+  ready: boolean; folderSet: boolean; verifyReady: boolean; month: string | null;
+  months: { month: string; total: number; matched: number }[];
+  docs: TawiOwnerDoc[]; people: TawiPerson[];
+};
+
 export type MyResponse = {
   ok: true;
   month: string;
