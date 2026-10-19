@@ -3,6 +3,7 @@ import webpush from "web-push";
 import { missingCalendarCounts } from "@/lib/calendar";
 import { bookingRange, getSettings, proofsBySlot, type Settings } from "@/lib/data";
 import { gmvCoverage } from "@/lib/gmv";
+import { dataHealth } from "@/lib/health";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -24,9 +25,12 @@ import { addDays, rangeText, type BookRange } from "@/lib/window";
  *   open_soon  slot ยังว่างใน 48 ชม. (เช้า)           → Owner ฝั่งนั้น
  *   proof      หลังไลฟ์ ~2 ชม. ยังไม่แนบหลักฐาน / GMV → Admin ของ slot · ค้างเกิน 24 ชม. (10:00) → Admin + Owner
  *   calendar   คิวยังไม่ขึ้นปฏิทิน (จันทร์ / พฤหัส 10:00) → คนนั้น พร้อมลิงก์วิธีแชร์
+ *   open_soon  [ด่วน] slot ว่างเหลือไม่ถึง 6 ชม. ก่อนไลฟ์ → Owner ฝั่งนั้น (ทุก 15 นาที)
+ *   data       ข้อมูลผิด (คนซ้อน slot / แถวซ้ำ / ขาดแถวคู่) → Owner (ทันที ไม่แจ้งซ้ำเรื่องเดิม)
+ *   weekly     อาทิตย์ 18:00 สรุปคิวสัปดาห์หน้า → ทุกคนที่มีคิว
  */
 
-export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "test";
+export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "test";
 /** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide) */
 export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide";
 export type Note = { kind: NoteKind; title: string; body: string; page?: NotePage | null; dedupe?: string };
@@ -579,6 +583,108 @@ export async function sendWorkReminders(now = Date.now(), dryRun = false) {
     }
   }
 
+  if (dryRun) return { sent: 0, items };
+  return { sent: await notifyMany(items), items: [] };
+}
+
+// ---------- แจ้ง Owner ทันที (cron ทุก 15 นาที) ----------
+
+/** slot ว่างที่เหลือไม่ถึงกี่ชั่วโมงก่อนไลฟ์ = [ด่วน] */
+const URGENT_OPEN_H = 6;
+/** สรุปรายสัปดาห์ วันอาทิตย์ตั้งแต่กี่โมง (เวลาไทย) */
+const WEEKLY_HOUR = 18;
+
+/**
+ * แจ้ง Owner ทันที (cron ทุก 15 นาที · ไม่แจ้งซ้ำเรื่องเดิม)
+ *   [ด่วน] slot ยังไม่มี Mc / Admin และเหลือไม่ถึง 6 ชม. ก่อนไลฟ์ (ไลฟ์ต่อกันหลาย slot = ข้อความเดียว)
+ *   ข้อมูลผิด: คนละคนซ้อน slot / แถวซ้ำในชีต / slot มีแถวฝั่งเดียว (เกณฑ์เดียวกับ "ข้อมูลที่ควรแก้" ในหน้าแรก)
+ */
+export async function sendOwnerAlerts(now = Date.now(), dryRun = false) {
+  const db = createAdminClient();
+  const today = bkkDay(now);
+  const items: (Note & { email: string })[] = [];
+  const owners = { mc: await ownerEmails("mc"), admin: await ownerEmails("admin") };
+
+  // ---- slot ว่างใกล้ไลฟ์ ----
+  for (const side of ["mc", "admin"] as const) {
+    const { data, error } = await db.from(tableOf(side))
+      .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed")
+      .is(personCol(side), null).eq("is_cancelled", false).gte("live_date", addDays(today, -1)).lte("live_date", addDays(today, 1))
+      .order("starts_at").overrideTypes<Slot[], { merge: false }>();
+    if (error) throw error;
+    const open = (data ?? []).filter((s) => {
+      const left = Date.parse(s.starts_at) - now;
+      return s.confirmed !== false && left > 0 && left <= URGENT_OPEN_H * 3600_000;
+    });
+    // ไลฟ์ต่อกัน (ช่องเดียวกัน) = ข้อความเดียว
+    const chains: Slot[][] = [];
+    for (const s of open) {
+      const c = chains.find((x) => x[x.length - 1].platform === s.platform && x[x.length - 1].ends_at === s.starts_at);
+      if (c) c.push(s); else chains.push([s]);
+    }
+    for (const c of chains) {
+      const h = Math.max(1, Math.round((Date.parse(c[0].starts_at) - now) / 3600_000));
+      for (const email of owners[side]) {
+        items.push({
+          email, kind: "open_soon", page: "home", dedupe: `urgent:${side}:${c[0].id}`,
+          title: `[ด่วน] slot ${roleLabel(side)} ยังว่าง อีก ${h} ชม. ไลฟ์`,
+          body: `${c.map(slotText).join("\n")}\nยังไม่มี ${roleLabel(side)} — ควรหาคนแทนโดยตรง`,
+        });
+      }
+    }
+  }
+
+  // ---- ข้อมูลผิด ----
+  const health = await dataHealth({ mc: true, admin: true });
+  const day = (d: string) => fmtDayShort.format(parseKey(d));
+  const toOwners = (sides: Side[], key: string, title: string, body: string) => {
+    const emails = sides.length === 2 ? owners.mc.filter((e) => owners.admin.includes(e)) : owners[sides[0]];
+    for (const email of emails) items.push({ email, kind: "data", page: "home", dedupe: `health:${key}`, title, body });
+  };
+  for (const x of health.overlap) {
+    toOwners([x.role], `overlap:${x.role}|${x.date}|${x.platform}|${x.time}|${x.names.join(",")}`,
+      `ข้อมูลผิด: คนซ้อน slot ${roleLabel(x.role)}`, `${day(x.date)} ${x.time} ${x.platform}\n${x.names.join(" + ")} อยู่ช่องเดียวกันเวลาทับกัน (ชั่วโมง / ค่าจ้างนับทั้งคู่)`);
+  }
+  for (const x of health.dupRows) {
+    toOwners([x.role], `dup:${x.role}|${x.date}|${x.platform}|${x.time}|${x.rows}`,
+      `ข้อมูลผิด: แถวซ้ำในชีต ${roleLabel(x.role)}`, `${day(x.date)} ${x.time} ${x.platform}\n${x.rows} แถว (${x.note})`);
+  }
+  for (const x of health.noPair) {
+    toOwners(["mc", "admin"], `nopair:${x.missing}|${x.date}|${x.platform}|${x.time}`,
+      `ข้อมูลผิด: slot ขาดแถว ${roleLabel(x.missing)}`, `${day(x.date)} ${x.time} ${x.platform}\nมีแถวแค่ฝั่ง ${roleLabel(x.missing === "mc" ? "admin" : "mc")} (แท็บ Deal Mc กับ Admin เสริมไม่ตรงกัน)`);
+  }
+
+  if (dryRun) return { sent: 0, items };
+  return { sent: await notifyMany(items), items: [] };
+}
+
+/**
+ * สรุปรายสัปดาห์ (อาทิตย์ 18:00) → ทุกคนที่มีคิวสัปดาห์หน้า (จันทร์–อาทิตย์) คนละ 1 ข้อความ
+ *   ไม่มีคิว = ไม่ส่ง · เป็นทั้ง Mc และ Admin = รวมกัน บอก (Admin) ท้ายคิว Admin
+ */
+export async function sendWeeklySummary(now = Date.now(), dryRun = false) {
+  const bkk = new Date(now + 7 * 3600_000);
+  if (bkk.getUTCDay() !== 0 || bkk.getUTCHours() < WEEKLY_HOUR) return { sent: 0, items: [] as (Note & { email: string })[] };
+  const monday = addDays(bkkDay(now), 1), sunday = addDays(monday, 6);
+  const slots = (await activeSlots(monday, sunday)).filter((s) => s.live_date >= monday);
+  const emails = await emailsOf(slots.map((s) => s.person));
+  const per = new Map<string, typeof slots>();
+  for (const s of slots) {
+    const email = emails.get(s.person!);
+    if (email) per.set(email, [...(per.get(email) ?? []), s]);
+  }
+  const items: (Note & { email: string })[] = [];
+  for (const [email, mine] of per) {
+    mine.sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
+    const mixed = new Set(mine.map((s) => s.side)).size > 1;
+    const days = new Set(mine.map((s) => s.live_date)).size;
+    const lines = mine.map((s) => `${slotText(s)}${mixed && s.side === "admin" ? " (Admin)" : ""}`);
+    items.push({
+      email, kind: "weekly", page: mine[0].side, dedupe: `week:${monday}`,
+      title: `สัปดาห์หน้าคุณมีไลฟ์ ${mine.length} คิว (${days} วัน)`,
+      body: lines.slice(0, 10).join("\n") + (lines.length > 10 ? `\nและอีก ${lines.length - 10} คิว` : ""),
+    });
+  }
   if (dryRun) return { sent: 0, items };
   return { sent: await notifyMany(items), items: [] };
 }

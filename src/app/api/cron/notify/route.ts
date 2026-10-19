@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { pruneNotifications, sendPreLiveReminders, sendWorkReminders } from "@/lib/notifications";
+import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySummary, sendWorkReminders } from "@/lib/notifications";
 
 export const maxDuration = 60;
 
@@ -14,9 +14,13 @@ export async function GET(request: Request) {
   try {
     const reminders = await sendPreLiveReminders();
     // งานค้าง (หลักฐาน / GMV / ยังไม่แชร์ปฏิทิน) — พลาดไม่กระทบเตือนก่อนไลฟ์
-    const work = await sendWorkReminders().then((x) => ({ sent: x.sent })).catch((err) => ({ error: String((err as Error)?.message ?? err) }));
+    const fail = (err: unknown) => ({ error: String((err as Error)?.message ?? err) });
+    const work = await sendWorkReminders().then((x) => ({ sent: x.sent })).catch(fail);
+    // แจ้ง Owner ทันที (slot ว่างใกล้ไลฟ์ / ข้อมูลผิด) + สรุปรายสัปดาห์ (อาทิตย์เย็น)
+    const owner = await sendOwnerAlerts().then((x) => ({ sent: x.sent })).catch(fail);
+    const weekly = await sendWeeklySummary().then((x) => ({ sent: x.sent })).catch(fail);
     await pruneNotifications().catch(() => undefined);
-    return NextResponse.json({ ok: true, reminders, work });
+    return NextResponse.json({ ok: true, reminders, work, owner, weekly });
   } catch (err) {
     return NextResponse.json({ ok: false, message: String((err as Error)?.message ?? err) }, { status: 500 });
   }

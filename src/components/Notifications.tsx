@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlarmClockIcon, BellIcon, BellRingIcon, CalendarCheckIcon, CalendarPlusIcon, CameraIcon, CalendarXIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon,
+  AlarmClockIcon, BellIcon, BellRingIcon, CalendarCheckIcon, CalendarPlusIcon, CalendarRangeIcon, CameraIcon, CalendarXIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon,
   type LucideIcon,
 } from "lucide-react";
 import { api, useToast } from "@/components/shared";
@@ -25,6 +25,7 @@ function withTimeout<T>(p: Promise<T>, sec: number, message: string) {
 const KIND_ICON: Record<string, LucideIcon> = {
   booked: CalendarPlusIcon, cancelled: CalendarXIcon, slot_open: SparklesIcon, changed: RefreshCwIcon,
   reminder: AlarmClockIcon, open_soon: TriangleAlertIcon, proof: CameraIcon, calendar: CalendarCheckIcon,
+  data: TriangleAlertIcon, weekly: CalendarRangeIcon,
 };
 
 /** "เมื่อสักครู่" / "5 นาทีที่แล้ว" / "3 ชม.ที่แล้ว" / "17 ต.ค. 09:30" */
