@@ -49,6 +49,8 @@ const hm = (t: string) => String(t).slice(0, 5);
 const bkkDay = (t: number) => new Date(t + 7 * 3600_000).toISOString().slice(0, 10);
 const cleanEmails = (emails: (string | null | undefined)[]) =>
   [...new Set(emails.filter((e): e is string => !!e?.trim()).map((e) => e.trim().toLowerCase()))];
+/** ป้ายฝั่งในหัวข้อแจ้งเตือน (แยกให้เห็นบนหน้าจอล็อกว่าเป็น slot ของ Mc หรือ Admin) */
+const roleLabel = (side: Side) => (side === "mc" ? "Mc" : "Admin");
 const who = (side: Side, name: string) => (side === "mc" ? `Mc ${name.replace(/^mc\s*/i, "")}` : name);
 
 // ---------- ส่ง ----------
@@ -230,7 +232,7 @@ export async function notifyCancelled(side: Side, name: string, actorEmail: stri
     const already = new Set(items.map((x) => x.email));
     for (const p of bookable) {
       if (p.email !== actor && !already.has(p.email)) {
-        items.push({ email: p.email, kind: "slot_open", page: side, title: `${urgent}มี slot ว่าง: ${text}`, body: `มีคนยกเลิกคิวนี้ ${side === "mc" ? "จองได้" : "รับคิวได้"}ทางเว็บ ใครกดก่อนได้ก่อน` });
+        items.push({ email: p.email, kind: "slot_open", page: side, title: `${urgent}มี slot ${roleLabel(side)} ว่าง: ${text}`, body: `มีคนยกเลิกคิวนี้ ${side === "mc" ? "จองได้" : "รับคิวได้"}ทางเว็บ ใครกดก่อนได้ก่อน` });
       }
     }
     return notifyMany(items);
@@ -280,9 +282,9 @@ export async function notifySlotChanges(table: Table, changes: SlotChange[], act
       ].filter(Boolean);
       if (!parts.length) continue;
       const only = parts.length === 1;
-      const title = !only ? "คิวของคุณมีการเปลี่ยนแปลง"
-        : b.added.length ? `คุณได้รับคิวใหม่ ${b.added.length} slot`
-          : b.removed.length ? `คุณถูกเอาออกจากคิว ${b.removed.length} slot` : `คิวของคุณถูกยกเลิก ${b.cancelled.length} slot`;
+      const title = !only ? `คิว ${roleLabel(side)} ของคุณมีการเปลี่ยนแปลง`
+        : b.added.length ? `คุณได้รับคิว ${roleLabel(side)} ใหม่ ${b.added.length} slot`
+          : b.removed.length ? `คุณถูกเอาออกจากคิว ${roleLabel(side)} ${b.removed.length} slot` : `คิว ${roleLabel(side)} ของคุณถูกยกเลิก ${b.cancelled.length} slot`;
       items.push({ email, kind: "changed", page: side, title, body: only ? parts[0].replace(/^[^\n]*\n/, "") : parts.join("\n\n") });
     }
     return notifyMany(items);
@@ -333,7 +335,7 @@ export async function notifyNewSlots(side: Side, slotIds: number[], actorEmail =
       if (p.email === actorEmail.toLowerCase()) continue;
       const range = bookingRange(settings, side, p.id);
       const mine = slots.filter((s) => inRange(range, s.live_date));
-      if (mine.length) items.push({ email: p.email, kind: "slot_open", page: side, title: `มี slot ใหม่เปิดให้${verb} ${mine.length} slot`, body: listText(mine) });
+      if (mine.length) items.push({ email: p.email, kind: "slot_open", page: side, title: `มี slot ${roleLabel(side)} ใหม่เปิดให้${verb} ${mine.length} slot`, body: listText(mine) });
     }
     return notifyMany(items);
   } catch (err) {
@@ -359,7 +361,7 @@ export async function notifyWindowOpened(side: Side, before: Settings, after: Se
       if (!mine.length) continue;
       items.push({
         email: p.email, kind: "slot_open", page: side,
-        title: `เปิดให้${verb}แล้ว: slot ว่าง ${mine.length} slot`,
+        title: `เปิดให้${verb}แล้ว: slot ${roleLabel(side)} ว่าง ${mine.length} slot`,
         body: `ช่วงที่${verb}ได้: ${rangeText(now)}\n${listText(mine)}`,
       });
     }
