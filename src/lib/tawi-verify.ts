@@ -3,7 +3,7 @@
 //   กับคีย์ชื่อของใบที่ทีมงานจับคู่ให้คนนี้ · ตรง = จำคีย์นั้นไว้ (ใบที่ชื่อต่างไป = ต้องยืนยันใหม่)
 //   การกรอกชื่อไม่ทำให้ใบไหนถูกจับคู่ (กันกรอกชื่อเพื่อนแล้วได้ใบของเพื่อน)
 import { tawiNameKey } from "@/lib/tawi-name";
-import type { TawiVerifyState } from "@/lib/types";
+import type { ReceiptState, TawiVerifyState } from "@/lib/types";
 
 /** กรอกผิดได้กี่ครั้งต่อวัน (เวลาไทย) — กันเดาชื่อ */
 export const TAWI_VERIFY_MAX_FAILS = 5;
@@ -17,19 +17,26 @@ export function failsToday(dayFails: number | null | undefined, failedAt: string
   return Number.isFinite(t) && bkkDay(t) === bkkDay(now) ? dayFails : 0;
 }
 
-export type TawiAccess = "ok" | "verify" | "updating" | "forbidden";
+/** receipt = ยังไม่ส่งเอกสารยืนยันการรับเงินของเดือนนี้ · rejected = ส่งแล้วแต่ Owner ตีกลับ (ต้องส่งใหม่) */
+export type TawiAccess = "ok" | "verify" | "receipt" | "rejected" | "updating" | "forbidden";
 
 /**
- * เปิด / ดาวน์โหลดใบนี้ได้ไหม
+ * เปิด / ดาวน์โหลดใบนี้ได้ไหม (ลำดับ: ยืนยันตัวตน -> ส่งเอกสารรับเงิน -> ดาวน์โหลด)
  *   viewer = Owner ที่ดูเอกสารทำเบิกได้ (เปิดได้เสมอ)
  *   mine = ใบนี้จับคู่กับอีเมลของคนที่ขออยู่ตอนนี้ (staff_id ปัจจุบัน — ย้าย / ยกเลิกแล้ว = ไม่ใช่ของเขา)
  *   verifiedKeys = คีย์ชื่อที่คนนี้ยืนยันแล้ว · null = ยังไม่ได้รัน SQL ยืนยันตัวตน (ไม่ให้เจ้าตัวโหลดไว้ก่อน)
+ *   receipt = สถานะเอกสารรับเงินของเดือนของใบนี้ (receiptState) · ไม่ระบุ = ไม่ต้องส่ง
  */
-export function tawiAccess(a: { viewer: boolean; mine: boolean; docKey: string; verifiedKeys: string[] | null }): TawiAccess {
+export function tawiAccess(a: {
+  viewer: boolean; mine: boolean; docKey: string; verifiedKeys: string[] | null; receipt?: ReceiptState;
+}): TawiAccess {
   if (a.viewer) return "ok";
   if (!a.mine) return "forbidden";
   if (a.verifiedKeys === null) return "updating";
-  return a.docKey && a.verifiedKeys.includes(a.docKey) ? "ok" : "verify";
+  if (!a.docKey || !a.verifiedKeys.includes(a.docKey)) return "verify";
+  if (a.receipt === "missing") return "receipt";
+  if (a.receipt === "rejected") return "rejected";
+  return "ok";
 }
 
 /** สถานะยืนยันของใบนี้ (หน้า Owner): ยืนยันชื่อของใบนี้แล้ว = ok · ยังและเคยกรอกไม่ตรง = fail · อื่นๆ = wait */

@@ -3,6 +3,8 @@ import type { drive_v3 } from "googleapis";
 import { driveClient, driveError } from "@/lib/drive";
 import { withSyncLock } from "@/lib/lock";
 import { notify, notifyMany } from "@/lib/notifications";
+import { receiptState } from "@/lib/receipts";
+import { myReceipts, receiptView } from "@/lib/receipts-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   cleanRealName, dominantMonth, parseTawiFile, suggestPeople, tawiMonthLabel, tawiNameKey, type TawiCandidate,
@@ -388,26 +390,32 @@ export async function assignTawi(docId: number, staffId: number | null) {
 }
 
 /**
- * ไฟล์ทั้งหมดที่จับคู่กับอีเมลนี้ (ทุกบทบาท) + ใบไหนยืนยันตัวตนแล้ว
+ * ไฟล์ทั้งหมดที่จับคู่กับอีเมลนี้ (ทุกบทบาท) + ใบไหนยืนยันตัวตนแล้ว + เอกสารรับเงินของแต่ละเดือน (src/lib/receipts-db.ts)
  *   ยังไม่ได้รัน SQL ใบ 50 ทวิ = ready: false · ยังไม่ได้รัน SQL ยืนยันตัวตน = verifyReady: false (ดาวน์โหลดไม่ได้)
  */
 export async function myTawi(email: string): Promise<MyTawi> {
   const db = createAdminClient();
-  const off: MyTawi = { ready: false, verifyReady: false, locked: false, docs: [] };
+  const off: MyTawi = { ready: false, verifyReady: false, locked: false, docs: [], receiptFrom: null, receipts: [] };
   const { data: staff, error } = await db.from("staff").select("id").eq("email", email).in("role", ["mc", "admin"]);
   if (error) return off;
   const ids = (staff ?? []).map((s) => Number(s.id));
-  if (!ids.length) return { ready: true, verifyReady: true, locked: false, docs: [] };
-  const [{ data, error: docErr }, rows] = await Promise.all([
+  if (!ids.length) return { ...off, ready: true, verifyReady: true };
+  const [{ data, error: docErr }, rows, rc] = await Promise.all([
     db.from("tawi_docs").select("id, month, name_key").in("staff_id", ids).order("month", { ascending: false }).order("id"),
     verifyRows(db, { ids }),
+    myReceipts(email),
   ]);
   if (docErr) return off;
   const v = rows ? mergeVerify(rows) : null;
+  const byMonth = new Map(rc.rows.map((r) => [r.month, r]));
   return {
     ready: true, verifyReady: !!v,
     locked: !!v && failsToday(v.dayFails, v.failedAt) >= TAWI_VERIFY_MAX_FAILS,
-    docs: (data ?? []).map((d) => ({ id: Number(d.id), month: String(d.month), verified: !!v?.keys.includes(String(d.name_key)) })),
+    docs: (data ?? []).map((d) => ({
+      id: Number(d.id), month: String(d.month), verified: !!v?.keys.includes(String(d.name_key)),
+      receipt: receiptState(String(d.month), rc.requiredFrom, byMonth.get(String(d.month))),
+    })),
+    receiptFrom: rc.requiredFrom, receipts: rc.rows.map(receiptView),
   };
 }
 

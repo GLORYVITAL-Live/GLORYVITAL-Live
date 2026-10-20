@@ -38,6 +38,19 @@ export function driveError(err: unknown) {
   return msg.slice(0, 300);
 }
 
+/** ข้อความถึงผู้ใช้เมื่อเปิดไฟล์ใน Drive ไม่ได้ (404) */
+export const DRIVE_FILE_GONE = "เปิดไฟล์ไม่ได้ (ไฟล์ใน Google Drive ถูกย้าย / ลบ หรือระบบไม่มีสิทธิ์เข้าถึง) แจ้งทีมงาน";
+
+/**
+ * Drive ตอบ 404 (ไฟล์ถูกลบ / ย้าย / ไม่มีสิทธิ์)
+ *   โหลดไฟล์แบบ arraybuffer ข้อความ error เป็นแค่ "Request failed with status code 404" (ไม่มีคำว่า not found) จึงดูเลขสถานะด้วย
+ */
+export function driveNotFound(err: unknown) {
+  const e = err as { status?: unknown; code?: unknown; response?: { status?: unknown }; message?: unknown } | null;
+  return e?.status === 404 || e?.response?.status === 404 || String(e?.code ?? "") === "404"
+    || /\b404\b|not found/i.test(String(e?.message ?? ""));
+}
+
 const quote = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
 /** หาโฟลเดอร์ชื่อนี้ใต้ parent (ไม่มี = สร้าง) */

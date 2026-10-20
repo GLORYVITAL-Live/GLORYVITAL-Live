@@ -5,6 +5,7 @@ import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { BellRingIcon, CalendarXIcon, CopyIcon, IdCardIcon, MailIcon, PlusIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { copyText } from "@/components/CalendarGuide";
 import { PayDocsPanel } from "@/components/PayDocs";
+import { ReceiptPanel } from "@/components/ReceiptPanel";
 import { TawiPanel } from "@/components/TawiPanel";
 import { CALENDAR_SHARE_TO, calendarShareMessage } from "@/lib/calendar-share";
 import {
@@ -344,6 +345,8 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
       ) : null}
       {/* ใบ 50 ทวิ: ตรวจไฟล์ใน Drive + จับคู่กับรายชื่อ (สิทธิ์เดียวกับเอกสารทำเบิก) */}
       {data.payDocsViewer && isCrew(role) ? <TawiPanel /> : null}
+      {/* เอกสารยืนยันการรับเงินรายเดือน (ต้องส่งก่อนดาวน์โหลดใบ 50 ทวิ) */}
+      {data.payDocsViewer && isCrew(role) ? <ReceiptPanel /> : null}
 
       {!list.length ? (
         <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : canEditRole(role) ? "กด \"เพิ่มคน\" เพื่อเพิ่มรายชื่อ" : null}</StateBox>

@@ -1,12 +1,14 @@
 import { fail, requireMe } from "@/lib/api";
-import { driveError } from "@/lib/drive";
+import { DRIVE_FILE_GONE, driveError, driveNotFound } from "@/lib/drive";
 import { canViewPayDocs } from "@/lib/pay-docs-db";
+import { receiptStateOf } from "@/lib/receipts-db";
 import { TAWI_SQL, TAWI_UPDATING, downloadTawi, tawiDoc, verifiedKeysOf } from "@/lib/tawi";
 import { tawiAccess } from "@/lib/tawi-verify";
 
 // ดาวน์โหลดใบ 50 ทวิ (?id=<tawi_docs.id>[&inline=1]) ส่ง PDF จาก Drive ผ่านเซิร์ฟเวอร์ (ไม่เปิดลิงก์ Drive ให้ใคร)
 //   เจ้าของไฟล์ (อีเมลของรายชื่อที่จับคู่ = คนที่ login) ที่ยืนยันตัวตนด้วยชื่อของใบนี้แล้ว
-//   หรือ Owner ที่ดูเอกสารทำเบิกได้ (เปิดได้เสมอ) · ยังไม่ยืนยัน = 403 · ยังไม่ได้รัน SQL ยืนยันตัวตน = 503 (เจ้าตัว)
+//     + ส่งเอกสารยืนยันการรับเงินของเดือนนั้นแล้ว (เดือนที่บังคับ — src/lib/receipts.ts)
+//   หรือ Owner ที่ดูเอกสารทำเบิกได้ (เปิดได้เสมอ) · ยังไม่ยืนยัน / ยังไม่ส่ง = 403 · ยังไม่ได้รัน SQL ยืนยันตัวตน = 503 (เจ้าตัว)
 export const maxDuration = 30;
 
 export async function GET(request: Request) {
@@ -27,18 +29,22 @@ export async function GET(request: Request) {
   if (!doc) return fail("ไม่มีสิทธิ์เปิดไฟล์นี้", 403);
   // ของตัวเอง = staff_id ปัจจุบันของใบนี้เป็นอีเมลนี้ (Owner ย้าย / ยกเลิกการจับคู่แล้ว = ไม่ใช่)
   const mine = !!doc.ownerEmail && doc.ownerEmail === r.me.email.trim().toLowerCase();
-  let access = tawiAccess({ viewer: false, mine, docKey: doc.nameKey, verifiedKeys: mine ? await verifiedKeysOf(r.me.email) : [] });
+  const [verifiedKeys, receipt] = mine
+    ? await Promise.all([verifiedKeysOf(r.me.email), receiptStateOf(r.me.email, doc.month)])
+    : [[] as string[], undefined];
+  let access = tawiAccess({ viewer: false, mine, docKey: doc.nameKey, verifiedKeys, receipt });
   if (access !== "ok" && (await canViewPayDocs(r.me))) access = "ok";
   if (access === "forbidden") return fail("ไม่มีสิทธิ์เปิดไฟล์นี้", 403);
   if (access === "updating") return fail(TAWI_UPDATING, 503);
   if (access === "verify") return fail('ยืนยันตัวตนก่อนดาวน์โหลด: กรอกชื่อ-นามสกุลจริงที่ "ตารางของฉัน"', 403);
+  if (access === "receipt") return fail('ส่งเอกสารยืนยันการรับเงินของเดือนนี้ก่อนดาวน์โหลด ที่ "ตารางของฉัน"', 403);
+  if (access === "rejected") return fail('เอกสารรับเงินของเดือนนี้ไม่ผ่าน ส่งใหม่ที่ "ตารางของฉัน" ก่อนดาวน์โหลด', 403);
 
   let bytes: Uint8Array;
   try {
     bytes = await downloadTawi(doc.fileId);
   } catch (err) {
-    const msg = (err as Error)?.message ?? "";
-    return fail(/not found/i.test(msg) ? "ไม่พบไฟล์ใน Google Drive (อาจถูกลบแล้ว) แจ้งทีมงาน" : driveError(err), /not found/i.test(msg) ? 404 : 502);
+    return driveNotFound(err) ? fail(DRIVE_FILE_GONE, 404) : fail(driveError(err), 502);
   }
   const name = `50ทวิ-${doc.month}${doc.sameMonth > 1 ? `-${doc.order}` : ""}.pdf`;
   // ชื่อไฟล์ภาษาไทยแบบ RFC 5987 + ชื่อสำรอง ASCII สำหรับเบราว์เซอร์เก่า

@@ -211,14 +211,41 @@ export type OwnerPayDocs = {
   folders?: DocsFolder[];
 };
 
-/** ใบ 50 ทวิ 1 ไฟล์ (เดือน "YYYY-MM") · verified = เจ้าตัวยืนยันชื่อของใบนี้แล้ว (ดาวน์โหลดได้) */
-export type TawiDoc = { id: number; month: string; verified: boolean };
+/** เอกสารยืนยันการรับเงินของเดือนหนึ่ง: none = ไม่ต้องส่ง / ok = ส่งแล้ว / missing = ยังไม่ส่ง / rejected = ไม่ผ่าน */
+export type ReceiptState = "none" | "ok" | "missing" | "rejected";
+/** เอกสารรับเงินที่ส่งแล้ว (ของตัวเอง) */
+export type ReceiptView = { id: number; month: string; status: "ok" | "rejected"; reason: string | null; uploadedAt: string; pdf: boolean };
+/**
+ * ใบ 50 ทวิ 1 ไฟล์ (เดือน "YYYY-MM") · verified = เจ้าตัวยืนยันชื่อของใบนี้แล้ว
+ *   receipt = เอกสารรับเงินของเดือนนี้ (ต้อง ok / none ถึงดาวน์โหลดได้)
+ */
+export type TawiDoc = { id: number; month: string; verified: boolean; receipt: ReceiptState };
 /**
  * GET /api/my/tawi — ready = รัน SQL 20261029000000_tawi50 แล้ว (ไม่พร้อม = ซ่อนส่วนนี้)
  *   verifyReady = รัน SQL 20261030000000_tawi_verify แล้ว (ยัง = ดาวน์โหลดไม่ได้ชั่วคราว)
  *   locked = กรอกชื่อไม่ตรงครบจำนวนของวันนี้แล้ว
+ *   receiptFrom = ต้องส่งเอกสารรับเงินตั้งแต่เดือนนี้ (null = ไม่บังคับ) · receipts = เอกสารรับเงินที่ส่งแล้ว
  */
-export type MyTawi = { ready: boolean; verifyReady: boolean; locked: boolean; docs: TawiDoc[] };
+export type MyTawi = {
+  ready: boolean; verifyReady: boolean; locked: boolean; docs: TawiDoc[];
+  receiptFrom: string | null; receipts: ReceiptView[];
+};
+/** คน 1 คนในหน้าเอกสารรับเงินของ Owner (key = อีเมล / รายชื่อที่ไม่มีอีเมล) */
+export type OwnerReceiptPerson = {
+  key: string; label: string; hasEmail: boolean;
+  /** มีใบ 50 ทวิเดือนนี้ = ต้องส่ง */
+  required: boolean;
+  receipt: (ReceiptView & { reviewedAt: string | null }) | null;
+};
+/**
+ * GET /api/owner/receipts — ready = รัน SQL 20261101000000_pay_receipts แล้ว · folderSet = ตั้งโฟลเดอร์ Drive แล้ว
+ *   requiredFrom = เดือนเริ่มบังคับที่ใช้จริง (null = ไม่บังคับ) · months = เดือนที่ต้องส่ง / มีคนส่ง (ใหม่ก่อน)
+ */
+export type OwnerReceipts = {
+  ready: boolean; folderSet: boolean; requiredFrom: string | null; month: string | null;
+  months: { month: string; required: number; sent: number; rejected: number }[];
+  people: OwnerReceiptPerson[];
+};
 /** สถานะยืนยันตัวตนของเจ้าของไฟล์: ok = ยืนยันแล้ว / wait = รอเจ้าตัวยืนยัน / fail = กรอกไม่ตรง */
 export type TawiVerifyState = { status: "ok" | "wait" | "fail"; fails: number; failedAt: string | null };
 /**
