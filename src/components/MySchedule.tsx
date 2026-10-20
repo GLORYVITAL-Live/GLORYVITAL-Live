@@ -16,7 +16,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + ยกเลิกคิว */
-export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDocs }: {
+export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDocs, canBook = true }: {
   open: boolean;
   onClose: () => void;
   role: "mc" | "admin";
@@ -24,6 +24,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   onOpenRules: () => void;
   /** เอกสารทำเบิก (บัตรประชาชน / สมุดบัญชี) */
   onOpenPayDocs: () => void;
+  /** จองคิวผ่านเว็บได้ (ทีม Shopee = ไม่ได้ ไม่ชวนให้ไปจอง) */
+  canBook?: boolean;
 }) {
   const toast = useToast();
   const [month, setMonth] = useState(() => monthKey());
@@ -153,7 +155,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
           ) : !items.length ? (
             <div className="py-6 text-center text-sm text-muted-foreground">
               <strong className="block text-foreground">เดือนนี้ยังไม่มีคิว</strong>
-              {role === "admin" ? "เลือก slot ที่รอ Admin แล้วกดรับคิวได้เลย" : "เลือก slot ที่ว่างแล้วกดจองได้เลย"}
+              {!canBook ? null : role === "admin" ? "เลือก slot ที่รอ Admin แล้วกดรับคิวได้เลย" : "เลือก slot ที่ว่างแล้วกดจองได้เลย"}
             </div>
           ) : (
             [...byDate.entries()].map(([k, list]) => (

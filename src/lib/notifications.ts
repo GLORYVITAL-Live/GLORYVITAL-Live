@@ -5,6 +5,7 @@ import { bookingRange, getSettings, proofsBySlot, windowAlerts, type Settings } 
 import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { fmtDayShort, parseKey } from "@/lib/format";
+import { tiktokOnly, withLiveTeam } from "@/lib/live-team";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
@@ -19,7 +20,7 @@ import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
  *   booked     มีคนจองคิว / รับคิว                → Owner ที่จัดการฝั่งนั้น
  *   cancelled  Mc / Admin เสริมกดยกเลิกคิว         → Owner ฝั่งนั้น + คู่ไลฟ์ของ slot นั้น
  *   slot_open  slot ว่างเพราะมีคนยกเลิก / เจ้าของสร้าง slot ใหม่ / เปิดช่วงจอง
- *                                                  → Mc (ที่จองวันนั้นได้) / Admin เสริม
+ *                                                  → Mc (ที่จองวันนั้นได้) / Admin เสริม (ไม่รวมทีม Shopee)
  *   changed    Owner เปลี่ยนคน / แคนคิว (เว็บ / ชีต) → คนที่ได้ / เสียคิว
  *   reminder   คืนก่อนวันไลฟ์ (20:00) + ก่อนเริ่ม ~1 ชม. → เจ้าของคิว (cron ทุก 15 นาที)
  *   open_soon  slot ยังว่างใน 48 ชม. (เช้า)           → Owner ฝั่งนั้น
@@ -219,16 +220,11 @@ export async function notifyCancelled(side: Side, name: string, actorEmail: stri
       .not(personCol(other), "is", null).overrideTypes<{ person: number; is_cancelled: boolean }[], { merge: false }>();
     const pairIds = (pairs ?? []).filter((p) => !p.is_cancelled).map((p) => p.person);
 
-    // คนอื่นที่จองแทนได้: Mc ที่ช่วงเปิดจองครอบวันนั้น / Admin เสริม
+    // คนอื่นที่จองแทนได้: Mc ที่ช่วงเปิดจองครอบวันนั้น / Admin เสริม (ไม่รวมทีม Shopee)
     let bookable: { id: number; email: string }[] = [];
     if (before > 0) {
-      let q = db.from("staff").select("id, email").eq("role", side).not("email", "is", null).neq("id", actorId);
-      if (side === "admin") q = q.eq("is_extra_admin", true);
-      const [{ data: staff }, settings] = await Promise.all([q, getSettings()]);
-      bookable = (staff ?? []).filter((p) => {
-        const r = bookingRange(settings, side, p.id);
-        return !r.empty && s.live_date >= r.from && (r.to === null || s.live_date <= r.to);
-      }).map((p) => ({ id: p.id, email: String(p.email).trim().toLowerCase() }));
+      const [staff, settings] = await Promise.all([bookers(side), getSettings()]);
+      bookable = staff.filter((p) => p.id !== actorId && inRange(bookingRange(settings, side, p.id), s.live_date));
     }
 
     const pairEmails = await emailsOf(pairIds);
@@ -317,12 +313,15 @@ async function openFutureSlots(side: Side, ids?: number[]) {
   return (data ?? []).filter((s) => Date.parse(s.starts_at) > now && (side === "mc" || s.needs_extra_admin === true));
 }
 
-/** คนที่จองผ่านเว็บได้ของฝั่งนั้น (มีอีเมล · Admin = เฉพาะ Admin เสริม) */
+/** คนที่จองผ่านเว็บได้ของฝั่งนั้น (มีอีเมล · Admin = เฉพาะ Admin เสริม · ไม่รวมทีม Shopee ที่ยังจองคิว TikTok ไม่ได้) */
 async function bookers(side: Side) {
-  let q = createAdminClient().from("staff").select("id, email").eq("role", side).not("email", "is", null);
-  if (side === "admin") q = q.eq("is_extra_admin", true);
-  const { data } = await q;
-  return (data ?? []).map((p) => ({ id: p.id as number, email: String(p.email).trim().toLowerCase() }));
+  type Row = { id: number; email: string; live_platform?: string | null };
+  const { data } = await withLiveTeam((extra) => {
+    let q = createAdminClient().from("staff").select(`id, email${extra}`).eq("role", side).not("email", "is", null);
+    if (side === "admin") q = q.eq("is_extra_admin", true);
+    return q.overrideTypes<Row[], { merge: false }>();
+  });
+  return tiktokOnly(data ?? []).map((p) => ({ id: p.id as number, email: String(p.email).trim().toLowerCase() }));
 }
 
 /**

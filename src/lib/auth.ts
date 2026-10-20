@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { LIVE_PLATFORM_RE, liveTeamOf } from "@/lib/live-team";
 import type { Me } from "@/lib/types";
 
 /** คอลัมน์สิทธิ์ "ดูได้อย่างเดียว" (SQL 20261018000000_view_only) */
@@ -18,7 +19,14 @@ export async function getMe(): Promise<Me | null> {
   if (!email) return null;
 
   const base = "id, role, name, is_extra_admin, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics";
-  const query = (cols: string) => createAdminClient().from("staff").select(cols).eq("email", email);
+  let live = ", live_platform";
+  const query = async (cols: string) => {
+    const run = () => createAdminClient().from("staff").select(cols + live).eq("email", email);
+    let res = await run();
+    // ยังไม่ได้รัน SQL 20261031000000_live_platform: ทุกคนเป็นทีม TikTok ตามเดิม
+    if (res.error && LIVE_PLATFORM_RE.test(res.error.message)) { live = ""; res = await run(); }
+    return res;
+  };
   let { data: rows, error } = await query(`${base}, can_plan_slots, ${VIEW_COLS}`);
   // ยังไม่ได้รัน SQL 20261018000000_view_only / 20261017000000_plan_slots: login ได้ตามเดิม (แค่ยังไม่มีสิทธิ์แบบดูอย่างเดียว / หน้า Plan)
   if (error && VIEW_COL_RE.test(error.message)) ({ data: rows, error } = await query(`${base}, can_plan_slots`));
@@ -30,11 +38,11 @@ export async function getMe(): Promise<Me | null> {
     id: number; role: string; name: string; is_extra_admin: boolean; can_manage_mc: boolean | null; can_manage_admin: boolean | null;
     can_manage_proofs: boolean | null; can_view_analytics: boolean | null; can_plan_slots?: boolean | null;
     can_view_mc?: boolean | null; can_view_admin?: boolean | null; can_view_proofs?: boolean | null; can_view_plan?: boolean | null;
-    analytics_readonly?: boolean | null;
+    analytics_readonly?: boolean | null; live_platform?: string | null;
   };
   for (const r of (rows ?? []) as unknown as Row[]) {
-    if (r.role === "mc") me.mc = { id: r.id, name: r.name };
-    if (r.role === "admin") me.admin = { id: r.id, name: r.name, isExtra: r.is_extra_admin };
+    if (r.role === "mc") me.mc = { id: r.id, name: r.name, platform: liveTeamOf(r.live_platform) };
+    if (r.role === "admin") me.admin = { id: r.id, name: r.name, isExtra: r.is_extra_admin, platform: liveTeamOf(r.live_platform) };
     if (r.role === "marketing") me.marketing = { id: r.id, name: r.name };
     if (r.role === "owner") {
       // สิทธิ์เดิม = จัดการได้ / can_view_* = ดูได้อย่างเดียว / Data analytics: ติ๊กแล้วดูได้ จัดการได้ถ้าไม่ได้ตั้งเป็นดูอย่างเดียว

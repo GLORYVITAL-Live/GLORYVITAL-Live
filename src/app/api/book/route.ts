@@ -29,6 +29,8 @@ export async function POST(request: Request) {
   } else {
     return fail("ไม่รู้จักบทบาทนี้");
   }
+  // ทีม Shopee: คิวในระบบเป็นบัญชี TikTok ทั้งหมด (หน้าจองคิว Shopee ยังไม่เปิด)
+  if ((role === "mc" ? r.me.mc : r.me.admin)?.platform === "shopee") return fail("ทีม Shopee ยังจองคิว TikTok ไม่ได้", 403);
 
   const db = createAdminClient();
   const table = role === "mc" ? "mc_slots" : "admin_slots";

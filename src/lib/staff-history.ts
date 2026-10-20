@@ -1,4 +1,5 @@
 // ประวัติการแก้พนักงาน: ข้อความ "อะไรเปลี่ยน จากเท่าไรเป็นเท่าไร" (ค่าจ้าง / Commit / สิทธิ์ / ข้อมูลติดต่อ) — ไม่แตะ DB (เทสได้)
+import { liveTeamOf } from "@/lib/live-team";
 import { tiersLabel } from "@/lib/pay";
 import type { CommitTier } from "@/lib/types";
 
@@ -8,10 +9,11 @@ const LABEL: Record<string, string> = {
   can_manage_mc: "จัดการ Mc", can_manage_admin: "จัดการ Admin", can_manage_proofs: "จัดการหลักฐานไลฟ์",
   can_view_analytics: "Data analytics", analytics_readonly: "Data analytics ดูอย่างเดียว", can_plan_slots: "Plan Slot Live",
   can_view_mc: "ดู Mc", can_view_admin: "ดู Admin", can_view_proofs: "ดูหลักฐานไลฟ์", can_view_plan: "ดู Plan Slot Live",
-  notify_cancel_mc: "รับเมลยกเลิก Mc", notify_cancel_admin: "รับเมลยกเลิก Admin",
+  notify_cancel_mc: "รับเมลยกเลิก Mc", notify_cancel_admin: "รับเมลยกเลิก Admin", live_platform: "ทีมไลฟ์",
 };
 
 function show(key: string, v: unknown) {
+  if (key === "live_platform") return liveTeamOf(v) === "shopee" ? "Shopee" : "TikTok";
   if (key === "hourly_rate") return v === null || v === undefined || v === "" ? "ค่าเริ่มต้น" : `${Number(v).toLocaleString("th-TH")} บาท/ชม.`;
   if (key === "commit_tiers") return (Array.isArray(v) && v.length ? tiersLabel(0, v as CommitTier[]) : "") || "ไม่มี";
   if (typeof v === "boolean" || v === null || v === undefined) {
@@ -26,7 +28,8 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stri
 /** ข้อความรายการที่เปลี่ยน เช่น "ค่าจ้าง 700 บาท/ชม. → 750 บาท/ชม. · พนักงานประจำ ปิด → เปิด" (ไม่เปลี่ยน = "") */
 export function staffChangeText(cur: Record<string, unknown>, changes: Record<string, unknown>) {
   return Object.keys(changes)
-    .filter((k) => k in LABEL && !same(cur[k], changes[k]))
+    // ทีมไลฟ์: ว่าง (ยังไม่ได้รัน SQL) = TikTok
+    .filter((k) => k in LABEL && (k === "live_platform" ? liveTeamOf(cur[k]) !== liveTeamOf(changes[k]) : !same(cur[k], changes[k])))
     .map((k) => `${LABEL[k]} ${show(k, cur[k])} → ${show(k, changes[k])}`)
     .join(" · ");
 }

@@ -1,12 +1,14 @@
 import type { GmvBefore } from "@/lib/gmv";
 import type { LiveSession } from "@/lib/live-stats";
+import type { LiveTeam } from "@/lib/live-team";
 
 export type Role = "mc" | "admin" | "owner";
 
 export type Me = {
   email: string;
-  mc: { id: number; name: string } | null;
-  admin: { id: number; name: string; isExtra: boolean } | null;
+  /** platform = ทีมไลฟ์ (shopee = ไม่เห็น / จองคิวไลฟ์ TikTok ไม่ได้ ใช้ได้แค่ "ตารางของฉัน") — src/lib/live-team.ts */
+  mc: { id: number; name: string; platform: LiveTeam } | null;
+  admin: { id: number; name: string; isExtra: boolean; platform: LiveTeam } | null;
   /** mc / admin = สิทธิ์จัดการฝั่งนั้น (ติ๊กทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อ Owner) */
   /** proofs = จัดการหลักฐานไลฟ์ทุก slot (Owner ที่ติ๊ก Mc มีสิทธิ์นี้อยู่แล้ว) */
   /** analytics = เข้าหน้า Data analytics (สถิติไลฟ์) ได้ */

@@ -29,6 +29,11 @@ export async function GET(request: Request) {
     }
   }
 
+  // ทีม Shopee: คิวในระบบเป็นบัญชี TikTok ทั้งหมด ไม่ส่ง slot ให้เห็น (Owner ที่เปิดดูฝั่งนั้นได้ เห็นตามปกติ)
+  if ((role === "mc" ? r.me.mc : r.me.admin)?.platform === "shopee" && !owner?.see[role]) {
+    return ok({ siteNotice: "", scheduleNotice: "", slots: [], mine: [] });
+  }
+
   // ช่วงเปิดจองตามคน: คนในรายชื่อจองก่อนได้ช่วงของตัวเอง คนอื่นใช้ช่วงทั่วไป
   // (ข้อความแจ้งบอกแค่ช่วงวันของคนนั้น ไม่บอกว่ามีรายชื่อจองก่อน) Owner ที่เปิดดูเห็นแบบคนทั่วไป
   const personId = (role === "mc" ? r.me.mc : r.me.admin?.isExtra ? r.me.admin : null)?.id ?? null;

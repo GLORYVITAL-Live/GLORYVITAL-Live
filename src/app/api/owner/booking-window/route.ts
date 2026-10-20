@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { fail, ok, requireOwner } from "@/lib/api";
 import { notifyWindowOpened } from "@/lib/notifications";
 import { bkkToday, bookWindow, cutoffDate, getSettings } from "@/lib/data";
+import { tiktokOnly, withLiveTeam } from "@/lib/live-team";
 import { createAdminClient } from "@/lib/supabase/server";
 import { cleanWindow, isDate, rangeText, type Period } from "@/lib/window";
 
@@ -12,13 +13,16 @@ import { cleanWindow, isDate, rangeText, type Period } from "@/lib/window";
 
 type Role = "mc" | "admin";
 
-/** คนที่จองผ่านเว็บได้ของฝั่งนั้น (Admin = เฉพาะ Admin เสริม) */
+/** คนที่จองผ่านเว็บได้ของฝั่งนั้น (Admin = เฉพาะ Admin เสริม · ไม่รวมทีม Shopee ที่ยังจองคิว TikTok ไม่ได้) */
 async function people(role: Role) {
-  let q = createAdminClient().from("staff").select("id, name").eq("role", role);
-  if (role === "admin") q = q.eq("is_extra_admin", true);
-  const { data, error } = await q.order("name");
+  type Row = { id: number; name: string; live_platform?: string | null };
+  const { data, error } = await withLiveTeam((extra) => {
+    let q = createAdminClient().from("staff").select(`id, name${extra}`).eq("role", role);
+    if (role === "admin") q = q.eq("is_extra_admin", true);
+    return q.order("name").overrideTypes<Row[], { merge: false }>();
+  });
   if (error) throw error;
-  return (data ?? []).map((p) => ({ id: Number(p.id), name: String(p.name) }));
+  return tiktokOnly(data ?? []).map((p) => ({ id: Number(p.id), name: String(p.name) }));
 }
 
 export async function GET() {

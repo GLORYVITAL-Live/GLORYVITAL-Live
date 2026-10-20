@@ -4,6 +4,7 @@ import { VIEW_COL_RE, VIEW_COLS } from "@/lib/auth";
 import { missingCalendarCounts } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
 import { parseTierHours } from "@/lib/pay";
+import { LIVE_PLATFORM_RE, liveTeamOf, type LiveTeam } from "@/lib/live-team";
 import { canViewPayDocs, payDocsStatus } from "@/lib/pay-docs-db";
 import { staffChangeText } from "@/lib/staff-history";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -14,7 +15,7 @@ import type { Me } from "@/lib/types";
 //   GET     รายชื่อทั้งหมด + จำนวนคิวตั้งแต่วันนี้
 //   POST    เพิ่มคน
 //   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Commit / Admin เสริม / Mc ประจำ / สิทธิ์ Owner (Mc / Admin / หลักฐานไลฟ์ / Data analytics / Plan Slot Live)
-//           / รับอีเมลแจ้งยกเลิกคิว (Owner)
+//           / รับอีเมลแจ้งยกเลิกคิว (Owner) / ทีม Shopee (Mc / Admin)
 //   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
 // สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
 //         รายชื่อและสิทธิ์ของ Owner / รายชื่อ Marketing จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
@@ -98,6 +99,8 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
   // หน้าอุปกรณ์โปรดักชั่น (SQL 20261025000000_equipment): บันทึกเฉพาะตอนส่งมา
   if (role === "admin" && "can_manage_equipment" in body) out.can_manage_equipment = body.can_manage_equipment === true;
+  // ทีมไลฟ์ tiktok / shopee (SQL 20261031000000_live_platform): บันทึกเฉพาะตอนส่งมา
+  if (isCrew(role) && "live_platform" in body) out.live_platform = liveTeamOf(body.live_platform);
   // Mc ประจำ / Admin ประจำ (เงินเดือน) = ไม่คิดค่าจ้างรายชั่วโมง (Mc ประจำ ไม่ต้องแนบหลักฐานไลฟ์ด้วย)
   if (role !== "owner" && (!partial || "is_salaried" in body)) out.is_salaried = !!body.is_salaried;
   if (role === "owner") {
@@ -132,7 +135,8 @@ async function withPlanCol<T>(run: (extra: string) => PromiseLike<{ data: T; err
   return res.error && /can_plan_slots/.test(res.error.message) ? run("") : res;
 }
 const needViewSql = (msg: string) =>
-  /notify_cancel/.test(msg) ? "ต้องรัน SQL 20261020000000_notify_cancel ใน Supabase ก่อน ถึงจะตั้งรับอีเมลแจ้งยกเลิกได้"
+  LIVE_PLATFORM_RE.test(msg) ? "ต้องรัน SQL 20261031000000_live_platform ใน Supabase ก่อน ถึงจะตั้งทีม Shopee ได้"
+    : /notify_cancel/.test(msg) ? "ต้องรัน SQL 20261020000000_notify_cancel ใน Supabase ก่อน ถึงจะตั้งรับอีเมลแจ้งยกเลิกได้"
     : VIEW_COL_RE.test(msg) ? "ต้องรัน SQL 20261018000000_view_only ใน Supabase ก่อน ถึงจะตั้งสิทธิ์แบบดูได้อย่างเดียวได้" : msg;
 const noPlanGrant = () => fail("ติ๊ก / เอาสิทธิ์ Plan Slot Live ออกได้เฉพาะคนที่มีสิทธิ์นี้", 403);
 
@@ -177,6 +181,9 @@ export async function GET() {
   // สิทธิ์หน้าอุปกรณ์ของ Admin (ยังไม่ได้รัน SQL = ไม่มีช่องนี้)
   const { data: equipRows, error: equipErr } = await db.from("staff").select("id, can_manage_equipment").eq("role", "admin");
   const equip = new Map((equipErr ? [] : equipRows ?? []).map((x) => [x.id as number, x.can_manage_equipment === true]));
+  // ทีมไลฟ์ของ Mc / Admin (ยังไม่ได้รัน SQL 20261031000000_live_platform = ไม่มีช่องนี้ ทุกคนเป็น TikTok)
+  const { data: teamRows, error: teamErr } = await db.from("staff").select("id, live_platform").in("role", ["mc", "admin"]);
+  const team = new Map((teamErr ? [] : teamRows ?? []).map((x) => [x.id as number, liveTeamOf(x.live_platform)]));
   const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
   // เปิดแจ้งเตือนเด้งในมือถือ / เบราว์เซอร์แล้วกี่เครื่อง (ตามอีเมล · ยังไม่ได้รัน SQL notifications = ไม่แสดง)
   const { data: subs, error: subErr } = await db.from("push_subscriptions").select("email");
@@ -188,6 +195,7 @@ export async function GET() {
       ...s, upcoming: upcoming.get(s.id) ?? 0, ...(isCrew(s.role as Role) ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
       ...(payDocs.has(s.id) ? { payDocs: payDocs.get(s.id) } : {}),
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
+      ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
       ...(s.email ? pushOf(s.email) : {}),
     })),
     meId: r.me.owner?.id ?? null,
@@ -211,14 +219,16 @@ export async function POST(request: Request) {
   if (role === "owner" && !hasAnyPerm((k) => c.data?.[k])) return fail("ตั้งสิทธิ์อย่างน้อย 1 อย่าง");
   // ให้สิทธิ์ Plan Slot Live (จัดการ / ดู) ได้เฉพาะคนที่มีสิทธิ์นี้
   if ((c.data?.can_plan_slots || c.data?.can_view_plan) && !r.me.owner?.plan) return noPlanGrant();
+  // TikTok = ค่าเริ่มต้นของคอลัมน์ ไม่ต้องส่ง (ยังไม่ได้รัน SQL ก็เพิ่มคนได้ตามเดิม)
+  if (c.data?.live_platform === "tiktok") delete c.data.live_platform;
 
   const { data, error } = await createAdminClient().from("staff").insert({ role, ...c.data }).select("id").single();
   if (error && role === "marketing" && /staff_role_check|check constraint/.test(error.message)) {
     return fail("ต้องรัน SQL 20261021000000_marketing ใน Supabase ก่อน ถึงจะเพิ่มบัญชี Marketing ได้");
   }
   if (error) return fail(needViewSql(dupMessage(error.message)));
-  const detail = staffChangeText({}, Object.fromEntries(Object.entries(c.data!).filter(([k]) => ["hourly_rate", "is_salaried", "is_extra_admin"].includes(k))));
-  after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"${detail ? ` (${detail.replace(/ว่าง → |ปิด → |ค่าเริ่มต้น → /g, "")})` : ""}`, data.id));
+  const detail = staffChangeText({}, Object.fromEntries(Object.entries(c.data!).filter(([k]) => ["hourly_rate", "is_salaried", "is_extra_admin", "live_platform"].includes(k))));
+  after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"${detail ? ` (${detail.replace(/ว่าง → |ปิด → |ค่าเริ่มต้น → |TikTok → /g, "")})` : ""}`, data.id));
   return ok({ id: data.id });
 }
 
@@ -270,6 +280,13 @@ export async function PATCH(request: Request) {
   const equipBefore = "can_manage_equipment" in changes
     ? (await db.from("staff").select("can_manage_equipment").eq("id", id).maybeSingle()).data?.can_manage_equipment
     : undefined;
+  // ทีมไลฟ์เดิม (ไว้บันทึกประวัติ · ไม่เปลี่ยน = ไม่ส่ง จะได้บันทึกได้แม้ยังไม่ได้รัน SQL ซึ่งทุกคนเป็น TikTok)
+  let teamBefore: LiveTeam | undefined;
+  if ("live_platform" in changes) {
+    const { data: t, error: tErr } = await db.from("staff").select("live_platform").eq("id", id).maybeSingle();
+    teamBefore = tErr ? "tiktok" : liveTeamOf(t?.live_platform);
+    if (changes.live_platform === teamBefore) delete changes.live_platform;
+  }
   const { error } = await db.from("staff").update(changes).eq("id", id);
   if (error) {
     if (/can_manage_equipment/.test(error.message)) return fail("ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน ถึงจะตั้งสิทธิ์หน้าอุปกรณ์ได้");
@@ -296,7 +313,7 @@ export async function PATCH(request: Request) {
     if (renamed || contactChanged) after(() => processSyncJobs().then(() => undefined));
   }
   // ประวัติ: เปลี่ยนอะไร จากเท่าไรเป็นเท่าไร (ไม่มีอะไรเปลี่ยนจริง = ไม่บันทึก)
-  const diff = staffChangeText({ ...cur, can_manage_equipment: equipBefore }, changes);
+  const diff = staffChangeText({ ...cur, can_manage_equipment: equipBefore, live_platform: teamBefore }, changes);
   if (diff) after(() => log(r.me, `แก้พนักงาน ${role} "${cur.name}": ${diff}`, id));
   return ok({ message: "บันทึกแล้ว" });
 }

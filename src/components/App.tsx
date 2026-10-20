@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowUpIcon, BriefcaseIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon, PackageIcon, SunIcon,
-  type LucideIcon,
+  ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
+  PackageIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
 } from "lucide-react";
+import { isShopeeRole } from "@/lib/live-team";
 import type { Me, OwnerScope, Role } from "@/lib/types";
 import dynamic from "next/dynamic";
 import type { Go } from "@/components/HomeView";
@@ -172,16 +173,18 @@ function Shell({ me }: { me: Me | null }) {
   const wide = page === "plan" || (page === "owner" && ownerTab === "slots" && slotView === "plan");
   const role: Role | null = page === "home" || page === "proof" || page === "stats" || page === "plan" || page === "ceo" || page === "equipment" ? null : page;
   const preview = isPreview(me, role);
+  // ทีม Shopee: คิวในระบบเป็นบัญชี TikTok ทั้งหมด ไม่แสดงหน้าจอง ใช้ได้แค่ตารางของฉัน (Owner ที่เปิดดูแบบ preview ไม่เกี่ยว)
+  const shopee = isShopeeRole(me, role);
   const [myOpen, setMyOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
   const [rulesManual, setRulesManual] = useState(false);
   const dark = useIsDark();
 
-  // กฎการทำงาน: เด้งวันละครั้งต่อบทบาท
+  // กฎการทำงาน: เด้งวันละครั้งต่อบทบาท (ทีม Shopee ไม่เด้ง — เป็นกฎของคิวไลฟ์ TikTok · ยังเปิดเองได้จากตารางของฉัน)
   const rulesKey = me && role ? `glory_rules_seen_${me.email}_${role}` : "";
   const rulesSeen = useLocal(rulesKey);
   const hydrated = useIsHydrated();
-  const rulesAuto = hydrated && !!rulesKey && role !== "owner" && !preview && rulesSeen !== todayKey();
+  const rulesAuto = hydrated && !!rulesKey && role !== "owner" && !preview && !shopee && rulesSeen !== todayKey();
   const rulesOpen = rulesManual || rulesAuto;
   function closeRules() {
     setRulesManual(false);
@@ -346,7 +349,9 @@ function Shell({ me }: { me: Me | null }) {
       <section className="pt-4 pb-3">
         <h1 className="text-2xl font-bold sm:text-[28px]">{mode?.title ?? "ตารางไลฟ์ GLORY VITAL"}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {mode?.hint ?? "เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ ระบบจะพาไปหน้าของ Mc หรือ Admin ให้อัตโนมัติ"}
+          {shopee
+            ? "ทีม Shopee — คิวไลฟ์ในหน้านี้ตอนนี้เป็นของช่อง TikTok"
+            : mode?.hint ?? "เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ ระบบจะพาไปหน้าของ Mc หรือ Admin ให้อัตโนมัติ"}
         </p>
       </section>
 
@@ -371,7 +376,8 @@ function Shell({ me }: { me: Me | null }) {
       {me?.owner && role === "owner" ? <OwnerTabs me={me} /> : null}
       {/* เอกสารทำเบิก: ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้ (เปิดจาก "ตารางของฉัน" ได้ด้วย) */}
       {me && (role === "mc" || role === "admin") && !preview ? <PayDocs open={docsOpen} onOpenChange={setDocsOpen} /> : null}
-      {me && (role === "mc" || role === "admin") ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
+      {me && (role === "mc" || role === "admin") && shopee ? <ShopeeSoon onOpenMine={() => setMyOpen(true)} /> : null}
+      {me && (role === "mc" || role === "admin") && !shopee ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
       {me && registered && page === "home" ? <HomeView go={goTo} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
       {me && registered && page === "stats" ? <LiveStats readOnly={!me.owner?.analytics} /> : null}
@@ -391,6 +397,7 @@ function Shell({ me }: { me: Me | null }) {
             who={displayName(me, role)}
             onOpenRules={() => setRulesManual(true)}
             onOpenPayDocs={() => { setMyOpen(false); setDocsOpen(true); }}
+            canBook={!shopee}
           />
           <RulesDialog open={rulesOpen} onClose={closeRules} role={role} who={displayName(me, role)} />
         </>
@@ -456,6 +463,26 @@ function OwnerTabs({ me }: { me: Me }) {
       <TabsContent value="staff"><StaffManager scope={scope} canGrantPlan={canGrantPlan} /></TabsContent>
       <TabsContent value="rules"><RulesEditor scope={scope} edit={edit} /></TabsContent>
     </Tabs>
+  );
+}
+
+/** ทีม Shopee: ยังไม่มีหน้าจองคิว Shopee (คิวในระบบเป็นบัญชี TikTok) ใช้ได้แค่ตารางของฉัน */
+function ShopeeSoon({ onOpenMine }: { onOpenMine: () => void }) {
+  return (
+    <Card className="my-3 shadow-card">
+      <CardContent className="flex flex-col items-center gap-3 py-2 text-center">
+        <span aria-hidden className="grid size-12 place-items-center rounded-full bg-p1/15 text-p1 [&_svg]:size-6"><ShoppingBagIcon /></span>
+        <div>
+          <strong className="block text-base">หน้าจองคิว Shopee จะเปิดเร็วๆ นี้</strong>
+          <span className="mt-1 block text-sm text-muted-foreground">
+            ตอนนี้ดูคิวของคุณ ดาวน์โหลดใบ 50 ทวิ และส่งเอกสารทำเบิกได้ที่ &quot;ตารางของฉัน&quot;
+          </span>
+        </div>
+        <Button size="lg" className="rounded-full px-5 pointer-coarse:min-h-11" onClick={onOpenMine}>
+          <CalendarDaysIcon />ตารางของฉัน
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
