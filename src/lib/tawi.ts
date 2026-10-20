@@ -4,7 +4,7 @@ import { driveClient, driveError } from "@/lib/drive";
 import { withSyncLock } from "@/lib/lock";
 import { notify, notifyMany } from "@/lib/notifications";
 import { receiptState } from "@/lib/receipts";
-import { myReceipts, receiptView } from "@/lib/receipts-db";
+import { myReceipts, receiptGaps, receiptView } from "@/lib/receipts-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   cleanRealName, dominantMonth, parseTawiFile, suggestPeople, tawiMonthLabel, tawiNameKey, type TawiCandidate,
@@ -207,17 +207,25 @@ async function notifyPending(db: Db, staff: StaffLite[], staffIds?: number[]) {
   if (!groups.size) return 0;
   const rows = await verifyRows(db, { ids: staff.filter((s) => groups.has(personOf(s))).map((s) => s.id) });
   const verified = rows ? verifyByPerson(rows) : new Map<string, Verify>();
+  // เดือนที่ต้องส่งเอกสารยืนยันการรับเงินก่อนดาวน์โหลด (บังคับแล้วแต่ยังไม่ส่ง) — อ่านไม่ได้ = ไม่บอก
+  const gaps = await receiptGaps([...groups.values()].flatMap((g) => g.docs.map((d) => ({ email: g.email, month: d.month }))))
+    .catch(() => new Map<string, Set<string>>());
   const items = [...groups].map(([person, g]) => {
     const months = [...new Set(g.docs.map((d) => d.month))].sort().map(tawiMonthLabel).join(", ");
     const keys = verified.get(person)?.keys ?? [];
     const ready = g.docs.every((d) => keys.includes(d.key));
+    const needReceipt = g.docs.some((d) => gaps.get(g.email)?.has(d.month));
+    const steps = [
+      ready ? "" : `กรอกชื่อจริงเพื่อยืนยันตัวตน${keys.length ? "" : "ครั้งแรก"}`,
+      needReceipt ? "ส่งเอกสารยืนยันการรับเงินของเดือนนั้น" : "",
+    ].filter(Boolean);
     return {
       email: g.email, kind: "tawi" as const, page: g.role,
       dedupe: `tawi:${g.docs.map((d) => d.id).sort((a, b) => a - b).join(",")}`.slice(0, 200),
-      title: ready ? `ใบ 50 ทวิ เดือน ${months} พร้อมดาวน์โหลดแล้ว` : `ใบ 50 ทวิ เดือน ${months} พร้อมแล้ว`,
-      body: ready
-        ? 'ดาวน์โหลดได้ที่ "ตารางของฉัน" (กดรูปโปรไฟล์มุมขวาบน)'
-        : `กรอกชื่อจริงเพื่อยืนยันตัวตน${keys.length ? "" : "ครั้งแรก"}ก่อนดาวน์โหลด ที่ "ตารางของฉัน" (กดรูปโปรไฟล์มุมขวาบน)`,
+      title: steps.length ? `ใบ 50 ทวิ เดือน ${months} พร้อมแล้ว${needReceipt ? " — ส่งเอกสารรับเงินก่อนดาวน์โหลด" : ""}` : `ใบ 50 ทวิ เดือน ${months} พร้อมดาวน์โหลดแล้ว`,
+      body: steps.length
+        ? `${steps.join(" แล้ว")}ก่อนดาวน์โหลด ที่ "ตารางของฉัน" (กดรูปโปรไฟล์มุมขวาบน)`
+        : 'ดาวน์โหลดได้ที่ "ตารางของฉัน" (กดรูปโปรไฟล์มุมขวาบน)',
     };
   });
   await notifyMany(items);

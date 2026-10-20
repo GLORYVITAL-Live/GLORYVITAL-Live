@@ -3,7 +3,7 @@ import { Readable } from "stream";
 import type { drive_v3 } from "googleapis";
 import { driveClient, driveError, folder } from "@/lib/drive";
 import { withSyncLock } from "@/lib/lock";
-import { notify } from "@/lib/notifications";
+import { notify, notifyMany } from "@/lib/notifications";
 import {
   isWebFileOf, matchReceiptFile, parseReceiptFile, receiptFolderMonth, receiptPersonFolder, receiptRealName, receiptWebFileName,
   roleFolder, suggestReceiptPeople, type ReceiptCandidate, type Role,
@@ -89,6 +89,59 @@ export async function myReceipts(email: string): Promise<{ requiredFrom: string 
   const { data, error } = await db.from("pay_receipts").select("*").eq("email", norm(email)).order("month", { ascending: false });
   if (error) return { requiredFrom: null, rows: [] };
   return { requiredFrom: cfg.requiredFrom, rows: (data ?? []) as ReceiptRow[] };
+}
+
+/**
+ * เดือนที่ยังต้องส่งเอกสารรับเงิน (บังคับแล้ว แต่ยังไม่มีเอกสารสถานะ ok) ของแต่ละอีเมล ในเดือนที่ขอ
+ *   ใช้ในแจ้งเตือน "ใบ 50 ทวิพร้อมแล้ว" · ยังไม่บังคับ / อ่านไม่ได้ = ว่าง (ไม่บอกให้ส่ง)
+ */
+export async function receiptGaps(want: { email: string; month: string }[]) {
+  const out = new Map<string, Set<string>>();
+  const db = createAdminClient();
+  const cfg = await loadConfig(db);
+  const need = want.filter((w) => receiptState(w.month, cfg.requiredFrom) !== "none");
+  if (!need.length) return out;
+  const { data, error } = await db.from("pay_receipts").select("email, month, status")
+    .in("email", [...new Set(need.map((w) => norm(w.email)))]).eq("status", "ok");
+  if (error) return out;
+  const ok = new Set((data ?? []).map((r) => `${norm(r.email)}|${r.month}`));
+  for (const w of need) {
+    if (ok.has(`${norm(w.email)}|${w.month}`)) continue;
+    out.set(norm(w.email), (out.get(norm(w.email)) ?? new Set()).add(w.month));
+  }
+  return out;
+}
+
+/**
+ * เตือนคนที่ยังไม่ส่งเอกสารรับเงิน (cron ทุก 15 นาที → ส่งจริงทุก 3 วัน ตั้งแต่ 10:00 เวลาไทย)
+ *   = มีใบ 50 ทวิจับคู่แล้วในเดือนที่บังคับ แต่ยังไม่มีเอกสารสถานะ ok (ไม่ผ่าน = นับว่ายังไม่ส่ง) · คนละ 1 ข้อความ
+ */
+export async function sendReceiptReminders(now = Date.now(), dryRun = false) {
+  const bkk = new Date(now + 7 * 3600_000);
+  const day = Math.floor((now + 7 * 3600_000) / 86400_000);
+  if (bkk.getUTCHours() < 10 || day % 3 !== 0) return { sent: 0, items: [] as Parameters<typeof notifyMany>[0] };
+  const db = createAdminClient();
+  const cfg = await loadConfig(db);
+  if (!cfg.requiredFrom) return { sent: 0, items: [] };
+  const { data: docs, error } = await db.from("tawi_docs").select("staff_id, month")
+    .not("staff_id", "is", null).gte("month", cfg.requiredFrom);
+  if (error || !docs?.length) return { sent: 0, items: [] };
+  const { data: staff } = await db.from("staff").select("id, role, email").in("id", [...new Set(docs.map((d) => d.staff_id as number))]);
+  const byId = new Map((staff ?? []).filter((s) => s.email).map((s) => [s.id as number, { email: norm(String(s.email)), role: s.role as Role }]));
+  const want = docs.flatMap((d) => (byId.has(d.staff_id) ? [{ email: byId.get(d.staff_id)!.email, month: String(d.month) }] : []));
+  const gaps = await receiptGaps(want);
+  const roleOf = new Map([...byId.values()].map((p) => [p.email, p.role]));
+  const today = bkk.toISOString().slice(0, 10);
+  const items = [...gaps].map(([email, months]) => {
+    const list = [...months].sort().map(tawiMonthLabel).join(", ");
+    return {
+      email, kind: "receipt" as const, page: roleOf.get(email) ?? ("mc" as const), dedupe: `receipt-remind:${today}`,
+      title: `ยังไม่ได้ส่งเอกสารรับเงิน เดือน ${list}`,
+      body: 'ส่งที่ "ตารางของฉัน" (กดรูปโปรไฟล์มุมขวาบน) → ใบ 50 ทวิ → ส่งเอกสารรับเงิน แล้วดาวน์โหลดใบ 50 ทวิได้ทันที',
+    };
+  });
+  if (dryRun) return { sent: 0, items };
+  return { sent: await notifyMany(items), items: [] };
 }
 
 /** สถานะเอกสารรับเงินของอีเมลนี้ในเดือนนี้ (ใช้ตอนดาวน์โหลดใบ 50 ทวิ) */
