@@ -133,11 +133,13 @@ async function loadPeople(db: Db) {
 }
 
 /**
- * คีย์ชื่อจริง -> คนที่ใช้คีย์นี้ (คน -> รายชื่อที่จะผูกไฟล์)
- *   legal_name มาก่อน (รายชื่อที่ตั้งชื่อจริงไว้ = รายชื่อที่ผูก) แล้วค่อยชื่อในเอกสารทำเบิก / ไฟล์ที่ Owner เคยจับคู่
- *   (ไฟล์ matched_by 'self' แบบเดิมไม่นับ — ชื่อที่เจ้าตัวกรอกเองไม่ใช้จับคู่ใบอื่น)
+ * คีย์ชื่อจริง -> คนที่ใช้คีย์นี้ (คน -> รายชื่อที่จะผูกไฟล์) — ใช้จับคู่อัตโนมัติ จึงนับเฉพาะชื่อที่ Owner รับรอง
+ *   legal_name (Owner จับคู่ / ตั้งเอง) + ไฟล์ที่ Owner เคยจับคู่
+ *   ชื่อ-นามสกุลในเอกสารทำเบิก (pay_docs.full_name) ไม่นับ: เจ้าตัวพิมพ์เอง ไม่มีใครตรวจกับบัตร
+ *   (พิมพ์ชื่อเพื่อนที่ยังไม่ได้จับคู่ = ได้ใบ 50 ทวิของเพื่อน) — ใช้เป็นแค่ "ชื่อแนะนำ" ในแผง Owner
+ *   (ไฟล์ matched_by 'self' แบบเดิมไม่นับเช่นกัน)
  */
-function keyOwners(staff: StaffLite[], fullNames: Map<string, string>, docs: TawiRow[]) {
+function keyOwners(staff: StaffLite[], docs: TawiRow[]) {
   const map = new Map<string, Map<string, number>>();
   const add = (key: string, s: StaffLite) => {
     if (key.length < 2) return;
@@ -148,10 +150,6 @@ function keyOwners(staff: StaffLite[], fullNames: Map<string, string>, docs: Taw
   // Mc ก่อน Admin (คนที่เป็นทั้งคู่ ผูกกับรายชื่อ Mc)
   const ordered = [...staff].sort((a, b) => Number(a.role !== "mc") - Number(b.role !== "mc") || a.id - b.id);
   for (const s of ordered) if (s.legal_name?.trim()) add(tawiNameKey(s.legal_name), s);
-  for (const s of ordered) {
-    const full = s.email ? fullNames.get(s.email.trim().toLowerCase()) : "";
-    if (full) add(tawiNameKey(full), s);
-  }
   const byId = new Map(staff.map((s) => [s.id, s]));
   for (const d of docs) {
     const s = d.staff_id ? byId.get(d.staff_id) : undefined;
@@ -161,8 +159,8 @@ function keyOwners(staff: StaffLite[], fullNames: Map<string, string>, docs: Taw
 }
 
 /** จับคู่ไฟล์ที่ยังไม่มีเจ้าของ (Owner ไม่ได้ยกเลิกไว้) กับคนที่ชื่อตรงคนเดียว — แก้ docs ในหน่วยความจำด้วย คืนจำนวน */
-async function autoMatch(db: Db, docs: TawiRow[], staff: StaffLite[], fullNames: Map<string, string>) {
-  const owners = keyOwners(staff, fullNames, docs);
+async function autoMatch(db: Db, docs: TawiRow[], staff: StaffLite[]) {
+  const owners = keyOwners(staff, docs);
   const byStaff = new Map<number, TawiRow[]>();
   for (const d of docs) {
     if (d.staff_id || d.matched_by) continue; // matched_by = owner + ไม่มีคน = Owner ยกเลิกการจับคู่เอง (ไม่จับซ้ำ)
@@ -336,8 +334,8 @@ export async function scanTawi(): Promise<TawiScan> {
 
     // 3. จับคู่ + แจ้ง
     const docs = await allDocs(db);
-    const { staff, fullNames } = await loadPeople(db);
-    const matched = await autoMatch(db, docs, staff, fullNames);
+    const { staff } = await loadPeople(db);
+    const matched = await autoMatch(db, docs, staff);
     const notified = await notifyPending(db, staff);
     return {
       configured: true, months, files: seen.size, added: inserts.length, removed: gone.length, renamed,

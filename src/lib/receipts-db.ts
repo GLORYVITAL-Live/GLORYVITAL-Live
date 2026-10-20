@@ -317,24 +317,16 @@ async function loadStaff(db: Db) {
 }
 
 /**
- * รายชื่อสำหรับจับคู่ไฟล์: ชื่อในระบบ (ชื่อเล่น) + คีย์ชื่อจริงที่รู้ต่อคน
- *   (legal_name / ชื่อในเอกสารทำเบิก / ชื่อในใบ 50 ทวิที่จับคู่ให้คนนั้นแล้ว — ไม่ใช้ชื่อที่เจ้าตัวพิมพ์เอง)
+ * รายชื่อสำหรับจับคู่ไฟล์: ชื่อในระบบ (ชื่อเล่น) + คีย์ชื่อจริงที่ Owner รับรองแล้วต่อคน
+ *   (legal_name / ชื่อในใบ 50 ทวิที่จับคู่ให้คนนั้นแล้ว)
+ *   ไม่ใช้ชื่อในเอกสารทำเบิก (pay_docs.full_name): เจ้าตัวพิมพ์เอง ไม่มีใครตรวจกับบัตร — พิมพ์ชื่อเพื่อนจะได้ไฟล์ของเพื่อน
  */
 async function candidatesOf(db: Db, staff: StaffLite[]): Promise<ReceiptCandidate[]> {
-  const [pd, td] = await Promise.all([
-    db.from("pay_docs").select("email, full_name"),
-    allRows<{ staff_id: number; name_key: string }>((a, b) => db.from("tawi_docs").select("staff_id, name_key").not("staff_id", "is", null).order("id").range(a, b)),
-  ]);
+  const td = await allRows<{ staff_id: number; name_key: string }>((a, b) => db.from("tawi_docs").select("staff_id, name_key").not("staff_id", "is", null).order("id").range(a, b));
   const keys = new Map<string, Set<string>>();
   const add = (person: string, k: string) => { if (k.length >= 4) keys.set(person, (keys.get(person) ?? new Set()).add(k)); };
   const byId = new Map(staff.map((s) => [s.id, s]));
   for (const s of staff) if (s.legal_name?.trim()) add(personOf(s), tawiNameKey(s.legal_name));
-  // ยังไม่ได้รัน SQL เอกสารทำเบิก / ใบ 50 ทวิ = ไม่มีชื่อจากตรงนั้น
-  const full = new Map((pd.error ? [] : pd.data ?? []).map((d) => [norm(String(d.email)), String(d.full_name ?? "")]));
-  for (const s of staff) {
-    const f = s.email ? full.get(norm(s.email)) : "";
-    if (f) add(personOf(s), tawiNameKey(f));
-  }
   for (const t of td.rows) {
     const s = byId.get(Number(t.staff_id));
     if (s) add(personOf(s), String(t.name_key));
