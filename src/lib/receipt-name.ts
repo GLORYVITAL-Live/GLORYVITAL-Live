@@ -90,11 +90,13 @@ export function parseReceiptFile(fileName: string, ctx: { month: string; role: R
   // ไฟล์ที่ไม่มีชื่อคนเลย (เหลือแต่คำว่าเอกสาร / เดือน) ใช้ชื่อโฟลเดอร์ย่อย
   const p = own.nick || own.realName ? own : fromFolder;
   if (!p || !(p.nick || p.realName)) return null;
-  const key = receiptNameKey(p);
-  if (key.length < 3) return null;
+  const base = receiptNameKey(p);
+  if (base.length < 3) return null;
+  // ไฟล์ทีม Shopee (โฟลเดอร์ย่อย / ชื่อไฟล์มี Shopee) = คีย์แยกจากทีม TikTok — ชื่อเล่นซ้ำกันได้ (คนละคน)
+  const shopee = /shopee/i.test(fileName) || /shopee/i.test(ctx.subfolder ?? "");
   return {
     month: own.month ?? ctx.month, role: p.role ?? ctx.role, nick: p.nick,
-    realName: p.realName ?? (p === own ? fromFolder?.realName : null) ?? null, key,
+    realName: p.realName ?? (p === own ? fromFolder?.realName : null) ?? null, key: shopee ? `sp:${base}` : base,
   };
 }
 
@@ -119,9 +121,11 @@ export const roleFolder = (name: string): Role | null =>
 
 /**
  * รายชื่อ 1 แถว: person = คน (อีเมล — เป็นทั้ง Mc และ Admin = คนเดียวกัน)
- *   realKeys = คีย์ชื่อจริงที่ยืนยันแล้ว (legal_name / ชื่อในเอกสารทำเบิก / ใบ 50 ทวิที่จับคู่แล้ว)
+ *   realKeys = คีย์ชื่อจริงที่ยืนยันแล้ว (legal_name / ใบ 50 ทวิที่จับคู่แล้ว) · shopee = ติ๊กทีม Shopee ในรายชื่อ
  */
-export type ReceiptCandidate = { id: number; role: Role; person: string; nick: string; label: string; realKeys: string[] };
+export type ReceiptCandidate = { id: number; role: Role; person: string; nick: string; label: string; realKeys: string[]; shopee?: boolean };
+/** ไฟล์ทีม Shopee (คีย์ขึ้นต้น sp:) */
+const isShopeeKey = (key: string) => key.startsWith("sp:");
 export type ReceiptFileKey = { role: Role; key: string; nick: string; realName: string | null };
 
 /** เลือกแถวของคนเดียว: บทบาทตรงก่อน */
@@ -135,7 +139,7 @@ function pickOne(list: ReceiptCandidate[], role: Role) {
  * จับคู่อัตโนมัติ (ชัดเจนคนเดียวเท่านั้น — ไม่ชัด = null รอ Owner)
  *   1. ชื่อนี้ (บทบาทเดียวกัน) ที่ Owner เคยจับคู่ไว้ (remembered: "role:key" -> staff id)
  *   2. ชื่อจริงตรงกับชื่อจริงที่รู้ของคนเดียว
- *   3. ชื่อเล่นตรงกับชื่อในระบบ: บทบาทเดียวกันก่อน ไม่มี = บทบาทอื่น
+ *   3. ชื่อเล่นตรงกับชื่อในระบบ (ทีมเดียวกัน: ไฟล์ Shopee = คนที่ติ๊ก Shopee · ไฟล์อื่น = ทีม TikTok): บทบาทเดียวกันก่อน ไม่มี = บทบาทอื่น
  */
 export function matchReceiptFile(f: ReceiptFileKey, people: ReceiptCandidate[], remembered: Map<string, number>): number | null {
   const mem = remembered.get(`${f.role}:${f.key}`);
@@ -150,7 +154,8 @@ export function matchReceiptFile(f: ReceiptFileKey, people: ReceiptCandidate[], 
 
   const nk = nickKey(f.nick);
   if (nk.length < 1) return null;
-  const same = people.filter((p) => nickKey(p.nick) === nk);
+  const sp = isShopeeKey(f.key);
+  const same = people.filter((p) => !!p.shopee === sp && nickKey(p.nick) === nk);
   const inRole = same.filter((p) => p.role === f.role);
   return pickOne(inRole.length ? inRole : same, f.role);
 }
@@ -165,6 +170,7 @@ export function suggestReceiptPeople(f: ReceiptFileKey, people: ReceiptCandidate
     // ชื่อเล่นสั้นที่ขึ้นต้นเหมือนกัน ("มาย" กับ "มายด์")
     if (nk && pn && Math.min(nk.length, pn.length) >= 2 && (nk.startsWith(pn) || pn.startsWith(nk))) score = Math.max(score, 0.6);
     if (score > 0 && p.role === f.role) score += 0.05;
+    if (score > 0 && !!p.shopee === isShopeeKey(f.key)) score += 0.05;
     return { id: p.id, score };
   });
   return scored.filter((s) => s.score >= 0.5).sort((a, b) => b.score - a.score).slice(0, limit);

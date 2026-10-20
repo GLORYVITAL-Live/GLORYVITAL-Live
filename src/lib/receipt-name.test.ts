@@ -55,7 +55,10 @@ describe("รูปแบบที่เว็บสร้าง", () => {
   });
   test("ไฟล์มีชื่อคน: ใช้ชื่อไฟล์ · บทบาทจากคำหน้าชื่อก่อนโฟลเดอร์ · เดือนจากโฟลเดอร์", () => {
     expect(parseReceiptFile("Sep อกสารรับเงิน Mcส้มโอ.jpg", { month: "2026-09", role: "mc", subfolder: "Shopee" }))
-      .toEqual({ month: "2026-09", role: "mc", nick: "ส้มโอ", realName: null, key: "n:ส้มโอ" });
+      .toEqual({ month: "2026-09", role: "mc", nick: "ส้มโอ", realName: null, key: "sp:n:ส้มโอ" });
+    // ทีม Shopee = คีย์แยก (โฟลเดอร์ย่อย Shopee / ชื่อไฟล์มี shopee)
+    expect(parseReceiptFile("Juneเอกสารเซ็นรับเงินMc มะลิ(shopee).jpg", { month: "2026-06", role: "mc" })?.key).toBe("sp:n:มะลิ");
+    expect(parseReceiptFile("Juneเอกสารเซ็นรับเงินMc มะลิ tiktok.jpg", { month: "2026-06", role: "mc" })?.key).toBe("n:มะลิ");
     expect(parseReceiptFile("Julyเอกสารรับเงิน Admin ส้มโอ", { month: "2026-07", role: "mc" })?.role).toBe("admin");
     expect(parseReceiptFile("ส้มโอ.jpg", { month: "2026-07", role: "admin" })?.role).toBe("admin");
   });
@@ -140,6 +143,16 @@ describe("จับคู่ไฟล์กับรายชื่อ", () => {
     expect(matchReceiptFile(f("mc", "ส้ม"), people, mem)).toBe(4);
     // รายชื่อที่เลือกไว้ถูกลบ = กลับไปเทียบชื่อ
     expect(matchReceiptFile(f("mc", "มะลิ"), people, new Map([["mc:n:มะลิ", 99]]))).toBe(1);
+  });
+  test("ไฟล์ทีม Shopee จับคู่ชื่อเล่นกับคนที่ติ๊ก Shopee เท่านั้น (ชื่อเล่นซ้ำกับทีม TikTok ได้)", () => {
+    const team = [c(11, "mc", "e:t", "บีม"), { ...c(12, "mc", "e:s", "ปู"), shopee: true }];
+    const sp = (nick: string) => ({ ...f("mc", nick), key: `sp:n:${nickKey(nick)}` });
+    expect(matchReceiptFile(sp("บีม"), team, none)).toBeNull();
+    expect(matchReceiptFile(f("mc", "บีม"), team, none)).toBe(11);
+    expect(matchReceiptFile(sp("ปู"), team, none)).toBe(12);
+    expect(matchReceiptFile(f("mc", "ปู"), team, none)).toBeNull();
+    // ชื่อจริงที่รับรองแล้ว ไม่ขึ้นกับทีม
+    expect(matchReceiptFile({ ...sp("บีม"), realName: "สมใจ ใจดี" }, [{ ...team[0], realKeys: ["สมใจใจดี"] }], none)).toBe(11);
   });
   test("แนะนำชื่อใกล้เคียง (ขึ้นต้นเหมือนกัน / สะกดต่าง)", () => {
     const s = suggestReceiptPeople(f("mc", "ส้มโอะ"), people);

@@ -52,7 +52,7 @@ type FileRow = {
 const PAGE = 1000;
 const FOLDER = "application/vnd.google-apps.folder";
 const norm = (email: string) => email.trim().toLowerCase();
-type StaffLite = { id: number; role: Role; name: string; email: string | null; legal_name?: string | null; tawi_verified_keys?: string[] | null };
+type StaffLite = { id: number; role: Role; name: string; email: string | null; legal_name?: string | null; tawi_verified_keys?: string[] | null; live_platform?: string | null };
 const label = (s: Pick<StaffLite, "role" | "name">) => (s.role === "mc" ? `Mc ${s.name}` : s.name);
 const personOf = (s: Pick<StaffLite, "id" | "email">) => (s.email?.trim() ? `e:${norm(s.email)}` : `s:${s.id}`);
 const chunks = <T,>(list: T[], size = 300) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
@@ -331,7 +331,8 @@ async function candidatesOf(db: Db, staff: StaffLite[]): Promise<ReceiptCandidat
     const s = byId.get(Number(t.staff_id));
     if (s) add(personOf(s), String(t.name_key));
   }
-  return staff.map((s) => ({ id: s.id, role: s.role, person: personOf(s), nick: s.name, label: label(s), realKeys: [...(keys.get(personOf(s)) ?? [])] }));
+  return staff.map((s) => ({ id: s.id, role: s.role, person: personOf(s), nick: s.name, label: label(s), realKeys: [...(keys.get(personOf(s)) ?? [])], shopee: s.live_platform === "shopee",
+  }));
 }
 
 /**
