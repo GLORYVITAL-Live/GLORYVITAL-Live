@@ -19,6 +19,8 @@ const TABLES: Record<string, string> = {
   staff: "id", settings: "id", mc_slots: "id", admin_slots: "id", agency_slots: "id", booking_logs: "id",
   live_proofs: "id", live_proof_slots: "mc_slot_id", live_sessions: "id", live_campaigns: "id", ceo_sessions: "id",
   pay_docs: "email", pay_periods: "id", equipment: "id",
+  // ใบ 50 ทวิ (การจับคู่ที่ Owner ทำไว้) + เอกสารยืนยันการรับเงิน (ไฟล์อยู่ใน Drive แล้ว เก็บแค่ข้อมูล)
+  tawi_docs: "id", pay_receipts: "id", receipt_files: "id",
 };
 
 async function readTable(name: string, order: string) {
