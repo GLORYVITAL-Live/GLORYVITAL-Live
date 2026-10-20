@@ -262,12 +262,16 @@ function UploadButton({ month, text, variant, uploading, onUpload }: {
   );
 }
 
-/** สถานะเอกสารรับเงินของเดือนนี้ (ใต้แถวใบ 50 ทวิ): ไม่ผ่าน + เหตุผล / ส่งแล้ว + ดูไฟล์ + ส่งใหม่ */
+/**
+ * สถานะเอกสารรับเงินของเดือนนี้ (ใต้แถวใบ 50 ทวิ): ไม่ผ่าน + เหตุผล / ส่งแล้ว + ดูไฟล์ + ส่งใหม่
+ *   เดือนก่อนบังคับที่มีเอกสารแล้ว (เช่น ไฟล์เดิมใน Drive ที่ทีมงานจับคู่ให้) = แสดงว่าส่งแล้วด้วย
+ */
 function ReceiptLine({ doc, receipt, uploading, onUpload }: { doc: TawiDoc; receipt: ReceiptView | undefined } & Upload) {
-  if (doc.receipt === "none" || doc.receipt === "missing" || !receipt) return null;
+  if (!receipt || doc.receipt === "missing" || (doc.receipt === "none" && receipt.status === "rejected")) return null;
+  const fromDrive = receipt.source === "drive";
   const view = (
     <a href={receiptUrl(receipt.id)} target="_blank" rel="noopener" className="font-semibold text-primary underline-offset-2 hover:underline pointer-coarse:inline-flex pointer-coarse:min-h-8 pointer-coarse:items-center">
-      ดูไฟล์ที่ส่ง
+      {fromDrive ? "ดูไฟล์" : "ดูไฟล์ที่ส่ง"}
     </a>
   );
   if (doc.receipt === "rejected") {
@@ -280,7 +284,9 @@ function ReceiptLine({ doc, receipt, uploading, onUpload }: { doc: TawiDoc; rece
   }
   return (
     <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-      <span className="inline-flex items-center gap-1 text-success"><CircleCheckIcon className="size-3.5" aria-hidden />ส่งเอกสารรับเงินแล้ว</span>
+      <span className="inline-flex items-center gap-1 text-success">
+        <CircleCheckIcon className="size-3.5" aria-hidden />ส่งเอกสารรับเงินแล้ว{fromDrive ? " (จาก Drive)" : ""}
+      </span>
       {view}
       <UploadButton month={doc.month} text="ส่งใหม่" variant="link" uploading={uploading} onUpload={onUpload} />
     </p>

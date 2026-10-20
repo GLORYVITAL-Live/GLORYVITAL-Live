@@ -213,8 +213,10 @@ export type OwnerPayDocs = {
 
 /** เอกสารยืนยันการรับเงินของเดือนหนึ่ง: none = ไม่ต้องส่ง / ok = ส่งแล้ว / missing = ยังไม่ส่ง / rejected = ไม่ผ่าน */
 export type ReceiptState = "none" | "ok" | "missing" | "rejected";
-/** เอกสารรับเงินที่ส่งแล้ว (ของตัวเอง) */
-export type ReceiptView = { id: number; month: string; status: "ok" | "rejected"; reason: string | null; uploadedAt: string; pdf: boolean };
+/** เอกสารรับเงินที่ส่งแล้ว (ของตัวเอง) · source: web = ส่งผ่านเว็บ / drive = ไฟล์เดิมใน Drive ที่จับคู่ให้ */
+export type ReceiptView = {
+  id: number; month: string; status: "ok" | "rejected"; reason: string | null; uploadedAt: string; pdf: boolean; source: "web" | "drive";
+};
 /**
  * ใบ 50 ทวิ 1 ไฟล์ (เดือน "YYYY-MM") · verified = เจ้าตัวยืนยันชื่อของใบนี้แล้ว
  *   receipt = เอกสารรับเงินของเดือนนี้ (ต้อง ok / none ถึงดาวน์โหลดได้)
@@ -236,15 +238,25 @@ export type OwnerReceiptPerson = {
   /** มีใบ 50 ทวิเดือนนี้ = ต้องส่ง */
   required: boolean;
   receipt: (ReceiptView & { reviewedAt: string | null }) | null;
+  /** ไฟล์เดิมใน Drive ที่จับคู่กับคนนี้เดือนนี้ (รายชื่อที่ไม่มีอีเมล = มีแค่ตรงนี้ ไม่มี receipt) */
+  driveFiles: { id: number; fileName: string; matchedBy: "auto" | "owner" | null }[];
+};
+/** ไฟล์เดิมใน Drive ที่ยังไม่จับคู่ (ignored = Owner ตั้งว่าไม่ใช่คนในระบบ) */
+export type ReceiptDriveFile = {
+  id: number; month: string; role: "mc" | "admin"; fileName: string; path: string; nick: string; realName: string | null;
+  ignored: boolean; suggest: { id: number; score: number }[];
 };
 /**
  * GET /api/owner/receipts — ready = รัน SQL 20261101000000_pay_receipts แล้ว · folderSet = ตั้งโฟลเดอร์ Drive แล้ว
- *   requiredFrom = เดือนเริ่มบังคับที่ใช้จริง (null = ไม่บังคับ) · months = เดือนที่ต้องส่ง / มีคนส่ง (ใหม่ก่อน)
+ *   requiredFrom = เดือนเริ่มบังคับที่ใช้จริง (null = ไม่บังคับ) · months = เดือนที่ต้องส่ง / มีคนส่ง / มีไฟล์ใน Drive (ใหม่ก่อน)
+ *   months[].received = คนที่มีเอกสารผ่านแล้ว (รวมเดือนที่ไม่บังคับ) · unmatched = ไฟล์ใน Drive ที่ยังไม่จับคู่
+ *   drive.ready = รัน SQL 20261102000000_receipt_files แล้ว · drive.files = ไฟล์ที่ยังไม่จับคู่ของเดือนที่เลือก
  */
 export type OwnerReceipts = {
   ready: boolean; folderSet: boolean; requiredFrom: string | null; month: string | null;
-  months: { month: string; required: number; sent: number; rejected: number }[];
+  months: { month: string; required: number; sent: number; rejected: number; received: number; unmatched: number }[];
   people: OwnerReceiptPerson[];
+  drive: { ready: boolean; files: ReceiptDriveFile[]; people: TawiPerson[] };
 };
 /** สถานะยืนยันตัวตนของเจ้าของไฟล์: ok = ยืนยันแล้ว / wait = รอเจ้าตัวยืนยัน / fail = กรอกไม่ตรง */
 export type TawiVerifyState = { status: "ok" | "wait" | "fail"; fails: number; failedAt: string | null };

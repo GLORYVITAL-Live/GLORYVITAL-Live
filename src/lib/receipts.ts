@@ -62,12 +62,6 @@ export function receiptFolders(month: string) {
 export const receiptExt = (mime: string) =>
   mime === "application/pdf" ? "pdf" : mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
 
-/** ชื่อไฟล์ใน Drive: "Mc ปลื้ม - 2026-09.pdf" (ตัดอักขระที่ใช้ในชื่อไฟล์ไม่ได้) */
-export function receiptFileName(label: string, month: string, mime: string) {
-  const clean = label.replace(/[\\/:*?"<>|\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "ไม่มีชื่อ";
-  return `${clean} - ${month}.${receiptExt(mime)}`;
-}
-
 /** ชนิดไฟล์จริงจากไบต์แรก (ไม่เชื่อนามสกุล / ชนิดที่เบราว์เซอร์บอก) ไม่รู้จัก = "" */
 export function sniffType(b: Uint8Array) {
   const ascii = (from: number, to: number) => String.fromCharCode(...b.slice(from, to));

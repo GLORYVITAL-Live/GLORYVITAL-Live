@@ -4,6 +4,7 @@ import { openSlots, sendMorningDigest } from "@/lib/digest";
 import { notifyOpenSoon } from "@/lib/notifications";
 import { matchPayDocsFolders, syncPendingPayDocs } from "@/lib/drive";
 import { removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
+import { scanReceiptFiles } from "@/lib/receipts-db";
 import { scanTawi } from "@/lib/tawi";
 import { processSyncJobs } from "@/lib/sync";
 
@@ -14,6 +15,7 @@ export const maxDuration = 60;
 //   2. เมลสรุปเช้า + แจ้งเตือนในเว็บ "slot ยังว่างใน 48 ชม." (ทำก่อนงานยาว ไม่ให้หมดเวลาก่อนส่ง)
 //   3. ปิดงานลงปฏิทินที่ระบบเลิกลองแล้ว + คนที่เพิ่งแชร์ปฏิทิน ลงคิวที่ค้างให้
 //      + เอกสารทำเบิก (ขึ้น Drive ที่ค้าง / จับคู่โฟลเดอร์เอกสารเดิม) + ใบ 50 ทวิ (ไฟล์ใหม่ใน Drive / จับคู่ / แจ้งเจ้าของ)
+//      + เอกสารรับเงินเดิมใน Drive (ไฟล์ใหม่ / จับคู่ — ไม่แจ้งเตือน)
 //   4. เก็บตกงานที่ค้าง (ลงปฏิทิน + เขียนชีต) เช่น Google ขัดข้องชั่วคราว
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -41,5 +43,9 @@ export async function GET(request: Request) {
   const tawi = await scanTawi()
     .then((s) => (s.configured ? { added: s.added, removed: s.removed, matched: s.matched, unmatched: s.unmatched, notified: s.notified } : { skipped: "no folder" }))
     .catch(errorOf);
-  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs, tawi });
+  // เอกสารรับเงินเดิมใน Drive: ไฟล์ใหม่ / จับคู่ / นับเป็นส่งแล้ว (ไม่แจ้งเตือน) — ยังไม่ได้รัน SQL = บันทึก error
+  const receipts = await scanReceiptFiles()
+    .then((s) => (s.configured ? { added: s.added, removed: s.removed, matched: s.matched, unmatched: s.unmatched, synced: s.synced } : { skipped: "no folder" }))
+    .catch(errorOf);
+  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs, tawi, receipts });
 }

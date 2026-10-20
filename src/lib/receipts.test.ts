@@ -1,7 +1,7 @@
 // เทสเอกสารยืนยันการรับเงิน (bun test) — ชื่อในเทสเป็นชื่อสมมติ
 import { describe, expect, test } from "bun:test";
 import {
-  bkkMonth, cleanReason, cleanRequiredFrom, receiptFileName, receiptFolders, receiptMonthOk, receiptRole, receiptState,
+  bkkMonth, cleanReason, cleanRequiredFrom, receiptFolders, receiptMonthOk, receiptRole, receiptState,
   shiftMonth, sniffType, RECEIPT_REASON_MAX,
 } from "@/lib/receipts";
 import { tawiAccess } from "@/lib/tawi-verify";
@@ -80,11 +80,6 @@ describe("โฟลเดอร์ / ชื่อไฟล์ใน Drive", () =
   test("โฟลเดอร์ปี + เดือนแบบ '10 October'", () => {
     expect(receiptFolders("2026-10")).toEqual({ year: "2026", month: "10 October" });
     expect(receiptFolders("2026-06")).toEqual({ year: "2026", month: "06 June" });
-  });
-  test("ชื่อไฟล์อ่านง่าย + ตัดอักขระต้องห้าม", () => {
-    expect(receiptFileName("Mc ปลื้ม", "2026-09", "application/pdf")).toBe("Mc ปลื้ม - 2026-09.pdf");
-    expect(receiptFileName("มะลิ", "2026-09", "image/jpeg")).toBe("มะลิ - 2026-09.jpg");
-    expect(receiptFileName("Mc a/b:c", "2026-09", "image/png")).toBe("Mc a b c - 2026-09.png");
   });
   test("Mc หรือ Admin: ตามบทบาทที่ใบ 50 ทวิจับคู่ · ไม่ชัด = Mc", () => {
     expect(receiptRole(["mc", "admin"], ["admin"])).toBe("admin");
