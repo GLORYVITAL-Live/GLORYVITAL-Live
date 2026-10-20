@@ -970,7 +970,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           </fieldset>
         ) : null}
 
-        {payDocsViewer && person && isCrew(person.role) && person.email ? <PayDocsPanel staffId={person.id} /> : null}
+        {payDocsViewer && person && isCrew(person.role) && person.email ? <PayDocsPanel staffId={person.id} name={person.name} /> : null}
 
         {person ? <StaffHistory staffId={person.id} /> : null}
 

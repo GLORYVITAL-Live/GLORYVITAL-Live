@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { FileTextIcon, FileUpIcon, FolderOpenIcon, RefreshCwIcon } from "lucide-react";
-import type { MyPayDocs, OwnerPayDocs, PayDocsView } from "@/lib/types";
+import type { DocsFolder, MyPayDocs, OwnerPayDocs, PayDocsView } from "@/lib/types";
 import {
   BANKS, PAY_DOC_LABEL, PAY_DOC_MAX_BYTES, cleanPayInfo, formatThaiId, type PayDocKind,
 } from "@/lib/pay-docs";
@@ -268,7 +268,7 @@ function Field({ label, hint, children }: { label: ReactNode; hint?: ReactNode; 
 // ---------- Owner: ดูเอกสารของคนนี้ (หน้าต่างแก้ไขพนักงาน) ----------
 
 /** เอกสารทำเบิกของ Mc / Admin คนนี้ (เฉพาะ Owner ที่ดูเอกสารได้) staffId = id ในรายชื่อ */
-export function PayDocsPanel({ staffId }: { staffId: number }) {
+export function PayDocsPanel({ staffId, name = "" }: { staffId: number; name?: string }) {
   const toast = useToast();
   const [data, setData] = useState<OwnerPayDocs | null>(null);
   const [error, setError] = useState("");
@@ -375,20 +375,59 @@ export function PayDocsPanel({ staffId }: { staffId: number }) {
               <FolderOpenIcon />{busy === "folders" ? "กำลังโหลดโฟลเดอร์..." : "ผูกกับโฟลเดอร์เอกสารเดิมใน Drive"}
             </Button>
           ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <Select value={pick} onValueChange={setPick}>
-                <SelectTrigger aria-label="โฟลเดอร์เอกสารเดิม" className="h-8 min-w-48 flex-1"><SelectValue placeholder="เลือกโฟลเดอร์ของคนนี้" /></SelectTrigger>
-                <SelectContent position="popper" className="max-h-72">
-                  {data.folders.map((f) => (
-                    <SelectItem key={f.id} value={f.id}>{f.name}{f.usedBy ? ` (ผูกกับ ${f.usedBy} แล้ว)` : ""}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button size="sm" disabled={!pick || !!busy} onClick={() => link(pick)}>{busy === "link" ? "กำลังผูก..." : "ผูก"}</Button>
-            </div>
+            <FolderPicker folders={data.folders} name={name} pick={pick} onPick={setPick} busy={!!busy} onLink={() => link(pick)} linking={busy === "link"} />
           )}
         </div>
       ) : null}
     </fieldset>
+  );
+}
+
+/** คีย์ค้นหาชื่อ: ตัด "Mc" นำหน้า ช่องว่าง และตัวพิมพ์ใหญ่ (พิมพ์ "ปลื้ม" เจอ "Mc ปลื้ม") */
+const searchKey = (s: string) => s.toLowerCase().replace(/^mc\s*/, "").replace(/\s+/g, "");
+
+/**
+ * เลือกโฟลเดอร์เอกสารเดิม (หน้าต่างแก้ไขพนักงาน): พิมพ์ค้นหาชื่อได้ (โฟลเดอร์มีหลายสิบอัน)
+ *   เรียง: ชื่อใกล้เคียงกับคนนี้ก่อน → ยังว่าง → ผูกกับคนอื่นแล้ว (กดเลือกไม่ได้)
+ */
+function FolderPicker({ folders, name, pick, onPick, busy, onLink, linking }: {
+  folders: DocsFolder[]; name: string; pick: string; onPick: (id: string) => void; busy: boolean; onLink: () => void; linking: boolean;
+}) {
+  const [q, setQ] = useState("");
+  const me = searchKey(name), key = searchKey(q);
+  const near = (f: DocsFolder) => !!me && (searchKey(f.name).includes(me) || me.includes(searchKey(f.name)));
+  const list = folders
+    .filter((f) => !key || searchKey(f.name).includes(key))
+    .sort((a, b) => Number(near(b)) - Number(near(a)) || Number(!!a.usedBy) - Number(!!b.usedBy) || a.name.localeCompare(b.name, "th"));
+  const free = folders.filter((f) => !f.usedBy).length;
+  const picked = folders.find((f) => f.id === pick);
+  return (
+    <div className="space-y-2">
+      <Input
+        type="search" value={q} onChange={(e) => setQ(e.target.value)} className="h-8"
+        placeholder={`พิมพ์ค้นหาชื่อโฟลเดอร์ (ว่าง ${free} จาก ${folders.length})`} aria-label="ค้นหาโฟลเดอร์เอกสารเดิม"
+      />
+      <div role="listbox" aria-label="โฟลเดอร์เอกสารเดิม" className="max-h-52 overflow-y-auto rounded-md border">
+        {list.length ? list.map((f) => (
+          <button
+            key={f.id} type="button" role="option" aria-selected={pick === f.id} disabled={!!f.usedBy}
+            onClick={() => onPick(f.id)}
+            className={cn(
+              "flex w-full items-center gap-2 border-b px-2.5 py-1.5 text-left last:border-b-0 pointer-coarse:py-2.5",
+              pick === f.id ? "bg-primary text-primary-foreground" : "hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+          >
+            <FolderOpenIcon className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{f.name}</span>
+            {f.usedBy ? <span className="shrink-0 text-[11px]">ผูกกับ {f.usedBy} แล้ว</span>
+              : near(f) ? <span className={cn("shrink-0 text-[11px] font-semibold", pick === f.id ? "" : "text-primary")}>ชื่อใกล้เคียง</span> : null}
+          </button>
+        )) : <p className="px-2.5 py-3 text-center text-muted-foreground">ไม่พบโฟลเดอร์ชื่อนี้ — คนใหม่ที่ไม่มีเอกสารเดิม ให้ส่งเอกสารทำเบิกเองในเว็บ</p>}
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">{picked ? <>เลือก: <b className="text-foreground">{picked.name}</b></> : "ยังไม่ได้เลือกโฟลเดอร์"}</span>
+        <Button size="sm" disabled={!pick || busy} onClick={onLink}>{linking ? "กำลังผูก..." : "ผูก"}</Button>
+      </div>
+    </div>
   );
 }
