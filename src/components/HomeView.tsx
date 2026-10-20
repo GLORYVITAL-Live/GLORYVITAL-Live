@@ -2,11 +2,13 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  AlertTriangleIcon, CalendarClockIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, DatabaseBackupIcon, RadioIcon, RefreshCwIcon, UserXIcon,
+  AlertTriangleIcon, CalendarClockIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, DatabaseBackupIcon, FileTextIcon, RadioIcon, ReceiptTextIcon,
+  RefreshCwIcon, UserXIcon,
 } from "lucide-react";
 import { windowText } from "@/lib/campaign";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import { SLOT_VIEW_KEY, writeLocal } from "@/lib/hooks";
+import { tawiMonthLabel } from "@/lib/tawi-name";
 import { fmtDay } from "@/lib/window";
 import type { HomeData, HomeSlot } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -57,6 +59,10 @@ export function HomeView({ go }: { go: Go }) {
   const windows = data.windows ?? [];
   const issueCount = data.issues.noEmail.length + data.issues.samePhone.length + gmvOver.length + gmvOdd.length + healthCount;
   const baht = (n: number) => `฿${Math.round(n).toLocaleString("th-TH")}`;
+  const receipts = data.receipts ?? null;
+  const tawi = data.tawi ?? null;
+  const tawiCount = tawi ? tawi.unmatched.length + tawi.noEmail.length + (tawi.missingMonth ? 1 : 0) : 0;
+  const monthsText = (months: string[]) => months.map(tawiMonthLabel).join(", ");
 
   const stats: { label: string; value: string; tone: "ok" | "warn" | "info"; target: string; show: boolean }[] = [
     { label: "ไลฟ์วันนี้", value: `${data.live.length} slot`, tone: "info", target: "home-live", show: scope.mc || scope.proofs },
@@ -68,6 +74,11 @@ export function HomeView({ go }: { go: Go }) {
       label: liveCamp ? "แคมเปญตอนนี้" : "แคมเปญถัดไป", value: liveCamp ? liveCamp.label : nextCamp ? `${nextCamp.label} · อีก ${nextCamp.daysUntil} วัน` : "–",
       tone: "info", target: "home-campaign", show: scope.mc,
     },
+    {
+      label: "เอกสารรับเงินยังไม่ครบ", value: receipts?.people.length ? `${receipts.people.length} คน` : "0",
+      tone: receipts?.people.length ? "warn" : "ok", target: "home-receipts", show: !!receipts,
+    },
+    { label: "ใบ 50 ทวิที่ต้องจัดการ", value: String(tawiCount), tone: tawiCount ? "warn" : "ok", target: "home-tawi", show: !!tawi },
     { label: "ข้อมูลที่ควรแก้", value: String(issueCount), tone: issueCount ? "warn" : "ok", target: "home-issues", show: true },
   ];
   const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -172,6 +183,64 @@ export function HomeView({ go }: { go: Go }) {
               )} />
             </>
           ) : null}
+        </Section>
+      ) : null}
+
+      {tawi ? (
+        <Section
+          id="home-tawi" title="ใบ 50 ทวิ" icon={<FileTextIcon />} count={tawiCount}
+          action={<GoButton onClick={() => go("owner", "staff")}>แผงใบ 50 ทวิ</GoButton>}
+        >
+          {tawiCount ? (
+            <div className="space-y-3 text-sm">
+              {tawi.missingMonth ? (
+                <IssueGroup
+                  title={`ยังไม่มีใบ 50 ทวิ ${tawiMonthLabel(tawi.missingMonth)}`}
+                  note="ในโฟลเดอร์หลักของใบ 50 ทวิยังไม่มีไฟล์ของเดือนนี้ — ให้ทีมบัญชีสร้างโฟลเดอร์รายเดือน (เช่น 09Sep) ในโฟลเดอร์หลัก แล้วกดตรวจไฟล์ใน Drive"
+                  items={[<>Mc / Admin ยังไม่เห็นใบของเดือนนี้</>]}
+                />
+              ) : null}
+              {tawi.unmatched.length ? (
+                <IssueGroup
+                  chips title="ชื่อในใบที่ยังไม่มีเจ้าของ"
+                  note="เจ้าตัวไม่เห็นใบของตัวเอง — จับคู่ในแผงใบ 50 ทวิ (ชื่อในไฟล์สะกดผิด = แก้ชื่อไฟล์ใน Drive ก่อน) · คนนอกทีม กด &quot;ไม่ใช่คนในทีม&quot;"
+                  items={tawi.unmatched.map((u) => <>{u.name} · {monthsText(u.months)}</>)}
+                />
+              ) : null}
+              {tawi.noEmail.length ? (
+                <IssueGroup
+                  chips title="มีใบ 50 ทวิแต่ยังไม่มีอีเมล" note="เข้าเว็บมาดาวน์โหลดไม่ได้ — ใส่อีเมลที่หน้าพนักงาน"
+                  items={tawi.noEmail.map((p) => <>{p.label} · {p.months.length} ใบ (ล่าสุด {tawiMonthLabel(p.months[p.months.length - 1])})</>)}
+                />
+              ) : null}
+            </div>
+          ) : <Empty>ใบ 50 ทวิจับคู่ครบ และทุกคนมีอีเมลแล้ว</Empty>}
+        </Section>
+      ) : null}
+
+      {receipts ? (
+        <Section
+          id="home-receipts" title="เอกสารรับเงินยังไม่ครบ" icon={<ReceiptTextIcon />} count={receipts.people.length}
+          action={<GoButton onClick={() => go("owner", "staff")}>แผงเอกสารรับเงิน</GoButton>}
+        >
+          {receipts.people.length ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                มีใบ 50 ทวิแล้ว (ตั้งแต่ {tawiMonthLabel(receipts.requiredFrom)}) แต่ยังไม่มีเอกสารรับเงินที่ผ่าน — ดาวน์โหลดใบ 50 ทวิเดือนนั้นไม่ได้จนกว่าจะส่ง
+                (ระบบเตือนเจ้าตัวทุก 3 วัน)
+              </p>
+              <IssueGroup
+                chips title="รายชื่อ" note="ไม่มีอีเมล = เข้าเว็บมาส่งเองไม่ได้ ใส่อีเมลที่หน้าพนักงาน หรือให้ทีมบัญชีอัปไฟล์ลง Drive"
+                items={receipts.people.map((p) => (
+                  <>
+                    {p.label}{p.shopee ? " (Shopee)" : ""} · {monthsText(p.months)}
+                    {p.rejected.length ? <b> · ไม่ผ่าน ส่งใหม่</b> : null}
+                    {!p.hasEmail ? " · ไม่มีอีเมล" : null}
+                  </>
+                ))}
+              />
+            </>
+          ) : <Empty>ทุกคนส่งเอกสารรับเงินครบแล้ว</Empty>}
         </Section>
       ) : null}
 

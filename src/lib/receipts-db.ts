@@ -14,7 +14,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/server";
 import { tawiMonthLabel, tawiNameKey } from "@/lib/tawi-name";
 import type {
-  OwnerReceiptPerson, OwnerReceipts, ReceiptDriveFile, ReceiptState, ReceiptView, TawiPerson,
+  HomeReceipts, OwnerReceiptPerson, OwnerReceipts, ReceiptDriveFile, ReceiptState, ReceiptView, TawiPerson,
 } from "@/lib/types";
 
 /**
@@ -142,6 +142,46 @@ export async function sendReceiptReminders(now = Date.now(), dryRun = false) {
   });
   if (dryRun) return { sent: 0, items };
   return { sent: await notifyMany(items), items: [] };
+}
+
+/**
+ * หน้าแรกของ Owner: คนที่ยังส่งเอกสารรับเงินไม่ครบ (มีใบ 50 ทวิจับคู่แล้วในเดือนที่บังคับ แต่ยังไม่มีเอกสารที่ผ่าน)
+ *   นับแบบเดียวกับแผงเอกสารรับเงิน: แถวใน pay_receipts (ต่ออีเมล) ก่อน ไม่มี = ไฟล์เดิมใน Drive ที่จับคู่แล้ว (รายชื่อที่ไม่มีอีเมล)
+ *   ยังไม่บังคับ / ยังไม่ได้รัน SQL = null (ไม่แสดง)
+ */
+export async function receiptPending(): Promise<HomeReceipts | null> {
+  const db = createAdminClient();
+  const cfg = await loadConfig(db);
+  const from = cfg.requiredFrom;
+  if (!from) return null;
+  const [tawi, receipts, files, staff] = await Promise.all([
+    allRows<{ month: string; staff_id: number }>((a, b) => db.from("tawi_docs").select("month, staff_id")
+      .not("staff_id", "is", null).gte("month", from).order("id").range(a, b)),
+    allRows<ReceiptRow>((a, b) => db.from("pay_receipts").select("email, month, status").gte("month", from).order("id").range(a, b)),
+    allRows<FileRow>((a, b) => db.from("receipt_files").select("month, staff_id").not("staff_id", "is", null).gte("month", from).order("id").range(a, b)),
+    loadStaff(db),
+  ]);
+  if (tawi.error || receipts.error) return null;
+  const byId = new Map(staff.map((s) => [s.id, s]));
+  const status = new Map(receipts.rows.map((r) => [`e:${norm(r.email)}|${r.month}`, r.status]));
+  const drive = new Set(files.rows.flatMap((f) => {
+    const s = byId.get(Number(f.staff_id));
+    return s ? [`${personOf(s)}|${f.month}`] : [];
+  }));
+  const people = new Map<string, HomeReceipts["people"][number]>();
+  for (const t of tawi.rows) {
+    const s = byId.get(Number(t.staff_id));
+    if (!s) continue;
+    const k = personOf(s), st = status.get(`${k}|${t.month}`);
+    if (st === "ok" || (!st && drive.has(`${k}|${t.month}`))) continue;
+    const p = people.get(k) ?? { label: label(s), hasEmail: !!s.email?.trim(), shopee: s.live_platform === "shopee", months: [], rejected: [] };
+    if (!p.months.includes(t.month)) p.months.push(t.month);
+    if (st === "rejected" && !p.rejected.includes(t.month)) p.rejected.push(t.month);
+    people.set(k, p);
+  }
+  const list = [...people.values()].map((p) => ({ ...p, months: p.months.sort() }));
+  list.sort((a, b) => b.rejected.length - a.rejected.length || Number(b.hasEmail) - Number(a.hasEmail) || a.label.localeCompare(b.label, "th"));
+  return { requiredFrom: from, people: list };
 }
 
 /** สถานะเอกสารรับเงินของอีเมลนี้ในเดือนนี้ (ใช้ตอนดาวน์โหลดใบ 50 ทวิ) */

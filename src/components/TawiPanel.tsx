@@ -83,20 +83,24 @@ export function TawiPanel() {
   }
 
   async function assign(doc: TawiOwnerDoc, person: TawiPerson | null) {
+    // ไฟล์ที่ยังไม่มีเจ้าของ + ไม่เลือกคน = ตั้งว่าไม่ใช่คนในทีม (ไม่ขึ้นเป็นงานค้างในหน้าแรก)
+    const outsider = !person && !doc.staffId;
     const ok = await confirm({
-      title: person ? `จับคู่ "${doc.realName}" กับ ${person.label}?` : `ยกเลิกการจับคู่ "${doc.realName}"?`,
+      title: person ? `จับคู่ "${doc.realName}" กับ ${person.label}?` : outsider ? `"${doc.realName}" ไม่ใช่คนในทีม?` : `ยกเลิกการจับคู่ "${doc.realName}"?`,
       description: person
         ? `ใช้กับใบ 50 ทวิทุกเดือนที่ชื่อนี้ ${person.label} จะดาวน์โหลดได้ที่ "ตารางของฉัน" หลังกรอกชื่อจริงยืนยันตัวตน${person.legalName ? "" : " และระบบจำชื่อนี้เป็นชื่อจริงของคนนี้ (เดือนถัดไปจับคู่เอง)"}${person.hasEmail ? "" : " — รายชื่อนี้ยังไม่มีอีเมล จึงยังเข้าเว็บดาวน์โหลดไม่ได้"}`
-        : "ทุกเดือนที่ชื่อนี้จะกลับไปเป็น \"ยังไม่จับคู่\" และระบบจะไม่จับคู่ชื่อนี้อัตโนมัติอีก (เลือกคนใหม่ได้)",
-      confirmText: person ? "จับคู่" : "ยกเลิกการจับคู่",
-      destructive: !person,
+        : outsider
+          ? "ใช้กับทุกเดือนที่ชื่อนี้ — ไม่ขึ้นเป็นงานค้างในหน้าแรกอีก และระบบจะไม่จับคู่ชื่อนี้อัตโนมัติ (เลือกคนทีหลังได้)"
+          : "ทุกเดือนที่ชื่อนี้จะกลับไปเป็น \"ยังไม่จับคู่\" และระบบจะไม่จับคู่ชื่อนี้อัตโนมัติอีก (เลือกคนใหม่ได้)",
+      confirmText: person ? "จับคู่" : outsider ? "ไม่ใช่คนในทีม" : "ยกเลิกการจับคู่",
+      destructive: !person && !outsider,
     });
     if (!ok) return;
     setBusy(`doc${doc.id}`);
     try {
       const res = await api<{ changed: number }>("/api/owner/tawi", person ? { action: "assign", docId: doc.id, staffId: person.id } : { action: "unassign", docId: doc.id });
       if (!res.ok) throw new Error(res.message);
-      toast(person ? `จับคู่กับ ${person.label} แล้ว (${res.changed} ไฟล์)` : `ยกเลิกแล้ว (${res.changed} ไฟล์)`);
+      toast(person ? `จับคู่กับ ${person.label} แล้ว (${res.changed} ไฟล์)` : outsider ? `ตั้งว่าไม่ใช่คนในทีมแล้ว (${res.changed} ไฟล์)` : `ยกเลิกแล้ว (${res.changed} ไฟล์)`);
       reload();
     } catch (err) {
       toast((err as Error).message, "error");
@@ -232,7 +236,7 @@ export function TawiPanel() {
                 </div>
               )}
               <p className="text-[11px] text-muted-foreground">
-                ไฟล์ที่ผู้รับเป็นบริษัท / ไม่ใช่ PDF ไม่แสดง · คนนอกระบบปล่อยไว้ &quot;ยังไม่จับคู่&quot; ได้
+                ไฟล์ที่ผู้รับเป็นบริษัท / ไม่ใช่ PDF ไม่แสดง · คนนอกทีม กด &quot;ไม่ใช่คนในทีม&quot; (ไม่ขึ้นเป็นงานค้างในหน้าแรก)
               </p>
             </>
           ) : null}
@@ -331,6 +335,13 @@ function DocRow({ doc, people, owner, busy, disabled, onAssign, onReset }: {
         </div>
       ) : (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {doc.matchedBy === "owner" ? (
+            <Badge variant="outline" className="text-[11px] text-muted-foreground">ไม่ใช่คนในทีม</Badge>
+          ) : (
+            <Button size="sm" variant="outline" className="pointer-coarse:min-h-9" disabled={disabled} onClick={() => onAssign(null)}>
+              <XIcon />ไม่ใช่คนในทีม
+            </Button>
+          )}
           {suggested.map((p) => (
             <Button key={p.id} size="sm" variant="secondary" className="max-w-full pointer-coarse:min-h-9" disabled={disabled} onClick={() => onAssign(p)}>
               <span className="truncate">ใช่ {p.label}?</span>

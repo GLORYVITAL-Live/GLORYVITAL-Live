@@ -104,6 +104,23 @@ export type HomeData = {
   canBackup?: boolean;
   /** ช่วงเปิดจอง (ทั่วไป) ของฝั่งที่มีสิทธิ์ ที่หมดภายใน 2 วัน / หมดแล้ว — to = วันสุดท้าย, daysLeft 0 = วันนี้ */
   windows?: { role: "mc" | "admin"; ended: boolean; to: string; daysLeft: number }[];
+  /** เอกสารรับเงินที่ยังส่งไม่ครบ (เฉพาะ Owner ที่ดูเอกสารทำเบิกได้ · ยังไม่บังคับ = ไม่มี) */
+  receipts?: HomeReceipts | null;
+  /** ใบ 50 ทวิที่ต้องจัดการ (เฉพาะ Owner ที่ดูเอกสารทำเบิกได้ · ยังไม่ได้ตั้งโฟลเดอร์ = ไม่มี) */
+  tawi?: HomeTawi | null;
+};
+
+/** ใบ 50 ทวิบนหน้าแรก: months = "YYYY-MM" เรียงเก่าไปใหม่ · missingMonth = เดือนก่อนที่ยังไม่มีใบเลย (เลยวันที่ 10 แล้ว) */
+export type HomeTawi = {
+  unmatched: { name: string; months: string[] }[];
+  noEmail: { label: string; months: string[] }[];
+  missingMonth: string | null;
+};
+
+/** คนที่ยังส่งเอกสารรับเงินไม่ครบ: months = เดือนที่ยังไม่มีเอกสารที่ผ่าน ("YYYY-MM") · rejected = เดือนที่ส่งแล้วแต่ไม่ผ่าน */
+export type HomeReceipts = {
+  requiredFrom: string;
+  people: { label: string; hasEmail: boolean; shopee: boolean; months: string[]; rejected: string[] }[];
 };
 
 /** ตรวจสุขภาพข้อมูล: ต้นเดือนนี้ถึง 60 วันข้างหน้า เฉพาะฝั่งที่มีสิทธิ์ (time = "19:30–21:30") */

@@ -10,7 +10,7 @@ import {
   cleanRealName, dominantMonth, parseTawiFile, suggestPeople, tawiMonthLabel, tawiNameKey, type TawiCandidate,
 } from "@/lib/tawi-name";
 import { checkTawiVerify, failsToday, TAWI_VERIFY_MAX_FAILS, tawiVerifyState, type TawiVerifyResult } from "@/lib/tawi-verify";
-import type { MyTawi, OwnerTawi, TawiOwnerDoc } from "@/lib/types";
+import type { HomeTawi, MyTawi, OwnerTawi, TawiOwnerDoc } from "@/lib/types";
 
 /**
  * ใบ 50 ทวิ รายเดือน (ตาราง tawi_docs) — SQL 20261029000000_tawi50 + 20261030000000_tawi_verify
@@ -532,6 +532,49 @@ export async function ownerTawi(month: string | null): Promise<OwnerTawi> {
     ready: true, folderSet: !!root, verifyReady: !!verified, month: pick, months, docs: list,
     people: staff.map((s) => ({ id: s.id, role: s.role, label: label(s), legalName: s.legal_name?.trim() || null, hasEmail: !!s.email?.trim() }))
       .sort((a, b) => a.label.localeCompare(b.label, "th")),
+  };
+}
+
+/**
+ * หน้าแรกของ Owner: เรื่องใบ 50 ทวิที่ต้องจัดการ · ยังไม่ได้รัน SQL / ไม่ได้ตั้งโฟลเดอร์ = null (ไม่แสดง)
+ *   unmatched = ชื่อในใบที่ยังไม่มีเจ้าของ (ไม่นับที่ Owner ตั้งว่าไม่ใช่คนในทีม) · noEmail = มีใบแล้วแต่รายชื่อไม่มีอีเมล (เข้าเว็บดาวน์โหลดไม่ได้)
+ *   missingMonth = เลยวันที่ 10 แล้วยังไม่มีใบของเดือนก่อน (ทีมบัญชีลืมสร้างโฟลเดอร์รายเดือนในโฟลเดอร์หลัก / วางไฟล์ผิดที่)
+ */
+export async function tawiHome(today: string): Promise<HomeTawi | null> {
+  const db = createAdminClient();
+  let root: string | null;
+  try { root = await rootFolder(db); } catch { return null; }
+  if (!root) return null;
+  const [docs, { staff }] = await Promise.all([allDocs(db), loadPeople(db)]);
+  const byId = new Map(staff.map((s) => [s.id, s]));
+
+  const loose = new Map<string, { name: string; months: string[] }>();
+  for (const d of docs) {
+    if (d.staff_id || d.matched_by === "owner") continue;
+    const g = loose.get(d.name_key) ?? { name: d.real_name, months: [] };
+    if (!g.months.includes(d.month)) g.months.push(d.month);
+    loose.set(d.name_key, g);
+  }
+  const noEmail = new Map<number, { label: string; months: string[] }>();
+  for (const d of docs) {
+    const s = d.staff_id ? byId.get(d.staff_id) : undefined;
+    if (!s || s.email?.trim()) continue;
+    const g = noEmail.get(s.id) ?? { label: label(s), months: [] };
+    if (!g.months.includes(d.month)) g.months.push(d.month);
+    noEmail.set(s.id, g);
+  }
+  // เดือนเรียงเก่าไปใหม่ · คนที่มีใบเดือนล่าสุดก่อน
+  const latest = <T extends { months: string[] },>(list: T[]) => list.map((g) => ({ ...g, months: g.months.sort() }))
+    .sort((a, b) => b.months[b.months.length - 1].localeCompare(a.months[a.months.length - 1]));
+
+  // เดือนก่อน (เวลาไทย) ควรมีใบแล้วหลังวันที่ 10
+  const [y, m, d] = today.split("-").map(Number);
+  const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+  const months = new Set(docs.map((x) => x.month));
+  return {
+    unmatched: latest([...loose.values()]).map((g) => ({ name: g.name, months: g.months })),
+    noEmail: latest([...noEmail.values()]),
+    missingMonth: d > 10 && months.size && !months.has(prev) ? prev : null,
   };
 }
 
