@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon,
+  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, MinimizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon,
   Trash2Icon, UsersIcon, VideoIcon,
 } from "lucide-react";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
@@ -158,13 +158,20 @@ export function TrainingPage() {
           <div ref={player} className="scroll-mt-4">
             {playing ? (
               <div className="mb-4">
-                <Frame key={playing.ref} src={playerUrl(playing)} title={playing.title} drive={playing.kind === "drive"} />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <b className="min-w-0 flex-1 text-sm break-words">{playing.title}</b>
-                  <Button size="sm" variant="ghost" className="text-muted-foreground" asChild>
-                    <a href={openUrl(playing)} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เล่นไม่ได้? เปิดในแท็บใหม่</a>
-                  </Button>
-                </div>
+                <Frame
+                  key={playing.ref} src={playerUrl(playing)} title={playing.title}
+                  driveTouch={playing.kind === "drive"}
+                  footer={(
+                    <>
+                      <b className="w-full text-sm break-words sm:w-auto sm:flex-1">{playing.title}</b>
+                      <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
+                        <a href={openUrl(playing)} target="_blank" rel="noopener noreferrer">
+                          <ExternalLinkIcon />{playing.kind === "youtube" ? "เปิดใน YouTube" : "เปิดในไดรฟ์ (ฟังก์ชันครบ)"}
+                        </a>
+                      </Button>
+                    </>
+                  )}
+                />
               </div>
             ) : count ? (
               <p className="mb-3 text-sm text-muted-foreground">แตะวิดีโอเพื่อเล่นในหน้านี้ (กดปุ่มขยายในตัวเล่น = เต็มจอ)</p>
@@ -447,44 +454,94 @@ function AddDialog({ open, busy, groups, onClose, onAdd }: {
   );
 }
 
-/**
- * สไลด์ Google Slides: สูง = สไลด์ 16:9 + แถบปุ่มของ Google (~37px) — ไม่งั้นสไลด์หดมีขอบดำ (เห็นชัดบนมือถือ)
- *   ปุ่มเต็มจอของเว็บ (เบราว์เซอร์ที่รองรับ — iPhone ไม่รองรับเต็มจอแบบนี้ = ไม่แสดงปุ่ม ให้หมุนจอแนวนอนแทน)
- */
+/** สไลด์ Google Slides: สูง = สไลด์ 16:9 + แถบปุ่มของ Google (~37px) — ไม่งั้นสไลด์หดมีขอบดำ (เห็นชัดบนมือถือ) */
 function SlidesView({ id }: { id: string }) {
-  const box = useRef<HTMLDivElement>(null);
-  // แสดงหลังโหลดข้อมูลแล้วเท่านั้น (ฝั่งเซิร์ฟเวอร์ไม่ได้วาดส่วนนี้) จึงอ่าน document ตอนเริ่มได้
-  const [canFull] = useState(() => typeof document !== "undefined" && !!document.fullscreenEnabled);
   return (
-    <div>
-      <div ref={box} className="relative w-full overflow-hidden rounded-xl border bg-black shadow-card" style={{ paddingBottom: "calc(56.25% + 37px)" }}>
-        <iframe src={slidesUrl(id)} title="สไลด์บรีฟโปรดักต์" className="absolute inset-0 size-full" allow="fullscreen" allowFullScreen />
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <p className="min-w-0 flex-1 text-xs text-muted-foreground">แตะสไลด์ หรือกดลูกศร &lt; &gt; ใต้สไลด์เพื่อเปลี่ยนหน้า{canFull ? "" : " · หมุนจอแนวนอนเพื่อดูใหญ่ขึ้น"}</p>
-        {canFull ? (
-          <Button size="sm" variant="outline" onClick={() => box.current?.requestFullscreen().catch(() => undefined)}>
-            <MaximizeIcon />เต็มจอ
-          </Button>
-        ) : null}
-      </div>
-    </div>
+    <Frame
+      src={slidesUrl(id)} title="สไลด์บรีฟโปรดักต์" extra={37}
+      footer={<p className="min-w-0 flex-1 text-xs text-muted-foreground">แตะสไลด์ หรือกดลูกศร &lt; &gt; ใต้สไลด์เพื่อเปลี่ยนหน้า</p>}
+    />
   );
 }
 
 /**
- * ตัวเล่นวิดีโอ 16:9
- *   drive = ตัวเล่นของ Google Drive: บนจอสัมผัส (มือถือ / แท็บเล็ต) วางแถบปุ่มไว้เหนือวิดีโอ แล้วดันวิดีโอลง
- *   → เผื่อความสูงอีก 64px ไม่งั้นวิดีโอส่วนล่างโดนตัด (เห็นบน iPhone)
+ * ตัวเล่นวิดีโอ / สไลด์ (16:9) + ปุ่ม "เต็มจอ" ของเว็บ
+ *   ความสูงกรอบ = กว้าง × 9/16 + extra (px) — แถบปุ่มของ Google ที่อยู่นอกภาพ (สไลด์ 37px)
+ *   driveTouch = ตัวเล่นของ Google Drive บนจอสัมผัส วางแถบปุ่มไว้เหนือวิดีโอแล้วดันวิดีโอลง → เผื่ออีก 64px (ไม่งั้นภาพล่างโดนตัด บน iPhone)
  *   กว้างไม่เกินที่ทำให้สูงพอดีจอ (มือถือแนวนอน: เดิมกรอบสูงเกินจอ ต้องเลื่อนดูภาพล่าง)
+ *   เต็มจอ: ตัวเล่นที่ฝังมาจาก Google บน iPhone ไม่มีปุ่มเต็มจอ และ Safari บน iPhone สั่งเต็มจอให้กรอบนี้ไม่ได้
+ *     → ขยายกรอบเดิมให้เต็มหน้าจอเอง (ไม่สร้างตัวเล่นใหม่ วิดีโอเล่นต่อ) + เบราว์เซอร์ที่รองรับ = เต็มจอจริงด้วย
+ *     ตัวเล่นมีขนาดพอดีจอแบบ 16:9 อยู่กลางจอ (ยืดเต็มจอแนวตั้ง = ตัวเล่นของ Google ตัดขอบซ้ายขวาของภาพ)
  */
-function Frame({ src, title, drive = false }: { src: string; title: string; drive?: boolean }) {
+function Frame({ src, title, extra = 0, driveTouch = false, footer }: {
+  src: string; title: string; extra?: number; driveTouch?: boolean; footer?: React.ReactNode;
+}) {
+  // ส่วนนี้วาดหลังโหลดข้อมูลแล้วเท่านั้น (ฝั่งเซิร์ฟเวอร์ไม่ได้วาด) จึงอ่าน matchMedia ตอนเริ่มได้
+  const [touch] = useState(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches);
+  const add = extra + (driveTouch && touch ? 64 : 0);
+  // เต็มจอ: พื้นที่ใต้แถบหัว (cq = ขนาดกรอบเต็มจอ) → กว้าง / สูงพอดีแบบ 16:9 (+ add) อยู่กลาง
+  const avail = "(100cqh - env(safe-area-inset-top) - 48px - env(safe-area-inset-bottom))";
+  const fw = `min(100cqw, (${avail} - ${add}px) * 16 / 9)`;
+  const fh = `min(${avail}, 100cqw * 9 / 16 + ${add}px)`;
+  const fullStyle = {
+    width: `calc(${fw})`, height: `calc(${fh})`,
+    left: `calc((100cqw - ${fw}) / 2)`, top: `calc(env(safe-area-inset-top) + 48px + (${avail} - ${fh}) / 2)`,
+  };
+  const [full, setFull] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  function enter() {
+    setFull(true);
+    if (document.fullscreenEnabled) box.current?.requestFullscreen().catch(() => undefined);
+  }
+  function exit() {
+    setFull(false);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
+  }
+  useEffect(() => {
+    if (!full) return;
+    // ออกจากเต็มจอของเบราว์เซอร์ (ปุ่ม Esc / ปัดกลับ) = ออกจากโหมดเต็มจอของเว็บด้วย · Esc · ล็อกการเลื่อนหน้าหลัง
+    const onChange = () => { if (!document.fullscreenElement) setFull(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    document.addEventListener("fullscreenchange", onChange);
+    window.addEventListener("keydown", onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [full]);
   return (
-    <div className="mx-auto w-full max-w-[calc((100svh-120px)*16/9)]">
-      <div className={cn("relative w-full overflow-hidden rounded-xl border bg-black pb-[56.25%] shadow-card", drive && "pointer-coarse:pb-[calc(56.25%+64px)]")}>
-        <iframe src={src} title={title} className="absolute inset-0 size-full" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen />
+    <>
+      {/* โครงเดิมทั้งสองโหมด (เปลี่ยนแค่ class) — iframe ไม่ถูกสร้างใหม่ วิดีโอไม่เริ่มใหม่ */}
+      <div
+        className={full ? "fixed inset-0 z-[70] bg-black" : "mx-auto w-full"}
+        style={full ? undefined : { maxWidth: `calc((100svh - 120px - ${add}px) * 16 / 9)` }}
+      >
+        <div
+          ref={box} className={full ? "absolute inset-0 bg-black" : "relative w-full overflow-hidden rounded-xl border bg-black shadow-card"}
+          style={full ? { containerType: "size" } : { paddingBottom: `calc(56.25% + ${add}px)` }}
+        >
+          {full ? (
+            <div className="absolute inset-x-0 top-0 z-10 flex h-[calc(env(safe-area-inset-top)+48px)] items-center gap-2 bg-black px-3 pt-[env(safe-area-inset-top)] text-white">
+              <span className="min-w-0 flex-1 truncate py-2 text-sm font-semibold">{title}</span>
+              <button type="button" onClick={exit} className="flex shrink-0 cursor-pointer items-center gap-1 rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold [&_svg]:size-4">
+                <MinimizeIcon />ออกจากเต็มจอ
+              </button>
+            </div>
+          ) : null}
+          <iframe
+            src={src} title={title} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen
+            className={full ? "absolute" : "absolute inset-0 size-full"} style={full ? fullStyle : undefined}
+          />
+        </div>
       </div>
-    </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {footer}
+        <Button size="sm" variant="outline" className="ml-auto" onClick={enter}><MaximizeIcon />เต็มจอ</Button>
+      </div>
+    </>
   );
 }
 
