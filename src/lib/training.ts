@@ -1,4 +1,5 @@
 import "server-only";
+import { Readable } from "stream";
 import { driveClient, driveError } from "@/lib/drive";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me, Training, TrainingGroup, TrainingVideo, TrainingViews } from "@/lib/types";
@@ -209,6 +210,60 @@ export async function addTrainingClip(url: unknown, title: unknown, group: unkno
   if (!name) throw new Error("อ่านชื่อคลิปไม่ได้ (ไฟล์อาจไม่ได้แชร์แบบทุกคนที่มีลิงก์) กรุณาใส่ชื่อคลิปเอง");
   await upsert(ref, { added: true, title: name, group_name: groupName, hidden: false }, by);
   return { title: name };
+}
+
+// ---------- ส่งไฟล์วิดีโอให้ตัวเล่นของเว็บ ----------
+//   Google บล็อกเว็บอื่นไม่ให้ดึงวิดีโอจากลิงก์ไดรฟ์ตรงๆ (403) → เซิร์ฟเวอร์ดึงด้วยบัญชีระบบแล้วส่งต่อทีละช่วง (Range)
+//   ส่งได้เฉพาะคลิปที่อยู่ในหน้าเทรนนิ่ง (กันใช้เปิดไฟล์อื่นที่บัญชีระบบเข้าถึงได้ เช่น ใบ 50 ทวิ / เอกสารรับเงิน)
+//   ช่วงละไม่เกิน 4MB (ฟังก์ชันของ Vercel ตอบได้ไม่เกิน ~4.5MB ต่อครั้ง) — ตัวเล่นขอช่วงถัดไปเอง
+
+const CHUNK = 4 * 1024 * 1024;
+let allowed: { manage: boolean; at: number; ids: Set<string> }[] = [];
+const sizes = new Map<string, { size: number; mime: string }>();
+
+/** คลิปไดรฟ์ที่เปิดได้ (จำไว้ 10 นาที · Owner ที่จัดการได้ = รวมที่ซ่อน) */
+async function allowedIds(manage: boolean) {
+  const hit = allowed.find((a) => a.manage === manage && Date.now() - a.at < TTL);
+  if (hit) return hit.ids;
+  const t = await loadTraining(manage);
+  const ids = new Set(t.groups.flatMap((g) => g.videos).filter((v) => v.kind === "drive").map((v) => v.id));
+  allowed = [...allowed.filter((a) => a.manage !== manage), { manage, at: Date.now(), ids }];
+  return ids;
+}
+
+/**
+ * ส่งวิดีโอ 1 ช่วงตาม header Range (ไม่มี = ช่วงแรก) · ไม่ใช่คลิปในหน้าเทรนนิ่ง = 404
+ *   ส่งต่อทันทีที่ได้จากไดรฟ์ (ไม่รอครบช่วง — เริ่มเล่น / เลื่อนเวลาได้เร็ว) · ตัวเล่นยกเลิกคำขอ (เลื่อนไปที่อื่น) = หยุดดึงจากไดรฟ์
+ */
+export async function trainingVideoChunk(id: string, range: string | null, manage: boolean, signal?: AbortSignal): Promise<Response> {
+  if (!/^[\w-]{10,}$/.test(id) || !(await allowedIds(manage)).has(id)) return new Response("not found", { status: 404 });
+  const drive = driveClient();
+  let meta = sizes.get(id);
+  if (!meta) {
+    const f = await drive.files.get({ fileId: id, fields: "size, mimeType", supportsAllDrives: true });
+    meta = { size: Number(f.data.size ?? 0), mime: f.data.mimeType || "video/mp4" };
+    sizes.set(id, meta);
+  }
+  const m = range?.match(/bytes=(\d*)-(\d*)/);
+  let start = m?.[1] ? Number(m[1]) : 0;
+  let end = m?.[2] ? Number(m[2]) : meta.size - 1;
+  if (m && !m[1] && m[2]) { start = Math.max(0, meta.size - Number(m[2])); end = meta.size - 1; } // bytes=-N (ท้ายไฟล์)
+  if (start >= meta.size) return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${meta.size}` } });
+  end = Math.min(end, start + CHUNK - 1, meta.size - 1);
+  const res = await drive.files.get(
+    { fileId: id, alt: "media", supportsAllDrives: true },
+    { responseType: "stream", headers: { Range: `bytes=${start}-${end}` }, signal },
+  );
+  const node = res.data as unknown as Readable;
+  signal?.addEventListener("abort", () => node.destroy(), { once: true });
+  return new Response(Readable.toWeb(node) as unknown as ReadableStream<Uint8Array>, {
+    status: 206,
+    headers: {
+      "Content-Type": meta.mime, "Content-Length": String(end - start + 1), "Accept-Ranges": "bytes",
+      "Content-Range": `bytes ${start}-${end}/${meta.size}`,
+      "Cache-Control": "private, max-age=3600",
+    },
+  });
 }
 
 // ---------- ประวัติการเข้าชม (SQL 20261105000000_training_views) ----------

@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon,
-  Trash2Icon, UsersIcon, VideoIcon, XIcon,
+  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
+  RefreshCwIcon, RotateCcwIcon, RotateCwIcon, Settings2Icon, Trash2Icon, UsersIcon, VideoIcon, Volume2Icon, VolumeXIcon, XIcon,
 } from "lucide-react";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
@@ -158,23 +158,24 @@ export function TrainingPage() {
           <div ref={player} className="scroll-mt-4">
             {playing ? (
               <div className="mb-4">
-                <Frame
-                  key={playing.ref} src={playerUrl(playing)} title={playing.title}
-                  driveTouch={playing.kind === "drive"}
-                  footer={(
-                    <>
-                      <b className="w-full text-sm break-words sm:w-auto sm:flex-1">{playing.title}</b>
-                      <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
-                        <a href={openUrl(playing)} target="_blank" rel="noopener noreferrer">
-                          <ExternalLinkIcon />{playing.kind === "youtube" ? "เปิดใน YouTube" : "เปิดในไดรฟ์ (ฟังก์ชันครบ)"}
-                        </a>
-                      </Button>
-                    </>
-                  )}
-                />
+                {playing.kind === "drive" ? (
+                  <VideoPlayer key={playing.ref} id={playing.id} title={playing.title} />
+                ) : (
+                  <Frame
+                    key={playing.ref} src={playerUrl(playing)} title={playing.title}
+                    footer={(
+                      <>
+                        <b className="w-full text-sm break-words sm:w-auto sm:flex-1">{playing.title}</b>
+                        <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
+                          <a href={openUrl(playing)} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดใน YouTube</a>
+                        </Button>
+                      </>
+                    )}
+                  />
+                )}
               </div>
             ) : count ? (
-              <p className="mb-3 text-sm text-muted-foreground">แตะวิดีโอเพื่อเล่นในหน้านี้ (กดปุ่มขยายในตัวเล่น = เต็มจอ)</p>
+              <p className="mb-3 text-sm text-muted-foreground">แตะวิดีโอเพื่อเล่นในหน้านี้</p>
             ) : null}
           </div>
           {!count && !data.message ? <Notice>ยังไม่มีวิดีโอในหน้าเทรนนิ่ง</Notice> : null}
@@ -464,25 +465,208 @@ function SlidesView({ id }: { id: string }) {
   );
 }
 
+/** วิดีโอในไดรฟ์ ส่งผ่านเซิร์ฟเวอร์ของเว็บทีละช่วง (Google บล็อกไม่ให้เว็บอื่นดึงจากลิงก์ไดรฟ์ตรงๆ) */
+const streamUrl = (id: string) => `/api/training/video?id=${encodeURIComponent(id)}`;
+const SPEEDS = [1, 1.25, 1.5, 2, 0.75];
+const POS_KEY = (id: string) => `glory_training_pos_${id}`;
+/** "1:02:03" / "4:05" */
+const clock = (s: number) => {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
+};
+
 /**
- * ตัวเล่นวิดีโอ / สไลด์ (16:9) + ปุ่ม "เต็มจอ" ของเว็บ
- *   ความสูงกรอบ = กว้าง × 9/16 + extra (px) — แถบปุ่มของ Google ที่อยู่นอกภาพ (สไลด์ 37px)
- *   driveTouch = ตัวเล่นของ Google Drive บนจอสัมผัส วางแถบปุ่มไว้เหนือวิดีโอแล้วดันวิดีโอลง → เผื่ออีก 64px (ไม่งั้นภาพล่างโดนตัด บน iPhone)
- *   กว้างไม่เกินที่ทำให้สูงพอดีจอ (มือถือแนวนอน: เดิมกรอบสูงเกินจอ ต้องเลื่อนดูภาพล่าง)
- *   เต็มจอ: ตัวเล่นที่ฝังมาจาก Google บน iPhone ไม่มีปุ่มเต็มจอ และ Safari บน iPhone สั่งเต็มจอให้กรอบนี้ไม่ได้
- *     → ขยายกรอบเดิมให้เต็มหน้าจอเอง (ไม่สร้างตัวเล่นใหม่ วิดีโอเล่นต่อ) + เบราว์เซอร์ที่รองรับ = เต็มจอจริงด้วย
- *     ตัวเล่นใหญ่สุดที่พอดีจอแบบ 16:9 อยู่กลางจอ (ยืดเต็มจอ = ตัวเล่นของ Google ตัดขอบภาพ) · เผื่อแค่รอยบาก / ขอบจอ (safe area)
- *     ปุ่มออกลอยมุมซ้ายบน (อยู่ในพื้นที่ดำข้างตัวเล่น ไม่กินที่วิดีโอ — เดิมแถบหัว 48px ทำให้แนวนอนวิดีโอเล็กเกือบครึ่ง)
- *     แถบปุ่มของ Drive บนจอสัมผัส: แนวตั้ง ~64px · แนวนอนเตี้ยกว่า (~40px)
+ * ตัวเล่นวิดีโอของเว็บ (คลิปในไดรฟ์) — ควบคุมได้ทั้งหมด: เล่น / หยุด (แตะที่ภาพได้) · แถบเลื่อนเวลา · ย้อน / ข้าม 10 วิ
+ *   · ความเร็ว · ปิดเสียง · เต็มจอ (iPhone = ตัวเล่นเต็มจอของ iPhone เอง) · เล่นต่อจากที่ดูค้าง (จำในเครื่อง)
+ *   ปุ่มซ่อนเองหลังเล่น 3 วินาที (แตะ / ขยับเมาส์ = แสดง) · คีย์บอร์ด: เว้นวรรค = เล่น / หยุด · ← → = 10 วิ
+ *   เล่นไม่ได้ (Google จำกัดการดาวน์โหลดชั่วคราว / เน็ตหลุด) = ข้อความ + ปุ่มเปิดในไดรฟ์
  */
-function Frame({ src, title, extra = 0, driveTouch = false, footer }: {
-  src: string; title: string; extra?: number; driveTouch?: boolean; footer?: React.ReactNode;
-}) {
-  // ส่วนนี้วาดหลังโหลดข้อมูลแล้วเท่านั้น (ฝั่งเซิร์ฟเวอร์ไม่ได้วาด) จึงอ่าน matchMedia ตอนเริ่มได้
-  const [touch] = useState(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches);
-  const [land, setLand] = useState(false);
+function VideoPlayer({ id, title }: { id: string; title: string }) {
+  const toast = useToast();
+  const box = useRef<HTMLDivElement>(null);
+  const vid = useRef<HTMLVideoElement>(null);
+  const hideAt = useRef(0);
+  const [paused, setPaused] = useState(true);
+  const [time, setTime] = useState(0);
+  const [dur, setDur] = useState(0);
+  const [buffering, setBuffering] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [shown, setShown] = useState(true);
+  const [isFull, setIsFull] = useState(false);
+
+  const poke = () => { hideAt.current = Date.now() + 3000; setShown(true); };
+  useEffect(() => {
+    // ซ่อนปุ่มเมื่อเล่นอยู่และไม่ได้แตะ 3 วินาที
+    const t = window.setInterval(() => { if (Date.now() > hideAt.current) setShown(false); }, 500);
+    const onFs = () => setIsFull(document.fullscreenElement === box.current);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => { window.clearInterval(t); document.removeEventListener("fullscreenchange", onFs); };
+  }, []);
+
+  const v = () => vid.current;
+  const toggle = () => {
+    const el = v();
+    if (!el) return;
+    if (el.paused) el.play().catch(() => setPaused(true));
+    else el.pause();
+    poke();
+  };
+  const seekTo = (s: number) => { const el = v(); if (el) el.currentTime = Math.max(0, Math.min(dur || el.duration || 0, s)); poke(); };
+  const skip = (d: number) => seekTo((v()?.currentTime ?? 0) + d);
+  const cycleSpeed = () => {
+    const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
+    if (v()) v()!.playbackRate = next;
+    setSpeed(next);
+    poke();
+  };
+  const toggleMute = () => { const el = v(); if (el) { el.muted = !el.muted; setMuted(el.muted); } poke(); };
+  function fullscreen() {
+    const el = v() as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => undefined); return; }
+    // iPhone: เต็มจอได้เฉพาะตัว video (ตัวเล่นของ iPhone มีปุ่มครบ) · อื่นๆ = เต็มจอทั้งกรอบ (ใช้ปุ่มของเว็บ)
+    if (document.fullscreenEnabled && box.current) box.current.requestFullscreen().catch(() => el?.webkitEnterFullscreen?.());
+    else el?.webkitEnterFullscreen?.();
+  }
+
+  // จำตำแหน่งที่ดูไว้ (ทุก 5 วินาที / ตอนหยุด) — ดูจบ = ลบ
+  const lastSave = useRef(0);
+  const savePos = (t: number, d: number) => {
+    try {
+      if (d && t > d - 15) localStorage.removeItem(POS_KEY(id));
+      else if (t > 10) localStorage.setItem(POS_KEY(id), String(Math.floor(t)));
+    } catch { /* ไม่มีที่เก็บ = ไม่จำ */ }
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === " " || e.key === "k") { e.preventDefault(); toggle(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); skip(-10); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); skip(10); }
+  };
+  const showUi = shown || paused || failed;
+  const iconBtn = "grid size-9 shrink-0 cursor-pointer place-items-center rounded-full text-white hover:bg-white/15 [&_svg]:size-5";
+
+  return (
+    <div>
+      <div className="mx-auto w-full max-w-[calc((100svh-120px)*16/9)]">
+        <div
+          ref={box} tabIndex={0} onKeyDown={onKeyDown} onMouseMove={poke}
+          className={cn("group relative w-full overflow-hidden bg-black outline-none select-none", isFull ? "h-full" : "aspect-video rounded-xl border shadow-card", !showUi && "cursor-none")}
+        >
+          <video
+            ref={vid} src={streamUrl(id)} playsInline preload="metadata" autoPlay title={title}
+            className="absolute inset-0 size-full object-contain" onClick={toggle}
+            onLoadedMetadata={(e) => {
+              const el = e.currentTarget;
+              setDur(el.duration);
+              try {
+                const at = Number(localStorage.getItem(POS_KEY(id)));
+                if (at > 10 && at < el.duration - 15) { el.currentTime = at; toast(`เล่นต่อจาก ${clock(at)}`); }
+              } catch { /* ไม่มีที่เก็บ */ }
+            }}
+            onDurationChange={(e) => setDur(e.currentTarget.duration)}
+            onTimeUpdate={(e) => {
+              const el = e.currentTarget;
+              setTime(el.currentTime);
+              if (Date.now() - lastSave.current > 5000) { lastSave.current = Date.now(); savePos(el.currentTime, el.duration); }
+            }}
+            onPlay={() => { setPaused(false); poke(); }}
+            onPause={(e) => { setPaused(true); savePos(e.currentTarget.currentTime, e.currentTarget.duration); }}
+            onEnded={(e) => { setPaused(true); savePos(e.currentTarget.duration, e.currentTarget.duration); }}
+            onWaiting={() => setBuffering(true)} onCanPlay={() => setBuffering(false)} onPlaying={() => setBuffering(false)}
+            onError={() => { setFailed(true); setBuffering(false); }}
+          />
+
+          {/* กลางจอ: กำลังโหลด / ปุ่มเล่นใหญ่ / เล่นไม่ได้ */}
+          {failed ? (
+            <div className="absolute inset-0 grid place-items-center bg-black/80 p-4 text-center text-sm text-white">
+              <div>
+                <p className="font-semibold">เล่นวิดีโอนี้ในเว็บไม่ได้ตอนนี้</p>
+                <p className="mt-1 text-xs text-white/70">Google อาจจำกัดการเปิดไฟล์นี้ชั่วคราว (คนเปิดพร้อมกันเยอะ) หรือเน็ตหลุด</p>
+                <Button size="sm" variant="secondary" className="mt-3" asChild>
+                  <a href={`https://drive.google.com/file/d/${id}/view`} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดในไดรฟ์</a>
+                </Button>
+              </div>
+            </div>
+          ) : buffering && !paused ? (
+            <div className="pointer-events-none absolute inset-0 grid place-items-center">
+              <span className="size-10 animate-spin rounded-full border-4 border-white/30 border-t-white" />
+            </div>
+          ) : paused ? (
+            <button
+              type="button" onClick={toggle} aria-label="เล่น"
+              className="absolute inset-0 m-auto grid size-12 -translate-y-5 cursor-pointer place-items-center rounded-full bg-black/55 text-white sm:size-16 sm:-translate-y-4 [&_svg]:size-6 sm:[&_svg]:size-8"
+            >
+              {buffering && !dur ? <span className="size-6 animate-spin rounded-full border-4 border-white/30 border-t-white" /> : <PlayIcon className="fill-current" />}
+            </button>
+          ) : null}
+
+          {/* แถบปุ่มด้านล่าง */}
+          {!failed ? (
+            <div
+              className={cn(
+                "absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-6 pb-1 transition-opacity",
+                showUi ? "opacity-100" : "pointer-events-none opacity-0",
+              )}
+              onClick={poke}
+            >
+              <div className="flex items-center gap-2 px-1 text-[11px] font-semibold text-white tabular-nums">
+                <span>{clock(time)}</span>
+                <input
+                  type="range" min={0} max={dur || 0} step={0.1} value={Math.min(time, dur || 0)} aria-label="เลื่อนเวลา"
+                  onChange={(e) => seekTo(Number(e.target.value))}
+                  className="h-1.5 min-w-0 flex-1 cursor-pointer accent-primary"
+                />
+                <span>{clock(dur)}</span>
+              </div>
+              <div className="flex items-center gap-0.5">
+                <button type="button" className={iconBtn} onClick={toggle} aria-label={paused ? "เล่น" : "หยุด"}>
+                  {paused ? <PlayIcon className="fill-current" /> : <PauseIcon className="fill-current" />}
+                </button>
+                <button type="button" className={cn(iconBtn, "relative")} onClick={() => skip(-10)} aria-label="ย้อน 10 วินาที">
+                  <RotateCcwIcon /><span className="absolute inset-0 grid place-items-center pt-px text-[8px] font-bold">10</span>
+                </button>
+                <button type="button" className={cn(iconBtn, "relative")} onClick={() => skip(10)} aria-label="ข้าม 10 วินาที">
+                  <RotateCwIcon /><span className="absolute inset-0 grid place-items-center pt-px text-[8px] font-bold">10</span>
+                </button>
+                <button type="button" className={iconBtn} onClick={toggleMute} aria-label={muted ? "เปิดเสียง" : "ปิดเสียง"}>
+                  {muted ? <VolumeXIcon /> : <Volume2Icon />}
+                </button>
+                <span className="flex-1" />
+                <button type="button" onClick={cycleSpeed} aria-label="ความเร็ว" className="h-8 shrink-0 cursor-pointer rounded-full px-2.5 text-xs font-bold text-white tabular-nums hover:bg-white/15">
+                  {speed}x
+                </button>
+                <button type="button" className={iconBtn} onClick={fullscreen} aria-label={isFull ? "ออกจากเต็มจอ" : "เต็มจอ"}>
+                  {isFull ? <MinimizeIcon /> : <MaximizeIcon />}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <b className="w-full text-sm break-words sm:w-auto sm:flex-1">{title}</b>
+        <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
+          <a href={`https://drive.google.com/file/d/${id}/view`} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดในไดรฟ์</a>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ตัวเล่นที่ฝังมาจาก Google / YouTube (คลิป YouTube + สไลด์) 16:9 + ปุ่ม "เต็มจอ" ของเว็บ
+ *   ความสูงกรอบ = กว้าง × 9/16 + extra (px) — แถบปุ่มของ Google ที่อยู่นอกภาพ (สไลด์ 37px)
+ *   กว้างไม่เกินที่ทำให้สูงพอดีจอ (มือถือแนวนอน: เดิมกรอบสูงเกินจอ ต้องเลื่อนดูภาพล่าง)
+ *   เต็มจอ: Safari บน iPhone สั่งเต็มจอให้กรอบที่ฝังมาไม่ได้ → ขยายกรอบเดิมให้เต็มหน้าจอเอง (ไม่สร้างใหม่ เล่นต่อ) + เบราว์เซอร์ที่รองรับ = เต็มจอจริงด้วย
+ *     ใหญ่สุดที่พอดีจอแบบ 16:9 อยู่กลางจอ · เผื่อแค่รอยบาก / ขอบจอ (safe area) · ปุ่มออกลอยมุมซ้ายบน (พื้นที่ดำข้างกรอบ)
+ *   คลิปในไดรฟ์ใช้ VideoPlayer (ตัวเล่นของเว็บเอง — ตัวเล่นที่ฝังมาจากไดรฟ์ควบคุมไม่ได้)
+ */
+function Frame({ src, title, extra = 0, footer }: { src: string; title: string; extra?: number; footer?: React.ReactNode }) {
   const [full, setFull] = useState(false);
-  const add = extra + (driveTouch && touch ? (full && land ? 40 : 64) : 0);
+  const add = extra;
   // เต็มจอ (cq = ขนาดกรอบเต็มจอ): พื้นที่ใช้ได้ = จอ - safe area → กว้าง / สูงพอดีแบบ 16:9 (+ add) อยู่กลาง
   const sT = "env(safe-area-inset-top)", sB = "env(safe-area-inset-bottom)", sL = "env(safe-area-inset-left)", sR = "env(safe-area-inset-right)";
   const aw = `(100cqw - ${sL} - ${sR})`, ah = `(100cqh - ${sT} - ${sB})`;
@@ -494,7 +678,6 @@ function Frame({ src, title, extra = 0, driveTouch = false, footer }: {
   };
   const box = useRef<HTMLDivElement>(null);
   function enter() {
-    setLand(window.matchMedia("(orientation: landscape)").matches);
     setFull(true);
     if (document.fullscreenEnabled) box.current?.requestFullscreen().catch(() => undefined);
   }
@@ -507,18 +690,13 @@ function Frame({ src, title, extra = 0, driveTouch = false, footer }: {
     // ออกจากเต็มจอของเบราว์เซอร์ (ปุ่ม Esc / ปัดกลับ) = ออกจากโหมดเต็มจอของเว็บด้วย · Esc · ล็อกการเลื่อนหน้าหลัง
     const onChange = () => { if (!document.fullscreenElement) setFull(false); };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
-    // หมุนจอระหว่างเต็มจอ → ปรับพื้นที่เผื่อแถบปุ่มของ Drive
-    const mq = window.matchMedia("(orientation: landscape)");
-    const onTurn = () => setLand(mq.matches);
     document.addEventListener("fullscreenchange", onChange);
     window.addEventListener("keydown", onKey);
-    mq.addEventListener("change", onTurn);
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("fullscreenchange", onChange);
       window.removeEventListener("keydown", onKey);
-      mq.removeEventListener("change", onTurn);
       document.body.style.overflow = overflow;
     };
   }, [full]);
