@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ExternalLinkIcon, EyeIcon, EyeOffIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon, Trash2Icon, VideoIcon,
+  ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon, Trash2Icon, VideoIcon,
 } from "lucide-react";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +81,8 @@ export function TrainingPage() {
   const groups: TrainingGroup[] = editing ? data.groups : data.groups.filter((g) => !g.hidden)
     .map((g) => ({ ...g, videos: g.videos.filter((v) => !v.hidden) })).filter((g) => g.videos.length);
   const count = groups.reduce((n, g) => n + g.videos.length, 0);
+  // จำนวนบนแท็บ = คลิปที่ทีมเห็น (โหมดจัดการไม่นับที่ซ่อน — ตัวเลขไม่กระโดด)
+  const shown = data.groups.filter((g) => !g.hidden).reduce((n, g) => n + g.videos.filter((v) => !v.hidden).length, 0);
   const play = (v: TrainingVideo) => {
     setPlaying(v);
     requestAnimationFrame(() => player.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -103,7 +105,7 @@ export function TrainingPage() {
           type="single" variant="outline" spacing={0} value={tab} aria-label="เลือกหมวด" className="w-full bg-card sm:w-auto"
           onValueChange={(v) => { if (v) setTab(v as "video" | "slides"); }}
         >
-          <ToggleGroupItem value="video" className="flex-1 font-semibold sm:flex-none"><VideoIcon />วิดีโอเทรนนิ่ง ({count})</ToggleGroupItem>
+          <ToggleGroupItem value="video" className="flex-1 font-semibold sm:flex-none"><VideoIcon />วิดีโอเทรนนิ่ง ({shown})</ToggleGroupItem>
           <ToggleGroupItem value="slides" className="flex-1 font-semibold sm:flex-none"><PresentationIcon />สไลด์บรีฟโปรดักต์</ToggleGroupItem>
         </ToggleGroup>
         {canManage && tab === "video" ? (
@@ -115,10 +117,7 @@ export function TrainingPage() {
 
       {tab === "slides" ? (
         data.slides ? (
-          <div>
-            <Frame src={slidesUrl(data.slides)} title="สไลด์บรีฟโปรดักต์" />
-            <p className="mt-2 text-xs text-muted-foreground">กดลูกศรใต้สไลด์เพื่อเปลี่ยนหน้า · ปุ่มขยายมุมขวาล่าง = เต็มจอ</p>
-          </div>
+          <SlidesView id={data.slides} />
         ) : <Notice>ยังไม่ได้ตั้งสไลด์บรีฟโปรดักต์ (settings.training_slides)</Notice>
       ) : (
         <>
@@ -299,7 +298,7 @@ function AddDialog({ open, busy, groups, onClose, onAdd }: {
       <DialogBody className="space-y-3">
         <div>
           <Label htmlFor="training-url" className="mb-1.5">ลิงก์คลิป</Label>
-          <Input id="training-url" value={url} inputMode="url" placeholder="https://drive.google.com/file/d/... หรือ https://youtu.be/..." onChange={(e) => setUrl(e.target.value)} autoFocus />
+          <Input id="training-url" value={url} inputMode="url" placeholder="วางลิงก์ Google Drive / YouTube" onChange={(e) => setUrl(e.target.value)} autoFocus />
         </div>
         <div>
           <Label htmlFor="training-new-title" className="mb-1.5">ชื่อคลิป <span className="font-normal text-muted-foreground">(เว้นว่าง = ใช้ชื่อไฟล์ / ชื่อใน YouTube)</span></Label>
@@ -331,7 +330,32 @@ function AddDialog({ open, busy, groups, onClose, onAdd }: {
   );
 }
 
-/** ตัวเล่น / สไลด์ ขนาด 16:9 */
+/**
+ * สไลด์ Google Slides: สูง = สไลด์ 16:9 + แถบปุ่มของ Google (~37px) — ไม่งั้นสไลด์หดมีขอบดำ (เห็นชัดบนมือถือ)
+ *   ปุ่มเต็มจอของเว็บ (เบราว์เซอร์ที่รองรับ — iPhone ไม่รองรับเต็มจอแบบนี้ = ไม่แสดงปุ่ม ให้หมุนจอแนวนอนแทน)
+ */
+function SlidesView({ id }: { id: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  // แสดงหลังโหลดข้อมูลแล้วเท่านั้น (ฝั่งเซิร์ฟเวอร์ไม่ได้วาดส่วนนี้) จึงอ่าน document ตอนเริ่มได้
+  const [canFull] = useState(() => typeof document !== "undefined" && !!document.fullscreenEnabled);
+  return (
+    <div>
+      <div ref={box} className="relative w-full overflow-hidden rounded-xl border bg-black shadow-card" style={{ paddingBottom: "calc(56.25% + 37px)" }}>
+        <iframe src={slidesUrl(id)} title="สไลด์บรีฟโปรดักต์" className="absolute inset-0 size-full" allow="fullscreen" allowFullScreen />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1 text-xs text-muted-foreground">แตะสไลด์ หรือกดลูกศร &lt; &gt; ใต้สไลด์เพื่อเปลี่ยนหน้า{canFull ? "" : " · หมุนจอแนวนอนเพื่อดูใหญ่ขึ้น"}</p>
+        {canFull ? (
+          <Button size="sm" variant="outline" onClick={() => box.current?.requestFullscreen().catch(() => undefined)}>
+            <MaximizeIcon />เต็มจอ
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** ตัวเล่นวิดีโอ ขนาด 16:9 */
 function Frame({ src, title }: { src: string; title: string }) {
   return (
     <div className="aspect-video w-full overflow-hidden rounded-xl border bg-black shadow-card">
