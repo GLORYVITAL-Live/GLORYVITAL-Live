@@ -143,6 +143,8 @@ export type HealthIssues = {
   noPhone: { role: "mc" | "admin"; name: string; upcoming: number }[];
   /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน */
   calendar: { role: "mc" | "admin"; name: string; count: number }[];
+  /** slot ที่เว็บเปลี่ยนแล้วแต่ยังเขียนลงชีตไม่ได้เกิน 15 นาที (filtered = แท็บเปิดตัวกรองอยู่ แทรกแถวไม่ได้) */
+  sheetStuck?: { role: "mc" | "admin"; date: string; platform: string; time: string; filtered: boolean; error: string }[];
 };
 
 /** slot ที่ยังว่าง (หน้าแรกของ Mc / Admin) */

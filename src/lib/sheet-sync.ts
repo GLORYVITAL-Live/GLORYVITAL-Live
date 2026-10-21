@@ -365,29 +365,53 @@ export async function sortDaysGloryFirst(tab: TabKey, from: string, to: string, 
   return dryRun ? run() : withSheetLock(run);
 }
 
-/** เขียนการเปลี่ยนแปลงจากเว็บลงชีต (งานค้างใน sheet_jobs) */
+/** แทรกแถวไม่ได้เพราะแท็บเปิดตัวกรอง (filter) ซ่อนแถวอยู่ — ไม่ใช่ความผิดของงาน ลองใหม่ได้เรื่อยๆ จนกว่าจะปิดตัวกรอง */
+export const isFilteredError = (msg: string | null | undefined) => /filtered rows|คัดกรอง/i.test(msg ?? "");
+
+/**
+ * เขียนการเปลี่ยนแปลงจากเว็บลงชีต (งานค้างใน sheet_jobs)
+ *   เขียนทั้งชุดต่อแท็บ · ชุดพลาด = ลองทีละ slot (slot ที่แทรกแถวไม่ได้ไม่ถ่วง slot อื่นที่แก้แถวเดิม)
+ *   พลาดเพราะเปิดตัวกรอง = ไม่นับครั้ง (ลองใหม่รอบหน้า — cron ทุก 15 นาที) · พลาดอย่างอื่น = นับครั้ง ครบ 5 ครั้งเลิกลอง
+ *   ค้างนาน = ขึ้นเตือนใน "ข้อมูลที่ควรแก้" หน้าแรก (home.ts)
+ */
 export async function processSheetJobs() {
   const db = createAdminClient();
   const result = await withSheetLock(async () => {
     let done = 0, failed = 0;
+    const skip = new Set<number>(); // พลาดในรอบนี้แล้ว ไม่ลองซ้ำในการเรียกครั้งเดียวกัน
+    type Job = { id: number; slot_table: string; slot_id: number; attempts: number };
+    const fail = async (list: Job[], msg: string) => {
+      failed += list.length;
+      for (const j of list) {
+        skip.add(j.id);
+        await db.from("sheet_jobs").update({ attempts: isFilteredError(msg) ? j.attempts : j.attempts + 1, last_error: msg }).eq("id", j.id);
+      }
+    };
+    const write = async (tab: TabKey, list: Job[]) => {
+      await writeSlotsToSheet(tab, [...new Set(list.map((j) => j.slot_id))]);
+      await db.from("sheet_jobs").update({ done_at: new Date().toISOString(), last_error: null }).in("id", list.map((j) => j.id));
+      done += list.length;
+    };
+    const msgOf = (err: unknown) => String((err as Error)?.message ?? err).slice(0, 500);
     for (let round = 0; round < 5; round++) {
-      const { data: jobs, error } = await db.from("sheet_jobs").select("id, slot_table, slot_id, attempts")
+      const { data, error } = await db.from("sheet_jobs").select("id, slot_table, slot_id, attempts")
         .is("done_at", null).lt("attempts", 5).order("created_at").limit(300);
       if (error) throw error;
-      if (!jobs?.length) break;
+      const jobs = ((data ?? []) as Job[]).filter((j) => !skip.has(j.id));
+      if (!jobs.length) break;
       for (const tab of ["mc", "admin"] as const) {
         const mine = jobs.filter((j) => j.slot_table === TABLE_OF[tab]);
         if (!mine.length) continue;
-        const jobIds = mine.map((j) => j.id);
         try {
-          await writeSlotsToSheet(tab, [...new Set(mine.map((j) => j.slot_id))]);
-          await db.from("sheet_jobs").update({ done_at: new Date().toISOString(), last_error: null }).in("id", jobIds);
-          done += mine.length;
+          await write(tab, mine);
         } catch (err) {
-          failed += mine.length;
-          const msg = String((err as Error)?.message ?? err).slice(0, 500);
-          console.warn(`เขียนชีตไม่สำเร็จ (${tab}):`, msg);
-          for (const j of mine) await db.from("sheet_jobs").update({ attempts: j.attempts + 1, last_error: msg }).eq("id", j.id);
+          console.warn(`เขียนชีตไม่สำเร็จ (${tab}):`, msgOf(err));
+          const bySlot = new Map<number, Job[]>();
+          for (const j of mine) bySlot.set(j.slot_id, [...(bySlot.get(j.slot_id) ?? []), j]);
+          if (bySlot.size === 1) { await fail(mine, msgOf(err)); continue; }
+          for (const list of bySlot.values()) {
+            try { await write(tab, list); } catch (e) { await fail(list, msgOf(e)); }
+          }
         }
       }
     }

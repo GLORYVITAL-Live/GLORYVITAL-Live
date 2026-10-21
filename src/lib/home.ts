@@ -6,6 +6,7 @@ import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { loadSessions } from "@/lib/live-stats-db";
 import { platformLabel } from "@/lib/platform";
+import { isFilteredError } from "@/lib/sheet-sync";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { HealthIssues, HomeData, HomeSlot } from "@/lib/types";
 import { addDays } from "@/lib/window";
@@ -156,7 +157,33 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   }
   out.issues.noEmail.sort((a, b) => b.upcoming - a.upcoming);
   out.issues.samePhone = [...phones.values()].filter((g) => g.names.length > 1);
+  out.health.sheetStuck = await sheetStuck(db, roles, now).catch(() => []);
   return out;
+}
+
+/** งานเขียนชีตที่ค้างเกิน 15 นาที (slot ที่ยังมีอยู่) ของฝั่งที่มีสิทธิ์ — เว็บกับชีตไม่ตรงกันจนกว่าจะเขียนได้ */
+async function sheetStuck(db: ReturnType<typeof createAdminClient>, roles: Set<string>, now: number) {
+  const { data: jobs, error } = await db.from("sheet_jobs").select("slot_table, slot_id, last_error")
+    .is("done_at", null).lt("created_at", new Date(now - 15 * 60_000).toISOString()).order("id").limit(200);
+  if (error || !jobs?.length) return [];
+  const out: NonNullable<HealthIssues["sheetStuck"]> = [];
+  for (const table of ["mc_slots", "admin_slots"] as const) {
+    const role = table === "mc_slots" ? "mc" : "admin";
+    if (!roles.has(role)) continue;
+    const mine = jobs.filter((j) => j.slot_table === table);
+    if (!mine.length) continue;
+    const { data: slots } = await db.from(table).select("id, platform, live_date, start_time, end_time")
+      .in("id", [...new Set(mine.map((j) => j.slot_id))]);
+    const errOf = new Map(mine.map((j) => [j.slot_id, String(j.last_error ?? "")]));
+    for (const s of slots ?? []) {
+      const err = errOf.get(s.id) ?? "";
+      out.push({
+        role, date: s.live_date, platform: platformLabel(s.platform), time: `${hm(s.start_time)}–${hm(s.end_time)}`,
+        filtered: isFilteredError(err), error: err.slice(0, 200),
+      });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
 }
 
 /**

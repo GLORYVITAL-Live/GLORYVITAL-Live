@@ -269,6 +269,17 @@ export function HomeView({ go }: { go: Go }) {
       <Section id="home-issues" title="ข้อมูลที่ควรแก้" icon={<AlertTriangleIcon />} count={issueCount} action={<GoButton onClick={() => go("owner", "staff")}>หน้าพนักงาน</GoButton>}>
         {issueCount ? (
           <div className="space-y-3 text-sm">
+            {h?.sheetStuck?.length ? (
+              <IssueGroup
+                title="slot ที่ยังไม่ลงชีต"
+                note={h.sheetStuck.some((x) => x.filtered)
+                  ? "เว็บกับชีตไม่ตรงกัน — แท็บในชีตเปิดตัวกรอง (filter) อยู่ ระบบแทรกแถวไม่ได้ ปิดตัวกรองแล้วระบบจะเขียนให้เองภายใน 15 นาที"
+                  : "เว็บกับชีตไม่ตรงกัน — ระบบเขียนลงชีตไม่สำเร็จ (ลองใหม่อัตโนมัติ) ถ้ายังค้างอยู่ แจ้งผู้ดูแลระบบ"}
+                items={h.sheetStuck.map((x) => (
+                  <><b>{dayText(x.date)} {x.platform} {x.time}</b> · {x.role === "mc" ? "แท็บ Deal Mc" : "แท็บ Admin เสริม"}{x.filtered ? " · เปิดตัวกรองอยู่" : x.error ? ` · ${x.error}` : ""}</>
+                ))}
+              />
+            ) : null}
             {h?.overlap.length ? (
               <IssueGroup
                 title="คนละคนอยู่ slot เดียวกัน" note="ชั่วโมงและค่าจ้างนับทั้งคู่ — เช็กว่าใครไลฟ์จริง แล้วลบอีกแถวในชีต"
