@@ -158,7 +158,7 @@ export function TrainingPage() {
           <div ref={player} className="scroll-mt-4">
             {playing ? (
               <div className="mb-4">
-                <Frame key={playing.ref} src={playerUrl(playing)} title={playing.title} />
+                <Frame key={playing.ref} src={playerUrl(playing)} title={playing.title} drive={playing.kind === "drive"} />
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <b className="min-w-0 flex-1 text-sm break-words">{playing.title}</b>
                   <Button size="sm" variant="ghost" className="text-muted-foreground" asChild>
@@ -472,11 +472,15 @@ function SlidesView({ id }: { id: string }) {
   );
 }
 
-/** ตัวเล่นวิดีโอ ขนาด 16:9 */
-function Frame({ src, title }: { src: string; title: string }) {
+/**
+ * ตัวเล่นวิดีโอ 16:9
+ *   drive = ตัวเล่นของ Google Drive: บนจอสัมผัส (มือถือ / แท็บเล็ต) วางแถบปุ่มไว้เหนือวิดีโอ แล้วดันวิดีโอลง
+ *   → เผื่อความสูงอีก 64px ไม่งั้นวิดีโอส่วนล่างโดนตัด (เห็นบน iPhone)
+ */
+function Frame({ src, title, drive = false }: { src: string; title: string; drive?: boolean }) {
   return (
-    <div className="aspect-video w-full overflow-hidden rounded-xl border bg-black shadow-card">
-      <iframe src={src} title={title} className="size-full" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen />
+    <div className={cn("relative w-full overflow-hidden rounded-xl border bg-black pb-[56.25%] shadow-card", drive && "pointer-coarse:pb-[calc(56.25%+64px)]")}>
+      <iframe src={src} title={title} className="absolute inset-0 size-full" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen />
     </div>
   );
 }
