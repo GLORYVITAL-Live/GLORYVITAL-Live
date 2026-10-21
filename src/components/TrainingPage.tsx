@@ -476,11 +476,14 @@ function SlidesView({ id }: { id: string }) {
  * ตัวเล่นวิดีโอ 16:9
  *   drive = ตัวเล่นของ Google Drive: บนจอสัมผัส (มือถือ / แท็บเล็ต) วางแถบปุ่มไว้เหนือวิดีโอ แล้วดันวิดีโอลง
  *   → เผื่อความสูงอีก 64px ไม่งั้นวิดีโอส่วนล่างโดนตัด (เห็นบน iPhone)
+ *   กว้างไม่เกินที่ทำให้สูงพอดีจอ (มือถือแนวนอน: เดิมกรอบสูงเกินจอ ต้องเลื่อนดูภาพล่าง)
  */
 function Frame({ src, title, drive = false }: { src: string; title: string; drive?: boolean }) {
   return (
-    <div className={cn("relative w-full overflow-hidden rounded-xl border bg-black pb-[56.25%] shadow-card", drive && "pointer-coarse:pb-[calc(56.25%+64px)]")}>
-      <iframe src={src} title={title} className="absolute inset-0 size-full" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen />
+    <div className="mx-auto w-full max-w-[calc((100svh-120px)*16/9)]">
+      <div className={cn("relative w-full overflow-hidden rounded-xl border bg-black pb-[56.25%] shadow-card", drive && "pointer-coarse:pb-[calc(56.25%+64px)]")}>
+        <iframe src={src} title={title} className="absolute inset-0 size-full" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen />
+      </div>
     </div>
   );
 }
