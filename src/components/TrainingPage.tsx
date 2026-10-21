@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, MinimizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon,
-  Trash2Icon, UsersIcon, VideoIcon,
+  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon,
+  Trash2Icon, UsersIcon, VideoIcon, XIcon,
 } from "lucide-react";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
@@ -471,25 +471,30 @@ function SlidesView({ id }: { id: string }) {
  *   กว้างไม่เกินที่ทำให้สูงพอดีจอ (มือถือแนวนอน: เดิมกรอบสูงเกินจอ ต้องเลื่อนดูภาพล่าง)
  *   เต็มจอ: ตัวเล่นที่ฝังมาจาก Google บน iPhone ไม่มีปุ่มเต็มจอ และ Safari บน iPhone สั่งเต็มจอให้กรอบนี้ไม่ได้
  *     → ขยายกรอบเดิมให้เต็มหน้าจอเอง (ไม่สร้างตัวเล่นใหม่ วิดีโอเล่นต่อ) + เบราว์เซอร์ที่รองรับ = เต็มจอจริงด้วย
- *     ตัวเล่นมีขนาดพอดีจอแบบ 16:9 อยู่กลางจอ (ยืดเต็มจอแนวตั้ง = ตัวเล่นของ Google ตัดขอบซ้ายขวาของภาพ)
+ *     ตัวเล่นใหญ่สุดที่พอดีจอแบบ 16:9 อยู่กลางจอ (ยืดเต็มจอ = ตัวเล่นของ Google ตัดขอบภาพ) · เผื่อแค่รอยบาก / ขอบจอ (safe area)
+ *     ปุ่มออกลอยมุมซ้ายบน (อยู่ในพื้นที่ดำข้างตัวเล่น ไม่กินที่วิดีโอ — เดิมแถบหัว 48px ทำให้แนวนอนวิดีโอเล็กเกือบครึ่ง)
+ *     แถบปุ่มของ Drive บนจอสัมผัส: แนวตั้ง ~64px · แนวนอนเตี้ยกว่า (~40px)
  */
 function Frame({ src, title, extra = 0, driveTouch = false, footer }: {
   src: string; title: string; extra?: number; driveTouch?: boolean; footer?: React.ReactNode;
 }) {
   // ส่วนนี้วาดหลังโหลดข้อมูลแล้วเท่านั้น (ฝั่งเซิร์ฟเวอร์ไม่ได้วาด) จึงอ่าน matchMedia ตอนเริ่มได้
   const [touch] = useState(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches);
-  const add = extra + (driveTouch && touch ? 64 : 0);
-  // เต็มจอ: พื้นที่ใต้แถบหัว (cq = ขนาดกรอบเต็มจอ) → กว้าง / สูงพอดีแบบ 16:9 (+ add) อยู่กลาง
-  const avail = "(100cqh - env(safe-area-inset-top) - 48px - env(safe-area-inset-bottom))";
-  const fw = `min(100cqw, (${avail} - ${add}px) * 16 / 9)`;
-  const fh = `min(${avail}, 100cqw * 9 / 16 + ${add}px)`;
+  const [land, setLand] = useState(false);
+  const [full, setFull] = useState(false);
+  const add = extra + (driveTouch && touch ? (full && land ? 40 : 64) : 0);
+  // เต็มจอ (cq = ขนาดกรอบเต็มจอ): พื้นที่ใช้ได้ = จอ - safe area → กว้าง / สูงพอดีแบบ 16:9 (+ add) อยู่กลาง
+  const sT = "env(safe-area-inset-top)", sB = "env(safe-area-inset-bottom)", sL = "env(safe-area-inset-left)", sR = "env(safe-area-inset-right)";
+  const aw = `(100cqw - ${sL} - ${sR})`, ah = `(100cqh - ${sT} - ${sB})`;
+  const fw = `min(${aw}, (${ah} - ${add}px) * 16 / 9)`;
+  const fh = `min(${ah}, ${aw} * 9 / 16 + ${add}px)`;
   const fullStyle = {
     width: `calc(${fw})`, height: `calc(${fh})`,
-    left: `calc((100cqw - ${fw}) / 2)`, top: `calc(env(safe-area-inset-top) + 48px + (${avail} - ${fh}) / 2)`,
+    left: `calc(${sL} + (${aw} - ${fw}) / 2)`, top: `calc(${sT} + (${ah} - ${fh}) / 2)`,
   };
-  const [full, setFull] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   function enter() {
+    setLand(window.matchMedia("(orientation: landscape)").matches);
     setFull(true);
     if (document.fullscreenEnabled) box.current?.requestFullscreen().catch(() => undefined);
   }
@@ -502,13 +507,18 @@ function Frame({ src, title, extra = 0, driveTouch = false, footer }: {
     // ออกจากเต็มจอของเบราว์เซอร์ (ปุ่ม Esc / ปัดกลับ) = ออกจากโหมดเต็มจอของเว็บด้วย · Esc · ล็อกการเลื่อนหน้าหลัง
     const onChange = () => { if (!document.fullscreenElement) setFull(false); };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    // หมุนจอระหว่างเต็มจอ → ปรับพื้นที่เผื่อแถบปุ่มของ Drive
+    const mq = window.matchMedia("(orientation: landscape)");
+    const onTurn = () => setLand(mq.matches);
     document.addEventListener("fullscreenchange", onChange);
     window.addEventListener("keydown", onKey);
+    mq.addEventListener("change", onTurn);
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("fullscreenchange", onChange);
       window.removeEventListener("keydown", onKey);
+      mq.removeEventListener("change", onTurn);
       document.body.style.overflow = overflow;
     };
   }, [full]);
@@ -524,12 +534,12 @@ function Frame({ src, title, extra = 0, driveTouch = false, footer }: {
           style={full ? { containerType: "size" } : { paddingBottom: `calc(56.25% + ${add}px)` }}
         >
           {full ? (
-            <div className="absolute inset-x-0 top-0 z-10 flex h-[calc(env(safe-area-inset-top)+48px)] items-center gap-2 bg-black px-3 pt-[env(safe-area-inset-top)] text-white">
-              <span className="min-w-0 flex-1 truncate py-2 text-sm font-semibold">{title}</span>
-              <button type="button" onClick={exit} className="flex shrink-0 cursor-pointer items-center gap-1 rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold [&_svg]:size-4">
-                <MinimizeIcon />ออกจากเต็มจอ
-              </button>
-            </div>
+            <button
+              type="button" onClick={exit} aria-label="ออกจากเต็มจอ"
+              className="absolute top-[calc(env(safe-area-inset-top)+8px)] left-[calc(env(safe-area-inset-left)+8px)] z-10 flex cursor-pointer items-center gap-1 rounded-full bg-white/20 px-2.5 py-1.5 text-xs font-semibold text-white backdrop-blur [&_svg]:size-4"
+            >
+              <XIcon />ออก
+            </button>
           ) : null}
           <iframe
             src={src} title={title} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen
