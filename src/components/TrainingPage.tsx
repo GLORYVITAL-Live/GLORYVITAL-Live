@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon, Trash2Icon, VideoIcon,
+  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon, RefreshCwIcon, Settings2Icon,
+  Trash2Icon, UsersIcon, VideoIcon,
 } from "lucide-react";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import type { Training, TrainingGroup, TrainingVideo } from "@/lib/types";
+import type { Training, TrainingGroup, TrainingVideo, TrainingViews } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -34,7 +35,7 @@ export function TrainingPage() {
   const [data, setData] = useState<Training | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  const [tab, setTab] = useState<"video" | "slides">("video");
+  const [tab, setTab] = useState<"video" | "slides" | "views">("video");
   const [playing, setPlaying] = useState<TrainingVideo | null>(null);
   const [manage, setManage] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -52,6 +53,10 @@ export function TrainingPage() {
       .catch((err) => { if (alive) setError((err as Error).message); });
     return () => { alive = false; };
   }, [attempt]);
+
+  // บันทึกการเข้าหน้า (ครั้งแรกที่โหลดสำเร็จ)
+  const loaded = !!data?.ready;
+  useEffect(() => { if (loaded) track("page"); }, [loaded]);
 
   /** คำสั่งจัดการ → ได้รายชื่อใหม่กลับมา · คืน true = สำเร็จ */
   async function run(key: string, body: object) {
@@ -84,6 +89,7 @@ export function TrainingPage() {
   // จำนวนบนแท็บ = คลิปที่ทีมเห็น (โหมดจัดการไม่นับที่ซ่อน — ตัวเลขไม่กระโดด)
   const shown = data.groups.filter((g) => !g.hidden).reduce((n, g) => n + g.videos.filter((v) => !v.hidden).length, 0);
   const play = (v: TrainingVideo) => {
+    if (playing?.ref !== v.ref) track("video", v);
     setPlaying(v);
     requestAnimationFrame(() => player.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
@@ -103,10 +109,20 @@ export function TrainingPage() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <ToggleGroup
           type="single" variant="outline" spacing={0} value={tab} aria-label="เลือกหมวด" className="w-full bg-card sm:w-auto"
-          onValueChange={(v) => { if (v) setTab(v as "video" | "slides"); }}
+          onValueChange={(v) => {
+            if (!v) return;
+            if (v === "slides" && tab !== "slides") track("slides");
+            setTab(v as typeof tab);
+          }}
         >
-          <ToggleGroupItem value="video" className="flex-1 font-semibold sm:flex-none"><VideoIcon />วิดีโอเทรนนิ่ง ({shown})</ToggleGroupItem>
-          <ToggleGroupItem value="slides" className="flex-1 font-semibold sm:flex-none"><PresentationIcon />สไลด์บรีฟโปรดักต์</ToggleGroupItem>
+          {/* Owner มี 3 แท็บ: จอมือถือใช้ชื่อสั้น */}
+          <ToggleGroupItem value="video" className="flex-1 font-semibold sm:flex-none">
+            <VideoIcon />{canManage ? <><span className="sm:hidden">วิดีโอ</span><span className="max-sm:hidden">วิดีโอเทรนนิ่ง</span></> : "วิดีโอเทรนนิ่ง"} ({shown})
+          </ToggleGroupItem>
+          <ToggleGroupItem value="slides" className="flex-1 font-semibold sm:flex-none">
+            <PresentationIcon />{canManage ? <><span className="sm:hidden">สไลด์</span><span className="max-sm:hidden">สไลด์บรีฟโปรดักต์</span></> : "สไลด์บรีฟโปรดักต์"}
+          </ToggleGroupItem>
+          {canManage ? <ToggleGroupItem value="views" className="flex-1 font-semibold sm:flex-none"><UsersIcon />ผู้เข้าชม</ToggleGroupItem> : null}
         </ToggleGroup>
         {canManage && tab === "video" ? (
           <Button variant={manage ? "default" : "outline"} className="rounded-full sm:ml-auto" onClick={() => setManage(!manage)} aria-pressed={manage}>
@@ -115,7 +131,7 @@ export function TrainingPage() {
         ) : null}
       </div>
 
-      {tab === "slides" ? (
+      {tab === "views" && canManage ? <ViewsPanel /> : tab === "slides" ? (
         data.slides ? (
           <SlidesView id={data.slides} />
         ) : <Notice>ยังไม่ได้ตั้งสไลด์บรีฟโปรดักต์ (settings.training_slides)</Notice>
@@ -235,6 +251,107 @@ export function TrainingPage() {
         open={adding} busy={!!busy} groups={data.groups.map((g) => g.name)} onClose={() => setAdding(false)}
         onAdd={async (body) => { if (await run("add", { action: "add", ...body })) setAdding(false); }}
       />
+    </div>
+  );
+}
+
+/** บันทึกการเข้าชม (เงียบ — พลาดไม่เป็นไร ไม่แจ้งผู้ใช้) */
+function track(kind: "page" | "video" | "slides", v?: TrainingVideo) {
+  fetch("/api/training", {
+    method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+    body: JSON.stringify({ action: "view", kind, ref: v?.ref, title: v?.title }),
+  }).catch(() => undefined);
+}
+
+const ROLE_LABEL: Record<string, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
+/** "21 ต.ค. 14:05" (เวลาไทย) */
+const when = (iso: string) =>
+  new Date(iso).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+/** ประวัติการเข้าชม (Owner ที่จัดการได้): ต่อคน — เข้าหน้า / เปิดสไลด์ / คลิปที่เล่น + Mc / Admin ที่ยังไม่เคยเข้า */
+function ViewsPanel() {
+  const [days, setDays] = useState("30");
+  const [data, setData] = useState<TrainingViews | null>(null);
+  const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api<TrainingViews>(`/api/training?views=${days}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) { setData(res); setError(""); }
+      })
+      .catch((err) => { if (alive) setError((err as Error).message); });
+    return () => { alive = false; };
+  }, [days, tick]);
+
+  const current = data && String(data.days) === days ? data : null;
+  if (!current) return error ? <LoadError title="โหลดประวัติการเข้าชมไม่สำเร็จ" message={error} onRetry={() => setTick((n) => n + 1)} /> : <LoadingBlock />;
+  if (!current.ready) return <Notice variant="warning" icon title="ยังดูประวัติการเข้าชมไม่ได้">{current.message}</Notice>;
+
+  const plays = current.people.reduce((n, p) => n + p.plays.reduce((m, c) => m + c.count, 0), 0);
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <ToggleGroup type="single" variant="outline" spacing={0} size="sm" value={days} aria-label="ช่วงเวลา" className="bg-card" onValueChange={(v) => { if (v) setDays(v); }}>
+          <ToggleGroupItem value="7">7 วัน</ToggleGroupItem>
+          <ToggleGroupItem value="30">30 วัน</ToggleGroupItem>
+          <ToggleGroupItem value="0">ทั้งหมด</ToggleGroupItem>
+        </ToggleGroup>
+        <span className="text-sm text-muted-foreground">เข้าชม <b className="text-foreground">{current.people.length}</b> คน · เล่นคลิป <b className="text-foreground">{plays}</b> ครั้ง</span>
+      </div>
+
+      {current.people.length ? (
+        <ul className="divide-y overflow-hidden rounded-xl border bg-card">
+          {current.people.map((p) => {
+            const isOpen = open === p.email;
+            return (
+              <li key={p.email}>
+                <button
+                  type="button" onClick={() => setOpen(isOpen ? null : p.email)} aria-expanded={isOpen}
+                  className="flex w-full cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2.5 text-left hover:bg-muted/50"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5">
+                      <b className="truncate text-sm">{p.who}</b>
+                      <Badge variant="outline" className="text-[10px] text-muted-foreground">{ROLE_LABEL[p.role] ?? p.role}</Badge>
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      ล่าสุด {when(p.lastAt)} · เข้าหน้า {p.pages} ครั้ง · เล่น {p.plays.length} คลิป{p.slides ? ` · เปิดสไลด์ ${p.slides} ครั้ง` : ""}
+                    </span>
+                  </span>
+                  {p.plays.length ? <ChevronDownIcon className={cn("size-4 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-180")} /> : null}
+                </button>
+                {isOpen && p.plays.length ? (
+                  <ul className="space-y-1 bg-muted/30 px-3 py-2 text-xs">
+                    {p.plays.map((c) => (
+                      <li key={c.ref} className="flex gap-2">
+                        <PlayIcon className="mt-0.5 size-3 shrink-0 text-primary" />
+                        <span className="min-w-0 flex-1 break-words">{c.title}</span>
+                        <span className="shrink-0 text-muted-foreground tabular-nums">{c.count > 1 ? `${c.count} ครั้ง · ` : ""}{when(c.lastAt)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : <Notice>ยังไม่มีคนเข้าชมในช่วงนี้</Notice>}
+
+      {current.never.length ? (
+        <div className="mt-4">
+          <h3 className="text-sm font-semibold">
+            ยังไม่เคยเข้าดู{current.days ? `ใน ${current.days} วัน` : ""} <span className="font-normal text-muted-foreground">({current.never.length} คน · Mc / Admin ที่มีอีเมล)</span>
+          </h3>
+          <ul className="mt-1.5 flex flex-wrap gap-1.5">
+            {current.never.map((n) => <li key={n} className="rounded-full border bg-card px-2.5 py-0.5 text-xs">{n}</li>)}
+          </ul>
+        </div>
+      ) : null}
+      <p className="mt-3 text-[11px] text-muted-foreground">นับเมื่อเปิดหน้าเทรนนิ่ง / กดเล่นคลิป / เปิดสไลด์ (ครั้งเดิมภายใน 30 นาทีนับครั้งเดียว) — บอกว่ากดเล่น ไม่ได้บอกว่าดูจนจบ</p>
     </div>
   );
 }

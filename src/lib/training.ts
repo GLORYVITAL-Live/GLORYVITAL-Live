@@ -1,7 +1,7 @@
 import "server-only";
 import { driveClient, driveError } from "@/lib/drive";
 import { createAdminClient } from "@/lib/supabase/server";
-import type { Training, TrainingGroup, TrainingVideo } from "@/lib/types";
+import type { Me, Training, TrainingGroup, TrainingVideo, TrainingViews } from "@/lib/types";
 
 /**
  * หน้าเทรนนิ่ง — SQL 20261103000000_training + 20261104000000_training_items
@@ -209,6 +209,82 @@ export async function addTrainingClip(url: unknown, title: unknown, group: unkno
   if (!name) throw new Error("อ่านชื่อคลิปไม่ได้ (ไฟล์อาจไม่ได้แชร์แบบทุกคนที่มีลิงก์) กรุณาใส่ชื่อคลิปเอง");
   await upsert(ref, { added: true, title: name, group_name: groupName, hidden: false }, by);
   return { title: name };
+}
+
+// ---------- ประวัติการเข้าชม (SQL 20261105000000_training_views) ----------
+
+export const TRAINING_VIEWS_SQL = "ต้องรัน SQL 20261105000000_training_views ใน Supabase ก่อน (ประวัติการเข้าชม)";
+const VIEW_GAP = 30 * 60_000;
+
+/** ชื่อ + บทบาทของคนที่เข้าชม (Mc ก่อน — คนที่เป็นหลายบทบาท) */
+function viewerOf(me: Me) {
+  if (me.mc) return { who: `Mc ${me.mc.name}`, role: "mc" };
+  if (me.admin) return { who: me.admin.name, role: "admin" };
+  if (me.owner) return { who: me.owner.name, role: "owner" };
+  return { who: me.marketing?.name ?? me.email, role: "marketing" };
+}
+
+/** บันทึกการเข้าชม (คนเดิม + เรื่องเดิม ภายใน 30 นาที = ไม่บันทึกซ้ำ) · ยังไม่ได้รัน SQL / พลาด = ไม่เป็นไร (ไม่กระทบการดู) */
+export async function logTrainingView(me: Me, kind: unknown, ref: unknown, title: unknown) {
+  if (kind !== "page" && kind !== "video" && kind !== "slides") return;
+  const clip = kind === "video" && okRef(ref) && !ref.startsWith("folder:") ? ref : null;
+  if (kind === "video" && !clip) return;
+  const db = createAdminClient();
+  const email = me.email.trim().toLowerCase();
+  let q = db.from("training_views").select("id").eq("email", email).eq("kind", kind)
+    .gte("created_at", new Date(Date.now() - VIEW_GAP).toISOString()).limit(1);
+  q = clip ? q.eq("ref", clip) : q;
+  const { data, error } = await q;
+  if (error || data?.length) return;
+  await db.from("training_views").insert({ email, ...viewerOf(me), kind, ref: clip, title: clip ? cleanText(title, 200) || null : null });
+}
+
+/**
+ * ประวัติการเข้าชมในช่วง days วันล่าสุด (0 = ทั้งหมด) ต่อคน + Mc / Admin (มีอีเมล) ที่ยังไม่เคยเข้าในช่วงนั้น
+ *   คนที่มีหลายแถวในรายชื่อ (อีเมลเดียวกัน) = คนเดียว
+ */
+export async function trainingViews(days: number): Promise<TrainingViews> {
+  const db = createAdminClient();
+  const since = days > 0 ? new Date(Date.now() - days * 86400_000).toISOString() : null;
+  type Row = { email: string; who: string; role: string; kind: "page" | "video" | "slides"; ref: string | null; title: string | null; created_at: string };
+  const rows: Row[] = [];
+  for (let from = 0; ; from += 1000) {
+    let q = db.from("training_views").select("email, who, role, kind, ref, title, created_at").order("created_at", { ascending: false });
+    if (since) q = q.gte("created_at", since);
+    const { data, error } = await q.range(from, from + 999);
+    if (error) return { ready: false, message: TRAINING_VIEWS_SQL, days, people: [], never: [] };
+    rows.push(...((data ?? []) as Row[]));
+    if ((data?.length ?? 0) < 1000 || rows.length >= 20_000) break;
+  }
+  const people = new Map<string, TrainingViews["people"][number]>();
+  for (const r of rows) {
+    // แถวแรก = ล่าสุด (เรียงใหม่ไปเก่า) → ชื่อ / บทบาทล่าสุด
+    const p = people.get(r.email) ?? {
+      email: r.email, who: r.who || r.email, role: r.role, lastAt: r.created_at, firstAt: r.created_at, pages: 0, slides: 0, plays: [],
+    };
+    p.firstAt = r.created_at;
+    if (r.kind === "page") p.pages++;
+    else if (r.kind === "slides") p.slides++;
+    else if (r.ref) {
+      const c = p.plays.find((x) => x.ref === r.ref);
+      if (c) c.count++;
+      else p.plays.push({ ref: r.ref, title: r.title || "ไม่มีชื่อ", count: 1, lastAt: r.created_at });
+    }
+    people.set(r.email, p);
+  }
+  const { data: staff } = await db.from("staff").select("role, name, email").in("role", ["mc", "admin"]).not("email", "is", null).order("name");
+  const seen = new Set(people.keys());
+  const never = new Map<string, string>();
+  for (const s of staff ?? []) {
+    const e = String(s.email ?? "").trim().toLowerCase();
+    if (!e || seen.has(e) || never.has(e)) continue;
+    never.set(e, s.role === "mc" ? `Mc ${s.name}` : String(s.name));
+  }
+  return {
+    ready: true, message: null, days,
+    people: [...people.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)),
+    never: [...never.values()].sort((a, b) => a.localeCompare(b, "th")),
+  };
 }
 
 /** ลบคลิปที่เพิ่มจากลิงก์ (ไฟล์ในไดรฟ์ / YouTube ไม่ถูกลบ) */

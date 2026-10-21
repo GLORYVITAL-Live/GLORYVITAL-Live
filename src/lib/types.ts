@@ -135,6 +135,19 @@ export type Training = {
   manage: { ready: boolean; message: string | null } | null;
 };
 
+/**
+ * ประวัติการเข้าชมหน้าเทรนนิ่ง (days = ช่วงวันล่าสุด 0 = ทั้งหมด) · ต่อคน: pages = เปิดหน้า · slides = เปิดสไลด์ · plays = คลิปที่กดเล่น
+ *   never = Mc / Admin (มีอีเมล) ที่ยังไม่เคยเข้าในช่วงนั้น · ready false = ยังไม่ได้รัน SQL
+ */
+export type TrainingViews = {
+  ready: boolean; message: string | null; days: number;
+  people: {
+    email: string; who: string; role: string; lastAt: string; firstAt: string; pages: number; slides: number;
+    plays: { ref: string; title: string; count: number; lastAt: string }[];
+  }[];
+  never: string[];
+};
+
 /** คนที่ยังส่งเอกสารรับเงินไม่ครบ: months = เดือนที่ยังไม่มีเอกสารที่ผ่าน ("YYYY-MM") · rejected = เดือนที่ส่งแล้วแต่ไม่ผ่าน */
 export type HomeReceipts = {
   requiredFrom: string;
