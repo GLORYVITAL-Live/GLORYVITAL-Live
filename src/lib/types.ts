@@ -117,6 +117,24 @@ export type HomeTawi = {
   missingMonth: string | null;
 };
 
+/**
+ * วิดีโอเทรนนิ่ง 1 คลิป: ref = 'drive:<id>' / 'youtube:<id>' · title = ชื่อที่แสดง (Owner แก้ได้) · fileTitle = ชื่อไฟล์เดิม
+ *   minutes = ความยาว (ไม่รู้ = null) · hidden = Owner ซ่อนไว้ · added = เพิ่มจากลิงก์ (ไม่อยู่ในโฟลเดอร์)
+ */
+export type TrainingVideo = {
+  ref: string; kind: "drive" | "youtube"; id: string; title: string; fileTitle: string; minutes: number | null; hidden: boolean; added: boolean;
+};
+/** กลุ่มวิดีโอ: ref = 'folder:<id>' (โฟลเดอร์ในไดรฟ์ — ซ่อน / แก้ชื่อได้) · null = กลุ่มของคลิปที่เพิ่มจากลิงก์ */
+export type TrainingGroup = { ref: string | null; name: string; folderName: string | null; hidden: boolean; videos: TrainingVideo[] };
+/**
+ * หน้าเทรนนิ่ง: ready = รัน SQL แล้ว · slides = id Google Slides · message = อ่านไดรฟ์ไม่สำเร็จ
+ *   manage = Owner ที่จัดการได้ (null = ดูอย่างเดียว ไม่เห็นที่ซ่อน) · manage.ready = รัน SQL training_items แล้ว
+ */
+export type Training = {
+  ready: boolean; message: string | null; slides: string | null; groups: TrainingGroup[];
+  manage: { ready: boolean; message: string | null } | null;
+};
+
 /** คนที่ยังส่งเอกสารรับเงินไม่ครบ: months = เดือนที่ยังไม่มีเอกสารที่ผ่าน ("YYYY-MM") · rejected = เดือนที่ส่งแล้วแต่ไม่ผ่าน */
 export type HomeReceipts = {
   requiredFrom: string;

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
-  PackageIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
+  GraduationCapIcon, PackageIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
 } from "lucide-react";
 import { isShopeeRole } from "@/lib/live-team";
 import type { Me, OwnerScope, Role } from "@/lib/types";
@@ -29,6 +29,7 @@ const ProofPage = dynamic(() => import("@/components/ProofPage").then((m) => m.P
 const RulesEditor = dynamic(() => import("@/components/RulesEditor").then((m) => m.RulesEditor), { loading: Loading });
 const SlotWorkspace = dynamic(() => import("@/components/SlotWorkspace").then((m) => m.SlotWorkspace), { loading: Loading });
 const StaffManager = dynamic(() => import("@/components/StaffManager").then((m) => m.StaffManager), { loading: Loading });
+const TrainingPage = dynamic(() => import("@/components/TrainingPage").then((m) => m.TrainingPage), { loading: Loading });
 // หน้าต่าง / ป้ายในหน้าจอง (ไม่ต้องมีตัวโหลด)
 const MySchedule = dynamic(() => import("@/components/MySchedule").then((m) => m.MySchedule), { loading: Nothing });
 const PayDocs = dynamic(() => import("@/components/PayDocs").then((m) => m.PayDocs), { loading: Nothing });
@@ -83,6 +84,11 @@ export const MODES = {
     hint: "ยอดทั้งวันของวันที่มี CEO Live เทียบวันก่อน ทั้งช่องที่ CEO ไลฟ์และทุกบัญชี (TikTok / Shopee จากไฟล์ Export)",
     rule: "",
   },
+  training: {
+    sub: "Training", title: "เทรนนิ่ง", label: "เทรนนิ่ง",
+    hint: "วิดีโอ product training และสไลด์บรีฟโปรดักต์ กดเล่นในหน้านี้ได้เลย",
+    rule: "",
+  },
   plan: {
     sub: "Plan slot", title: "Plan Slot Live", label: "Plan Slot Live",
     hint: "แพลน slot ไลฟ์ทั้งเดือนเป็นร่างก่อน แล้วกดบันทึก ระบบจะเขียนลงชีตทั้งแท็บ \"ลงตาราง Deal Mc\" และ \"ลงตาราง Admin เสริม\" (กำหนด Mc / Admin ต่อที่หน้าจัดการ slot)",
@@ -92,17 +98,19 @@ export const MODES = {
 
 /**
  * หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ / Plan Slot Live (Owner ที่ติ๊กสิทธิ์)
- *   + CEO Live (บัญชี Marketing — Owner ดูได้ที่แท็บ CEO Live ในหน้าสถิติไลฟ์)
+ *   + CEO Live (บัญชี Marketing — Owner ดูได้ที่แท็บ CEO Live ในหน้าสถิติไลฟ์) + เทรนนิ่ง (ทุกคน)
  */
-type Page = Role | "home" | "proof" | "stats" | "plan" | "ceo" | "equipment";
+type Page = Role | "home" | "proof" | "stats" | "plan" | "ceo" | "equipment" | "training";
 /** ลำดับในเมนูเลือกหน้า */
-const PAGE_ORDER: Page[] = ["home", "owner", "stats", "ceo", "plan", "mc", "admin", "proof", "equipment"];
+const PAGE_ORDER: Page[] = ["home", "owner", "stats", "ceo", "plan", "mc", "admin", "proof", "equipment", "training"];
 /** ชื่อสั้น + ไอคอนในแถบเมนู */
 const PAGE_SHORT: Record<Page, string> = {
   home: "หน้าแรก", owner: "เจ้าของ", stats: "สถิติไลฟ์", ceo: "CEO Live", plan: "แพลน slot", mc: "Mc", admin: "Admin", proof: "หลักฐานไลฟ์", equipment: "อุปกรณ์",
+  training: "เทรนนิ่ง",
 };
 const PAGE_ICON: Record<Page, LucideIcon> = {
   home: HouseIcon, owner: BriefcaseIcon, stats: ChartColumnIcon, ceo: CrownIcon, plan: CalendarRangeIcon, mc: MicIcon, admin: HeadsetIcon, proof: CameraIcon, equipment: PackageIcon,
+  training: GraduationCapIcon,
 };
 
 const ROLE_KEY = "glory_booking_role";
@@ -155,6 +163,8 @@ function Shell({ me }: { me: Me | null }) {
     ...(me?.owner?.see.plan && !ownerPage ? ["plan" as const] : []),
     // อุปกรณ์โปรดักชั่น: Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊กในหน้าพนักงาน
     ...(me?.equipment ? ["equipment" as const] : []),
+    // เทรนนิ่ง (วิดีโอ product training + สไลด์บรีฟ): ทุกคนที่ลงทะเบียน
+    ...(me && (me.mc || me.admin || me.owner || me.marketing) ? ["training" as const] : []),
   ].sort((a, b) => PAGE_ORDER.indexOf(a) - PAGE_ORDER.indexOf(b));
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
   const savedPage = useLocal(ROLE_KEY) as Page | null;
@@ -171,7 +181,7 @@ function Shell({ me }: { me: Me | null }) {
   const ownerTab = useLocal(OWNER_TAB_KEY), slotView = useLocal(SLOT_VIEW_KEY);
   // แพลนทั้งเดือนเป็นตารางกว้าง ใช้หน้าจอกว้างกว่า
   const wide = page === "plan" || (page === "owner" && ownerTab === "slots" && slotView === "plan");
-  const role: Role | null = page === "home" || page === "proof" || page === "stats" || page === "plan" || page === "ceo" || page === "equipment" ? null : page;
+  const role: Role | null = page === "mc" || page === "admin" || page === "owner" ? page : null;
   const preview = isPreview(me, role);
   // ทีม Shopee: คิวในระบบเป็นบัญชี TikTok ทั้งหมด ไม่แสดงหน้าจอง ใช้ได้แค่ตารางของฉัน (Owner ที่เปิดดูแบบ preview ไม่เกี่ยว)
   const shopee = isShopeeRole(me, role);
@@ -250,7 +260,8 @@ function Shell({ me }: { me: Me | null }) {
     : me && page === "proof" ? me.owner?.name || me.admin?.name || ""
       : me && (page === "home" || page === "stats" || page === "plan") ? me.owner?.name || ""
         : me && page === "ceo" ? me.marketing?.name || ""
-          : me && page === "equipment" ? me.owner?.name || me.admin?.name || "" : "";
+          : me && page === "equipment" ? me.owner?.name || me.admin?.name || ""
+            : me && page === "training" ? me.owner?.name || (me.mc ? `Mc ${me.mc.name}` : "") || me.admin?.name || me.marketing?.name || "" : "";
 
   // เมนูหน้า: จอกว้าง = แถบปุ่มใต้หัวเว็บ / มือถือ = แถบล่าง (หน้าจองคิวมีแถบจองอยู่ล่างแล้ว จึงใช้แถบบนแทน)
   const showNav = pages.length > 1 && !!page;
@@ -384,6 +395,7 @@ function Shell({ me }: { me: Me | null }) {
       {me && registered && page === "plan" ? <PlanSlots readOnly={!me.owner?.plan} /> : null}
       {me && registered && page === "ceo" ? <CeoLive /> : null}
       {me && registered && page === "equipment" ? <EquipmentPage /> : null}
+      {me && registered && page === "training" ? <TrainingPage /> : null}
       {!me || !registered ? (
         <StateBox title="เข้าสู่ระบบเพื่อดูตาราง">Mc จะเห็น slot ที่เปิดให้จอง ส่วน Admin จะเห็น slot ที่รอ Admin</StateBox>
       ) : null}
