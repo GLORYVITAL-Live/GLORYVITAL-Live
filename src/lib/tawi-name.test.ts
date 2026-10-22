@@ -57,6 +57,10 @@ describe("คำนำหน้า / คีย์ชื่อ", () => {
     expect(tawiNameKey("Mr. JOHN smith")).toBe("johnsmith");
     // "ํา" (นิคหิต + สระอา) = "ำ"
     expect(tawiNameKey("สํารวย ดี")).toBe(tawiNameKey("สำรวย ดี"));
+    // สระ / วรรณยุกต์ที่พิมพ์ซ้อน = ตัวเดียว (ไฟล์ใบ 50 ทวิพิมพ์ "สุุ") · ตัวต่างกันไม่ถูกรวม
+    expect(tawiNameKey("น.ส.สุุกฤตา ใจดี")).toBe(tawiNameKey("สุกฤตา ใจดี"));
+    expect(tawiNameKey("สมใจ ใจดี้้")).toBe(tawiNameKey("สมใจ ใจดี้"));
+    expect(tawiNameKey("สุกฤตา")).not.toBe(tawiNameKey("สูกฤตา"));
   });
   test("cleanRealName ตัดวงเล็บ", () => expect(cleanRealName("น.ส.สมใจ ใจดี (สำนักงานใหญ่)")).toBe("สมใจ ใจดี"));
   test("isCompany", () => {

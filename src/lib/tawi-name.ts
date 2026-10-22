@@ -81,9 +81,13 @@ export function cleanRealName(raw: string) {
   return stripTitle(s).replace(/\s+/g, " ").trim();
 }
 
-/** คีย์สำหรับเทียบชื่อ: ตัดคำนำหน้า + ช่องว่าง / จุด / ขีด ทั้งหมด, ตัวพิมพ์เล็ก ("นาย สมชาย  ใจดี" = "สมชายใจดี") */
+/**
+ * คีย์สำหรับเทียบชื่อ: ตัดคำนำหน้า + ช่องว่าง / จุด / ขีด ทั้งหมด, ตัวพิมพ์เล็ก ("นาย สมชาย  ใจดี" = "สมชายใจดี")
+ *   สระ / วรรณยุกต์ตัวเดียวกันที่พิมพ์ซ้อน = ตัวเดียว ("สุุกฤตา" = "สุกฤตา" — ไฟล์ใบ 50 ทวิพิมพ์ซ้อนมา เจ้าตัวกรอกชื่อถูกแต่ไม่ตรง)
+ */
 export function tawiNameKey(name: string) {
-  return cleanRealName(name).toLowerCase().replace(/[\s.\-–'’]/g, "");
+  return cleanRealName(name).normalize("NFC").toLowerCase().replace(/[\s.\-–'’]/g, "")
+    .replace(/([ัิ-ฺ็-๎])\1+/g, "$1");
 }
 
 export type TawiParsed = { month: string; realName: string; nameKey: string; docNo: boolean };
