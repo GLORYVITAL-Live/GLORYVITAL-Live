@@ -1,8 +1,8 @@
 import { fail, requireMe } from "@/lib/api";
 import { DRIVE_FILE_GONE, driveError, driveNotFound } from "@/lib/drive";
-import { canViewPayDocs } from "@/lib/pay-docs-db";
+import { docsCan, payDocsScope } from "@/lib/pay-docs-db";
 import { RECEIPT_TYPES, receiptExt } from "@/lib/receipts";
-import { RECEIPT_FILES_SQL, RECEIPT_SQL, downloadReceipt, receiptById, receiptFileById } from "@/lib/receipts-db";
+import { RECEIPT_FILES_SQL, RECEIPT_SQL, downloadReceipt, receiptById, receiptFileById, receiptVisible } from "@/lib/receipts-db";
 
 // เปิดเอกสารยืนยันการรับเงิน ส่งไฟล์จาก Drive ผ่านเซิร์ฟเวอร์ (ไม่เปิดลิงก์ Drive ให้ใคร)
 //   ?id=<pay_receipts.id>     เอกสารที่ส่งแล้ว (ส่งผ่านเว็บ / ไฟล์เดิมใน Drive ที่จับคู่ให้)
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   const id = Number(byFile ? params.get("file") : params.get("id"));
   if (!Number.isInteger(id) || id <= 0) return fail("ไม่พบไฟล์นี้", 404);
 
-  let row: { month: string; fileId: string; mime: string; ownerEmail: string | null } | null;
+  let row: { month: string; fileId: string; mime: string; ownerEmail: string | null; role?: string } | null;
   try {
     if (byFile) row = await receiptFileById(id);
     else {
@@ -31,7 +31,13 @@ export async function GET(request: Request) {
   }
   // ไม่มีไฟล์ / ไม่ใช่ของตัวเอง ตอบเหมือนกัน (ไม่บอกว่ามี id นี้อยู่)
   const mine = !!row?.ownerEmail && row.ownerEmail.trim().toLowerCase() === r.me.email.trim().toLowerCase();
-  if (!row || (!mine && !(await canViewPayDocs(r.me)))) return fail("ไม่มีสิทธิ์เปิดไฟล์นี้", 403);
+  // Owner: เฉพาะเอกสารของคนฝั่งที่ดูเอกสารได้ (ไฟล์ในไดรฟ์ = ฝั่งของคนที่จับคู่ / โฟลเดอร์ที่ไฟล์อยู่)
+  const ownerOk = async () => {
+    const scope = await payDocsScope(r.me);
+    if (!scope.mc && !scope.admin) return false;
+    return row!.role ? docsCan(scope, row!.role) : receiptVisible(row!.ownerEmail, scope);
+  };
+  if (!row || (!mine && !(await ownerOk()))) return fail("ไม่มีสิทธิ์เปิดไฟล์นี้", 403);
 
   let bytes: Uint8Array;
   try {

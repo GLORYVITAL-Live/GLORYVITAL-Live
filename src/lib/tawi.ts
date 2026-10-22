@@ -3,6 +3,7 @@ import type { drive_v3 } from "googleapis";
 import { driveClient, driveError } from "@/lib/drive";
 import { withSyncLock } from "@/lib/lock";
 import { notify, notifyMany } from "@/lib/notifications";
+import { docsCan, type DocsScope } from "@/lib/pay-docs-db";
 import { receiptState } from "@/lib/receipts";
 import { myReceipts, receiptGaps, receiptView } from "@/lib/receipts-db";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -29,6 +30,8 @@ export const TAWI_SQL = "ต้องรัน SQL 20261029000000_tawi50 ใน 
 export const TAWI_VERIFY_SQL = "ต้องรัน SQL 20261030000000_tawi_verify ใน Supabase ก่อน";
 /** ข้อความถึงเจ้าตัวระหว่างยังไม่ได้รัน SQL ยืนยันตัวตน (ไม่ให้ดาวน์โหลดไว้ก่อน) */
 export const TAWI_UPDATING = "ระบบใบ 50 ทวิกำลังอัปเดต ยังดาวน์โหลดไม่ได้ชั่วคราว ลองใหม่ภายหลัง";
+/** Owner แก้ใบของคนฝั่งที่ไม่ได้รับสิทธิ์ดูเอกสาร */
+export const NO_SIDE = "บัญชีนี้ไม่มีสิทธิ์ดูเอกสารของคนฝั่งนี้ (ตั้งที่หน้าพนักงาน > สิทธิ์ดูเอกสาร Mc / Admin)";
 /** error จาก DB ที่แปลว่ายังไม่ได้รัน SQL (ไม่มีตาราง / คอลัมน์) */
 const noSql = (msg: string) => /tawi|legal_name|schema cache|does not exist/i.test(msg);
 const dbError = (msg: string) => new Error(noSql(msg) ? TAWI_SQL : msg);
@@ -352,7 +355,7 @@ export async function scanTawi(): Promise<TawiScan> {
  *   คนใหม่ยังไม่มี legal_name = ตั้งจากชื่อในไฟล์ (เดือนถัดไปจับคู่เอง) · คนเดิมที่ legal_name เป็นชื่อนี้ = ล้างออก (จับผิดคน)
  *   เปลี่ยนคนของไฟล์เดือนล่าสุด = แจ้งคนใหม่
  */
-export async function assignTawi(docId: number, staffId: number | null) {
+export async function assignTawi(docId: number, staffId: number | null, scope?: DocsScope) {
   const db = createAdminClient();
   const { data: doc, error } = await db.from("tawi_docs").select("id, name_key, real_name").eq("id", docId).maybeSingle();
   if (error) throw dbError(error.message);
@@ -363,6 +366,12 @@ export async function assignTawi(docId: number, staffId: number | null) {
 
   const { data: same, error: sameErr } = await db.from("tawi_docs").select("id, month, staff_id, notified_at").eq("name_key", doc.name_key);
   if (sameErr) throw dbError(sameErr.message);
+  // Owner (scope): จับคู่ / ย้าย / ยกเลิกได้เฉพาะคนฝั่งที่ดูเอกสารได้ (ทั้งคนใหม่และคนเดิมของใบนี้)
+  if (scope) {
+    const roleOf = new Map(staff.map((s) => [s.id, s.role]));
+    const sides = [target?.role, ...(same ?? []).map((r) => (r.staff_id ? roleOf.get(Number(r.staff_id)) : undefined))].filter((x): x is "mc" | "admin" => !!x);
+    if (sides.some((r) => !docsCan(scope, r))) throw new Error(NO_SIDE);
+  }
   const { data: last } = await db.from("tawi_docs").select("month").order("month", { ascending: false }).limit(1);
   const latest = String(last?.[0]?.month ?? "");
   const rows = (same ?? []) as { id: number; month: string; staff_id: number | null; notified_at: string | null }[];
@@ -455,10 +464,18 @@ export async function verifyTawi(email: string, name: unknown): Promise<TawiVeri
   return res;
 }
 
-/** แจ้ง Owner ที่ดูเอกสารทำเบิกได้ ว่าคนนี้กรอกชื่อไม่ตรง (วันละครั้งต่อคน — ไม่ใส่ชื่อที่กรอกในแจ้งเตือน) */
+/** แจ้ง Owner ที่ดูเอกสารฝั่งของคนนี้ได้ ว่าคนนี้กรอกชื่อไม่ตรง (วันละครั้งต่อคน — ไม่ใส่ชื่อที่กรอกในแจ้งเตือน) */
 export async function notifyVerifyFail(email: string, who: string, fails: number) {
-  const { data } = await createAdminClient().from("staff").select("email")
-    .eq("role", "owner").eq("can_view_pay_docs", true).not("email", "is", null);
+  const db = createAdminClient();
+  const { data: mine } = await db.from("staff").select("role").eq("email", email.trim().toLowerCase()).in("role", ["mc", "admin"]);
+  const roles = new Set((mine ?? []).map((s) => String(s.role)));
+  // ฝั่ง Mc = can_view_pay_docs · ฝั่ง Admin = can_view_pay_docs_admin (ยังไม่ได้รัน SQL = can_view_pay_docs ทั้งสองฝั่ง)
+  const cols = [...(roles.has("mc") || !roles.size ? ["can_view_pay_docs"] : []), ...(roles.has("admin") ? ["can_view_pay_docs_admin"] : [])];
+  const res = await db.from("staff").select("email")
+    .eq("role", "owner").not("email", "is", null).or(cols.map((c) => `${c}.eq.true`).join(","));
+  const { data } = res.error
+    ? await db.from("staff").select("email").eq("role", "owner").eq("can_view_pay_docs", true).not("email", "is", null)
+    : res;
   const day = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   await notify((data ?? []).map((r) => r.email as string), {
     kind: "tawi", page: "owner", dedupe: `tawi-verify:${email.trim().toLowerCase()}:${day}`,
@@ -467,11 +484,12 @@ export async function notifyVerifyFail(email: string, who: string, fails: number
   });
 }
 
-/** Owner รีเซ็ตการยืนยันตัวตนของคนนี้ (ทุกบทบาทของอีเมลเดียวกัน) — เจ้าตัวต้องกรอกชื่อยืนยันใหม่ */
-export async function resetTawiVerify(staffId: number) {
+/** Owner รีเซ็ตการยืนยันตัวตนของคนนี้ (ทุกบทบาทของอีเมลเดียวกัน) — เจ้าตัวต้องกรอกชื่อยืนยันใหม่ · เฉพาะฝั่งที่ดูเอกสารได้ */
+export async function resetTawiVerify(staffId: number, scope: DocsScope) {
   const db = createAdminClient();
-  const { data: s } = await db.from("staff").select("id, email").eq("id", staffId).in("role", ["mc", "admin"]).maybeSingle();
+  const { data: s } = await db.from("staff").select("id, email, role").eq("id", staffId).in("role", ["mc", "admin"]).maybeSingle();
   if (!s) throw new Error("ไม่พบรายชื่อนี้");
+  if (!docsCan(scope, String(s.role))) throw new Error(NO_SIDE);
   const email = (s.email as string | null)?.trim().toLowerCase();
   const rows = await verifyRows(db, email ? { email } : { ids: [staffId] });
   if (!rows) throw new Error(TAWI_VERIFY_SQL);
@@ -483,15 +501,22 @@ export async function resetTawiVerify(staffId: number) {
   return { reset: ids.length };
 }
 
-/** หน้าจับคู่ของ Owner: เดือนที่เลือก (ไม่ระบุ = ล่าสุด) + รายชื่อให้เลือก + คนที่น่าจะใช่ */
-export async function ownerTawi(month: string | null): Promise<OwnerTawi> {
+/**
+ * หน้าจับคู่ของ Owner: เดือนที่เลือก (ไม่ระบุ = ล่าสุด) + รายชื่อให้เลือก + คนที่น่าจะใช่
+ *   เฉพาะฝั่งที่ดูเอกสารได้: ใบที่จับคู่กับคนฝั่งอื่น = ไม่แสดง · รายชื่อให้เลือก = ฝั่งที่ดูได้
+ *   ใบที่ยังไม่มีเจ้าของ = แสดง (ยังไม่รู้ว่าเป็นของฝั่งไหน — ต้องดูชื่อเพื่อจับคู่)
+ */
+export async function ownerTawi(month: string | null, scope: DocsScope): Promise<OwnerTawi> {
   const db = createAdminClient();
   let root: string | null;
   try { root = await rootFolder(db); } catch (err) {
     if ((err as Error).message !== TAWI_SQL) throw err;
     return { ready: false, folderSet: false, verifyReady: false, month: null, months: [], docs: [], people: [] };
   }
-  const [docs, { staff, fullNames }] = await Promise.all([allDocs(db), loadPeople(db)]);
+  const [allDocRows, { staff: allStaff, fullNames }] = await Promise.all([allDocs(db), loadPeople(db)]);
+  const roleOf = new Map(allStaff.map((s) => [s.id, s.role]));
+  const docs = allDocRows.filter((d) => !d.staff_id || docsCan(scope, roleOf.get(d.staff_id) ?? ""));
+  const staff = allStaff.filter((s) => docsCan(scope, s.role));
   const vRows = await verifyRows(db, { ids: staff.map((s) => s.id) });
   const verified = vRows ? verifyByPerson(vRows) : null;
   const staffById = new Map(staff.map((s) => [s.id, s]));
@@ -518,7 +543,7 @@ export async function ownerTawi(month: string | null): Promise<OwnerTawi> {
     const full = s.email ? fullNames.get(s.email.trim().toLowerCase()) : "";
     if (full) addKey(s.id, tawiNameKey(full));
   }
-  for (const d of docs) if (d.staff_id) addKey(d.staff_id, d.name_key);
+  for (const d of docs) if (d.staff_id && roleOf.has(d.staff_id)) addKey(d.staff_id, d.name_key);
   const candidates: TawiCandidate[] = staff.map((s) => ({ id: s.id, label: label(s), keys: [...(keysOf.get(s.id) ?? [])], nick: s.name }));
 
   const list: TawiOwnerDoc[] = docs.filter((d) => d.month === pick)
@@ -540,13 +565,14 @@ export async function ownerTawi(month: string | null): Promise<OwnerTawi> {
  *   unmatched = ชื่อในใบที่ยังไม่มีเจ้าของ (ไม่นับที่ Owner ตั้งว่าไม่ใช่คนในทีม) · noEmail = มีใบแล้วแต่รายชื่อไม่มีอีเมล (เข้าเว็บดาวน์โหลดไม่ได้)
  *   missingMonth = เลยวันที่ 10 แล้วยังไม่มีใบของเดือนก่อน (ทีมบัญชีลืมสร้างโฟลเดอร์รายเดือนในโฟลเดอร์หลัก / วางไฟล์ผิดที่)
  */
-export async function tawiHome(today: string): Promise<HomeTawi | null> {
+export async function tawiHome(today: string, scope: DocsScope): Promise<HomeTawi | null> {
   const db = createAdminClient();
   let root: string | null;
   try { root = await rootFolder(db); } catch { return null; }
   if (!root) return null;
   const [docs, { staff }] = await Promise.all([allDocs(db), loadPeople(db)]);
-  const byId = new Map(staff.map((s) => [s.id, s]));
+  // ไม่มีอีเมล: เฉพาะคนฝั่งที่ดูเอกสารได้ · ใบที่ยังไม่มีเจ้าของ: แสดงทุกฝั่ง (ยังไม่รู้ว่าเป็นของใคร)
+  const byId = new Map(staff.filter((s) => docsCan(scope, s.role)).map((s) => [s.id, s]));
 
   const loose = new Map<string, { name: string; months: string[] }>();
   for (const d of docs) {
@@ -584,16 +610,17 @@ export async function tawiDoc(id: number) {
   const { data, error } = await db.from("tawi_docs").select("id, month, drive_file_id, staff_id, name_key").eq("id", id).maybeSingle();
   if (error) throw dbError(error.message);
   if (!data) return null;
-  let ownerEmail: string | null = null, order = 1, sameMonth = 1;
+  let ownerEmail: string | null = null, ownerRole: string | null = null, order = 1, sameMonth = 1;
   if (data.staff_id) {
-    const { data: s } = await db.from("staff").select("email").eq("id", data.staff_id).maybeSingle();
+    const { data: s } = await db.from("staff").select("email, role").eq("id", data.staff_id).maybeSingle();
     ownerEmail = (s?.email as string | null)?.trim().toLowerCase() || null;
+    ownerRole = (s?.role as string | null) ?? null;
     // เดือนเดียวกันมีหลายไฟล์ = ต่อท้ายลำดับในชื่อไฟล์ดาวน์โหลด
     const { data: sib } = await db.from("tawi_docs").select("id").eq("staff_id", data.staff_id).eq("month", data.month).order("id");
     sameMonth = sib?.length ?? 1;
     order = Math.max(1, (sib ?? []).findIndex((x) => Number(x.id) === id) + 1);
   }
-  return { month: String(data.month), fileId: String(data.drive_file_id), nameKey: String(data.name_key), ownerEmail, order, sameMonth };
+  return { month: String(data.month), fileId: String(data.drive_file_id), nameKey: String(data.name_key), ownerEmail, ownerRole, order, sameMonth };
 }
 
 /** ไฟล์ PDF จาก Drive */

@@ -5,7 +5,7 @@ import { missingCalendarCounts } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
 import { parseTierHours } from "@/lib/pay";
 import { LIVE_PLATFORM_RE, liveTeamOf, type LiveTeam } from "@/lib/live-team";
-import { canViewPayDocs, payDocsStatus } from "@/lib/pay-docs-db";
+import { docsCan, payDocsScope, payDocsStatus } from "@/lib/pay-docs-db";
 import { staffChangeText } from "@/lib/staff-history";
 import { createAdminClient } from "@/lib/supabase/server";
 import { processSyncJobs } from "@/lib/sync";
@@ -115,13 +115,17 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     // ดูได้อย่างเดียว (SQL 20261018000000_view_only)
     for (const k of VIEW_FIELDS) if (k in body) out[k] = body[k] === true;
     for (const k of NOTIFY_FIELDS) if (k in body) out[k] = body[k] === true;
-    // ดูเอกสารทำเบิก / ใบ 50 ทวิ / เอกสารรับเงินของทุกคน: บันทึกเฉพาะตอนส่งมา (ตั้งได้เฉพาะคนที่มีสิทธิ์นี้ — ตรวจใน POST / PATCH)
-    if ("can_view_pay_docs" in body) out.can_view_pay_docs = body.can_view_pay_docs === true;
+    // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ฝั่ง Mc / ฝั่ง Admin: บันทึกเฉพาะตอนส่งมา (ตั้งได้เฉพาะคนที่มีสิทธิ์ฝั่งนั้น — ตรวจใน POST / PATCH)
+    for (const k of DOC_FIELDS) if (k in body) out[k] = body[k] === true;
   }
   return { data: out };
 }
 
-const noPayDocsGrant = () => fail("ติ๊ก / เอาสิทธิ์ดูเอกสารออกได้เฉพาะคนที่มีสิทธิ์นี้", 403);
+/** สิทธิ์ดูเอกสาร: คอลัมน์ -> ฝั่ง (can_view_pay_docs = Mc · can_view_pay_docs_admin = Admin — SQL 20261106000000_pay_docs_admin) */
+const DOC_FIELDS = ["can_view_pay_docs", "can_view_pay_docs_admin"] as const;
+const DOC_SIDE = { can_view_pay_docs: "mc", can_view_pay_docs_admin: "admin" } as const;
+const noPayDocsGrant = (side: "mc" | "admin") => fail(`ติ๊ก / เอาสิทธิ์ดูเอกสารฝั่ง ${side === "mc" ? "Mc" : "Admin"} ออกได้เฉพาะคนที่มีสิทธิ์นี้`, 403);
+const docsSql = (msg: string) => /can_view_pay_docs_admin/.test(msg) ? "ต้องรัน SQL 20261106000000_pay_docs_admin ใน Supabase ก่อน ถึงจะตั้งสิทธิ์ดูเอกสารฝั่ง Admin แยกได้" : msg;
 
 /** มีสิทธิ์อย่างน้อย 1 อย่าง (จัดการได้ หรือ ดูได้) */
 const hasAnyPerm = (pick: (k: string) => unknown) =>
@@ -180,8 +184,9 @@ export async function GET() {
   }
   // คิวข้างหน้าที่ยังไม่ขึ้นปฏิทิน (ส่วนใหญ่ = ยังไม่แชร์ปฏิทินให้บัญชีระบบ) — ดึงไม่ได้ก็แสดงรายชื่อได้ปกติ
   const noCalendar = await missingCalendarCounts().catch(() => new Map<number, number>());
-  // เอกสารทำเบิก: เห็นเฉพาะ Owner ที่ดูเอกสารได้ (ยังไม่ได้รัน SQL = ไม่แสดง)
-  const payDocsViewer = await canViewPayDocs(r.me);
+  // เอกสารทำเบิก: เห็นเฉพาะ Owner ที่ดูเอกสารได้ เฉพาะฝั่งที่ติ๊กไว้ (ยังไม่ได้รัน SQL = ไม่แสดง)
+  const docsScope = await payDocsScope(r.me);
+  const payDocsViewer = docsScope.mc || docsScope.admin;
   // สิทธิ์หน้าอุปกรณ์ของ Admin (ยังไม่ได้รัน SQL = ไม่มีช่องนี้)
   const { data: equipRows, error: equipErr } = await db.from("staff").select("id, can_manage_equipment").eq("role", "admin");
   const equip = new Map((equipErr ? [] : equipRows ?? []).map((x) => [x.id as number, x.can_manage_equipment === true]));
@@ -189,9 +194,17 @@ export async function GET() {
   const { data: teamRows, error: teamErr } = await db.from("staff").select("id, live_platform").in("role", ["mc", "admin"]);
   const team = new Map((teamErr ? [] : teamRows ?? []).map((x) => [x.id as number, liveTeamOf(x.live_platform)]));
   const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
-  // Owner คนไหนดูเอกสารได้ (บอกเฉพาะคนที่ดูเอกสารได้เอง — ตั้งให้คนอื่นได้)
-  const { data: docRows } = payDocsViewer ? await db.from("staff").select("id, can_view_pay_docs").eq("role", "owner") : { data: [] };
-  const docViewers = new Map((docRows ?? []).map((x) => [x.id as number, x.can_view_pay_docs === true]));
+  // Owner คนไหนดูเอกสารฝั่งไหนได้ (บอกเฉพาะคนที่ดูเอกสารได้เอง — ตั้งให้คนอื่นได้) · ยังไม่ได้รัน SQL ฝั่ง Admin = ไม่มีค่าฝั่ง Admin
+  const docRows = !payDocsViewer ? [] : await (async () => {
+    const both = await db.from("staff").select("id, can_view_pay_docs, can_view_pay_docs_admin").eq("role", "owner");
+    if (!both.error) return both.data ?? [];
+    const old = await db.from("staff").select("id, can_view_pay_docs").eq("role", "owner");
+    return (old.data ?? []) as { id: number; can_view_pay_docs: boolean; can_view_pay_docs_admin?: boolean }[];
+  })();
+  const docViewers = new Map(docRows.map((x) => [x.id as number, {
+    can_view_pay_docs: x.can_view_pay_docs === true,
+    ...(x.can_view_pay_docs_admin !== undefined ? { can_view_pay_docs_admin: x.can_view_pay_docs_admin === true } : {}),
+  }]));
   // เปิดแจ้งเตือนเด้งในมือถือ / เบราว์เซอร์แล้วกี่เครื่อง (ตามอีเมล · ยังไม่ได้รัน SQL notifications = ไม่แสดง)
   const { data: subs, error: subErr } = await db.from("push_subscriptions").select("email");
   const devices = new Map<string, number>();
@@ -200,16 +213,18 @@ export async function GET() {
   return ok({
     staff: (staff ?? []).map((s) => ({
       ...s, upcoming: upcoming.get(s.id) ?? 0, ...(isCrew(s.role as Role) ? { calendarMissing: noCalendar.get(s.id) ?? 0 } : {}),
-      ...(payDocs.has(s.id) ? { payDocs: payDocs.get(s.id) } : {}),
+      // สถานะเอกสารทำเบิก: เฉพาะคนฝั่งที่ดูเอกสารได้
+      ...(payDocs.has(s.id) && docsCan(docsScope, s.role) ? { payDocs: payDocs.get(s.id) } : {}),
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
       ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
-      ...(docViewers.has(s.id) ? { can_view_pay_docs: docViewers.get(s.id) } : {}),
+      ...(docViewers.get(s.id) ?? {}),
       ...(s.email ? pushOf(s.email) : {}),
     })),
     meId: r.me.owner?.id ?? null,
     // บทบาทที่แก้รายชื่อได้ (ดูได้อย่างเดียว = false)
     canEdit: edit,
     payDocsViewer,
+    docsScope,
   });
 }
 
@@ -227,8 +242,12 @@ export async function POST(request: Request) {
   if (role === "owner" && !hasAnyPerm((k) => c.data?.[k])) return fail("ตั้งสิทธิ์อย่างน้อย 1 อย่าง");
   // ให้สิทธิ์ Plan Slot Live (จัดการ / ดู) ได้เฉพาะคนที่มีสิทธิ์นี้
   if ((c.data?.can_plan_slots || c.data?.can_view_plan) && !r.me.owner?.plan) return noPlanGrant();
-  if (c.data?.can_view_pay_docs && !(await canViewPayDocs(r.me))) return noPayDocsGrant();
-  if (c.data && !c.data.can_view_pay_docs) delete c.data.can_view_pay_docs; // ไม่ติ๊ก = ค่าเริ่มต้นของคอลัมน์ (ปิด)
+  // สิทธิ์ดูเอกสาร: ติ๊กได้เฉพาะฝั่งที่ตัวเองมีสิทธิ์ · ไม่ติ๊ก = ค่าเริ่มต้นของคอลัมน์ (ปิด — ไม่ต้องส่ง)
+  if (c.data && DOC_FIELDS.some((k) => c.data![k])) {
+    const mine = await payDocsScope(r.me);
+    for (const k of DOC_FIELDS) if (c.data[k] && !mine[DOC_SIDE[k]]) return noPayDocsGrant(DOC_SIDE[k]);
+  }
+  for (const k of DOC_FIELDS) if (c.data && !c.data[k]) delete c.data[k];
   // TikTok = ค่าเริ่มต้นของคอลัมน์ ไม่ต้องส่ง (ยังไม่ได้รัน SQL ก็เพิ่มคนได้ตามเดิม)
   if (c.data?.live_platform === "tiktok") delete c.data.live_platform;
 
@@ -236,7 +255,7 @@ export async function POST(request: Request) {
   if (error && role === "marketing" && /staff_role_check|check constraint/.test(error.message)) {
     return fail("ต้องรัน SQL 20261021000000_marketing ใน Supabase ก่อน ถึงจะเพิ่มบัญชี Marketing ได้");
   }
-  if (error) return fail(needViewSql(dupMessage(error.message)));
+  if (error) return fail(docsSql(needViewSql(dupMessage(error.message))));
   const detail = staffChangeText({}, Object.fromEntries(Object.entries(c.data!).filter(([k]) => ["hourly_rate", "is_salaried", "is_extra_admin", "live_platform"].includes(k))));
   after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"${detail ? ` (${detail.replace(/ว่าง → |ปิด → |ค่าเริ่มต้น → |TikTok → /g, "")})` : ""}`, data.id));
   return ok({ id: data.id });
@@ -284,14 +303,18 @@ export async function PATCH(request: Request) {
     if (isMe) {
       for (const k of ["can_manage_mc", "can_manage_admin", "can_manage_proofs", "can_view_analytics", "can_plan_slots", ...VIEW_FIELDS]) delete changes[k];
     }
-    // ดูเอกสาร: แก้ของตัวเองไม่ได้ · ให้ / เอาออกได้เฉพาะคนที่มีสิทธิ์นี้ · ไม่เปลี่ยน = ไม่ส่ง (ไม่บันทึกประวัติ)
-    if ("can_view_pay_docs" in changes) {
-      const { data: d } = await db.from("staff").select("can_view_pay_docs").eq("id", id).maybeSingle();
-      const before = d?.can_view_pay_docs === true;
-      if (changes.can_view_pay_docs === before) delete changes.can_view_pay_docs;
-      else if (isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ดูเอกสารแก้ให้");
-      else if (!(await canViewPayDocs(r.me))) return noPayDocsGrant();
-      else (cur as Record<string, unknown>).can_view_pay_docs = before;
+    // ดูเอกสาร (แต่ละฝั่ง): แก้ของตัวเองไม่ได้ · ให้ / เอาออกได้เฉพาะคนที่มีสิทธิ์ฝั่งนั้น · ไม่เปลี่ยน = ไม่ส่ง (ไม่บันทึกประวัติ)
+    const docKeys = DOC_FIELDS.filter((k) => k in changes);
+    if (docKeys.length) {
+      const { data: d } = await db.from("staff").select(docKeys.join(", ")).eq("id", id).maybeSingle();
+      const mine = await payDocsScope(r.me);
+      for (const k of docKeys) {
+        const before = (d as Record<string, unknown> | null)?.[k] === true;
+        if (changes[k] === before) { delete changes[k]; continue; }
+        if (isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ดูเอกสารแก้ให้");
+        if (!mine[DOC_SIDE[k]]) return noPayDocsGrant(DOC_SIDE[k]);
+        (cur as Record<string, unknown>)[k] = before;
+      }
     }
   }
 
@@ -309,7 +332,7 @@ export async function PATCH(request: Request) {
   const { error } = await db.from("staff").update(changes).eq("id", id);
   if (error) {
     if (/can_manage_equipment/.test(error.message)) return fail("ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน ถึงจะตั้งสิทธิ์หน้าอุปกรณ์ได้");
-    return fail(needViewSql(dupMessage(error.message)));
+    return fail(docsSql(needViewSql(dupMessage(error.message))));
   }
 
   // ผลต่อปฏิทิน / ชีต

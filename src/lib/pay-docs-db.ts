@@ -5,7 +5,7 @@ import type { Me, PayDocsView } from "@/lib/types";
 
 /**
  * เอกสารทำเบิก (ตาราง pay_docs + bucket "pay-docs") — SQL 20261022000000_pay_docs
- *   1 อีเมล = 1 ชุด · ดูได้เฉพาะเจ้าตัว + Owner ที่ตั้ง staff.can_view_pay_docs (ตั้งด้วย SQL เท่านั้น)
+ *   1 อีเมล = 1 ชุด · ดูได้เฉพาะเจ้าตัว + Owner ที่ติ๊กสิทธิ์ดูเอกสารฝั่งนั้น (หน้าพนักงาน — payDocsScope)
  */
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -33,11 +33,30 @@ export async function loadPayDocs(db: Db, email: string) {
   return { row: (data as PayDocsRow | null) ?? null, error: error ? (noPayDocsSql(error.message) ? PAY_DOCS_SQL : error.message) : null };
 }
 
-/** Owner ที่ดูเอกสารทำเบิกของคนอื่นได้ */
+/** ฝั่งที่ดูเอกสารได้ (Mc / Admin) */
+export type DocsScope = { mc: boolean; admin: boolean };
+export const NO_DOCS: DocsScope = { mc: false, admin: false };
+export const docsCan = (scope: DocsScope, role: string) => (role === "mc" ? scope.mc : role === "admin" ? scope.admin : false);
+
+/**
+ * ฝั่งที่ Owner คนนี้ดูเอกสารทำเบิก / ใบ 50 ทวิ / เอกสารรับเงินได้
+ *   staff.can_view_pay_docs = ฝั่ง Mc · can_view_pay_docs_admin = ฝั่ง Admin (SQL 20261106000000_pay_docs_admin)
+ *   ยังไม่ได้รัน SQL ฝั่ง Admin = can_view_pay_docs ครอบทั้งสองฝั่งแบบเดิม
+ */
+export async function payDocsScope(me: Me): Promise<DocsScope> {
+  if (!me.owner) return NO_DOCS;
+  const db = createAdminClient();
+  const { data, error } = await db.from("staff").select("can_view_pay_docs, can_view_pay_docs_admin").eq("id", me.owner.id).maybeSingle();
+  if (!error) return { mc: data?.can_view_pay_docs === true, admin: data?.can_view_pay_docs_admin === true };
+  const { data: old, error: oldErr } = await db.from("staff").select("can_view_pay_docs").eq("id", me.owner.id).maybeSingle();
+  const all = !oldErr && old?.can_view_pay_docs === true;
+  return { mc: all, admin: all };
+}
+
+/** Owner ที่ดูเอกสารของคนอื่นได้อย่างน้อยหนึ่งฝั่ง */
 export async function canViewPayDocs(me: Me) {
-  if (!me.owner) return false;
-  const { data, error } = await createAdminClient().from("staff").select("can_view_pay_docs").eq("id", me.owner.id).maybeSingle();
-  return !error && data?.can_view_pay_docs === true;
+  const s = await payDocsScope(me);
+  return s.mc || s.admin;
 }
 
 /**
@@ -54,12 +73,14 @@ export const DRIVE_LINK_SQL = "ต้องรัน SQL 20261023000000_pay_docs
 export async function requirePayDocsViewer(staffId: unknown) {
   const r = await requireMe();
   if ("res" in r) return r;
-  if (!(await canViewPayDocs(r.me))) return { res: fail("บัญชีนี้ไม่มีสิทธิ์ดูเอกสารทำเบิก", 403) };
+  const scope = await payDocsScope(r.me);
+  if (!scope.mc && !scope.admin) return { res: fail("บัญชีนี้ไม่มีสิทธิ์ดูเอกสารทำเบิก", 403) };
   const id = Number(staffId);
   if (!Number.isInteger(id) || id <= 0) return { res: fail("ไม่พบรายชื่อนี้") };
   const { data } = await createAdminClient().from("staff").select("*").eq("id", id).in("role", ["mc", "admin"]).maybeSingle();
   const person = data as CrewRow | null;
-  if (!person?.email) return { res: fail("รายชื่อนี้ยังไม่มีอีเมล") };
+  if (!person || !docsCan(scope, person.role)) return { res: fail(`บัญชีนี้ไม่มีสิทธิ์ดูเอกสารฝั่ง ${person?.role === "admin" ? "Admin" : "Mc"}`, 403) };
+  if (!person.email) return { res: fail("รายชื่อนี้ยังไม่มีอีเมล") };
   return { me: r.me, email: person.email, person };
 }
 

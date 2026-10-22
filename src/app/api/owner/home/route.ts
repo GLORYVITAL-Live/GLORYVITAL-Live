@@ -1,7 +1,7 @@
 import { fail, ok, requireOwner } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
 import { ownerHome } from "@/lib/home";
-import { canViewPayDocs } from "@/lib/pay-docs-db";
+import { payDocsScope } from "@/lib/pay-docs-db";
 import { canClosePeriods } from "@/lib/periods";
 import { withPlatformLabels } from "@/lib/platform";
 import { receiptPending } from "@/lib/receipts-db";
@@ -14,12 +14,14 @@ export async function GET() {
   const see = r.me.owner!.see;
   try {
     // ใบ 50 ทวิ + เอกสารรับเงินค้าง: เฉพาะคนที่ดูเอกสารทำเบิกได้ · พลาด = ไม่แสดง
-    const payDocs = canViewPayDocs(r.me).catch(() => false);
+    // เฉพาะฝั่งที่ดูเอกสารได้ (Mc / Admin)
+    const docs = payDocsScope(r.me).catch(() => ({ mc: false, admin: false }));
+    const any = (s: { mc: boolean; admin: boolean }) => s.mc || s.admin;
     const [home, canBackup, receipts, tawi] = await Promise.all([
       ownerHome({ mc: see.mc, admin: see.admin, proofs: see.mc || see.proofs }),
       canClosePeriods(r.me), // ส่วน "สำรองข้อมูล" ท้ายหน้าแรก
-      payDocs.then((yes) => (yes ? receiptPending() : null)).catch(() => null),
-      payDocs.then((yes) => (yes ? tawiHome(bkkToday()) : null)).catch(() => null),
+      docs.then((s) => (any(s) ? receiptPending(s) : null)).catch(() => null),
+      docs.then((s) => (any(s) ? tawiHome(bkkToday(), s) : null)).catch(() => null),
     ]);
     return ok({ home: { ...withPlatformLabels(home), canBackup, receipts, tawi } });
   } catch (err) {

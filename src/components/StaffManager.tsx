@@ -60,10 +60,15 @@ type Person = {
   live_platform?: LiveTeam;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
   payDocs?: "ok" | "drive" | "missing";
-  /** Owner: ดูเอกสารทำเบิก / ใบ 50 ทวิ / เอกสารรับเงินของทุกคน (ส่งมาเฉพาะตอนคนที่เปิดดูมีสิทธิ์นี้เอง) */
+  /** Owner: ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ฝั่ง Mc / ฝั่ง Admin (ส่งมาเฉพาะตอนคนที่เปิดดูมีสิทธิ์ดูเอกสาร · ไม่มีฝั่ง Admin = ยังไม่ได้รัน SQL) */
   can_view_pay_docs?: boolean;
+  can_view_pay_docs_admin?: boolean;
 };
-type StaffData = { staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean>; payDocsViewer?: boolean };
+type StaffData = {
+  staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean>; payDocsViewer?: boolean;
+  /** ฝั่งที่คนที่เปิดดูเอกสารได้ (Mc / Admin) */
+  docsScope?: { mc: boolean; admin: boolean };
+};
 
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
 const displayName = (p: Pick<Person, "role" | "name">) => (p.role === "mc" ? `Mc ${p.name}` : p.name);
@@ -195,6 +200,8 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   const pushPeople = (data?.staff ?? []).filter((p) => p.role === role && p.pushDevices !== undefined);
   const pushOff = pushPeople.filter((p) => !p.pushDevices);
   // เอกสารทำเบิก (เห็นเฉพาะ Owner ที่ดูเอกสารได้): คนใหม่ที่ยังไม่ส่ง + จำนวนที่มีแล้ว
+  // เอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ของแท็บนี้: เฉพาะฝั่งที่ดูเอกสารได้
+  const docsSide = isCrew(role) && (data?.docsScope ? data.docsScope[role as "mc" | "admin"] : !!data?.payDocsViewer);
   const noPayDocs = (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "missing");
   const payDocsCount = {
     ok: (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "ok").length,
@@ -319,7 +326,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
         </div>
       ) : null}
 
-      {data.payDocsViewer && isCrew(role) ? (
+      {docsSide ? (
         <div
           className={cn(
             "my-2 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-sm leading-snug",
@@ -346,9 +353,9 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
         </div>
       ) : null}
       {/* ใบ 50 ทวิ: ตรวจไฟล์ใน Drive + จับคู่กับรายชื่อ (สิทธิ์เดียวกับเอกสารทำเบิก) */}
-      {data.payDocsViewer && isCrew(role) ? <TawiPanel /> : null}
+      {docsSide ? <TawiPanel /> : null}
       {/* เอกสารยืนยันการรับเงินรายเดือน (ต้องส่งก่อนดาวน์โหลดใบ 50 ทวิ) */}
-      {data.payDocsViewer && isCrew(role) ? <ReceiptPanel /> : null}
+      {docsSide ? <ReceiptPanel /> : null}
 
       {!list.length ? (
         <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : canEditRole(role) ? "กด \"เพิ่มคน\" เพื่อเพิ่มรายชื่อ" : null}</StateBox>
@@ -450,7 +457,8 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           viewReady={data.staff.some((p) => p.can_view_mc !== undefined)}
           notifyReady={data.staff.some((p) => p.notify_cancel_mc !== undefined)}
           teamReady={data.staff.some((p) => p.live_platform !== undefined)}
-          payDocsViewer={!!data.payDocsViewer}
+          docsScope={data.docsScope ?? { mc: !!data.payDocsViewer, admin: !!data.payDocsViewer }}
+          docsAdminReady={data.staff.some((p) => p.can_view_pay_docs_admin !== undefined)}
           others={editing === "new" ? [] : data.staff.filter((p) => p.role === editing.role && p.id !== editing.id)}
           onClose={(changed) => {
             setEditing(null);
@@ -587,14 +595,16 @@ function DuplicatePanel({ role, groups, onMerged }: { role: "mc" | "admin"; grou
   );
 }
 
-function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, teamReady, payDocsViewer, others, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, teamReady, docsScope, docsAdminReady, others, onClose }: {
   person: Person | null;
   roles: Role[];
   defaultRole: Role;
   isMe: boolean;
   canGrantPlan: boolean;
-  /** Owner คนนี้ดูเอกสารทำเบิกได้ */
-  payDocsViewer: boolean;
+  /** ฝั่งที่ Owner ที่ใช้อยู่ดูเอกสารได้ (Mc / Admin) */
+  docsScope: { mc: boolean; admin: boolean };
+  /** รัน SQL 20261106000000_pay_docs_admin แล้ว (สิทธิ์ดูเอกสารฝั่ง Admin แยก) */
+  docsAdminReady: boolean;
   /** รัน SQL 20261018000000_view_only แล้ว (มีคอลัมน์สิทธิ์ดูได้อย่างเดียว) */
   viewReady: boolean;
   /** รัน SQL 20261020000000_notify_cancel แล้ว (มีคอลัมน์รับอีเมลแจ้งยกเลิก) */
@@ -635,9 +645,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
     .map((t) => ({ hours: parseTierHours(t.hours) ?? 0, rate: Number(t.rate.replace(/[,\s]/g, "")) }))
     .filter((t) => t.hours > 0 && t.rate > 0);
   const [perm, setPerm] = useState(() => permsOf(person));
-  // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน): ตั้งได้เฉพาะคนที่มีสิทธิ์นี้ · ของตัวเองแก้ไม่ได้
-  const [docs, setDocs] = useState(person?.can_view_pay_docs ?? false);
-  const canGrantDocs = payDocsViewer && !isMe;
+  // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) แยกฝั่ง: ตั้งได้เฉพาะฝั่งที่ตัวเองมีสิทธิ์ · ของตัวเองแก้ไม่ได้
+  const [docs, setDocs] = useState({ mc: person?.can_view_pay_docs ?? false, admin: person?.can_view_pay_docs_admin ?? false });
+  const payDocsViewer = docsScope.mc || docsScope.admin;
   // ฝั่ง Mc ครอบหลักฐานไลฟ์อยู่แล้ว (จัดการ Mc = จัดการหลักฐานได้ / ดู Mc = ดูหลักฐานได้)
   const proofsLevel: Level = RANK[perm.mc] > RANK[perm.proofs] ? perm.mc : perm.proofs;
   const [saving, setSaving] = useState(false);
@@ -685,7 +695,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         ...(role === "owner" && !isMe && canGrantPlan
           ? { can_plan_slots: perm.plan === "edit", ...(viewReady || perm.plan === "view" ? { can_view_plan: perm.plan === "view" } : {}) }
           : {}),
-        ...(role === "owner" && canGrantDocs ? { can_view_pay_docs: docs } : {}),
+        // สิทธิ์ดูเอกสาร: ส่งเฉพาะฝั่งที่ตัวเองมีสิทธิ์ (ฝั่ง Admin ต้องรัน SQL แยกก่อน)
+        ...(role === "owner" && !isMe && docsScope.mc ? { can_view_pay_docs: docs.mc } : {}),
+        ...(role === "owner" && !isMe && docsScope.admin && (docsAdminReady || docs.admin) ? { can_view_pay_docs_admin: docs.admin } : {}),
         // รับอีเมลแจ้งยกเลิก (ตั้งให้ตัวเองได้) ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(role === "owner" && (notifyReady || anyNotify) ? { notify_cancel_mc: notifyOn.mc, notify_cancel_admin: notifyOn.admin } : {}),
       };
@@ -945,17 +957,34 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
                         : "รายชื่อและสิทธิ์ของ Owner คนอื่น จัดการได้เฉพาะคนที่จัดการได้ทั้ง Mc และ Admin"}
             </span>
             {payDocsViewer ? (
-              <Label className="mt-2 items-start border-t pt-2 leading-snug font-normal">
-                <Checkbox checked={isMe ? true : docs} disabled={!canGrantDocs} onCheckedChange={(v) => setDocs(v === true)} className="mt-0.5" />
-                <span>
-                  <span className="font-medium">ดูเอกสารของ Mc / Admin</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์นี้แก้ให้"
-                      : "เอกสารทำเบิก (บัตร ปชช. / บัญชีธนาคาร) · ใบ 50 ทวิ · เอกสารรับเงิน ของทุกคน + จับคู่ / ตรวจเอกสาร (ข้อมูลส่วนตัว — ให้เฉพาะคนที่ต้องใช้)"}
-                    {!isMe && docs && perm.mc === "none" && perm.admin === "none" ? <span className="block text-destructive">ต้องมีสิทธิ์ฝั่ง Mc หรือ Admin ด้วย ถึงจะเห็นหน้าพนักงาน (ที่อยู่ของเอกสาร)</span> : null}
-                  </span>
+              <div className="mt-2 border-t pt-2">
+                <span className="font-medium">ดูเอกสาร</span>
+                <span className="block text-xs text-muted-foreground">
+                  เอกสารทำเบิก (บัตร ปชช. / บัญชีธนาคาร) · ใบ 50 ทวิ · เอกสารรับเงิน + จับคู่ / ตรวจเอกสาร ของฝั่งที่ติ๊ก (ข้อมูลส่วนตัว — ให้เฉพาะคนที่ต้องใช้)
                 </span>
-              </Label>
+                {([["mc", "เอกสารของ Mc"], ["admin", "เอกสารของ Admin"]] as const).map(([side, text]) => {
+                  const mineSide = docsScope[side];
+                  const sqlMissing = side === "admin" && !docsAdminReady;
+                  return (
+                    <Label key={side} className="items-start py-1 leading-snug font-normal">
+                      <Checkbox
+                        checked={isMe ? mineSide : docs[side]} disabled={isMe || !mineSide}
+                        onCheckedChange={(v) => setDocs({ ...docs, [side]: v === true })} className="mt-0.5"
+                      />
+                      <span>
+                        {text}
+                        {!isMe && !mineSide ? <span className="block text-xs text-muted-foreground">ตั้งได้เฉพาะคนที่ดูเอกสารฝั่งนี้ได้</span> : null}
+                        {!isMe && mineSide && sqlMissing && docs.admin ? <span className="block text-xs text-destructive">ต้องรัน SQL 20261106000000_pay_docs_admin ใน Supabase ก่อน</span> : null}
+                      </span>
+                    </Label>
+                  );
+                })}
+                <span className="block text-xs text-muted-foreground">
+                  {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ดูเอกสารแก้ให้" : null}
+                  {!isMe && (docs.mc || docs.admin) && perm.mc === "none" && perm.admin === "none"
+                    ? <span className="block text-destructive">ต้องมีสิทธิ์ฝั่ง Mc หรือ Admin ด้วย ถึงจะเห็นหน้าพนักงาน (ที่อยู่ของเอกสาร)</span> : null}
+                </span>
+              </div>
             ) : null}
           </fieldset>
         ) : null}
@@ -992,7 +1021,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           </fieldset>
         ) : null}
 
-        {payDocsViewer && person && isCrew(person.role) && person.email ? <PayDocsPanel staffId={person.id} name={person.name} /> : null}
+        {person && isCrew(person.role) && docsScope[person.role as "mc" | "admin"] && person.email ? <PayDocsPanel staffId={person.id} name={person.name} /> : null}
 
         {person ? <StaffHistory staffId={person.id} /> : null}
 

@@ -1,6 +1,6 @@
 import { fail, requireMe } from "@/lib/api";
 import { DRIVE_FILE_GONE, driveError, driveNotFound } from "@/lib/drive";
-import { canViewPayDocs } from "@/lib/pay-docs-db";
+import { docsCan, payDocsScope } from "@/lib/pay-docs-db";
 import { receiptStateOf } from "@/lib/receipts-db";
 import { TAWI_SQL, TAWI_UPDATING, downloadTawi, tawiDoc, verifiedKeysOf } from "@/lib/tawi";
 import { tawiAccess } from "@/lib/tawi-verify";
@@ -33,7 +33,11 @@ export async function GET(request: Request) {
     ? await Promise.all([verifiedKeysOf(r.me.email), receiptStateOf(r.me.email, doc.month)])
     : [[] as string[], undefined];
   let access = tawiAccess({ viewer: false, mine, docKey: doc.nameKey, verifiedKeys, receipt });
-  if (access !== "ok" && (await canViewPayDocs(r.me))) access = "ok";
+  // Owner: ใบของคนฝั่งที่ดูเอกสารได้ / ใบที่ยังไม่มีเจ้าของ (ดูได้ฝั่งใดฝั่งหนึ่ง)
+  if (access !== "ok") {
+    const scope = await payDocsScope(r.me);
+    if (doc.ownerRole ? docsCan(scope, doc.ownerRole) : scope.mc || scope.admin) access = "ok";
+  }
   if (access === "forbidden") return fail("ไม่มีสิทธิ์เปิดไฟล์นี้", 403);
   if (access === "updating") return fail(TAWI_UPDATING, 503);
   if (access === "verify") return fail('ยืนยันตัวตนก่อนดาวน์โหลด: กรอกชื่อ-นามสกุลจริงที่ "ตารางของฉัน"', 403);

@@ -11,6 +11,7 @@ import {
 import {
   cleanRequiredFrom, receiptExt, receiptFolders, receiptMonthOk, receiptRole, receiptState,
 } from "@/lib/receipts";
+import { docsCan, type DocsScope } from "@/lib/pay-docs-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import { tawiMonthLabel, tawiNameKey } from "@/lib/tawi-name";
 import type {
@@ -31,6 +32,8 @@ type Drive = drive_v3.Drive;
 
 export const RECEIPT_SQL = "ต้องรัน SQL 20261101000000_pay_receipts ใน Supabase ก่อน";
 export const RECEIPT_FILES_SQL = "ต้องรัน SQL 20261102000000_receipt_files ใน Supabase ก่อน (ดึงไฟล์เดิมใน Drive)";
+/** Owner แก้เอกสารของคนฝั่งที่ไม่ได้รับสิทธิ์ดูเอกสาร */
+const NO_SIDE = "บัญชีนี้ไม่มีสิทธิ์ดูเอกสารของคนฝั่งนี้ (ตั้งที่หน้าพนักงาน > สิทธิ์ดูเอกสาร Mc / Admin)";
 const noSql = (msg: string) => /pay_receipts|receipt_|schema cache|does not exist/i.test(msg);
 const dbError = (msg: string) => new Error(noSql(msg) ? RECEIPT_SQL : msg);
 const filesError = (msg: string) => new Error(/receipt_files|source|folder_id|schema cache|does not exist/i.test(msg) ? RECEIPT_FILES_SQL : msg);
@@ -149,7 +152,7 @@ export async function sendReceiptReminders(now = Date.now(), dryRun = false) {
  *   นับแบบเดียวกับแผงเอกสารรับเงิน: แถวใน pay_receipts (ต่ออีเมล) ก่อน ไม่มี = ไฟล์เดิมใน Drive ที่จับคู่แล้ว (รายชื่อที่ไม่มีอีเมล)
  *   ยังไม่บังคับ / ยังไม่ได้รัน SQL = null (ไม่แสดง)
  */
-export async function receiptPending(): Promise<HomeReceipts | null> {
+export async function receiptPending(scope: DocsScope): Promise<HomeReceipts | null> {
   const db = createAdminClient();
   const cfg = await loadConfig(db);
   const from = cfg.requiredFrom;
@@ -171,7 +174,7 @@ export async function receiptPending(): Promise<HomeReceipts | null> {
   const people = new Map<string, HomeReceipts["people"][number]>();
   for (const t of tawi.rows) {
     const s = byId.get(Number(t.staff_id));
-    if (!s) continue;
+    if (!s || !docsCan(scope, s.role)) continue; // เฉพาะคนฝั่งที่ดูเอกสารได้
     const k = personOf(s), st = status.get(`${k}|${t.month}`);
     if (st === "ok" || (!st && drive.has(`${k}|${t.month}`))) continue;
     const p = people.get(k) ?? { label: label(s), hasEmail: !!s.email?.trim(), shopee: s.live_platform === "shopee", months: [], rejected: [] };
@@ -311,6 +314,24 @@ export async function saveReceipt(email: string, month: string, bytes: Uint8Arra
   return run;
 }
 
+/**
+ * Owner เห็นเอกสารของอีเมลนี้ไหม (ฝั่งที่ดูเอกสารได้) — คนเดียวเป็นทั้ง Mc และ Admin = เห็นได้จากฝั่งใดฝั่งหนึ่ง
+ *   ไม่มีในรายชื่อ Mc / Admin แล้ว = เห็นเฉพาะคนที่ดูได้ทั้งสองฝั่ง
+ */
+export async function receiptVisible(email: string | null, scope: DocsScope) {
+  if (scope.mc && scope.admin) return true;
+  if (!email) return false;
+  const { data } = await createAdminClient().from("staff").select("role").eq("email", norm(email)).in("role", ["mc", "admin"]);
+  return (data ?? []).some((s) => docsCan(scope, String(s.role)));
+}
+
+/** ตรวจเอกสาร (ไม่ผ่าน / ยกเลิกไม่ผ่าน) ได้เฉพาะเอกสารของคนฝั่งที่ดูได้ */
+export async function requireReceiptSide(id: number, scope: DocsScope) {
+  const row = await receiptById(id);
+  if (!row) throw new Error("ไม่พบเอกสารนี้ กดโหลดใหม่");
+  if (!(await receiptVisible(row.email, scope))) throw Object.assign(new Error(NO_SIDE), { status: 403 });
+}
+
 /** แถวตาม id (ไฟล์ให้เปิด: ตรวจสิทธิ์แล้วค่อยส่งไฟล์) */
 export async function receiptById(id: number) {
   const { data, error } = await createAdminClient().from("pay_receipts").select("*").eq("id", id).maybeSingle();
@@ -321,15 +342,17 @@ export async function receiptById(id: number) {
 /** ไฟล์เดิมใน Drive ตาม id ของ receipt_files + อีเมลของคนที่จับคู่ไว้ (ไม่มี = null) */
 export async function receiptFileById(id: number) {
   const db = createAdminClient();
-  const { data, error } = await db.from("receipt_files").select("id, month, drive_file_id, mime, staff_id").eq("id", id).maybeSingle();
+  const { data, error } = await db.from("receipt_files").select("id, month, drive_file_id, mime, staff_id, role").eq("id", id).maybeSingle();
   if (error) throw filesError(error.message);
   if (!data) return null;
-  let ownerEmail: string | null = null;
+  let ownerEmail: string | null = null, ownerRole: string | null = null;
   if (data.staff_id) {
-    const { data: s } = await db.from("staff").select("email").eq("id", data.staff_id).maybeSingle();
+    const { data: s } = await db.from("staff").select("email, role").eq("id", data.staff_id).maybeSingle();
     ownerEmail = (s?.email as string | null)?.trim().toLowerCase() || null;
+    ownerRole = (s?.role as string | null) ?? null;
   }
-  return { month: String(data.month), fileId: String(data.drive_file_id), mime: String(data.mime ?? ""), ownerEmail };
+  // ฝั่งของไฟล์: คนที่จับคู่ไว้ ไม่มี = โฟลเดอร์ Mc / Admin ที่ไฟล์อยู่
+  return { month: String(data.month), fileId: String(data.drive_file_id), mime: String(data.mime ?? ""), ownerEmail, role: ownerRole ?? String(data.role) };
 }
 
 /** ไฟล์จาก Drive */
@@ -380,7 +403,7 @@ async function candidatesOf(db: Db, staff: StaffLite[]): Promise<ReceiptCandidat
  *   + ไฟล์เดิมใน Drive ที่ยังไม่จับคู่ของเดือนนั้น (ยังไม่ได้รัน SQL receipt_files = drive.ready false)
  *   รายชื่อที่ไม่มีอีเมล: ไฟล์ใน Drive ที่จับคู่แล้วนับว่าส่งแล้ว (ไม่มีแถวใน pay_receipts เพราะเข้าเว็บไม่ได้)
  */
-export async function ownerReceipts(month: string | null): Promise<OwnerReceipts> {
+export async function ownerReceipts(month: string | null, scope: DocsScope): Promise<OwnerReceipts> {
   const db = createAdminClient();
   const cfg = await loadConfig(db);
   const off: OwnerReceipts = {
@@ -388,7 +411,7 @@ export async function ownerReceipts(month: string | null): Promise<OwnerReceipts
   };
   if (!cfg.ready) return off;
   const from = cfg.from;
-  const [receipts, staff, tawi, filesRes] = await Promise.all([
+  const [receiptsAll, allStaff, tawiAll, filesAll] = await Promise.all([
     allRows<ReceiptRow>((a, b) => db.from("pay_receipts").select("*").order("id").range(a, b)),
     loadStaff(db),
     from
@@ -397,10 +420,21 @@ export async function ownerReceipts(month: string | null): Promise<OwnerReceipts
       : Promise.resolve({ rows: [] as { month: string; staff_id: number }[], error: null }),
     allRows<FileRow>((a, b) => db.from("receipt_files").select("*").order("id").range(a, b)),
   ]);
-  if (receipts.error) {
-    if (noSql(receipts.error)) return off;
-    throw new Error(receipts.error);
+  if (receiptsAll.error) {
+    if (noSql(receiptsAll.error)) return off;
+    throw new Error(receiptsAll.error);
   }
+  // เฉพาะฝั่งที่ดูเอกสารได้: คน (อีเมล) ที่มีแถวฝั่งนั้น · ไฟล์ที่ยังไม่จับคู่ = ตามโฟลเดอร์ Mc / Admin ที่ไฟล์อยู่
+  const roleById = new Map(allStaff.map((s) => [s.id, s.role]));
+  const staff = allStaff.filter((s) => docsCan(scope, s.role));
+  const seen = new Set(staff.map(personOf));
+  const both = scope.mc && scope.admin;
+  const receipts = { ...receiptsAll, rows: receiptsAll.rows.filter((r) => both || seen.has(`e:${norm(r.email)}`)) };
+  const tawi = { ...tawiAll, rows: tawiAll.rows.filter((t) => docsCan(scope, roleById.get(Number(t.staff_id)) ?? "")) };
+  const filesRes = {
+    ...filesAll,
+    rows: filesAll.rows.filter((f) => (f.staff_id ? docsCan(scope, roleById.get(Number(f.staff_id)) ?? "") : docsCan(scope, f.role))),
+  };
   const driveReady = !filesRes.error;
   const files = driveReady ? filesRes.rows : [];
   const byId = new Map(staff.map((s) => [s.id, s]));
@@ -771,15 +805,18 @@ export async function scanReceiptFiles(): Promise<ReceiptScan> {
  * Owner จับคู่ไฟล์เดิมใน Drive กับรายชื่อ (staffId = null = ไม่ใช่คนในระบบ / ยกเลิกการจับคู่)
  *   ใช้กับทุกไฟล์ที่บทบาท + ชื่อเดียวกัน (ทุกเดือน) — ระบบจำไว้ ไฟล์ชื่อนี้ที่เจอทีหลังจับคู่เอง
  */
-export async function assignReceiptFile(fileId: number, staffId: number | null) {
+export async function assignReceiptFile(fileId: number, staffId: number | null, scope?: DocsScope) {
   const run = await withSyncLock("receipt-scan", async () => {
     const db = createAdminClient();
     const { data: row, error } = await db.from("receipt_files").select("id, role, name_key").eq("id", fileId).maybeSingle();
     if (error) throw filesError(error.message);
     if (!row) throw new Error("ไม่พบไฟล์นี้ (อาจถูกลบจาก Drive แล้ว) กดตรวจไฟล์ใหม่");
+    // Owner (scope): ไฟล์ในโฟลเดอร์ฝั่งที่ดูได้ + คนฝั่งที่ดูได้เท่านั้น
+    if (scope && !docsCan(scope, String(row.role))) throw Object.assign(new Error(NO_SIDE), { status: 403 });
     if (staffId) {
-      const { data: s } = await db.from("staff").select("id").eq("id", staffId).in("role", ["mc", "admin"]).maybeSingle();
+      const { data: s } = await db.from("staff").select("id, role").eq("id", staffId).in("role", ["mc", "admin"]).maybeSingle();
       if (!s) throw new Error("ไม่พบรายชื่อนี้ (ต้องเป็น Mc หรือ Admin)");
+      if (scope && !docsCan(scope, String(s.role))) throw Object.assign(new Error(NO_SIDE), { status: 403 });
     }
     const { data, error: upErr } = await db.from("receipt_files")
       .update({ staff_id: staffId, matched_by: "owner", updated_at: new Date().toISOString() })
