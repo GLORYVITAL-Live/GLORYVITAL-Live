@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { ChevronDownIcon, CircleCheckIcon, DownloadIcon, FileTextIcon, FileUpIcon, LockIcon, TriangleAlertIcon } from "lucide-react";
-import { api, useToast } from "@/components/shared";
+import {
+  ChevronDownIcon, CircleCheckIcon, DownloadIcon, FileTextIcon, FileUpIcon, LockIcon, ShareIcon, TriangleAlertIcon, XIcon,
+} from "lucide-react";
+import { AppDialog, DialogActions, DialogBody, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -231,12 +233,92 @@ function DocAction({ doc, ready, uploading, onUpload }: { doc: TawiDoc; ready: b
       />
     );
   }
+  return <TawiDownload doc={doc} />;
+}
+
+/**
+ * iPhone / iPad หรือเปิดเว็บแบบแอป (ไอคอนบนหน้าจอโฮม): ลิงก์ดาวน์โหลดพาทั้งหน้าไปที่ PDF ไม่มีปุ่มย้อนกลับ (ต้องปิดแอปแล้วเปิดใหม่)
+ *   → ดึงไฟล์มาแสดงในหน้าต่างของเว็บแทน + ปุ่ม "บันทึก / แชร์" (บันทึกลงไฟล์ / ส่ง LINE / พิมพ์) + "ปิด" กลับหน้าเดิม
+ */
+function useInAppPdf() {
+  // ปุ่มนี้วาดหลังโหลดข้อมูลแล้วเท่านั้น (ฝั่งเซิร์ฟเวอร์ไม่ได้วาด) จึงอ่าน navigator ตอนเริ่มได้
+  const [yes] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const app = window.matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    return ios || app;
+  });
+  return yes;
+}
+
+/** ปุ่มดาวน์โหลดใบ 50 ทวิ: คอม / Android ในเบราว์เซอร์ = ดาวน์โหลดตามปกติ · iPhone / แบบแอป = หน้าต่างดูไฟล์ในเว็บ */
+function TawiDownload({ doc }: { doc: TawiDoc }) {
+  const toast = useToast();
+  const inApp = useInAppPdf();
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<{ url: string; file: File } | null>(null);
+  const [error, setError] = useState("");
+  const label = `ใบ 50 ทวิ ${tawiMonthLabel(doc.month)}`;
+
+  async function show() {
+    setOpen(true);
+    setError("");
+    if (file) return;
+    try {
+      const res = await fetch(fileUrl(doc.id), { cache: "no-store" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null) as { message?: string } | null;
+        throw new Error(j?.message || "เปิดไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง");
+      }
+      const blob = await res.blob();
+      const name = decodeURIComponent(res.headers.get("content-disposition")?.match(/filename\*=UTF-8''([^;]+)/)?.[1] ?? "") || `50ทวิ-${doc.month}.pdf`;
+      const f = new File([blob], name, { type: "application/pdf" });
+      setFile({ url: URL.createObjectURL(f), file: f });
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+  // ปิดหน้าต่าง / ออกจากหน้า = คืนหน่วยความจำของไฟล์
+  useEffect(() => () => { if (file) URL.revokeObjectURL(file.url); }, [file]);
+
+  async function share() {
+    if (!file) return;
+    try {
+      if (navigator.canShare?.({ files: [file.file] })) await navigator.share({ files: [file.file], title: label });
+      else window.open(file.url, "_blank", "noopener");
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") toast("บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง", "error");
+    }
+  }
+
+  if (!inApp) {
+    return (
+      <Button size="sm" variant="outline" className="shrink-0 pointer-coarse:min-h-9" asChild>
+        <a href={fileUrl(doc.id)} download aria-label={`ดาวน์โหลด${label}`}><DownloadIcon />ดาวน์โหลด</a>
+      </Button>
+    );
+  }
   return (
-    <Button size="sm" variant="outline" className="shrink-0 pointer-coarse:min-h-9" asChild>
-      <a href={fileUrl(doc.id)} download aria-label={`ดาวน์โหลดใบ 50 ทวิ ${tawiMonthLabel(doc.month)}`}>
+    <>
+      <Button size="sm" variant="outline" className="shrink-0 pointer-coarse:min-h-9" onClick={show} aria-label={`ดาวน์โหลด${label}`}>
         <DownloadIcon />ดาวน์โหลด
-      </a>
-    </Button>
+      </Button>
+      <AppDialog open={open} onClose={() => setOpen(false)} title={label}>
+        <DialogBody>
+          {error ? (
+            <p className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>
+          ) : file ? (
+            <iframe src={file.url} title={label} className="h-[60svh] w-full rounded-lg border bg-white" />
+          ) : (
+            <div className="grid h-40 place-items-center text-sm text-muted-foreground"><Spinner /></div>
+          )}
+        </DialogBody>
+        <DialogActions>
+          <Button variant="outline" onClick={() => setOpen(false)}><XIcon />ปิด</Button>
+          <Button disabled={!file} onClick={share}><ShareIcon />บันทึก / แชร์</Button>
+        </DialogActions>
+      </AppDialog>
+    </>
   );
 }
 
