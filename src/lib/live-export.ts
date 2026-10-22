@@ -383,22 +383,39 @@ function dailySheet(
   }));
   cellStyles["1:0"] = { bg: "FFFFFF", bold: true };
   cellStyles["2:0"] = { bg: TINT[0], bold: true };
-  const value = (m: (typeof METRICS)[number], list: LiveSession[]) => { const t = totalsOf(list); return num(m.kind, t.lives ? m.value(t) : null); };
+  const raw = (m: (typeof METRICS)[number], list: LiveSession[]) => { const t = totalsOf(list); return t.lives ? m.value(t) : null; };
+  const value = (m: (typeof METRICS)[number], list: LiveSession[]) => num(m.kind, raw(m, list));
   const rows: Cell[][] = daily.labels.map((l, d) => [l, ...metrics.flatMap((m) => keys.map((k) => value(m, daily.byDay.get(k)?.[d] ?? [])))]);
   const totalRow = 3 + rows.length;
+  const changeRow = totalRow + 1;
+  // แถว "% เปลี่ยน": ยอดรวมของช่วงหลัก เทียบยอดรวมของแต่ละเดือน (ลด = แดง / เพิ่ม = เขียว · CTR / CO เป็น pp)
+  const sum = (k: string) => (daily.byDay.get(k) ?? []).flat();
+  const change: Cell[] = [`${shortLabel(focus)} เทียบ (%)`, ...metrics.flatMap((m, i) => keys.map((k, j): Cell => {
+    const at = `${changeRow}:${1 + i * w + j}`;
+    if (k === focus) {
+      cellStyles[at] = { bg: "FFF7E6", bold: true, align: "center", border: true };
+      return "ช่วงหลัก";
+    }
+    const d = deltaOf(m.kind, raw(m, sum(focus)), raw(m, sum(k)));
+    const base: RowStyle = { bg: "FFF7E6", bold: true, border: true, align: "right" };
+    cellStyles[at] = !d || Math.abs(d.value) < (m.kind === "pct" ? 0.005 : 0.0005) ? base
+      : d.value > 0 ? { ...base, bg: "EAF6EE", color: "1E7B3A" } : { ...base, bg: "FDECEC", color: "B42318" };
+    return m.kind === "pct" ? d?.text ?? null : d ? { v: d.value, f: "pct" } : null;
+  }))];
   return {
     name: "รายวัน",
     header: 2,
     rows: [
-      [`${rangeText}   ·   แต่ละแถว = วันที่เดียวกันของแต่ละเดือน   ·   ช่วงหลัก = ${shortLabel(focus)}`],
+      [`${rangeText}   ·   แต่ละแถว = วันที่เดียวกันของแต่ละเดือน   ·   ช่วงหลัก = ${shortLabel(focus)}   ·   แถวล่างสุด = ช่วงหลักเพิ่ม / ลดกี่ % เทียบแต่ละเดือน`],
       ["", ...metrics.flatMap((m) => [m.note && m.note.length <= 8 ? `${m.label} (${m.note})` : m.label, ...Array<string>(w - 1).fill("")])],
       ["วัน", ...metrics.flatMap(() => keys.map(shortLabel))],
       ...rows,
-      ["รวม", ...metrics.flatMap((m) => keys.map((k) => value(m, (daily.byDay.get(k) ?? []).flat())))],
+      ["รวม", ...metrics.flatMap((m) => keys.map((k) => value(m, sum(k))))],
+      change,
     ],
-    rowStyles: { [totalRow]: { bg: "FFF7E6", bold: true, border: true } },
+    rowStyles: { [totalRow]: { bg: "FFF7E6", bold: true, border: true }, [changeRow]: { bg: "FFF7E6", bold: true, border: true } },
     cellStyles,
-    colWidths: [12, ...metrics.flatMap(() => keys.map(() => 13))],
+    colWidths: [16, ...metrics.flatMap(() => keys.map(() => 13))],
   };
 }
 
