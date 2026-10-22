@@ -670,39 +670,64 @@ function Delta({ kind, a, b, className }: { kind: (typeof METRICS)[number]["kind
   return <span className={cn("font-semibold tabular-nums", flat ? "text-muted-foreground" : d.value > 0 ? "text-success" : "text-destructive", className)}>{d.text}</span>;
 }
 
+/** "YYYY-MM-DD" เลื่อนไป n เดือน วันที่เดิม (เดือนนั้นมีวันน้อยกว่า = วันสุดท้ายของเดือน) เช่น 31 ต.ค. -1 = 30 ก.ย. */
+function shiftMonthDay(k: string, n: number) {
+  const [y, m, d] = k.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m - 1 + n + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m - 1 + n, Math.min(d, last))).toISOString().slice(0, 10);
+}
+/** ช่วงวันสั้น เช่น "19–22 ก.ค." / "28 ก.ย.–3 ต.ค." */
+function dayRangeShort(a: string, b: string) {
+  const da = new Date(`${a}T12:00:00Z`), db = new Date(`${b}T12:00:00Z`);
+  return a.slice(0, 7) === b.slice(0, 7) ? `${+a.slice(8)}–${fmtRangeDay.format(db)}` : `${fmtRangeDay.format(da)}–${fmtRangeDay.format(db)}`;
+}
+
 /**
  * เทียบหลายเดือน (ไม่เกิน 12): ค่าของทุกเดือน + เดือนหลัก vs เดือนอื่นทีละเดือน (เช่น ก.ย. vs ก.ค. / ก.ย. vs ส.ค.)
  *   เดือนหลัก = เดือนสุดท้ายของช่วง (ค่าเริ่มต้น) / เลือกเองได้ / GMV สูงสุด (ไม่นับเดือนที่ยังไม่จบ)
  *   CTR / CO เทียบเป็น pp ค่าอื่นเป็น %
+ *   days = เทียบเฉพาะช่วงวันเดียวกันของแต่ละเดือน (เช่น 19–22 ก.ค. / ส.ค. / ก.ย. / ต.ค.) จากโหมด "ช่วงวันที่"
+ *     ช่วงที่เลือกเป็นเดือนหลัก (ค่าเริ่มต้น) · ค่าเริ่มต้น = 3 เดือนก่อนหน้า ถึงเดือนของช่วงที่เลือก
  */
-function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; dataMonths: string[]; version: number }) {
+function MultiMonthView({ toggle, dataMonths, version, days }: {
+  toggle: ReactNode; dataMonths: string[]; version: number; days?: { a: string; b: string };
+}) {
   const sorted = dataMonths.slice().sort();
-  const last = sorted.length ? sorted[sorted.length - 1] : monthKey();
-  const [range, setRange] = useState<MonthRange>(() => ({ from: monthKey(-2, last), to: last }));
-  const [focusPick, setFocusPick] = useState<string>("last"); // "last" / "best" / "YYYY-MM"
+  const base = days ? days.a.slice(0, 7) : null;
+  const last = base ?? (sorted.length ? sorted[sorted.length - 1] : monthKey());
+  const [range, setRange] = useState<MonthRange>(() => ({ from: monthKey(days ? -3 : -2, last), to: last }));
+  const [focusPick, setFocusPick] = useState<string>(base ?? "last"); // "last" / "best" / "YYYY-MM"
   const [metric, setMetric] = useState<MetricKey>("gmv");
   const filter = useFilter();
   const n = monthsIn(range);
   const keys = Array.from({ length: n }, (_, i) => monthKey(i, range.from));
-  const now = monthKey();
-  const { data, error, retry } = useSessions(monthWindow(range.from).from, monthWindow(range.to).to, version);
+  // ช่วงของแต่ละเดือน: ทั้งเดือน หรือ ช่วงวันเดียวกัน (เลื่อนจากช่วงที่เลือกทีละเดือน)
+  const dayWin = (k: string) => (days ? [shiftMonthDay(days.a, monthDiff(base!, k)), shiftMonthDay(days.b, monthDiff(base!, k))] as const : null);
+  const win = (k: string): Period => { const w = dayWin(k); return w ? rangePeriod(w[0], w[1]) : { ...monthWindow(k), name: monthLabel(k) }; };
+  const nowIso = new Date().toISOString();
+  // ยังไม่จบ: เดือนปัจจุบัน / ช่วงวันที่ยังไม่จบ
+  const open = (k: string) => (days ? win(k).to > nowIso : k === monthKey());
+  const long = (k: string) => (days ? win(k).name.replace(/ \(\d+ วัน\)$/, "") : monthLabel(k));
+  const { data, error, retry } = useSessions(n ? win(keys[0]).from : null, n ? win(keys[n - 1]).to : null, version);
 
   const controls = (
     <div className="my-3 rounded-xl border bg-card p-3">
       {toggle}
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-0 flex-1">
-          <span className="mb-1 block text-xs text-muted-foreground">ช่วงเดือน (กดเดือนเริ่ม แล้วกดเดือนสุดท้าย)</span>
-          <MonthPicker mode="range" value={range} onChange={(r) => { setRange(r); setFocusPick("last"); }} marked={dataMonths} className="w-full justify-start" />
+          <span className="mb-1 block text-xs text-muted-foreground">
+            {days ? `เดือนที่จะเทียบ (กดเดือนเริ่ม แล้วกดเดือนสุดท้าย) — นับเฉพาะวันที่ ${dayRangeShort(days.a, days.b).replace(/ .*$/, "")} ของแต่ละเดือน` : "ช่วงเดือน (กดเดือนเริ่ม แล้วกดเดือนสุดท้าย)"}
+          </span>
+          <MonthPicker mode="range" value={range} onChange={(r) => { setRange(r); setFocusPick(base && r.from <= base && base <= r.to ? base : "last"); }} marked={dataMonths} className="w-full justify-start" />
         </div>
         <div className="min-w-0 flex-1">
-          <span className="mb-1 block text-xs text-muted-foreground">เดือนหลัก (เทียบกับเดือนอื่นทีละเดือน)</span>
+          <span className="mb-1 block text-xs text-muted-foreground">{days ? "ช่วงหลัก (เทียบกับเดือนอื่นทีละเดือน)" : "เดือนหลัก (เทียบกับเดือนอื่นทีละเดือน)"}</span>
           <Select value={focusPick} onValueChange={setFocusPick}>
             <SelectTrigger aria-label="เดือนหลัก" className="h-9 w-full rounded-full bg-card font-semibold"><SelectValue /></SelectTrigger>
             <SelectContent position="popper">
               <SelectItem value="last">เดือนสุดท้าย ({shortMonth(range.to).split(" ")[0]})</SelectItem>
-              <SelectItem value="best">เดือนที่ GMV สูงสุด</SelectItem>
-              {keys.map((k) => <SelectItem key={k} value={k}>{monthLabel(k)}</SelectItem>)}
+              <SelectItem value="best">{days ? "ช่วงที่ GMV สูงสุด" : "เดือนที่ GMV สูงสุด"}</SelectItem>
+              {keys.map((k) => <SelectItem key={k} value={k}>{long(k)}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
@@ -714,15 +739,30 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
 
   const list = filterSessions(data, filter.platform, filter.account);
   const byMonth = new Map<string, LiveSession[]>(keys.map((k) => [k, []]));
-  for (const s of list) byMonth.get(monthOf(s.startedAt))?.push(s);
+  if (days) {
+    const wins = keys.map((k) => ({ k, from: Date.parse(win(k).from), to: Date.parse(win(k).to) }));
+    for (const s of list) {
+      const t = Date.parse(s.startedAt);
+      const w = wins.find((x) => t >= x.from && t < x.to);
+      if (w) byMonth.get(w.k)!.push(s);
+    }
+  } else {
+    for (const s of list) byMonth.get(monthOf(s.startedAt))?.push(s);
+  }
   const totals = new Map(keys.map((k) => [k, totalsOf(byMonth.get(k)!)]));
   const valueAt = (k: string, mk: MetricKey) => { const t = totals.get(k)!; return t.lives ? metricOf(mk).value(t) : null; };
-  // เดือนที่จบแล้วและมีข้อมูล (ใช้หาเดือนสูงสุด / ต่ำสุด)
-  const complete = keys.filter((k) => k !== now && totals.get(k)!.lives);
+  // เดือน / ช่วงที่จบแล้วและมีข้อมูล (ใช้หาสูงสุด / ต่ำสุด)
+  const complete = keys.filter((k) => !open(k) && totals.get(k)!.lives);
+  const now = keys.find(open) ?? "";
   const bestBy = (mk: MetricKey, dir = 1) => complete.reduce<string | null>((b, k) => (b === null || dir * ((valueAt(k, mk) ?? 0) - (valueAt(b, mk) ?? 0)) > 0 ? k : b), null);
   const focus = focusPick === "best" ? bestBy("gmv") ?? range.to : focusPick === "last" ? range.to : keys.includes(focusPick) ? focusPick : range.to;
   const others = keys.filter((k) => k !== focus);
-  const short = (k: string) => `${shortMonth(k).split(" ")[0]}${k.slice(0, 4) !== range.to.slice(0, 4) ? ` ${k.slice(2, 4)}` : ""}${k === now ? "*" : ""}`;
+  const short = (k: string) => {
+    const w = dayWin(k);
+    if (w) return `${dayRangeShort(w[0], w[1])}${k.slice(0, 4) !== range.to.slice(0, 4) ? ` ${k.slice(2, 4)}` : ""}${open(k) ? "*" : ""}`;
+    return `${shortMonth(k).split(" ")[0]}${k.slice(0, 4) !== range.to.slice(0, 4) ? ` ${k.slice(2, 4)}` : ""}${open(k) ? "*" : ""}`;
+  };
+  const rangeText = days ? `วันที่ ${dayRangeShort(days.a, days.b).replace(/ .*$/, "")} ของ ${rangeLabel(range)}` : rangeLabel(range);
   const metrics = MULTI_ORDER.map((mk) => metricOf(mk));
 
   const best = bestBy("gmv"), worst = bestBy("gmv", -1);
@@ -736,15 +776,15 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
   return (
     <>
       {controls}
-      {keys.includes(now) ? <Notice>{monthLabel(now)} ยังไม่จบเดือน (*) ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว และไม่นับเป็นเดือนสูงสุด/ต่ำสุด</Notice> : null}
+      {now ? <Notice>{long(now)} ยังไม่จบ{days ? "ช่วง" : "เดือน"} (*) ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว และไม่นับเป็นสูงสุด/ต่ำสุด</Notice> : null}
       <FilterBar filter={filter} sessions={data}>
         <div className="flex flex-wrap gap-2">
           <ExportMenu size="sm" label="ส่งออก" build={async () => multiBook({
-            rangeText: rangeLabel(range), monthLabel, shortLabel: short, keys, focus, byMonth, filter: exportFilter,
+            rangeText, monthLabel: long, shortLabel: short, keys, focus, byMonth, filter: exportFilter,
             crew: await loadCrew(keys.flatMap((k) => byMonth.get(k) ?? [])),
           })} />
-          <SlidesMenu label="สไลด์" title={`GLORY เทียบหลายเดือน ${rangeLabel(range)}`} build={(target) => buildMultiDeck({
-            rangeText: rangeLabel(range), keys, focus, label: short, longLabel: monthLabel, byMonth, now,
+          <SlidesMenu label="สไลด์" title={`GLORY เทียบหลายเดือน ${rangeText}`} build={(target) => buildMultiDeck({
+            rangeText, keys, focus, label: short, longLabel: long, byMonth, now,
             filterText: filterText(exportFilter).join(" · "), exportedAt: bkkStamp(new Date().toISOString()),
           }, target)} />
         </div>
@@ -753,9 +793,9 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
       {complete.length ? (
         <div className="my-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {([
-            ["GMV สูงสุด", best ? monthLabel(best) : "-", best ? fmtMetric("baht", valueAt(best, "gmv")) : ""],
-            ["GMV ต่ำสุด", worst ? monthLabel(worst) : "-", worst ? fmtMetric("baht", valueAt(worst, "gmv")) : ""],
-            ["GMV เฉลี่ยต่อเดือน", fmtMetric("baht", gmvSum / complete.length), `${complete.length} เดือนที่จบแล้ว`],
+            ["GMV สูงสุด", best ? long(best) : "-", best ? fmtMetric("baht", valueAt(best, "gmv")) : ""],
+            ["GMV ต่ำสุด", worst ? long(worst) : "-", worst ? fmtMetric("baht", valueAt(worst, "gmv")) : ""],
+            [days ? "GMV เฉลี่ยต่อช่วง" : "GMV เฉลี่ยต่อเดือน", fmtMetric("baht", gmvSum / complete.length), `${complete.length} ${days ? "ช่วง" : "เดือน"}ที่จบแล้ว`],
             ["แนวโน้ม", firstDone && lastDone && firstDone !== lastDone ? `${short(firstDone)} → ${short(lastDone)}` : "-", ""],
           ] as const).map(([label, big, sub], i) => (
             <div key={label} className="rounded-xl border bg-card px-3 py-2.5">
@@ -770,7 +810,7 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
       ) : null}
 
       <section className="my-4">
-        <h2 className="mb-2 text-lg font-bold">เทียบทุกตัวชี้วัด <span className="text-sm font-normal text-muted-foreground">เดือนหลัก: {monthLabel(focus)}</span></h2>
+        <h2 className="mb-2 text-lg font-bold">เทียบทุกตัวชี้วัด <span className="text-sm font-normal text-muted-foreground">{days ? "ช่วงหลัก" : "เดือนหลัก"}: {long(focus)}</span></h2>
         <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>
             <TableHeader>
@@ -806,13 +846,13 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
         <BarChart
           label={`${def.label} รายเดือน`}
           categories={keys.map(short)}
-          tooltipTitles={keys.map(monthLabel)}
+          tooltipTitles={keys.map(long)}
           series={[{ name: def.label, color: CUR, values: keys.map((k) => valueAt(k, metric)) }]}
           format={fmtV}
           formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
           highlight={chartBest >= 0 ? chartBest : undefined}
         />
-        {chartBest >= 0 ? <p className="mt-1 text-xs text-muted-foreground">แท่งเข้ม = เดือนที่ {def.label} สูงสุด ({monthLabel(keys[chartBest])})</p> : null}
+        {chartBest >= 0 ? <p className="mt-1 text-xs text-muted-foreground">แท่งเข้ม = {days ? "ช่วง" : "เดือน"}ที่ {def.label} สูงสุด ({long(keys[chartBest])})</p> : null}
       </section>
 
       <section className="my-4">
@@ -885,11 +925,12 @@ function rangePeriod(a: string, b: string): Period {
     : `${m1 === m2 && y1 === y2 ? String(d1) : fmtRangeDay.format(da)}–${fmtRangeDay.format(db)} ${y2}${y1 !== y2 ? ` (เริ่ม ${y1})` : ""} (${n} วัน)`;
   return { from: bkkIso(y1, m1, d1), to: bkkIso(y2, m2, d2 + 1), name };
 }
-type RangeVs = "none" | "prev" | "month" | "custom";
+type RangeVs = "none" | "prev" | "month" | "months" | "custom";
 
 /**
  * เทียบช่วงวันที่: เลือกวันเริ่ม–วันจบเอง (ไม่เกิน 92 วัน) ดูตัวเลขรวมของช่วง (GMV / Viewers / ออเดอร์ ...) + กราฟรายวัน
  *   เทียบกับ: ไม่เทียบ / ช่วงก่อนหน้า (ยาวเท่ากัน ต่อกันพอดี) / ช่วงเดียวกันเดือนก่อน / เลือกช่วงเอง
+ *     / หลายเดือน (ช่วงวันเดียวกันของแต่ละเดือน เช่น 19–22 ก.ค. ส.ค. ก.ย. ต.ค. — ตารางแบบแท็บหลายเดือน · ช่วงไม่เกิน 31 วัน)
  */
 function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMonths: string[]; version: number }) {
   // ค่าเริ่มต้น: 7 วันล่าสุดถึงเมื่อวาน (เดือนนี้ยังไม่มีข้อมูล = 7 วันสุดท้ายของเดือนล่าสุดที่มีข้อมูล)
@@ -911,7 +952,8 @@ function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; data
   const prevRange = vs === "prev" ? [dayKeyShift(a, -n), dayKeyShift(a, -1)]
     : vs === "month" ? [sameDayLastMonth(a), sameDayLastMonth(b)]
       : vs === "custom" ? [ca, cb] : null;
-  const tooLong = n > RANGE_MAX_DAYS || (!!prevRange && dayCount(prevRange[0], prevRange[1]) > RANGE_MAX_DAYS);
+  const months = vs === "months";
+  const tooLong = n > (months ? 31 : RANGE_MAX_DAYS) || (!!prevRange && dayCount(prevRange[0], prevRange[1]) > RANGE_MAX_DAYS);
   const picker = (value: string, onChange: (v: string) => void, label: string, swatch?: string) => (
     <div className="min-w-0 flex-1">
       <span className="mb-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">{swatch ? <span className={cn("size-2.5 rounded-[3px]", swatch)} /> : null}{label}</span>
@@ -919,7 +961,8 @@ function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; data
     </div>
   );
   const VS: [RangeVs, string][] = [
-    ["none", "ไม่เทียบ (ดูช่วงเดียว)"], ["prev", `${n} วันก่อนหน้า`], ["month", "ช่วงเดียวกันเดือนก่อน"], ["custom", "เลือกช่วงเทียบเอง"],
+    ["none", "ไม่เทียบ (ดูช่วงเดียว)"], ["prev", `${n} วันก่อนหน้า`], ["month", "ช่วงเดียวกันเดือนก่อน"],
+    ["months", "ช่วงเดียวกันหลายเดือน"], ["custom", "เลือกช่วงเทียบเอง"],
   ];
   const cur = rangePeriod(a, b);
   const prev = prevRange ? rangePeriod(prevRange[0], prevRange[1]) : null;
@@ -947,8 +990,14 @@ function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; data
           </div>
         ) : prev ? <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2.5 rounded-[3px] bg-viz-prev" />เทียบกับ {prev.name}</p> : null}
       </div>
-      {b >= init.today || (!!prevRange && prevRange[1] >= init.today) ? <Notice>ช่วงที่เลือกมีวันนี้ (ยังไม่จบวัน) ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice> : null}
-      {tooLong ? <StateBox title={`เลือกได้ไม่เกิน ${RANGE_MAX_DAYS} วันต่อช่วง`}>ช่วงยาวกว่านี้ ใช้แท็บ &ldquo;หลายเดือน&rdquo; หรือ &ldquo;ไตรมาส&rdquo; แทน</StateBox>
+      {!months && (b >= init.today || (!!prevRange && prevRange[1] >= init.today)) ? <Notice>ช่วงที่เลือกมีวันนี้ (ยังไม่จบวัน) ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice> : null}
+      {tooLong ? (
+        months ? <StateBox title="เทียบหลายเดือนได้ทีละไม่เกิน 31 วัน">เลือกวันเริ่ม–วันจบให้อยู่ในช่วง 1 เดือน เช่น 19–22</StateBox>
+          : <StateBox title={`เลือกได้ไม่เกิน ${RANGE_MAX_DAYS} วันต่อช่วง`}>ช่วงยาวกว่านี้ ใช้แท็บ &ldquo;หลายเดือน&rdquo; หรือ &ldquo;ไตรมาส&rdquo; แทน</StateBox>
+      ) : months ? (
+        // เปลี่ยนวันเริ่ม / วันจบ = ตั้งช่วงเดือนใหม่ (นับจากเดือนของช่วงที่เลือก)
+        <MultiMonthView key={`${a}|${b}`} toggle={null} dataMonths={dataMonths} version={version} days={{ a, b }} />
+      )
         : prevRange && prevRange[0] === a && prevRange[1] === b ? <StateBox title="เลือกช่วงที่ต่างกัน">ช่วงที่เทียบต้องไม่ใช่ช่วงเดียวกัน</StateBox>
           : (
             <PeriodCompare
