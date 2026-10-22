@@ -1,7 +1,7 @@
 // ข้อมูลส่งออกของหน้าสถิติไลฟ์ (ภาพรวมรายเดือน / ทั้งปี / เทียบช่วง / แคมเปญ) -> ExportBook
 //   ทุกไฟล์มีแผ่น "ข้อมูล" (ช่วงเวลา ตัวกรอง นิยามตัวชี้วัด) ตัวเลขเป็นตัวเลขจริง คำนวณต่อใน Excel / Google Sheet ได้
 
-import type { Cell, ExportBook, ExportSheet } from "@/lib/export";
+import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { accountLabel, accountsOf, bkkParts, changeOf, crewKey, METRICS, totalsOf, type LiveCrew, type LiveSession, type Totals } from "@/lib/live-stats";
 
 type Kind = (typeof METRICS)[number]["kind"];
@@ -106,20 +106,58 @@ function accountSheet(cur: LiveSession[], prev: LiveSession[], prevLabel: string
   };
 }
 
-/** เทียบ 2 ช่วงทีละกลุ่ม: ทุกตัวชี้วัด ช่วง A / ช่วง B / เปลี่ยน % */
-function pairSheet(name: string, first: string, aName: string, bName: string, groups: { label: string; a: LiveSession[]; b: LiveSession[] }[]): ExportSheet {
+/**
+ * เทียบ 2 ช่วงทีละกลุ่ม (วัน / ไตรมาส / บัญชี): หัวตาราง 2 ชั้น อ่านง่าย
+ *   แถว 1 = ช่วงหลัก / ช่วงเทียบ คืออะไร · แถว 2 = ชื่อตัวชี้วัด (ระบายสีสลับทีละกลุ่ม) · แถว 3 = ช่วงหลัก | ช่วงเทียบ | เปลี่ยน
+ *   (เดิมหัวคอลัมน์ยาว "GMV 19–22 ต.ค. 2026 (4 วัน)" ซ้ำทุกคอลัมน์ อ่านภาพรวมยาก)
+ *   ตัวชี้วัดเรียงแบบตารางที่ทีมใช้ (GMV, ชั่วโมง, GMV/ชม., ออเดอร์, Viewers ...) · CTR / CO เปลี่ยนเป็น pp · ช่องเปลี่ยน: บวก = เขียว / ลบ = แดง
+ *   total = แถว "รวม" ท้ายตาราง (ตัวหนา)
+ */
+function pairSheet(
+  name: string, first: string, aName: string, bName: string, groups: { label: string; a: LiveSession[]; b: LiveSession[] }[],
+  total?: { a: LiveSession[]; b: LiveSession[] },
+): ExportSheet {
+  const metrics = MULTI_ORDER.map((k) => METRICS.find((m) => m.key === k)!);
+  const TINT = ["FDE8F0", "EEF1F6"];
+  const rowStyles: Record<number, RowStyle> = {};
+  const cellStyles: Record<string, RowStyle> = {};
+  metrics.forEach((_, i) => {
+    for (let j = 0; j < 3; j++) {
+      const col = 1 + i * 3 + j;
+      cellStyles[`1:${col}`] = { bg: TINT[i % 2], bold: true, align: j === 0 ? "left" : "center" };
+      cellStyles[`2:${col}`] = { bg: TINT[i % 2], bold: true, align: "center" };
+    }
+  });
+  cellStyles["1:0"] = { bg: "FFFFFF", bold: true };
+  cellStyles["2:0"] = { bg: TINT[0], bold: true };
+  const all = [...groups.map((g) => ({ ...g, total: false })), ...(total ? [{ label: "รวม", ...total, total: true }] : [])];
+  const body = all.map((g, gi): Cell[] => {
+    const ta = totalsOf(g.a), tb = totalsOf(g.b);
+    const r = 3 + gi;
+    if (g.total) rowStyles[r] = { bg: "FFF7E6", bold: true, border: true };
+    return [g.label, ...metrics.flatMap((m, i) => {
+      const va = ta.lives ? m.value(ta) : null, vb = tb.lives ? m.value(tb) : null;
+      const d = deltaOf(m.kind, va, vb);
+      if (d && Math.abs(d.value) >= (m.kind === "pct" ? 0.005 : 0.0005)) {
+        cellStyles[`${r}:${1 + i * 3 + 2}`] = d.value > 0
+          ? { bg: g.total ? "FFF7E6" : "EAF6EE", color: "1E7B3A", bold: g.total }
+          : { bg: g.total ? "FFF7E6" : "FDECEC", color: "B42318", bold: g.total };
+      }
+      return [num(m.kind, va), num(m.kind, vb), m.kind === "pct" ? d?.text ?? null : d ? { v: d.value, f: "pct" as const } : null];
+    })];
+  });
   return {
     name,
+    header: 2,
     rows: [
-      [first, ...METRICS.flatMap((m) => [`${m.label} ${aName}`, `${m.label} ${bName}`, `${m.label} เปลี่ยน`])],
-      ...groups.map((g): Cell[] => {
-        const ta = totalsOf(g.a), tb = totalsOf(g.b);
-        return [g.label, ...METRICS.flatMap((m) => {
-          const va = ta.lives ? m.value(ta) : null, vb = tb.lives ? m.value(tb) : null;
-          return [num(m.kind, va), num(m.kind, vb), pct(va, vb)];
-        })];
-      }),
+      [`ช่วงหลัก = ${aName}   ·   ช่วงเทียบ = ${bName}   ·   เปลี่ยน = ช่วงหลักเทียบช่วงเทียบ (CTR / CO เป็น pp)`],
+      ["", ...metrics.flatMap((m) => [m.note && m.note.length <= 8 ? `${m.label} (${m.note})` : m.label, "", ""])],
+      [first, ...metrics.flatMap(() => ["ช่วงหลัก", "ช่วงเทียบ", "เปลี่ยน"])],
+      ...body,
     ],
+    rowStyles,
+    cellStyles,
+    colWidths: [Math.min(36, Math.max(12, ...all.map((g) => g.label.length + 2), first.length + 2)), ...metrics.flatMap(() => [13, 13, 10])],
   };
 }
 
@@ -215,7 +253,7 @@ export function yearBook(o: {
           ...curKeys.map((k, i): Cell[] => [monthLabel(k), ...metricCells(t(k)), num("baht", gmv(prevKeys[i])), pct(gmv(k), gmv(prevKeys[i])), pct(gmv(k), gmv(before(k)))]),
         ],
       },
-      pairSheet("รายไตรมาส", "ไตรมาส", aName, bName, o.quarters),
+      pairSheet("รายไตรมาส", "ไตรมาส", aName, bName, o.quarters, { a: o.curList, b: o.prevList }),
       accountSheet(o.curList, o.prevList, bName),
       sessionSheet("ไลฟ์", o.curList, o.crew),
     ],
@@ -325,11 +363,10 @@ export function compareBook(o: {
       infoSheet([["รายงาน", o.report], [`ช่วง ${o.aName}`, o.aRange], [`เทียบกับ ${o.bName}`, o.bRange]], o.filter),
       summarySheet("สรุปเทียบ", o.aName, totalsOf(o.a), [{ label: o.bName, totals: totalsOf(o.b) }]),
       ...platformSheets(o.aName, o.a, [{ label: o.bName, list: o.b }]),
-      pairSheet("แยกบัญชี", "บัญชี", o.aName, o.bName, [
-        ...accounts.map((acc) => ({ label: accountLabel(acc), a: o.a.filter((s) => keyOf(s) === acc.key), b: o.b.filter((s) => keyOf(s) === acc.key) })),
-        { label: "รวม", a: o.a, b: o.b },
-      ]),
-      ...(o.time.length > 1 ? [pairSheet(o.timeName, o.timeName, o.aName, o.bName, o.time)] : []),
+      pairSheet("แยกบัญชี", "บัญชี", o.aName, o.bName,
+        accounts.map((acc) => ({ label: accountLabel(acc), a: o.a.filter((s) => keyOf(s) === acc.key), b: o.b.filter((s) => keyOf(s) === acc.key) })),
+        { a: o.a, b: o.b }),
+      ...(o.time.length > 1 ? [pairSheet(o.timeName, o.timeName, o.aName, o.bName, o.time, { a: o.a, b: o.b })] : []),
       sessionSheet(`ไลฟ์ ${o.aName}`, o.a, o.crew),
       sessionSheet(`ไลฟ์ ${o.bName}`, o.b, o.crew),
     ],
