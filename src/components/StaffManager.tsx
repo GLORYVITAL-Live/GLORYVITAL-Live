@@ -645,9 +645,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
     .map((t) => ({ hours: parseTierHours(t.hours) ?? 0, rate: Number(t.rate.replace(/[,\s]/g, "")) }))
     .filter((t) => t.hours > 0 && t.rate > 0);
   const [perm, setPerm] = useState(() => permsOf(person));
-  // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) แยกฝั่ง: ตั้งได้เฉพาะฝั่งที่ตัวเองมีสิทธิ์ · ของตัวเองแก้ไม่ได้
+  // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) แยกฝั่ง: ตั้งได้เฉพาะคนที่ดูเอกสารได้ทั้งสองฝั่ง (คนที่ได้ฝั่งเดียวไม่เห็นช่องนี้) · ของตัวเองแก้ไม่ได้
   const [docs, setDocs] = useState({ mc: person?.can_view_pay_docs ?? false, admin: person?.can_view_pay_docs_admin ?? false });
-  const payDocsViewer = docsScope.mc || docsScope.admin;
+  const payDocsViewer = docsScope.mc && docsScope.admin;
   // ฝั่ง Mc ครอบหลักฐานไลฟ์อยู่แล้ว (จัดการ Mc = จัดการหลักฐานได้ / ดู Mc = ดูหลักฐานได้)
   const proofsLevel: Level = RANK[perm.mc] > RANK[perm.proofs] ? perm.mc : perm.proofs;
   const [saving, setSaving] = useState(false);
@@ -696,8 +696,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
           ? { can_plan_slots: perm.plan === "edit", ...(viewReady || perm.plan === "view" ? { can_view_plan: perm.plan === "view" } : {}) }
           : {}),
         // สิทธิ์ดูเอกสาร: ส่งเฉพาะฝั่งที่ตัวเองมีสิทธิ์ (ฝั่ง Admin ต้องรัน SQL แยกก่อน)
-        ...(role === "owner" && !isMe && docsScope.mc ? { can_view_pay_docs: docs.mc } : {}),
-        ...(role === "owner" && !isMe && docsScope.admin && (docsAdminReady || docs.admin) ? { can_view_pay_docs_admin: docs.admin } : {}),
+        // (ไม่ส่ง = ไม่แตะ — คนที่ดูเอกสารได้ฝั่งเดียวแก้ Owner คนอื่นได้ตามปกติ)
+        ...(role === "owner" && !isMe && payDocsViewer ? { can_view_pay_docs: docs.mc } : {}),
+        ...(role === "owner" && !isMe && payDocsViewer && (docsAdminReady || docs.admin) ? { can_view_pay_docs_admin: docs.admin } : {}),
         // รับอีเมลแจ้งยกเลิก (ตั้งให้ตัวเองได้) ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(role === "owner" && (notifyReady || anyNotify) ? { notify_cancel_mc: notifyOn.mc, notify_cancel_admin: notifyOn.admin } : {}),
       };
@@ -963,18 +964,16 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
                   เอกสารทำเบิก (บัตร ปชช. / บัญชีธนาคาร) · ใบ 50 ทวิ · เอกสารรับเงิน + จับคู่ / ตรวจเอกสาร ของฝั่งที่ติ๊ก (ข้อมูลส่วนตัว — ให้เฉพาะคนที่ต้องใช้)
                 </span>
                 {([["mc", "เอกสารของ Mc"], ["admin", "เอกสารของ Admin"]] as const).map(([side, text]) => {
-                  const mineSide = docsScope[side];
                   const sqlMissing = side === "admin" && !docsAdminReady;
                   return (
                     <Label key={side} className="items-start py-1 leading-snug font-normal">
                       <Checkbox
-                        checked={isMe ? mineSide : docs[side]} disabled={isMe || !mineSide}
+                        checked={isMe ? docsScope[side] : docs[side]} disabled={isMe}
                         onCheckedChange={(v) => setDocs({ ...docs, [side]: v === true })} className="mt-0.5"
                       />
                       <span>
                         {text}
-                        {!isMe && !mineSide ? <span className="block text-xs text-muted-foreground">ตั้งได้เฉพาะคนที่ดูเอกสารฝั่งนี้ได้</span> : null}
-                        {!isMe && mineSide && sqlMissing && docs.admin ? <span className="block text-xs text-destructive">ต้องรัน SQL 20261106000000_pay_docs_admin ใน Supabase ก่อน</span> : null}
+                        {!isMe && sqlMissing && docs.admin ? <span className="block text-xs text-destructive">ต้องรัน SQL 20261106000000_pay_docs_admin ใน Supabase ก่อน</span> : null}
                       </span>
                     </Label>
                   );

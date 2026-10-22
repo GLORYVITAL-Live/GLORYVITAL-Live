@@ -123,8 +123,9 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
 
 /** สิทธิ์ดูเอกสาร: คอลัมน์ -> ฝั่ง (can_view_pay_docs = Mc · can_view_pay_docs_admin = Admin — SQL 20261106000000_pay_docs_admin) */
 const DOC_FIELDS = ["can_view_pay_docs", "can_view_pay_docs_admin"] as const;
-const DOC_SIDE = { can_view_pay_docs: "mc", can_view_pay_docs_admin: "admin" } as const;
-const noPayDocsGrant = (side: "mc" | "admin") => fail(`ติ๊ก / เอาสิทธิ์ดูเอกสารฝั่ง ${side === "mc" ? "Mc" : "Admin"} ออกได้เฉพาะคนที่มีสิทธิ์นี้`, 403);
+/** ให้ / เอาสิทธิ์ดูเอกสารออกได้เฉพาะคนที่ดูเอกสารได้ทั้งฝั่ง Mc และ Admin (คนที่ได้ฝั่งเดียวให้ต่อไม่ได้) */
+const canGrantDocs = (s: { mc: boolean; admin: boolean }) => s.mc && s.admin;
+const noPayDocsGrant = () => fail("ติ๊ก / เอาสิทธิ์ดูเอกสารออกได้เฉพาะคนที่ดูเอกสารได้ทั้งฝั่ง Mc และ Admin", 403);
 const docsSql = (msg: string) => /can_view_pay_docs_admin/.test(msg) ? "ต้องรัน SQL 20261106000000_pay_docs_admin ใน Supabase ก่อน ถึงจะตั้งสิทธิ์ดูเอกสารฝั่ง Admin แยกได้" : msg;
 
 /** มีสิทธิ์อย่างน้อย 1 อย่าง (จัดการได้ หรือ ดูได้) */
@@ -194,8 +195,8 @@ export async function GET() {
   const { data: teamRows, error: teamErr } = await db.from("staff").select("id, live_platform").in("role", ["mc", "admin"]);
   const team = new Map((teamErr ? [] : teamRows ?? []).map((x) => [x.id as number, liveTeamOf(x.live_platform)]));
   const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
-  // Owner คนไหนดูเอกสารฝั่งไหนได้ (บอกเฉพาะคนที่ดูเอกสารได้เอง — ตั้งให้คนอื่นได้) · ยังไม่ได้รัน SQL ฝั่ง Admin = ไม่มีค่าฝั่ง Admin
-  const docRows = !payDocsViewer ? [] : await (async () => {
+  // Owner คนไหนดูเอกสารฝั่งไหนได้ (บอกเฉพาะคนที่ให้สิทธิ์นี้ได้ = ดูได้ทั้งสองฝั่ง) · ยังไม่ได้รัน SQL ฝั่ง Admin = ไม่มีค่าฝั่ง Admin
+  const docRows = !canGrantDocs(docsScope) ? [] : await (async () => {
     const both = await db.from("staff").select("id, can_view_pay_docs, can_view_pay_docs_admin").eq("role", "owner");
     if (!both.error) return both.data ?? [];
     const old = await db.from("staff").select("id, can_view_pay_docs").eq("role", "owner");
@@ -245,7 +246,7 @@ export async function POST(request: Request) {
   // สิทธิ์ดูเอกสาร: ติ๊กได้เฉพาะฝั่งที่ตัวเองมีสิทธิ์ · ไม่ติ๊ก = ค่าเริ่มต้นของคอลัมน์ (ปิด — ไม่ต้องส่ง)
   if (c.data && DOC_FIELDS.some((k) => c.data![k])) {
     const mine = await payDocsScope(r.me);
-    for (const k of DOC_FIELDS) if (c.data[k] && !mine[DOC_SIDE[k]]) return noPayDocsGrant(DOC_SIDE[k]);
+    if (!canGrantDocs(mine)) return noPayDocsGrant();
   }
   for (const k of DOC_FIELDS) if (c.data && !c.data[k]) delete c.data[k];
   // TikTok = ค่าเริ่มต้นของคอลัมน์ ไม่ต้องส่ง (ยังไม่ได้รัน SQL ก็เพิ่มคนได้ตามเดิม)
@@ -312,7 +313,7 @@ export async function PATCH(request: Request) {
         const before = (d as Record<string, unknown> | null)?.[k] === true;
         if (changes[k] === before) { delete changes[k]; continue; }
         if (isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ดูเอกสารแก้ให้");
-        if (!mine[DOC_SIDE[k]]) return noPayDocsGrant(DOC_SIDE[k]);
+        if (!canGrantDocs(mine)) return noPayDocsGrant();
         (cur as Record<string, unknown>)[k] = before;
       }
     }
