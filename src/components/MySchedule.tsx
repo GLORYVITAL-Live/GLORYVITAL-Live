@@ -8,7 +8,7 @@ import { ClipboardListIcon, IdCardIcon } from "lucide-react";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
-import { MyRank } from "@/components/MyRank";
+import { MyRank, RankChip, useMyRank } from "@/components/MyRank";
 import { MyTawi } from "@/components/MyTawi";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +34,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const [failed, setFailed] = useState<{ month: string; message: string } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [cancelItem, setCancelItem] = useState<MyItem | null>(null);
+  // แร็งค์ของ Mc (ป้ายข้างชื่อ + กล่องท้ายรายการคิว)
+  const rank = useMyRank(open && role === "mc");
 
   const [tick, setTick] = useState(0);
   const reload = () => setTick((n) => n + 1);
@@ -83,7 +85,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             </AvatarFallback>
           </Avatar>
           <span className="min-w-0 flex-1 leading-tight">
-            <span className="block truncate font-semibold">{profile?.name ?? who}</span>
+            <span className="block truncate font-semibold">{profile?.name ?? who}{rank ? <RankChip data={rank} /> : null}</span>
             <span className="block truncate text-xs text-muted-foreground">
               {profile ? [profile.email, profile.phone].filter(Boolean).join(" · ") : " "}
             </span>
@@ -133,7 +135,6 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             <p className="rounded-xl border border-warning-border bg-warning px-3 py-2 text-xs text-warning-foreground">ยังไม่ได้ตั้งค่าจ้างต่อชั่วโมง ติดต่อทีมงานเพื่อดูยอดเงิน</p>
           )
         ) : null}
-        {role === "mc" ? <MyRank open={open} /> : null}
         <div className="flex flex-wrap gap-x-4">
           <Button variant="link" onClick={onOpenRules} className="h-auto px-0 font-semibold">
             <ClipboardListIcon />กฎการทำงาน
@@ -233,6 +234,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
               </section>
             ))
           )}
+          {/* แร็งค์อยู่ในส่วนที่เลื่อนได้ (กาง "แร็งค์คิดยังไง?" แล้วยาว) · ป้ายข้างชื่อกดแล้วเลื่อนมาที่นี่ */}
+          {rank ? <div className="mt-3"><MyRank data={rank} /></div> : null}
         </DialogBody>
       </AppDialog>
 

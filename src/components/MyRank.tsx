@@ -23,28 +23,45 @@ const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 const mon = (m: string) => fmtMonthShort.format(new Date(`${m}-01T12:00:00Z`));
 const day = (d: string) => `${Number(d.slice(8, 10))} ${mon(d.slice(0, 7))}`;
 
-export function MyRank({ open }: { open: boolean }) {
+/** โหลดแร็งค์ตอนเปิดตารางของฉัน (โหลดไม่สำเร็จ = null ไม่แสดง ส่วนอื่นใช้ได้ตามปกติ) */
+export function useMyRank(open: boolean) {
   const [data, setData] = useState<MyRankData | null>(null);
-  const [error, setError] = useState("");
-
   useEffect(() => {
     if (!open) return;
     let alive = true;
     api<{ rank: MyRankData }>("/api/my/rank")
-      .then((res) => {
-        if (!res.ok) throw new Error(res.message);
-        if (alive) { setData(res.rank); setError(""); }
-      })
-      .catch((err) => { if (alive) setError((err as Error).message); });
+      .then((res) => { if (alive && res.ok) setData(res.rank); })
+      .catch(() => undefined);
     return () => { alive = false; };
   }, [open]);
+  return data;
+}
 
-  // โหลดไม่สำเร็จ = ไม่แสดงกล่องนี้ (ส่วนอื่นของตารางของฉันใช้ได้ตามปกติ)
-  if (error || !data) return null;
+export const RANK_ANCHOR = "my-rank";
+
+/** ป้ายแร็งค์ข้างชื่อ (แร็งค์เดือนที่แล้ว · ยังไม่มี = เดือนนี้ถึงตอนนี้) กดแล้วเลื่อนไปกล่องแร็งค์ */
+export function RankChip({ data }: { data: MyRankData }) {
+  const e = data.last?.tier ? data.last : data.current?.tier ? data.current : null;
+  return (
+    <button
+      type="button"
+      onClick={() => document.getElementById(RANK_ANCHOR)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+      className={cn(
+        "ml-1.5 inline-flex items-center rounded-full border px-1.5 align-middle text-[11px] font-bold outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        e?.tier ? TIER_CLASS[e.tier] : "text-muted-foreground",
+      )}
+      title={e ? `แร็งค์ ${mon(e.month)}${e === data.current ? " (ชั่วคราว)" : ""} — กดดูรายละเอียด` : "กดดูวิธีได้แร็งค์"}
+    >
+      {e?.tier ? `แร็งค์ ${e.tier}` : "ยังไม่มีแร็งค์"}
+    </button>
+  );
+}
+
+export function MyRank({ data }: { data: MyRankData }) {
   const quotaShown = !!(data.last?.quota || data.current?.quota);
 
   return (
-    <section aria-label="แร็งค์ของฉัน" className="rounded-xl border px-3 py-2.5">
+    <section id={RANK_ANCHOR} aria-label="แร็งค์ของฉัน" className="scroll-mt-2 rounded-xl border px-3 py-2.5">
       <h3 className="flex items-center gap-1.5 text-sm font-bold">
         <TrophyIcon className="size-4 text-primary" />แร็งค์ของฉัน
       </h3>
