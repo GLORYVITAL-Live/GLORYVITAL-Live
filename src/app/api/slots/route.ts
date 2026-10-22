@@ -3,6 +3,7 @@ import { fail, ok, requireMe } from "@/lib/api";
 import { withPlatformLabels } from "@/lib/platform";
 import { enqueueIfShared, missingCalendarCounts, processCalendarJobs, usesCalendar } from "@/lib/calendar";
 import { bookingLimits, getSettings, openAdminSlots, openMcSlots, scheduleNotice, upcomingQueues } from "@/lib/data";
+import { myQuotas } from "@/lib/mc-quota-db";
 
 // หน้าแรก: ประกาศ + slot ที่ว่าง (?role=mc | admin) — แทน action "init" / "adminInit"
 // Owner ที่มีสิทธิ์ฝั่งนั้นเปิดดูได้ (ดูอย่างเดียว เห็นแบบเดียวกับ Mc / Admin เสริม)
@@ -47,6 +48,13 @@ export async function GET(request: Request) {
   // เปิดหน้าครั้งแรก (?check=1) แล้วยังมีคิวไม่ขึ้นปฏิทิน: ถาม Google ว่าแชร์แล้วหรือยัง แชร์แล้วลงคิวที่ค้างให้เลย
   //   (หลังตอบผู้ใช้ ไม่ต้องรอ — รีเฟรชรอบถัดไปของหน้าจอง ป้ายเตือนจะหายเอง) ไม่ต้องกด "แชร์แล้ว เช็กเลย"
   const calendarMissing = personId && missing ? missing.get(personId) ?? 0 : 0;
+  // สิทธิ์จองต่อเดือนตามแร็งค์ (เดือนที่มี slot ให้จอง) — โหลดไม่สำเร็จก็จองได้ตามปกติ (ตอนจองฐานข้อมูลตรวจอีกชั้น)
+  const quota = role === "mc" && r.me.mc
+    ? await myQuotas(settings, r.me.mc.id, slots.map((s) => s.date.slice(0, 7))).catch((err) => {
+      console.warn("โหลดสิทธิ์จองไม่สำเร็จ:", (err as Error).message);
+      return null;
+    })
+    : null;
   if (calendarMissing && personId && new URL(request.url).searchParams.get("check") === "1") {
     after(async () => {
       const queued = await enqueueIfShared(role, personId, r.me.email).catch(() => 0);
@@ -63,5 +71,6 @@ export async function GET(request: Request) {
     // หน้าต่างยืนยันการจองย้ำกฎยกเลิก (ค่าเดียวกับ /api/my / ฟังก์ชันยกเลิกในฐานข้อมูล)
     cancelMinHours: Number(settings.cancel_min_hours) || 6,
     calendarMissing,
+    ...(quota ? { quota } : {}),
   });
 }

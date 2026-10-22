@@ -15,7 +15,7 @@ import type { Me } from "@/lib/types";
 //   GET     รายชื่อทั้งหมด + จำนวนคิวตั้งแต่วันนี้
 //   POST    เพิ่มคน
 //   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Commit / Admin เสริม / Mc ประจำ / สิทธิ์ Owner (Mc / Admin / หลักฐานไลฟ์ / Data analytics / Plan Slot Live)
-//           / รับอีเมลแจ้งยกเลิกคิว (Owner) / ทีม Shopee (Mc / Admin)
+//           / รับอีเมลแจ้งยกเลิกคิว (Owner) / ทีม Shopee (Mc / Admin) / กำหนดสิทธิ์จอง Mc (Owner)
 //   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
 // สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
 //         รายชื่อและสิทธิ์ของ Owner / รายชื่อ Marketing จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
@@ -117,6 +117,8 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     for (const k of NOTIFY_FIELDS) if (k in body) out[k] = body[k] === true;
     // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ฝั่ง Mc / ฝั่ง Admin: บันทึกเฉพาะตอนส่งมา (ตั้งได้เฉพาะคนที่มีสิทธิ์ฝั่งนั้น — ตรวจใน POST / PATCH)
     for (const k of DOC_FIELDS) if (k in body) out[k] = body[k] === true;
+    // กำหนดสิทธิ์จอง Mc ต่อเดือน (SQL 20261107000000_mc_quota): บันทึกเฉพาะตอนส่งมา (ตั้งได้เฉพาะ Owner ที่จัดการได้ทั้งคู่ — ตรวจใน POST / PATCH)
+    if ("can_manage_quota" in body) out.can_manage_quota = body.can_manage_quota === true;
   }
   return { data: out };
 }
@@ -126,7 +128,8 @@ const DOC_FIELDS = ["can_view_pay_docs", "can_view_pay_docs_admin"] as const;
 /** ให้ / เอาสิทธิ์ดูเอกสารออกได้เฉพาะคนที่ดูเอกสารได้ทั้งฝั่ง Mc และ Admin (คนที่ได้ฝั่งเดียวให้ต่อไม่ได้) */
 const canGrantDocs = (s: { mc: boolean; admin: boolean }) => s.mc && s.admin;
 const noPayDocsGrant = () => fail("ติ๊ก / เอาสิทธิ์ดูเอกสารออกได้เฉพาะคนที่ดูเอกสารได้ทั้งฝั่ง Mc และ Admin", 403);
-const docsSql = (msg: string) => /can_view_pay_docs_admin/.test(msg) ? "ต้องรัน SQL 20261106000000_pay_docs_admin ใน Supabase ก่อน ถึงจะตั้งสิทธิ์ดูเอกสารฝั่ง Admin แยกได้" : msg;
+const docsSql = (msg: string) => /can_view_pay_docs_admin/.test(msg) ? "ต้องรัน SQL 20261106000000_pay_docs_admin ใน Supabase ก่อน ถึงจะตั้งสิทธิ์ดูเอกสารฝั่ง Admin แยกได้"
+  : /can_manage_quota/.test(msg) ? "ต้องรัน SQL 20261107000000_mc_quota ใน Supabase ก่อน ถึงจะตั้งสิทธิ์กำหนดสิทธิ์จอง Mc ได้" : msg;
 
 /** มีสิทธิ์อย่างน้อย 1 อย่าง (จัดการได้ หรือ ดูได้) */
 const hasAnyPerm = (pick: (k: string) => unknown) =>
@@ -202,6 +205,9 @@ export async function GET() {
     const old = await db.from("staff").select("id, can_view_pay_docs").eq("role", "owner");
     return (old.data ?? []) as { id: number; can_view_pay_docs: boolean; can_view_pay_docs_admin?: boolean }[];
   })();
+  // Owner ที่ติ๊ก "กำหนดสิทธิ์จอง Mc" (ยังไม่ได้รัน SQL 20261107000000_mc_quota = ไม่มีช่องนี้)
+  const { data: quotaRows, error: quotaErr } = await db.from("staff").select("id, can_manage_quota").eq("role", "owner");
+  const quotaMgr = new Map((quotaErr ? [] : quotaRows ?? []).map((x) => [x.id as number, x.can_manage_quota === true]));
   const docViewers = new Map(docRows.map((x) => [x.id as number, {
     can_view_pay_docs: x.can_view_pay_docs === true,
     ...(x.can_view_pay_docs_admin !== undefined ? { can_view_pay_docs_admin: x.can_view_pay_docs_admin === true } : {}),
@@ -218,6 +224,7 @@ export async function GET() {
       ...(payDocs.has(s.id) && docsCan(docsScope, s.role) ? { payDocs: payDocs.get(s.id) } : {}),
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
       ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
+      ...(quotaMgr.has(s.id) ? { can_manage_quota: quotaMgr.get(s.id) } : {}),
       ...(docViewers.get(s.id) ?? {}),
       ...(s.email ? pushOf(s.email) : {}),
     })),
@@ -249,6 +256,7 @@ export async function POST(request: Request) {
     if (!canGrantDocs(mine)) return noPayDocsGrant();
   }
   for (const k of DOC_FIELDS) if (c.data && !c.data[k]) delete c.data[k];
+  if (c.data && !c.data.can_manage_quota) delete c.data.can_manage_quota;
   // TikTok = ค่าเริ่มต้นของคอลัมน์ ไม่ต้องส่ง (ยังไม่ได้รัน SQL ก็เพิ่มคนได้ตามเดิม)
   if (c.data?.live_platform === "tiktok") delete c.data.live_platform;
 
@@ -315,6 +323,17 @@ export async function PATCH(request: Request) {
         if (isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ดูเอกสารแก้ให้");
         if (!canGrantDocs(mine)) return noPayDocsGrant();
         (cur as Record<string, unknown>)[k] = before;
+      }
+    }
+    // กำหนดสิทธิ์จอง Mc: แก้ของตัวเองไม่ได้ · ให้ / เอาออกได้เฉพาะ Owner ที่จัดการได้ทั้ง Mc และ Admin · ไม่เปลี่ยน = ไม่ส่ง
+    if ("can_manage_quota" in changes) {
+      const { data: q, error: qErr } = await db.from("staff").select("can_manage_quota").eq("id", id).maybeSingle();
+      const before = !qErr && q?.can_manage_quota === true;
+      if (changes.can_manage_quota === before) delete changes.can_manage_quota;
+      else {
+        if (isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ทั้ง Mc และ Admin แก้ให้");
+        if (!r.scope.full) return noRole("owner");
+        (cur as Record<string, unknown>).can_manage_quota = before;
       }
     }
   }

@@ -3,6 +3,7 @@ import { fail, ok, requireMe } from "@/lib/api";
 import { processSyncJobs } from "@/lib/sync";
 import { bookingRange, getSettings, personPeriod, writeLogs } from "@/lib/data";
 import { notifyBooked } from "@/lib/notifications";
+import { myQuotas } from "@/lib/mc-quota-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import { rangeText } from "@/lib/window";
 import type { ActionResult } from "@/lib/types";
@@ -56,13 +57,26 @@ export async function POST(request: Request) {
 
   let results: ActionResult[] = [];
   if (allowed.length) {
+    // สิทธิ์จองต่อเดือนตามแร็งค์ (เปิดใช้อยู่ + ไม่ใช่ Mc ประจำ) {"YYYY-MM": slot สูงสุด} ฐานข้อมูลนับรวมคิวที่มีอยู่แล้วตอนจอง
+    let monthMax: Record<string, number> | null = null;
+    if (role === "mc") {
+      const months = (rows ?? []).filter((s) => allowed.includes(Number(s.id))).map((s) => String(s.live_date).slice(0, 7));
+      try {
+        const q = await myQuotas(settings, r.me.mc!.id, months);
+        if (q) monthMax = Object.fromEntries(q.map((x) => [x.month, x.max]));
+      } catch (err) {
+        return fail("เช็กสิทธิ์จองไม่สำเร็จ: " + (err as Error).message, 500);
+      }
+    }
     // p_until = วันสุดท้ายที่คนนี้จองได้ (ช่วงที่ใส่วันสุดท้ายเองเปิดเกินเดือนที่เปิดจองได้) ว่าง = ฐานข้อมูลใช้เดือนที่เปิดจอง
     const call = (until: boolean) => role === "mc"
-      ? db.rpc("book_mc_slots", { p_mc_id: r.me.mc!.id, p_slot_ids: allowed, ...(until ? { p_until: range.to } : {}) })
+      ? db.rpc("book_mc_slots", {
+        p_mc_id: r.me.mc!.id, p_slot_ids: allowed, ...(until ? { p_until: range.to } : {}), ...(monthMax ? { p_month_max: monthMax } : {}),
+      })
       : db.rpc("assign_admin_slots", { p_admin_id: r.me.admin!.id, p_slot_ids: allowed, ...(until ? { p_until: range.to } : {}) });
     let { data, error } = await call(true);
-    // ยังไม่ได้รัน SQL 20261019000000_book_until (ฟังก์ชันยังไม่มี p_until) = เรียกแบบเดิม
-    if (error && /p_until|could not find the function/i.test(error.message)) ({ data, error } = await call(false));
+    // ยังไม่ได้รัน SQL 20261019000000_book_until (ฟังก์ชันยังไม่มี p_until) = เรียกแบบเดิม (จำกัดสิทธิ์ต่อเดือนอยู่ = ไม่ข้ามการตรวจ)
+    if (error && !monthMax && /p_until|could not find the function/i.test(error.message)) ({ data, error } = await call(false));
     if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
     results = data;
   }

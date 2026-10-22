@@ -2,19 +2,21 @@
 
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { CampaignView } from "@/components/CampaignView";
+import { McQuotaPanel } from "@/components/McQuotaPanel";
 import { McRankPanel } from "@/components/McRankPanel";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
- * หน้าเจ้าของ > ผลงาน Mc: อันดับ Mc (ตามช่วง) + แคมเปญ (ทีละรอบ / Mc × แคมเปญ)
+ * หน้าเจ้าของ > ผลงาน Mc: อันดับ Mc (ตามช่วง) + สิทธิ์จองต่อเดือนตามแร็งค์ + แคมเปญ (ทีละรอบ / Mc × แคมเปญ)
  *   แยกออกจากสรุปรายเดือน (ค่าจ้าง) เพราะผลงานดูเป็นช่วง ไม่ผูกกับเดือนค่าจ้าง
  */
 
 const PERF_TAB_KEY = "glory_perf_tab";
-const TABS = [["rank", "อันดับ Mc"], ["campaign", "แคมเปญ"]] as const;
+const TABS = [["rank", "อันดับ Mc"], ["quota", "สิทธิ์จอง"], ["campaign", "แคมเปญ"]] as const;
 
 export function PerformanceView() {
-  const tab = useLocal(PERF_TAB_KEY) === "campaign" ? "campaign" : "rank";
+  const saved = useLocal(PERF_TAB_KEY);
+  const tab = saved === "campaign" || saved === "quota" ? saved : "rank";
   return (
     <div className="pb-10">
       <ToggleGroup
@@ -31,7 +33,7 @@ export function PerformanceView() {
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
-      {tab === "rank" ? <McRankPanel /> : <CampaignView />}
+      {tab === "rank" ? <McRankPanel /> : tab === "quota" ? <McQuotaPanel /> : <CampaignView />}
     </div>
   );
 }

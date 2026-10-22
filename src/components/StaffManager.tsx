@@ -63,6 +63,8 @@ type Person = {
   /** Owner: ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ฝั่ง Mc / ฝั่ง Admin (ส่งมาเฉพาะตอนคนที่เปิดดูมีสิทธิ์ดูเอกสาร · ไม่มีฝั่ง Admin = ยังไม่ได้รัน SQL) */
   can_view_pay_docs?: boolean;
   can_view_pay_docs_admin?: boolean;
+  /** Owner: ตั้งสิทธิ์จอง Mc ต่อเดือน (เพิ่มพิเศษ / เปิดปิด) ได้ (ไม่มี = ยังไม่ได้รัน SQL 20261107000000_mc_quota) */
+  can_manage_quota?: boolean;
 };
 type StaffData = {
   staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean>; payDocsViewer?: boolean;
@@ -459,6 +461,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           teamReady={data.staff.some((p) => p.live_platform !== undefined)}
           docsScope={data.docsScope ?? { mc: !!data.payDocsViewer, admin: !!data.payDocsViewer }}
           docsAdminReady={data.staff.some((p) => p.can_view_pay_docs_admin !== undefined)}
+          quotaReady={data.staff.some((p) => p.can_manage_quota !== undefined)}
           others={editing === "new" ? [] : data.staff.filter((p) => p.role === editing.role && p.id !== editing.id)}
           onClose={(changed) => {
             setEditing(null);
@@ -595,8 +598,10 @@ function DuplicatePanel({ role, groups, onMerged }: { role: "mc" | "admin"; grou
   );
 }
 
-function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, teamReady, docsScope, docsAdminReady, others, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, teamReady, docsScope, docsAdminReady, quotaReady, others, onClose }: {
   person: Person | null;
+  /** รัน SQL 20261107000000_mc_quota แล้ว (มีคอลัมน์กำหนดสิทธิ์จอง Mc) */
+  quotaReady: boolean;
   roles: Role[];
   defaultRole: Role;
   isMe: boolean;
@@ -648,6 +653,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) แยกฝั่ง: ตั้งได้เฉพาะคนที่ดูเอกสารได้ทั้งสองฝั่ง (คนที่ได้ฝั่งเดียวไม่เห็นช่องนี้) · ของตัวเองแก้ไม่ได้
   const [docs, setDocs] = useState({ mc: person?.can_view_pay_docs ?? false, admin: person?.can_view_pay_docs_admin ?? false });
   const payDocsViewer = docsScope.mc && docsScope.admin;
+  // กำหนดสิทธิ์จอง Mc ต่อเดือน (หน้าผลงาน Mc > สิทธิ์จอง) — Owner ที่จัดการได้ทั้ง Mc + Admin ได้อยู่แล้ว
+  const [quota, setQuota] = useState(person?.can_manage_quota ?? false);
+  const fullPerm = perm.mc === "edit" && perm.admin === "edit";
   // ฝั่ง Mc ครอบหลักฐานไลฟ์อยู่แล้ว (จัดการ Mc = จัดการหลักฐานได้ / ดู Mc = ดูหลักฐานได้)
   const proofsLevel: Level = RANK[perm.mc] > RANK[perm.proofs] ? perm.mc : perm.proofs;
   const [saving, setSaving] = useState(false);
@@ -699,6 +707,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         // (ไม่ส่ง = ไม่แตะ — คนที่ดูเอกสารได้ฝั่งเดียวแก้ Owner คนอื่นได้ตามปกติ)
         ...(role === "owner" && !isMe && payDocsViewer ? { can_view_pay_docs: docs.mc } : {}),
         ...(role === "owner" && !isMe && payDocsViewer && (docsAdminReady || docs.admin) ? { can_view_pay_docs_admin: docs.admin } : {}),
+        // กำหนดสิทธิ์จอง Mc: ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
+        ...(role === "owner" && !isMe && (quotaReady || quota) ? { can_manage_quota: quota } : {}),
         // รับอีเมลแจ้งยกเลิก (ตั้งให้ตัวเองได้) ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(role === "owner" && (notifyReady || anyNotify) ? { notify_cancel_mc: notifyOn.mc, notify_cancel_admin: notifyOn.admin } : {}),
       };
@@ -985,6 +995,22 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
                 </span>
               </div>
             ) : null}
+            <Label className="mt-2 items-start border-t pt-2 leading-snug font-normal">
+              <Checkbox
+                checked={quota || fullPerm} disabled={isMe || fullPerm}
+                onCheckedChange={(v) => setQuota(v === true)} className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">กำหนดสิทธิ์จอง Mc</span>
+                <span className="block text-xs text-muted-foreground">
+                  {fullPerm
+                    ? "จัดการได้ทั้ง Mc + Admin = ทำได้อยู่แล้ว"
+                    : "หน้าผลงาน Mc > สิทธิ์จอง: ตั้งสิทธิ์จองเพิ่มพิเศษรายคน / เปิดปิดการจำกัด / คำนวณแร็งค์ใหม่ (ต้องมีสิทธิ์ฝั่ง Mc ด้วย)"}
+                  {!isMe && quota && !quotaReady ? <span className="block text-destructive">ต้องรัน SQL 20261107000000_mc_quota ใน Supabase ก่อน</span> : null}
+                  {!isMe && quota && perm.mc === "none" ? <span className="block text-destructive">ต้องมีสิทธิ์ฝั่ง Mc ด้วย ถึงจะเห็นหน้าผลงาน Mc</span> : null}
+                </span>
+              </span>
+            </Label>
           </fieldset>
         ) : null}
 

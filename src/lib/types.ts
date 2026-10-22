@@ -1,6 +1,7 @@
 import type { GmvBefore } from "@/lib/gmv";
 import type { LiveSession } from "@/lib/live-stats";
 import type { LiveTeam } from "@/lib/live-team";
+import type { MyQuota } from "@/lib/mc-quota";
 
 export type Role = "mc" | "admin" | "owner";
 
@@ -205,6 +206,8 @@ export type SlotsResponse = {
   cancelMinHours?: number;
   /** คิวข้างหน้าที่ยังไม่ขึ้นปฏิทินของคนนี้ (> 0 = แสดงแถบเตือนให้แชร์ปฏิทิน) */
   calendarMissing?: number;
+  /** สิทธิ์จองต่อเดือนตามแร็งค์ของ Mc คนนี้ (ไม่ส่ง = ไม่จำกัด) — src/lib/mc-quota.ts */
+  quota?: MyQuota[];
 };
 
 export type ActionResult = { id: number; success: boolean; message: string };

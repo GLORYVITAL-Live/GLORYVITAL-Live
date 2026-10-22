@@ -29,6 +29,7 @@ export type Settings = {
   rules_admin?: string | null;
   book_window_mc?: unknown; // ช่วงเปิดจอง (src/lib/window.ts) null = ไม่จำกัดเพิ่ม
   book_window_admin?: unknown;
+  mc_quota_on?: boolean; // จำกัดสิทธิ์จองของ Mc ต่อเดือนตามแร็งค์ (SQL 20261107000000_mc_quota · src/lib/mc-quota-db.ts)
 };
 
 type SlotRow = {

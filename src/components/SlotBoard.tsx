@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, EyeIcon, LayoutGridIcon, Rows3Icon } from "lucide-react";
 import type { ActionResult, BookingLimits, Me, OpenSlot, SlotsResponse } from "@/lib/types";
 import {
-  fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, parseKey, platformOf, relLabel,
+  fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, monthLabel, parseKey, platformOf, relLabel,
 } from "@/lib/format";
+import { quotaBlock, type MyQuota } from "@/lib/mc-quota";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, LoadError, Notice, NoticeStrip, PlatformBadge, StateBox, api, useToast,
 } from "@/components/shared";
@@ -155,6 +156,8 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   const isLocked = !!data?.siteNotice;
   const slots = useMemo(() => data?.slots ?? [], [data]);
   const limits = data?.limits ?? DEFAULT_LIMITS[role];
+  // สิทธิ์จองต่อเดือนตามแร็งค์ (Mc · ไม่ส่งมา = ไม่จำกัด)
+  const quotaByMonth = useMemo(() => new Map((data?.quota ?? []).map((q) => [q.month, q])), [data]);
   // คิวที่จองไว้แล้ว (นับรวมโควต้าต่อวัน + เวลาทับ) แยกตามวัน
   const mineByDay = useMemo(() => {
     const m = new Map<string, Span[]>();
@@ -233,6 +236,9 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
     if ((data?.mine ?? []).some(hit)) return same(`เวลานี้ทับกับคิวที่คุณ${t.verb}ไว้แล้ว`);
     if (chosen.some(hit)) return same("เวลานี้ทับกับ slot ที่เลือกไว้แล้ว");
     if (chosen.length >= limits.perRequest) return same(`เลือกได้ครั้งละไม่เกิน ${limits.perRequest} slot`);
+    const month = s.date.slice(0, 7);
+    const mq = quotaBlock(quotaByMonth.get(month), chosen.filter((x) => x.date.slice(0, 7) === month).length);
+    if (mq) return same(mq);
     const q = quotaReason(s, [...chosen.filter((x) => x.date === s.date), ...booked]);
     if (!q) return same("");
     return { full: `${q}${booked.length ? ` (คุณมีคิววันนี้แล้ว ${booked.length} slot)` : ""}`, short: q };
@@ -242,6 +248,9 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   const fullDays = new Map<string, string>();
   if (!isLocked && !preview) {
     for (const [k, list] of groups) {
+      // ครบสิทธิ์จองของเดือนนั้นแล้ว = ทั้งวันเลือกไม่ได้
+      const mq = quotaBlock(quotaByMonth.get(k.slice(0, 7)), 0);
+      if (mq) { fullDays.set(k, mq); continue; }
       const booked = mineByDay.get(k) ?? [];
       if (!booked.length) continue;
       const reasons = list.map((s) => quotaReason(s, booked));
@@ -399,6 +408,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
           {role === "admin" ? " · เวลาห้ามทับกันแม้คนละแพลตฟอร์ม" : ""}
         </p>
       ) : null}
+      {data?.quota?.length && slots.length ? <QuotaStrip quota={data.quota} picked={sorted} /> : null}
       {data && updatedAt ? (
         <div className="my-1 flex items-center justify-end gap-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
@@ -623,6 +633,30 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
         </DialogActions>
       </AppDialog>
     </>
+  );
+}
+
+/** สิทธิ์จองต่อเดือนตามแร็งค์ผลงานเดือนก่อน: จองแล้ว / เลือกอยู่ / สิทธิ์ทั้งหมด */
+function QuotaStrip({ quota, picked }: { quota: MyQuota[]; picked: OpenSlot[] }) {
+  return (
+    <div className="my-1 flex flex-wrap gap-1.5 text-xs">
+      {quota.map((q) => {
+        const chosen = picked.filter((s) => s.date.slice(0, 7) === q.month).length;
+        const left = Math.max(0, q.max - q.used - chosen);
+        return (
+          <span
+            key={q.month}
+            className={cn("rounded-full border px-2.5 py-1", left ? "bg-card" : "border-destructive/40 bg-destructive/10 text-destructive")}
+            title={q.settled ? "คิดจากผลงานเดือนก่อน" : "ชั่วคราว: คิดจากผลงานเดือนก่อนถึงตอนนี้ อาจเปลี่ยนได้จนจบเดือน"}
+          >
+            สิทธิ์จอง{monthLabel(q.month)}
+            {q.tier ? ` (แร็งค์ ${q.tier})` : ""}: <b className="tabular-nums">{q.used + chosen}/{q.max}</b> slot
+            {chosen ? ` · เลือกอยู่ ${chosen}` : ""} · {left ? `เหลือ ${left}` : "ครบแล้ว"}
+            {!q.settled ? <span className="text-muted-foreground"> · ชั่วคราว</span> : null}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
