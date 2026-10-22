@@ -845,8 +845,10 @@ function MultiMonthView({ toggle, dataMonths, version }: { toggle: ReactNode; da
   );
 }
 
-type CompareMode = PeriodKind | "day" | "multi";
-const COMPARE_MODES: [CompareMode, string][] = [["day", "วัน"], ["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"]];
+type CompareMode = PeriodKind | "day" | "range" | "multi";
+const COMPARE_MODES: [CompareMode, string][] = [
+  ["day", "วัน"], ["range", "ช่วงวันที่"], ["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"],
+];
 
 /** แท็บเทียบช่วง: วัน / เดือน / ไตรมาส (เทียบ 2 ช่วง) หรือ หลายเดือน (เดือนหลัก vs เดือนอื่นทีละเดือน) */
 function CompareView({ dataMonths, version }: { dataMonths: string[]; version: number }) {
@@ -864,7 +866,97 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
   return mode === "multi"
     ? <MultiMonthView toggle={toggle} dataMonths={dataMonths} version={version} />
     : mode === "day" ? <DayCompare toggle={toggle} dataMonths={dataMonths} version={version} />
-      : <PairCompare kind={mode} toggle={toggle} dataMonths={dataMonths} version={version} />;
+      : mode === "range" ? <RangeCompare toggle={toggle} dataMonths={dataMonths} version={version} />
+        : <PairCompare kind={mode} toggle={toggle} dataMonths={dataMonths} version={version} />;
+}
+
+// ---------- เทียบช่วงวันที่ (เลือกวันเริ่ม–วันจบเอง) ----------
+
+/** ช่วงยาวสุดที่เลือกได้ (โหลดไลฟ์ทั้งช่วงมาในเครื่อง) */
+const RANGE_MAX_DAYS = 92;
+const dayCount = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400_000) + 1;
+const fmtRangeDay = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { day: "numeric", month: "short", timeZone: "UTC" });
+/** ช่วงวัน "YYYY-MM-DD" ถึง "YYYY-MM-DD" (รวมวันจบ) -> ช่วงเวลาไทย + ชื่อ เช่น "19–23 ต.ค. 2026 (5 วัน)" */
+function rangePeriod(a: string, b: string): Period {
+  const [y1, m1, d1] = a.split("-").map(Number), [y2, m2, d2] = b.split("-").map(Number);
+  const da = new Date(`${a}T12:00:00Z`), db = new Date(`${b}T12:00:00Z`);
+  const n = dayCount(a, b);
+  const name = a === b ? dayPeriod(a).name
+    : `${m1 === m2 && y1 === y2 ? String(d1) : fmtRangeDay.format(da)}–${fmtRangeDay.format(db)} ${y2}${y1 !== y2 ? ` (เริ่ม ${y1})` : ""} (${n} วัน)`;
+  return { from: bkkIso(y1, m1, d1), to: bkkIso(y2, m2, d2 + 1), name };
+}
+type RangeVs = "none" | "prev" | "month" | "custom";
+
+/**
+ * เทียบช่วงวันที่: เลือกวันเริ่ม–วันจบเอง (ไม่เกิน 92 วัน) ดูตัวเลขรวมของช่วง (GMV / Viewers / ออเดอร์ ...) + กราฟรายวัน
+ *   เทียบกับ: ไม่เทียบ / ช่วงก่อนหน้า (ยาวเท่ากัน ต่อกันพอดี) / ช่วงเดียวกันเดือนก่อน / เลือกช่วงเอง
+ */
+function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMonths: string[]; version: number }) {
+  // ค่าเริ่มต้น: 7 วันล่าสุดถึงเมื่อวาน (เดือนนี้ยังไม่มีข้อมูล = 7 วันสุดท้ายของเดือนล่าสุดที่มีข้อมูล)
+  const [init] = useState(() => {
+    const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+    const latestMonth = dataMonths.slice().sort().at(-1);
+    const end = !latestMonth || latestMonth >= today.slice(0, 7) ? dayKeyShift(today, -1) : dayKeyShift(`${monthKey(1, latestMonth)}-01`, -1);
+    return { today, from: dayKeyShift(end, -6), to: end };
+  });
+  const [from, setFrom] = useState(init.from);
+  const [to, setTo] = useState(init.to);
+  const [vs, setVs] = useState<RangeVs>("none");
+  const [cFrom, setCFrom] = useState(() => dayKeyShift(init.from, -7));
+  const [cTo, setCTo] = useState(() => dayKeyShift(init.to, -7));
+  // เลือกวันจบก่อนวันเริ่ม = สลับให้
+  const a = from <= to ? from : to, b = from <= to ? to : from;
+  const ca = cFrom <= cTo ? cFrom : cTo, cb = cFrom <= cTo ? cTo : cFrom;
+  const n = dayCount(a, b);
+  const prevRange = vs === "prev" ? [dayKeyShift(a, -n), dayKeyShift(a, -1)]
+    : vs === "month" ? [sameDayLastMonth(a), sameDayLastMonth(b)]
+      : vs === "custom" ? [ca, cb] : null;
+  const tooLong = n > RANGE_MAX_DAYS || (!!prevRange && dayCount(prevRange[0], prevRange[1]) > RANGE_MAX_DAYS);
+  const picker = (value: string, onChange: (v: string) => void, label: string, swatch?: string) => (
+    <div className="min-w-0 flex-1">
+      <span className="mb-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">{swatch ? <span className={cn("size-2.5 rounded-[3px]", swatch)} /> : null}{label}</span>
+      <DatePicker value={value} onChange={(v) => v && onChange(v)} aria-label={label} className="w-full" />
+    </div>
+  );
+  const VS: [RangeVs, string][] = [
+    ["none", "ไม่เทียบ (ดูช่วงเดียว)"], ["prev", `${n} วันก่อนหน้า`], ["month", "ช่วงเดียวกันเดือนก่อน"], ["custom", "เลือกช่วงเทียบเอง"],
+  ];
+  const cur = rangePeriod(a, b);
+  const prev = prevRange ? rangePeriod(prevRange[0], prevRange[1]) : null;
+
+  return (
+    <>
+      <div className="my-3 rounded-xl border bg-card p-3">
+        {toggle}
+        <div className="flex flex-wrap gap-3 sm:flex-nowrap">
+          {picker(from, setFrom, "วันเริ่ม", "bg-viz-cur")}
+          {picker(to, setTo, "วันจบ (รวมวันนี้)")}
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">{cur.name}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {VS.map(([id, text]) => (
+            <Button key={id} variant={vs === id ? "secondary" : "outline"} size="sm" className="rounded-full" aria-pressed={vs === id} onClick={() => setVs(id)}>
+              {text}
+            </Button>
+          ))}
+        </div>
+        {vs === "custom" ? (
+          <div className="mt-3 flex flex-wrap gap-3 sm:flex-nowrap">
+            {picker(cFrom, setCFrom, "เทียบกับ: วันเริ่ม", "bg-viz-prev")}
+            {picker(cTo, setCTo, "วันจบ")}
+          </div>
+        ) : prev ? <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2.5 rounded-[3px] bg-viz-prev" />เทียบกับ {prev.name}</p> : null}
+      </div>
+      {b >= init.today || (!!prevRange && prevRange[1] >= init.today) ? <Notice>ช่วงที่เลือกมีวันนี้ (ยังไม่จบวัน) ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice> : null}
+      {tooLong ? <StateBox title={`เลือกได้ไม่เกิน ${RANGE_MAX_DAYS} วันต่อช่วง`}>ช่วงยาวกว่านี้ ใช้แท็บ &ldquo;หลายเดือน&rdquo; หรือ &ldquo;ไตรมาส&rdquo; แทน</StateBox>
+        : prevRange && prevRange[0] === a && prevRange[1] === b ? <StateBox title="เลือกช่วงที่ต่างกัน">ช่วงที่เทียบต้องไม่ใช่ช่วงเดียวกัน</StateBox>
+          : (
+            <PeriodCompare
+              report={prev ? `เทียบช่วงวันที่ (${VS.find(([id]) => id === vs)?.[1]})` : "ดูช่วงวันที่"}
+              cur={cur} prev={prev} unit={n > 1 ? "day" : "hour"} dataMonths={dataMonths} version={version} fixHint="หรือเลือกช่วงอื่น" />
+          )}
+    </>
+  );
 }
 
 // ---------- เทียบรายวัน (DoD) ----------
