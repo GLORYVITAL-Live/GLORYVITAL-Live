@@ -282,6 +282,8 @@ export function multiBook(o: {
   rangeText: string; monthLabel: (k: string) => string; shortLabel: (k: string) => string;
   keys: string[]; focus: string; byMonth: Map<string, LiveSession[]>; filter: ExportFilter;
   crew?: CrewMap;
+  /** ช่วงวันเดียวกันหลายเดือน: รายวันของแต่ละเดือน (labels = "วันที่ 19" ... · byDay = เดือน -> ไลฟ์ของวันที่ 1, 2, ...) */
+  daily?: { labels: string[]; byDay: Map<string, LiveSession[][]> };
 }): ExportBook {
   const { keys, byMonth, monthLabel, shortLabel, focus } = o;
   const list = (k: string) => byMonth.get(k) ?? [];
@@ -291,36 +293,112 @@ export function multiBook(o: {
     const t = totalsOf(sel ? list(k).filter(sel) : list(k));
     return t.lives ? m.value(t) : null;
   };
-  const vsHeaders = others.map((k) => `${shortLabel(focus)} vs ${shortLabel(k)}`);
-  const row = (label: string, m: (typeof METRICS)[number], sel?: (s: LiveSession) => boolean): Cell[] => [
-    label,
-    ...keys.map((k) => num(m.kind, valueAt(k, m, sel))),
-    ...others.map((k) => {
-      const d = deltaOf(m.kind, valueAt(focus, m, sel), valueAt(k, m, sel));
-      return m.kind === "pct" ? d?.text ?? null : d ? { v: d.value, f: "pct" as const } : null;
-    }),
-  ];
+  // หัวคอลัมน์สั้น: ช่วงวันเดียวกันทุกเดือน (เช่น "18–22 มิ.ย.") = ตัดช่วงวันออก เหลือชื่อเดือน (ช่วงวันอยู่ในแถวบนสุดแล้ว)
+  const dayPrefix = keys.every((k) => /^\d+–\d+ /.test(shortLabel(k))) && new Set(keys.map((k) => shortLabel(k).match(/^\d+–\d+ /)![0])).size === 1;
+  const col = (k: string) => (dayPrefix ? shortLabel(k).replace(/^\d+–\d+ /, "") : shortLabel(k));
+  const legend = `${o.rangeText}   ·   ช่วงหลัก = ${shortLabel(focus)}   ·   เปลี่ยน = ช่วงหลักเทียบแต่ละเดือน (CTR / CO เป็น pp)${keys.some((k) => shortLabel(k).endsWith("*")) ? "   ·   * = ยังไม่จบ" : ""}`;
+  /**
+   * ตารางเทียบหลายเดือนแบบอ่านง่าย: หัว 2 ชั้น "ค่าแต่ละเดือน" | "ช่วงหลัก เทียบกับ" (สีต่างกัน) · หัวคอลัมน์สั้น (มิ.ย. / vs มิ.ย.)
+   *   คอลัมน์ช่วงหลักตัวหนา · เปลี่ยน: บวก = เขียว / ลบ = แดง · total = แถวรวมท้ายตาราง
+   */
+  const wideSheet = (name: string, first: string, items: { label: string; m: (typeof METRICS)[number]; sel?: (s: LiveSession) => boolean }[], total?: (typeof items)[number]): ExportSheet => {
+    const V = "FDE8F0", D = "EEF1F6";
+    const cellStyles: Record<string, RowStyle> = { "1:0": { bg: "FFFFFF", bold: true }, "2:0": { bg: V, bold: true } };
+    keys.forEach((k, j) => {
+      cellStyles[`1:${1 + j}`] = { bg: V, bold: true, align: j === 0 ? "left" : "center" };
+      cellStyles[`2:${1 + j}`] = { bg: V, bold: true, align: "center", ...(k === focus ? { color: "9D174D" } : {}) };
+    });
+    others.forEach((_, j) => {
+      cellStyles[`1:${1 + keys.length + j}`] = { bg: D, bold: true, align: j === 0 ? "left" : "center" };
+      cellStyles[`2:${1 + keys.length + j}`] = { bg: D, bold: true, align: "center" };
+    });
+    const all = [...items, ...(total ? [total] : [])];
+    const fi = keys.indexOf(focus);
+    const rows = all.map((it, ri): Cell[] => {
+      const r = 3 + ri;
+      const isTotal = !!total && ri === all.length - 1;
+      if (fi >= 0) cellStyles[`${r}:${1 + fi}`] = { bg: isTotal ? "FFF7E6" : "FFFFFF", bold: true, ...(isTotal ? { border: true } : {}) };
+      return [
+        it.label,
+        ...keys.map((k) => num(it.m.kind, valueAt(k, it.m, it.sel))),
+        ...others.map((k, j) => {
+          const d = deltaOf(it.m.kind, valueAt(focus, it.m, it.sel), valueAt(k, it.m, it.sel));
+          if (d && Math.abs(d.value) >= (it.m.kind === "pct" ? 0.005 : 0.0005)) {
+            cellStyles[`${r}:${1 + keys.length + j}`] = d.value > 0
+              ? { bg: isTotal ? "FFF7E6" : "EAF6EE", color: "1E7B3A", bold: isTotal, ...(isTotal ? { border: true } : {}) }
+              : { bg: isTotal ? "FFF7E6" : "FDECEC", color: "B42318", bold: isTotal, ...(isTotal ? { border: true } : {}) };
+          }
+          return it.m.kind === "pct" ? d?.text ?? null : d ? { v: d.value, f: "pct" as const } : null;
+        }),
+      ];
+    });
+    return {
+      name,
+      header: 2,
+      rows: [
+        [legend],
+        ["", "ค่าแต่ละเดือน", ...Array<string>(keys.length - 1).fill(""), `${col(focus)} เทียบกับ`, ...Array<string>(Math.max(0, others.length - 1)).fill("")],
+        [first, ...keys.map(col), ...others.map((k) => `vs ${col(k)}`)],
+        ...rows,
+      ],
+      ...(total ? { rowStyles: { [2 + all.length]: { bg: "FFF7E6", bold: true, border: true } } } : {}),
+      cellStyles,
+      colWidths: [Math.min(36, Math.max(14, first.length + 2, ...all.map((it) => it.label.length + 2))), ...keys.map(() => 14), ...others.map(() => 11)],
+    };
+  };
+  const metricLabel = (m: (typeof METRICS)[number]) => (m.note && m.note.length <= 8 ? `${m.label} (${m.note})` : m.label);
   const gmv = METRICS.find((m) => m.key === "gmv")!;
   return {
     title: `GLORY สถิติไลฟ์ เทียบหลายเดือน ${o.rangeText}`,
     sheets: [
       infoSheet([["รายงาน", "เทียบหลายเดือน"], ["ช่วง", o.rangeText], ["เดือนหลัก", `${monthLabel(focus)} เทียบกับทุกเดือนที่เหลือ (CTR / CO เทียบเป็น pp)`]], o.filter),
-      { name: "เทียบ", rows: [["Total", ...keys.map(shortLabel), ...vsHeaders], ...metrics.map((m) => row(m.label, m))] },
+      wideSheet("เทียบ", "ตัวชี้วัด (รวม)", metrics.map((m) => ({ label: metricLabel(m), m }))),
       ...PLATFORM_ORDER
         .filter((p) => keys.some((k) => list(k).some((s) => s.platform === p)))
-        .map((p): ExportSheet => ({
-          name: p,
-          rows: [[p, ...keys.map(shortLabel), ...vsHeaders], ...metrics.map((m) => row(m.label, m, (s) => s.platform === p))],
-        })),
-      {
-        name: "แยกบัญชี GMV",
-        rows: [
-          ["บัญชี", ...keys.map(shortLabel), ...vsHeaders],
-          ...accountsOf(keys.flatMap(list)).map((a) => row(accountLabel(a), gmv, (s) => keyOf(s) === a.key)),
-        ],
-      },
+        .map((p) => wideSheet(p, `ตัวชี้วัด (${p})`, metrics.map((m) => ({ label: metricLabel(m), m, sel: (s: LiveSession) => s.platform === p })))),
+      ...(o.daily ? [dailySheet(keys, col, focus, metrics, o.daily, o.rangeText)] : []),
+      wideSheet("แยกบัญชี GMV", "บัญชี (GMV)",
+        accountsOf(keys.flatMap(list)).map((a) => ({ label: accountLabel(a), m: gmv, sel: (s: LiveSession) => keyOf(s) === a.key })),
+        { label: "รวม", m: gmv }),
       sessionSheet("ไลฟ์", keys.flatMap(list), o.crew),
     ],
+  };
+}
+
+/**
+ * รายวันของแต่ละเดือน (ช่วงวันเดียวกันหลายเดือน): แถว = วันที่ · หัวตาราง 2 ชั้น = ตัวชี้วัด (สีสลับทีละกลุ่ม) > เดือน
+ *   แถว "รวม" ท้ายตาราง · เดือนหลักตัวหนา
+ */
+function dailySheet(
+  keys: string[], shortLabel: (k: string) => string, focus: string, metrics: (typeof METRICS)[number][],
+  daily: { labels: string[]; byDay: Map<string, LiveSession[][]> }, rangeText: string,
+): ExportSheet {
+  const TINT = ["FDE8F0", "EEF1F6"];
+  const w = keys.length;
+  const cellStyles: Record<string, RowStyle> = {};
+  metrics.forEach((_, i) => keys.forEach((k, j) => {
+    const col = 1 + i * w + j;
+    cellStyles[`1:${col}`] = { bg: TINT[i % 2], bold: true, align: j === 0 ? "left" : "center" };
+    cellStyles[`2:${col}`] = { bg: TINT[i % 2], bold: true, align: "center", ...(k === focus ? { color: "9D174D" } : {}) };
+  }));
+  cellStyles["1:0"] = { bg: "FFFFFF", bold: true };
+  cellStyles["2:0"] = { bg: TINT[0], bold: true };
+  const value = (m: (typeof METRICS)[number], list: LiveSession[]) => { const t = totalsOf(list); return num(m.kind, t.lives ? m.value(t) : null); };
+  const rows: Cell[][] = daily.labels.map((l, d) => [l, ...metrics.flatMap((m) => keys.map((k) => value(m, daily.byDay.get(k)?.[d] ?? [])))]);
+  const totalRow = 3 + rows.length;
+  return {
+    name: "รายวัน",
+    header: 2,
+    rows: [
+      [`${rangeText}   ·   แต่ละแถว = วันที่เดียวกันของแต่ละเดือน   ·   ช่วงหลัก = ${shortLabel(focus)}`],
+      ["", ...metrics.flatMap((m) => [m.note && m.note.length <= 8 ? `${m.label} (${m.note})` : m.label, ...Array<string>(w - 1).fill("")])],
+      ["วัน", ...metrics.flatMap(() => keys.map(shortLabel))],
+      ...rows,
+      ["รวม", ...metrics.flatMap((m) => keys.map((k) => value(m, (daily.byDay.get(k) ?? []).flat())))],
+    ],
+    rowStyles: { [totalRow]: { bg: "FFF7E6", bold: true, border: true } },
+    cellStyles,
+    colWidths: [12, ...metrics.flatMap(() => keys.map(() => 13))],
   };
 }
 

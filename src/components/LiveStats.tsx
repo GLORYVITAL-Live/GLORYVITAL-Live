@@ -739,12 +739,18 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
 
   const list = filterSessions(data, filter.platform, filter.account);
   const byMonth = new Map<string, LiveSession[]>(keys.map((k) => [k, []]));
+  // รายวันของแต่ละเดือน (โหมดช่วงวัน): วันที่ 1, 2, ... ของช่วง นับจากวันเริ่มของช่วงในเดือนนั้น
+  const nDays = days ? dayCount(days.a, days.b) : 0;
+  const dayLabels = days ? Array.from({ length: nDays }, (_, i) => `วันที่ ${+dayKeyShift(days.a, i).slice(8)}`) : [];
+  const byDay = new Map<string, LiveSession[][]>(keys.map((k) => [k, Array.from({ length: nDays }, () => [])]));
   if (days) {
     const wins = keys.map((k) => ({ k, from: Date.parse(win(k).from), to: Date.parse(win(k).to) }));
     for (const s of list) {
       const t = Date.parse(s.startedAt);
       const w = wins.find((x) => t >= x.from && t < x.to);
-      if (w) byMonth.get(w.k)!.push(s);
+      if (!w) continue;
+      byMonth.get(w.k)!.push(s);
+      byDay.get(w.k)![Math.min(nDays - 1, Math.floor((t - w.from) / 86400_000))]?.push(s);
     }
   } else {
     for (const s of list) byMonth.get(monthOf(s.startedAt))?.push(s);
@@ -781,6 +787,7 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
         <div className="flex flex-wrap gap-2">
           <ExportMenu size="sm" label="ส่งออก" build={async () => multiBook({
             rangeText, monthLabel: long, shortLabel: short, keys, focus, byMonth, filter: exportFilter,
+            ...(days && nDays > 1 ? { daily: { labels: dayLabels, byDay } } : {}),
             crew: await loadCrew(keys.flatMap((k) => byMonth.get(k) ?? [])),
           })} />
           <SlidesMenu label="สไลด์" title={`GLORY เทียบหลายเดือน ${rangeText}`} build={(target) => buildMultiDeck({
@@ -855,6 +862,13 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
         {chartBest >= 0 ? <p className="mt-1 text-xs text-muted-foreground">แท่งเข้ม = {days ? "ช่วง" : "เดือน"}ที่ {def.label} สูงสุด ({long(keys[chartBest])})</p> : null}
       </section>
 
+      {days && nDays > 1 ? (
+        <DailyByMonth
+          keys={keys} focus={focus} labels={dayLabels} byDay={byDay} short={short} long={long}
+          metric={metric} onMetric={setMetric}
+        />
+      ) : null}
+
       <section className="my-4">
         <h2 className="mb-2 text-lg font-bold">GMV แยกตามบัญชี</h2>
         <div className="overflow-x-auto rounded-xl border bg-card">
@@ -882,6 +896,78 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
         </div>
       </section>
     </>
+  );
+}
+
+/** สีของแต่ละเดือนในกราฟรายวัน: ช่วงหลัก = สีหลัก · ที่เหลือวนตามลำดับ */
+const MONTH_COLORS = [PREV, "var(--p1)", "var(--p3)", "var(--p2)", "var(--p0)"];
+
+/**
+ * รายวันของแต่ละเดือน (โหมดช่วงวันเดียวกันหลายเดือน): กราฟแท่งวันละกลุ่ม (เดือนละแท่ง) + ตาราง วัน × เดือน + ช่วงหลัก vs เดือนอื่น
+ *   ใช้ตัวชี้วัดเดียวกับกราฟรายเดือน (เปลี่ยนได้ที่นี่ด้วย)
+ */
+function DailyByMonth({ keys, focus, labels, byDay, short, long, metric, onMetric }: {
+  keys: string[]; focus: string; labels: string[]; byDay: Map<string, LiveSession[][]>;
+  short: (k: string) => string; long: (k: string) => string; metric: MetricKey; onMetric: (m: MetricKey) => void;
+}) {
+  const def = metricOf(metric);
+  const val = (list: LiveSession[] | undefined) => { const t = totalsOf(list ?? []); return t.lives ? def.value(t) : null; };
+  const others = keys.filter((k) => k !== focus);
+  let c = 0;
+  const colorOf = new Map(keys.map((k) => [k, k === focus ? CUR : MONTH_COLORS[c++ % MONTH_COLORS.length]]));
+  const fmt = (v: number | null) => fmtMetric(def.kind, v);
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold">{def.label} รายวันของแต่ละเดือน</h2>
+        <MetricSelect value={metric} onChange={onMetric} />
+      </div>
+      <BarChart
+        label={`${def.label} รายวันของแต่ละเดือน`}
+        categories={labels.map((l) => l.replace("วันที่ ", ""))}
+        tooltipTitles={labels}
+        series={keys.map((k) => ({ name: short(k), color: colorOf.get(k)!, values: byDay.get(k)!.map((d) => val(d)) }))}
+        format={fmt}
+        formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
+      />
+      <Legend series={keys.map((k) => ({ name: long(k), color: colorOf.get(k)! }))} />
+      <div className="mt-3 overflow-x-auto rounded-xl border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>วัน</TableHead>
+              {keys.map((k) => <TableHead key={k} className={cn("text-right whitespace-nowrap", k === focus && "text-foreground")}>{short(k)}</TableHead>)}
+              {others.map((k) => <TableHead key={k} className="border-l text-right whitespace-nowrap">{short(focus)} vs {short(k)}</TableHead>)}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {labels.map((l, i) => (
+              <TableRow key={l}>
+                <TableCell className="font-semibold whitespace-nowrap">{l}</TableCell>
+                {keys.map((k) => <TableCell key={k} className={cn("text-right tabular-nums whitespace-nowrap", k === focus && "font-bold")}>{fmt(val(byDay.get(k)![i]))}</TableCell>)}
+                {others.map((k) => (
+                  <TableCell key={k} className="border-l text-right whitespace-nowrap">
+                    <Delta kind={def.kind} a={val(byDay.get(focus)![i])} b={val(byDay.get(k)![i])} />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell>รวม</TableCell>
+              {keys.map((k) => <TableCell key={k} className={cn("text-right tabular-nums whitespace-nowrap", k === focus && "font-bold")}>{fmt(val(byDay.get(k)!.flat()))}</TableCell>)}
+              {others.map((k) => (
+                <TableCell key={k} className="border-l text-right whitespace-nowrap">
+                  <Delta kind={def.kind} a={val(byDay.get(focus)!.flat())} b={val(byDay.get(k)!.flat())} />
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">วันที่เดียวกันของแต่ละเดือน (เช่น วันที่ 19 ก.ค. / ส.ค. / ก.ย. / ต.ค.) · เดือนที่ไม่มีวันนั้น = วันสุดท้ายของเดือน</p>
+    </section>
   );
 }
 
