@@ -314,11 +314,12 @@ export async function scanTawi(): Promise<TawiScan> {
       if (error) throw dbError(error.message);
     }
 
-    // ชื่อไฟล์เปลี่ยน (id เดิม): อ่านใหม่ · ระบบจับคู่ไว้และชื่อคนเปลี่ยน = จับใหม่ (ที่ Owner / เจ้าตัวจับคู่ไว้คงเดิม)
+    // ชื่อไฟล์เปลี่ยน (id เดิม) / กฎคีย์ชื่อเปลี่ยน (คีย์ที่คำนวณใหม่ไม่ตรงของเดิม): อ่านใหม่
+    //   ระบบจับคู่ไว้และชื่อคนเปลี่ยน = จับใหม่ (ที่ Owner / เจ้าตัวจับคู่ไว้คงเดิม)
     let renamed = 0;
     for (const d of existing) {
       const p = seen.get(d.drive_file_id);
-      if (!p || p.fileName === d.file_name) continue;
+      if (!p || (p.fileName === d.file_name && p.nameKey === d.name_key)) continue;
       const rematch = p.nameKey !== d.name_key && d.matched_by === "auto";
       const { error } = await db.from("tawi_docs").update({
         file_name: p.fileName, month: p.month, real_name: p.realName, name_key: p.nameKey, updated_at: now,
