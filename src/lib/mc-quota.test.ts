@@ -1,6 +1,6 @@
 // เทสสิทธิ์จองคิวของ Mc ต่อเดือนตามแร็งค์ (bun test)
 import { describe, expect, test } from "bun:test";
-import { autoQuota, prevMonth, quotaBlock, settleDate, totalQuota } from "@/lib/mc-quota";
+import { autoQuota, nextMonth, nextTierGap, prevMonth, quotaBlock, settleDate, totalQuota } from "@/lib/mc-quota";
 
 describe("สิทธิ์อัตโนมัติตามแร็งค์", () => {
   test("A: 110% = 15 ไล่ขึ้นถึง 130% = 25 (เกินกว่านั้นไม่เพิ่ม)", () => {
@@ -34,13 +34,24 @@ describe("สิทธิ์อัตโนมัติตามแร็งค�
 });
 
 describe("เดือน", () => {
-  test("เดือนก่อน (ข้ามปี)", () => {
+  test("เดือนก่อน / เดือนถัดไป (ข้ามปี)", () => {
     expect(prevMonth("2026-11")).toBe("2026-10");
     expect(prevMonth("2027-01")).toBe("2026-12");
+    expect(nextMonth("2026-12")).toBe("2027-01");
   });
   test("ล็อกแร็งค์ = เดือนก่อนจบ + 3 วัน", () => {
     expect(settleDate("2026-11")).toBe("2026-11-04");
     expect(settleDate("2027-01")).toBe("2027-01-04");
+  });
+});
+
+describe("โปรไฟล์ Mc: อีกกี่ % ถึงแร็งค์ถัดไป", () => {
+  test("C -> B / B -> A / A = ไม่มี / ยังไม่มีแร็งค์ = ไม่มี", () => {
+    expect(nextTierGap("C", 0.9)?.tier).toBe("B");
+    expect(nextTierGap("C", 0.9)!.gap).toBeCloseTo(0.05);
+    expect(nextTierGap("B", 1.0)!.gap).toBeCloseTo(0.1);
+    expect(nextTierGap("A", 1.2)).toBeNull();
+    expect(nextTierGap(null, null)).toBeNull();
   });
 });
 

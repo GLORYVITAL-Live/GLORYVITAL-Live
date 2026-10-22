@@ -8,6 +8,7 @@ import { ClipboardListIcon, IdCardIcon } from "lucide-react";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
+import { MyRank } from "@/components/MyRank";
 import { MyTawi } from "@/components/MyTawi";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -132,6 +133,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             <p className="rounded-xl border border-warning-border bg-warning px-3 py-2 text-xs text-warning-foreground">ยังไม่ได้ตั้งค่าจ้างต่อชั่วโมง ติดต่อทีมงานเพื่อดูยอดเงิน</p>
           )
         ) : null}
+        {role === "mc" ? <MyRank open={open} /> : null}
         <div className="flex flex-wrap gap-x-4">
           <Button variant="link" onClick={onOpenRules} className="h-auto px-0 font-semibold">
             <ClipboardListIcon />กฎการทำงาน

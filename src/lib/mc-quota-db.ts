@@ -3,8 +3,10 @@ import { after } from "next/server";
 import { rankReport } from "@/lib/campaign-report";
 import { bkkToday, fetchAll, type Settings } from "@/lib/data";
 import { liveTeamOf } from "@/lib/live-team";
-import { autoQuota, prevMonth, QUOTA_NEW, settleDate, totalQuota, type MyQuota, type QuotaReport, type QuotaRow } from "@/lib/mc-quota";
-import { rankCells, type Tier } from "@/lib/mc-rank";
+import {
+  autoQuota, nextMonth, prevMonth, QUOTA_NEW, settleDate, totalQuota, type MyQuota, type MyRank, type QuotaReport, type QuotaRow, type RankDetail, type RankEntry,
+} from "@/lib/mc-quota";
+import { MIN_RANK_HOURS, rankCells, type Tier } from "@/lib/mc-rank";
 import { isTestAccount } from "@/lib/staff-check";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me } from "@/lib/types";
@@ -24,6 +26,7 @@ const REFRESH_MS = 3600_000;
 type DbRow = {
   month: string; staff_id: number; tier: Tier | null; score: number | string | null; hours: number | string; auto_quota: number;
   extra: number; note: string; computed_at: string; updated_by: string | null; updated_at: string;
+  detail?: RankDetail | null;
 };
 type McStaff = { id: number; name: string; email: string | null; is_salaried?: boolean; live_platform?: string | null };
 
@@ -32,8 +35,12 @@ const lastDayOf = (month: string) => {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 };
-/** Mc ที่ใช้สิทธิ์จอง (มีอีเมล ไม่ใช่ Mc ประจำ ไม่ใช่ทีม Shopee ไม่ใช่บัญชีทดสอบ) */
-const eligible = (s: McStaff) => !!s.email && !s.is_salaried && liveTeamOf(s.live_platform) !== "shopee" && !isTestAccount(s.name);
+/** Mc ที่มีแร็งค์ในโปรไฟล์ (มีอีเมล ไม่ใช่บัญชีทดสอบ) */
+const rankable = (s: McStaff) => !!s.email && !isTestAccount(s.name);
+/** Mc ที่ใช้สิทธิ์จอง (มีแร็งค์ + ไม่ใช่ Mc ประจำ ไม่ใช่ทีม Shopee) */
+const eligible = (s: McStaff) => rankable(s) && !s.is_salaried && liveTeamOf(s.live_platform) !== "shopee";
+const part = (p: { index: number; hours: number } | null) =>
+  (p ? { index: Math.round(p.index * 10000) / 10000, hours: Math.round(p.hours * 100) / 100 } : null);
 
 async function mcStaff(db: Db) {
   const { data, error } = await db.from("staff").select("*").eq("role", "mc");
@@ -41,13 +48,18 @@ async function mcStaff(db: Db) {
   return (data ?? []) as McStaff[];
 }
 
-/** คำนวณแร็งค์ + สิทธิ์อัตโนมัติของเดือนนี้ใหม่ จากผลงานเดือนก่อน (สิทธิ์เพิ่มพิเศษ / หมายเหตุ ไม่แตะ) */
+/**
+ * คำนวณแร็งค์ + สิทธิ์อัตโนมัติของเดือนนี้ใหม่ จากผลงานเดือนก่อน (สิทธิ์เพิ่มพิเศษ / หมายเหตุ ไม่แตะ)
+ *   เก็บของ Mc ทุกคนที่มีอีเมล (Mc ประจำ / ทีม Shopee ก็เห็นแร็งค์ในโปรไฟล์ แค่ไม่จำกัดสิทธิ์จอง)
+ *   detail = คะแนนแยกวันแคมเปญ / วันปกติ (SQL 20261108000000_mc_quota_detail · ยังไม่ได้รัน = ไม่เก็บ)
+ */
 export async function computeMonth(month: string) {
   const db = createAdminClient();
   const [report, staff] = await Promise.all([rankReport("month", prevMonth(month)), mcStaff(db)]);
   const ranks = new Map(rankCells(report.cells).map((r) => [r.name, r]));
   const now = new Date().toISOString();
-  const rows = staff.filter(eligible).map((s) => {
+  const people = staff.filter(rankable);
+  const rows = people.map((s) => {
     const r = ranks.get(`Mc ${s.name}`);
     const ranked = !!r?.ranked && r.score !== null;
     const tier = ranked ? r!.tier : null, score = ranked ? r!.score : null;
@@ -57,7 +69,12 @@ export async function computeMonth(month: string) {
     };
   });
   if (!rows.length) return;
-  const { error } = await db.from("mc_quota").upsert(rows, { onConflict: "month,staff_id" });
+  const details = people.map((s) => {
+    const r = ranks.get(`Mc ${s.name}`);
+    return r ? { campaign: part(r.campaign), normal: part(r.normal) } : null;
+  });
+  let { error } = await db.from("mc_quota").upsert(rows.map((x, i) => ({ ...x, detail: details[i] })), { onConflict: "month,staff_id" });
+  if (error && /detail/.test(error.message)) ({ error } = await db.from("mc_quota").upsert(rows, { onConflict: "month,staff_id" }));
   if (error) throw new Error(noQuotaSql(error.message) ? QUOTA_SQL : error.message);
 }
 
@@ -163,6 +180,29 @@ export async function myQuotas(settings: Settings, mcId: number, months: string[
       tier: r?.tier ?? null, settled: bkkToday() >= settleDate(month),
     };
   }));
+}
+
+/**
+ * แร็งค์ในโปรไฟล์ Mc (ตารางของฉัน): เดือนที่แล้ว (ใช้กับสิทธิ์จองเดือนนี้) + เดือนนี้ถึงตอนนี้ (ใช้กับเดือนหน้า)
+ *   แถวของเดือน M = แร็งค์จากผลงานเดือน M-1 · สิทธิ์จองบอกเฉพาะตอนเปิดใช้ และ Mc คนนี้ถูกจำกัด (ไม่ใช่ Mc ประจำ / ทีม Shopee)
+ */
+export async function myRank(settings: Settings, mcId: number): Promise<MyRank> {
+  const db = createAdminClient();
+  const { data } = await db.from("staff").select("*").eq("id", mcId).maybeSingle();
+  const person = data as McStaff | null;
+  const limited = quotaOn(settings) && !!person && eligible(person);
+  const entry = async (quotaMonth: string): Promise<RankEntry> => {
+    const r = (await monthRows(db, quotaMonth)).find((x) => Number(x.staff_id) === mcId);
+    const auto = r?.auto_quota ?? QUOTA_NEW, extra = r?.extra ?? 0;
+    return {
+      month: prevMonth(quotaMonth), tier: r?.tier ?? null, score: r?.score == null ? null : Number(r.score), hours: Number(r?.hours ?? 0),
+      detail: r?.detail ?? null, settled: bkkToday() >= settleDate(quotaMonth), settleDate: settleDate(quotaMonth),
+      quota: limited ? { month: quotaMonth, auto, extra, total: totalQuota(auto, extra) } : null,
+    };
+  };
+  const thisMonth = bkkToday().slice(0, 7);
+  const [last, current] = await Promise.all([entry(thisMonth), entry(nextMonth(thisMonth))]);
+  return { last, current, minHours: MIN_RANK_HOURS };
 }
 
 /** ตั้งสิทธิ์เพิ่มพิเศษ + หมายเหตุ (ยังไม่มีแถว = สร้างด้วยสิทธิ์อัตโนมัติของคนยังไม่มีอันดับ) คืนค่าเดิมไว้บันทึกประวัติ */

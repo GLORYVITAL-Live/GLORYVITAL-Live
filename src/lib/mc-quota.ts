@@ -29,12 +29,15 @@ export function autoQuota(tier: Tier | null, score: number | null): number {
 
 export const totalQuota = (auto: number, extra: number) => Math.max(0, auto + extra);
 
-/** "2026-11" -> "2026-10" */
-export function prevMonth(month: string) {
+const shiftMonth = (month: string, by: number) => {
   const [y, m] = month.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 2, 1));
+  const d = new Date(Date.UTC(y, m - 1 + by, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
+};
+/** "2026-11" -> "2026-10" */
+export const prevMonth = (month: string) => shiftMonth(month, -1);
+/** "2026-12" -> "2027-01" */
+export const nextMonth = (month: string) => shiftMonth(month, 1);
 
 /** วันที่แร็งค์ของเดือนก่อนล็อก (เดือนก่อนจบ + SETTLE_DAYS วัน) "YYYY-MM-DD" */
 export function settleDate(month: string) {
@@ -63,6 +66,28 @@ export type QuotaReport = {
   canEdit: boolean;
   rows: QuotaRow[];
 };
+
+/** คะแนนส่วนหนึ่ง (วันแคมเปญ / วันปกติ) index = ยอดจริง ÷ ยอดที่ควรได้ หลังดึงเข้าหา 100% */
+export type RankPartLite = { index: number; hours: number };
+export type RankDetail = { campaign: RankPartLite | null; normal: RankPartLite | null };
+
+/** แร็งค์ของ Mc 1 เดือน (โปรไฟล์ Mc) month = เดือนของผลงาน · quota = สิทธิ์จองของเดือนถัดไป (ไม่จำกัด / ปิดใช้ = null) */
+export type RankEntry = {
+  month: string; tier: Tier | null; score: number | null; hours: number; detail: RankDetail | null;
+  /** แร็งค์ล็อกแล้ว (จบเดือน + 3 วัน) */
+  settled: boolean; settleDate: string;
+  quota: { month: string; total: number; auto: number; extra: number } | null;
+};
+/** โปรไฟล์ Mc: last = เดือนที่แล้ว (ใช้กับสิทธิ์จองเดือนนี้) · current = เดือนนี้ถึงตอนนี้ (ใช้กับเดือนหน้า) */
+export type MyRank = { last: RankEntry | null; current: RankEntry | null; minHours: number };
+
+/** อีกกี่ % ถึงแร็งค์ถัดไป (A แล้ว = null) */
+export function nextTierGap(tier: Tier | null, score: number | null): { tier: Tier; gap: number } | null {
+  if (!tier || score === null) return null;
+  if (tier === "C") return { tier: "B", gap: TIER_B - score };
+  if (tier === "B") return { tier: "A", gap: TIER_A - score };
+  return null;
+}
 
 /** สิทธิ์ของ Mc ที่เปิดหน้าจอง (ต่อเดือนที่มี slot ให้จอง) */
 export type MyQuota = { month: string; max: number; used: number; tier: Tier | null; settled: boolean };
