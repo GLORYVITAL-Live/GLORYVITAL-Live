@@ -10,6 +10,7 @@ const LABEL: Record<string, string> = {
   can_view_analytics: "Data analytics", analytics_readonly: "Data analytics ดูอย่างเดียว", can_plan_slots: "Plan Slot Live",
   can_view_mc: "ดู Mc", can_view_admin: "ดู Admin", can_view_proofs: "ดูหลักฐานไลฟ์", can_view_plan: "ดู Plan Slot Live",
   notify_cancel_mc: "รับเมลยกเลิก Mc", notify_cancel_admin: "รับเมลยกเลิก Admin", live_platform: "ทีมไลฟ์",
+  can_view_pay_docs: "ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน)",
 };
 
 function show(key: string, v: unknown) {

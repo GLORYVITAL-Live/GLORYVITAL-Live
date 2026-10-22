@@ -60,6 +60,8 @@ type Person = {
   live_platform?: LiveTeam;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
   payDocs?: "ok" | "drive" | "missing";
+  /** Owner: ดูเอกสารทำเบิก / ใบ 50 ทวิ / เอกสารรับเงินของทุกคน (ส่งมาเฉพาะตอนคนที่เปิดดูมีสิทธิ์นี้เอง) */
+  can_view_pay_docs?: boolean;
 };
 type StaffData = { staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean>; payDocsViewer?: boolean };
 
@@ -633,6 +635,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
     .map((t) => ({ hours: parseTierHours(t.hours) ?? 0, rate: Number(t.rate.replace(/[,\s]/g, "")) }))
     .filter((t) => t.hours > 0 && t.rate > 0);
   const [perm, setPerm] = useState(() => permsOf(person));
+  // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน): ตั้งได้เฉพาะคนที่มีสิทธิ์นี้ · ของตัวเองแก้ไม่ได้
+  const [docs, setDocs] = useState(person?.can_view_pay_docs ?? false);
+  const canGrantDocs = payDocsViewer && !isMe;
   // ฝั่ง Mc ครอบหลักฐานไลฟ์อยู่แล้ว (จัดการ Mc = จัดการหลักฐานได้ / ดู Mc = ดูหลักฐานได้)
   const proofsLevel: Level = RANK[perm.mc] > RANK[perm.proofs] ? perm.mc : perm.proofs;
   const [saving, setSaving] = useState(false);
@@ -680,6 +685,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         ...(role === "owner" && !isMe && canGrantPlan
           ? { can_plan_slots: perm.plan === "edit", ...(viewReady || perm.plan === "view" ? { can_view_plan: perm.plan === "view" } : {}) }
           : {}),
+        ...(role === "owner" && canGrantDocs ? { can_view_pay_docs: docs } : {}),
         // รับอีเมลแจ้งยกเลิก (ตั้งให้ตัวเองได้) ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(role === "owner" && (notifyReady || anyNotify) ? { notify_cancel_mc: notifyOn.mc, notify_cancel_admin: notifyOn.admin } : {}),
       };
@@ -938,6 +944,19 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
                       : perm.mc === "edit" && perm.admin === "edit" ? "จัดการได้ทั้ง Mc + Admin = จัดการได้ทั้งหมด รวมถึงรายชื่อและสิทธิ์ของ Owner คนอื่น"
                         : "รายชื่อและสิทธิ์ของ Owner คนอื่น จัดการได้เฉพาะคนที่จัดการได้ทั้ง Mc และ Admin"}
             </span>
+            {payDocsViewer ? (
+              <Label className="mt-2 items-start border-t pt-2 leading-snug font-normal">
+                <Checkbox checked={isMe ? true : docs} disabled={!canGrantDocs} onCheckedChange={(v) => setDocs(v === true)} className="mt-0.5" />
+                <span>
+                  <span className="font-medium">ดูเอกสารของ Mc / Admin</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {isMe ? "แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์นี้แก้ให้"
+                      : "เอกสารทำเบิก (บัตร ปชช. / บัญชีธนาคาร) · ใบ 50 ทวิ · เอกสารรับเงิน ของทุกคน + จับคู่ / ตรวจเอกสาร (ข้อมูลส่วนตัว — ให้เฉพาะคนที่ต้องใช้)"}
+                    {!isMe && docs && perm.mc === "none" && perm.admin === "none" ? <span className="block text-destructive">ต้องมีสิทธิ์ฝั่ง Mc หรือ Admin ด้วย ถึงจะเห็นหน้าพนักงาน (ที่อยู่ของเอกสาร)</span> : null}
+                  </span>
+                </span>
+              </Label>
+            ) : null}
           </fieldset>
         ) : null}
 

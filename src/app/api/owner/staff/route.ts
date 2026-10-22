@@ -115,9 +115,13 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     // ดูได้อย่างเดียว (SQL 20261018000000_view_only)
     for (const k of VIEW_FIELDS) if (k in body) out[k] = body[k] === true;
     for (const k of NOTIFY_FIELDS) if (k in body) out[k] = body[k] === true;
+    // ดูเอกสารทำเบิก / ใบ 50 ทวิ / เอกสารรับเงินของทุกคน: บันทึกเฉพาะตอนส่งมา (ตั้งได้เฉพาะคนที่มีสิทธิ์นี้ — ตรวจใน POST / PATCH)
+    if ("can_view_pay_docs" in body) out.can_view_pay_docs = body.can_view_pay_docs === true;
   }
   return { data: out };
 }
+
+const noPayDocsGrant = () => fail("ติ๊ก / เอาสิทธิ์ดูเอกสารออกได้เฉพาะคนที่มีสิทธิ์นี้", 403);
 
 /** มีสิทธิ์อย่างน้อย 1 อย่าง (จัดการได้ หรือ ดูได้) */
 const hasAnyPerm = (pick: (k: string) => unknown) =>
@@ -185,6 +189,9 @@ export async function GET() {
   const { data: teamRows, error: teamErr } = await db.from("staff").select("id, live_platform").in("role", ["mc", "admin"]);
   const team = new Map((teamErr ? [] : teamRows ?? []).map((x) => [x.id as number, liveTeamOf(x.live_platform)]));
   const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
+  // Owner คนไหนดูเอกสารได้ (บอกเฉพาะคนที่ดูเอกสารได้เอง — ตั้งให้คนอื่นได้)
+  const { data: docRows } = payDocsViewer ? await db.from("staff").select("id, can_view_pay_docs").eq("role", "owner") : { data: [] };
+  const docViewers = new Map((docRows ?? []).map((x) => [x.id as number, x.can_view_pay_docs === true]));
   // เปิดแจ้งเตือนเด้งในมือถือ / เบราว์เซอร์แล้วกี่เครื่อง (ตามอีเมล · ยังไม่ได้รัน SQL notifications = ไม่แสดง)
   const { data: subs, error: subErr } = await db.from("push_subscriptions").select("email");
   const devices = new Map<string, number>();
@@ -196,6 +203,7 @@ export async function GET() {
       ...(payDocs.has(s.id) ? { payDocs: payDocs.get(s.id) } : {}),
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
       ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
+      ...(docViewers.has(s.id) ? { can_view_pay_docs: docViewers.get(s.id) } : {}),
       ...(s.email ? pushOf(s.email) : {}),
     })),
     meId: r.me.owner?.id ?? null,
@@ -219,6 +227,8 @@ export async function POST(request: Request) {
   if (role === "owner" && !hasAnyPerm((k) => c.data?.[k])) return fail("ตั้งสิทธิ์อย่างน้อย 1 อย่าง");
   // ให้สิทธิ์ Plan Slot Live (จัดการ / ดู) ได้เฉพาะคนที่มีสิทธิ์นี้
   if ((c.data?.can_plan_slots || c.data?.can_view_plan) && !r.me.owner?.plan) return noPlanGrant();
+  if (c.data?.can_view_pay_docs && !(await canViewPayDocs(r.me))) return noPayDocsGrant();
+  if (c.data && !c.data.can_view_pay_docs) delete c.data.can_view_pay_docs; // ไม่ติ๊ก = ค่าเริ่มต้นของคอลัมน์ (ปิด)
   // TikTok = ค่าเริ่มต้นของคอลัมน์ ไม่ต้องส่ง (ยังไม่ได้รัน SQL ก็เพิ่มคนได้ตามเดิม)
   if (c.data?.live_platform === "tiktok") delete c.data.live_platform;
 
@@ -273,6 +283,15 @@ export async function PATCH(request: Request) {
     if (!hasAnyPerm((k) => (k in changes ? changes[k] : curOf(k)))) return fail("ตั้งสิทธิ์อย่างน้อย 1 อย่าง");
     if (isMe) {
       for (const k of ["can_manage_mc", "can_manage_admin", "can_manage_proofs", "can_view_analytics", "can_plan_slots", ...VIEW_FIELDS]) delete changes[k];
+    }
+    // ดูเอกสาร: แก้ของตัวเองไม่ได้ · ให้ / เอาออกได้เฉพาะคนที่มีสิทธิ์นี้ · ไม่เปลี่ยน = ไม่ส่ง (ไม่บันทึกประวัติ)
+    if ("can_view_pay_docs" in changes) {
+      const { data: d } = await db.from("staff").select("can_view_pay_docs").eq("id", id).maybeSingle();
+      const before = d?.can_view_pay_docs === true;
+      if (changes.can_view_pay_docs === before) delete changes.can_view_pay_docs;
+      else if (isMe) return fail("แก้สิทธิ์ของตัวเองไม่ได้ ให้ Owner คนอื่นที่มีสิทธิ์ดูเอกสารแก้ให้");
+      else if (!(await canViewPayDocs(r.me))) return noPayDocsGrant();
+      else (cur as Record<string, unknown>).can_view_pay_docs = before;
     }
   }
 
