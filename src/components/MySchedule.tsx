@@ -135,17 +135,17 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             <p className="rounded-xl border border-warning-border bg-warning px-3 py-2 text-xs text-warning-foreground">ยังไม่ได้ตั้งค่าจ้างต่อชั่วโมง ติดต่อทีมงานเพื่อดูยอดเงิน</p>
           )
         ) : null}
-        <div className="flex flex-wrap gap-x-4">
-          <Button variant="link" onClick={onOpenRules} className="h-auto px-0 font-semibold">
-            <ClipboardListIcon />กฎการทำงาน
-          </Button>
-          <Button variant="link" onClick={onOpenPayDocs} className="h-auto px-0 font-semibold">
-            <IdCardIcon />เอกสารทำเบิก
-          </Button>
-        </div>
-        <MyTawi open={open} />
-
         <DialogBody>
+          {/* ลิงก์ + ใบ 50 ทวิ อยู่ในส่วนที่เลื่อนได้: กล่อง 50 ทวิสูงขึ้นได้ (ฟอร์มยืนยัน / เดือนอื่น) ถ้าอยู่ส่วนบนจะดันรายการคิวจนเลื่อนดูวันอื่นไม่ได้ */}
+          <div className="flex flex-wrap gap-x-4">
+            <Button variant="link" onClick={onOpenRules} className="h-auto px-0 font-semibold">
+              <ClipboardListIcon />กฎการทำงาน
+            </Button>
+            <Button variant="link" onClick={onOpenPayDocs} className="h-auto px-0 font-semibold">
+              <IdCardIcon />เอกสารทำเบิก
+            </Button>
+          </div>
+          <div className="mb-3 empty:hidden"><MyTawi open={open} /></div>
           {error && !items ? (
             <div className="py-6 text-center text-sm text-muted-foreground">
               <strong className="block text-foreground">โหลดข้อมูลไม่สำเร็จ</strong>
