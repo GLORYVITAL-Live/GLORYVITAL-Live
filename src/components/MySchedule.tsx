@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPay, sumPay, tiersLabel } from "@/lib/pay";
-import { ClipboardListIcon, IdCardIcon } from "lucide-react";
+import Link from "next/link";
+import { BookOpenIcon, ClipboardListIcon, IdCardIcon } from "lucide-react";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
@@ -143,6 +144,10 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             </Button>
             <Button variant="link" onClick={onOpenPayDocs} className="h-auto px-0 font-semibold">
               <IdCardIcon />เอกสารทำเบิก
+            </Button>
+            {/* หน้าวิธีใช้ (/guide): วิดีโอเพิ่มเว็บไว้หน้าจอโฮม + แชร์ปฏิทิน */}
+            <Button variant="link" className="h-auto px-0 font-semibold" asChild>
+              <Link href="/guide"><BookOpenIcon />วิธีใช้ / ลงแอปไว้หน้าจอโฮม</Link>
             </Button>
           </div>
           <div className="mb-3 empty:hidden"><MyTawi open={open} /></div>
