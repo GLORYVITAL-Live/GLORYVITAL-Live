@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PhoneIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import {
-  LOAN_STATUS_TEXT, OPEN, availableQty, canAct, companionsFor, isOverdue, lightRole, shortages,
-  type CatalogItem, type Hold, type Loan, type LoanAction, type LoanStatus,
+  LOAN_STATUS_TEXT, OPEN, canAct, companionsFor, isOverdue, leftOf, lightRole, roomInfo, shortages,
+  type CatalogItem, type Hold, type LiveBlock, type Loan, type LoanAction, type LoanStatus, type Stock,
 } from "@/lib/loans";
 import { todayKey } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -26,8 +26,11 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 type LoansData = {
   manage: boolean; loans: Loan[]; catalog: CatalogItem[]; holds: Hold[];
+  /** ช่วงที่ห้องไลฟ์มีไลฟ์ (ไฟประจำห้องต้องเหลือไว้) — เว็บเก่าไม่ส่ง = ไม่มี */
+  live?: LiveBlock[];
   me: { name: string; team: string; phone: string } | null;
 };
+const stockOf = (d: LoansData): Stock => ({ catalog: d.catalog, holds: d.holds, live: d.live ?? [] });
 
 const fmtWhen = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
 const when = (iso: string) => fmtWhen.format(new Date(iso));
@@ -105,7 +108,16 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
   const [busy, setBusy] = useState(false);
   const startMs = msOf(start), endMs = msOf(end);
   const validRange = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs;
-  const left = (c: CatalogItem) => (validRange ? availableQty(c, data.holds, startMs, endMs) : c.quantity);
+  // ว่างในช่วงนี้ = หักที่ถูกยืม + ไฟประจำห้องไลฟ์ที่ต้องเหลือไว้ตอนมีไลฟ์
+  //   ของประจำห้องเดียวกัน (เช่น ไฟห้อง Cherry 3 ดวง ไลฟ์อยู่ ยืมได้รวม 1) = หักชิ้นอื่นในห้องที่เลือกไว้แล้วด้วย
+  const stock = useMemo(() => stockOf(data), [data]);
+  const left = (c: CatalogItem) => {
+    if (!validRange) return c.quantity;
+    const own = leftOf(stock, c, startMs, endMs), room = roomInfo(stock, c, startMs, endMs);
+    if (!room) return own;
+    const others = room.ids.filter((id) => id !== c.id).reduce((a, id) => a + (picked.get(id) ?? 0), 0);
+    return Math.max(0, Math.min(own, room.left - others));
+  };
 
   const q = search.trim().toLowerCase();
   const groups = useMemo(() => {
@@ -115,7 +127,7 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
     return [...m];
   }, [data.catalog, q]);
   const items = [...picked].filter(([, n]) => n > 0).map(([equipmentId, quantity]) => ({ equipmentId, quantity }));
-  const short = validRange ? shortages(items, data.catalog, data.holds, startMs, endMs) : [];
+  const short = validRange ? shortages(items, stock, startMs, endMs) : [];
   const byId = useMemo(() => new Map(data.catalog.map((c) => [c.id, c])), [data.catalog]);
 
   // ยืมไฟเป็นชุด: กด + ที่ไฟ = เพิ่มขา + Softbox (+ สายไฟที่แยกรายการ) ให้ด้วย (src/lib/loans.ts companionsFor)
@@ -234,6 +246,7 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
                 <ul className="space-y-1">
                   {list.map((c) => {
                     const n = picked.get(c.id) ?? 0, free = left(c);
+                    const room = validRange ? roomInfo(stock, c, startMs, endMs) : null;
                     // ของที่เพิ่มคู่กับไฟดวงนี้ (แสดงใต้ชื่อ)
                     const mates = [...new Set((links.get(c.id) ?? []).flat())].map((id) => byId.get(id)?.name).filter(Boolean);
                     return (
@@ -245,8 +258,14 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
                         <span className="min-w-0 flex-1 leading-tight">
                           {/* ชื่อยาว (รุ่น + สายไฟ) แสดงได้ 2 บรรทัด มือถือจะได้เห็นรุ่นครบ */}
                           <span className="line-clamp-2 text-sm font-medium break-words">{c.name}</span>
+                          {/* ไฟประจำห้องไลฟ์ต้องเหลือไว้ห้องละ 2 ชุดตอนมีไลฟ์: ห้องไม่เหลือให้ยืม = ติดไลฟ์ / เหลือ = บอกว่ายืมรวมได้กี่ชิ้น */}
                           <span className={cn("block text-[11px]", free ? "text-muted-foreground" : "text-destructive")}>
-                            {c.code ? `${c.code} · ` : ""}{free ? `ว่าง ${free}/${c.quantity}` : "ไม่ว่างในช่วงนี้"}
+                            {c.code ? `${c.code} · ` : ""}
+                            {room && !room.left ? `ติดไลฟ์${room.room.replace(/^ห้องไลฟ์\s*/, "ห้อง ")}`
+                              : free ? `ว่าง ${free}/${c.quantity}` : n ? "เลือกครบแล้ว" : "ไม่ว่างในช่วงนี้"}
+                            {room && room.left ? (
+                              <span className="text-warning-foreground"> · {room.room.replace(/^ห้องไลฟ์\s*/, "ห้อง ")} มีไลฟ์ ยืมรวมได้ {room.left}</span>
+                            ) : null}
                           </span>
                           {n && mates.length ? <span className="block text-[11px] text-primary">+ {mates.join(" + ")}</span> : null}
                         </span>
@@ -357,7 +376,7 @@ export function LoanManager() {
         <div className="space-y-2">
           {list.map((l) => {
             const short = l.status === "pending"
-              ? shortages(l.items, data.catalog, data.holds, Date.parse(l.startAt), Date.parse(l.endAt), l.id) : [];
+              ? shortages(l.items, stockOf(data), Date.parse(l.startAt), Date.parse(l.endAt), l.id) : [];
             return <LoanCard key={l.id} loan={l} now={now} manage actions={actionsOf(l)} warning={short.length ? `ของไม่พอแล้ว: ${short.map((s) => `${s.name} เหลือ ${s.left} (ขอ ${s.want})`).join(" · ")}` : ""} onDone={reload} />;
           })}
         </div>

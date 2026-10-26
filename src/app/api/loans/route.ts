@@ -31,12 +31,12 @@ export async function GET(request: Request) {
     // ?mine=1 = หน้าขอยืม (เฉพาะคำขอของตัวเอง แม้เป็นคนที่จัดการคำขอได้ด้วย เช่น Owner ที่เป็น Marketing)
     const mine = new URL(request.url).searchParams.get("mine") === "1" && !!r.me.borrower;
     const manage = r.me.equipment && !mine;
-    const [loans, { catalog, holds }, phone] = await Promise.all([
+    const [loans, { catalog, holds, live }, phone] = await Promise.all([
       listLoans(manage ? undefined : r.me.borrower!.id), loanCatalog(),
       // เบอร์ในรายชื่อ ใส่ให้ในฟอร์มขอยืมเป็นค่าเริ่มต้น
       r.me.borrower ? createAdminClient().from("staff").select("phone").eq("id", r.me.borrower.id).maybeSingle().then((x) => String(x.data?.phone ?? "")) : "",
     ]);
-    return ok({ manage, loans, catalog, holds, me: r.me.borrower ? { name: r.me.borrower.name, team: r.me.borrower.team, phone } : null });
+    return ok({ manage, loans, catalog, holds, live, me: r.me.borrower ? { name: r.me.borrower.name, team: r.me.borrower.team, phone } : null });
   } catch (err) {
     return errorOf(err);
   }

@@ -2,7 +2,8 @@ import "server-only";
 import { notify, notifyMany, type Note } from "@/lib/notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
-  ACTION_TO, HOLDING, LOAN_STATUS_TEXT, canAct, shortages, type CatalogItem, type Hold, type Loan, type LoanAction, type LoanInput, type LoanStatus,
+  ACTION_TO, HOLDING, LOAN_STATUS_TEXT, canAct, isLiveRoom, liveBlocks, shortages,
+  type Loan, type LoanAction, type LoanInput, type LoanStatus, type Stock,
 } from "@/lib/loans";
 
 /**
@@ -42,19 +43,28 @@ const itemsText = (l: Loan) => l.items.map((i) => `${i.name}${i.quantity > 1 ? `
 const whoText = (l: Loan) => `${l.requester.name}${l.requester.team ? ` (${l.requester.team})` : ""}`;
 const periodText = (l: Loan) => `${when(l.startAt)} – ${when(l.endAt)}`;
 
-/** อุปกรณ์ที่ให้ยืมได้ (สถานะใช้งานได้) + ช่วงที่ถูกกันไว้ (ไม่บอกว่าใครยืม) */
-export async function loanCatalog(): Promise<{ catalog: CatalogItem[]; holds: Hold[] }> {
+/**
+ * อุปกรณ์ที่ให้ยืมได้ (สถานะใช้งานได้) + ช่วงที่ถูกกันไว้ (ไม่บอกว่าใครยืม) + ช่วงที่ห้องไลฟ์มีไลฟ์ (ไฟประจำห้องต้องเหลือ 2 ชุด)
+ *   ไลฟ์ = slot Mc ที่ไม่ยกเลิก ตั้งแต่เมื่อวานถึงอีก 100 วัน · ช่อง → ห้อง ตามชื่อที่เก็บ (src/lib/loans.ts roomForPlatform)
+ */
+export async function loanCatalog(): Promise<Stock> {
   const db = createAdminClient();
-  const [eq, loans] = await Promise.all([
-    db.from("equipment").select("id, code, name, category, quantity, photo_path").eq("status", "ใช้งานได้").gt("quantity", 0)
+  const now = Date.now();
+  const [eq, loans, slots] = await Promise.all([
+    db.from("equipment").select("id, code, name, category, quantity, photo_path, location, status").gt("quantity", 0)
       .order("category").order("code").order("name"),
     db.from("equipment_loans").select("id, start_at, end_at, items:equipment_loan_items(equipment_id, quantity)")
-      .in("status", HOLDING).gte("end_at", new Date(Date.now() - 86400_000).toISOString()),
+      .in("status", HOLDING).gte("end_at", new Date(now - 86400_000).toISOString()),
+    db.from("mc_slots").select("platform, starts_at, ends_at").eq("is_cancelled", false)
+      .gte("ends_at", new Date(now - 86400_000).toISOString()).lte("starts_at", new Date(now + 100 * 86400_000).toISOString()).limit(5000),
   ]);
   if (eq.error) throw new Error(eq.error.message);
   if (loans.error) throw new Error(sqlMsg(loans.error.message));
-  type EqRow = { id: number; code: string | null; name: string; category: string; quantity: number; photo_path: string | null };
-  const rows = (eq.data ?? []) as EqRow[];
+  type EqRow = { id: number; code: string | null; name: string; category: string; quantity: number; photo_path: string | null; location: string; status: string };
+  const all = (eq.data ?? []) as EqRow[];
+  const rooms = [...new Set(all.map((x) => x.location).filter(isLiveRoom))];
+  const live = liveBlocks((slots.data ?? []).map((s) => ({ platform: String(s.platform), startMs: Date.parse(s.starts_at), endMs: Date.parse(s.ends_at) })), rooms);
+  const rows = all.filter((x) => x.status === "ใช้งานได้");
   const paths = rows.map((x) => x.photo_path).filter((p): p is string => !!p);
   const urls = new Map<string, string>();
   if (paths.length) {
@@ -65,11 +75,12 @@ export async function loanCatalog(): Promise<{ catalog: CatalogItem[]; holds: Ho
   return {
     catalog: rows.map((x) => ({
       id: Number(x.id), code: x.code ?? "", name: x.name, category: x.category, quantity: x.quantity,
-      photoUrl: x.photo_path ? urls.get(x.photo_path) ?? null : null,
+      photoUrl: x.photo_path ? urls.get(x.photo_path) ?? null : null, room: isLiveRoom(x.location) ? x.location : null,
     })),
     holds: ((loans.data ?? []) as HoldRow[]).flatMap((l) => (l.items ?? []).map((i) => ({
       loanId: Number(l.id), equipmentId: Number(i.equipment_id), quantity: i.quantity, startMs: Date.parse(l.start_at), endMs: Date.parse(l.end_at),
     }))),
+    live,
   };
 }
 
@@ -110,8 +121,7 @@ async function log(email: string, name: string, action: string, id: number) {
 
 /** ส่งคำขอยืม (ผู้ยืม) — ของไม่พอในช่วงนั้น = error บอกว่าเหลือเท่าไร */
 export async function createLoan(me: { id: number; name: string; email: string; team: string }, input: LoanInput) {
-  const { catalog, holds } = await loanCatalog();
-  const short = shortages(input.items, catalog, holds, input.startMs, input.endMs);
+  const short = shortages(input.items, await loanCatalog(), input.startMs, input.endMs);
   if (short.length) return { error: `ช่วงนี้ของไม่พอ: ${short.map((s) => `${s.name} เหลือ ${s.left} (ขอ ${s.want})`).join(" · ")}` };
   const db = createAdminClient();
   const { data, error } = await db.from("equipment_loans").insert({
@@ -153,8 +163,7 @@ export async function actOnLoan(id: number, action: LoanAction, actor: { email: 
   }
   if (!canAct(loan.status, action)) return { error: `คำขอนี้${ACTION_TEXT[action]}ไม่ได้แล้ว (ตอนนี้: ${LOAN_STATUS_TEXT[loan.status]})` };
   if (action === "approve") {
-    const { catalog, holds } = await loanCatalog();
-    const short = shortages(loan.items, catalog, holds, Date.parse(loan.startAt), Date.parse(loan.endAt), id);
+    const short = shortages(loan.items, await loanCatalog(), Date.parse(loan.startAt), Date.parse(loan.endAt), id);
     if (short.length) return { error: `อนุมัติไม่ได้ ของไม่พอในช่วงนี้: ${short.map((s) => `${s.name} เหลือ ${s.left} (ขอ ${s.want})`).join(" · ")}` };
   }
   const now = new Date().toISOString();

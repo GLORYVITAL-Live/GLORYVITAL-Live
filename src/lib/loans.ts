@@ -35,10 +35,17 @@ export type Loan = {
   handedBy: string | null; handedAt: string | null; returnedBy: string | null; returnedAt: string | null; returnNote: string;
   createdAt: string;
 };
-/** อุปกรณ์ที่ให้ยืมได้ (สถานะใช้งานได้) — ไม่มีราคา / Serial */
-export type CatalogItem = { id: number; code: string; name: string; category: string; quantity: number; photoUrl: string | null };
+/**
+ * อุปกรณ์ที่ให้ยืมได้ (สถานะใช้งานได้) — ไม่มีราคา / Serial
+ *   room = ที่เก็บเป็นห้องไลฟ์ ("ห้องไลฟ์ Cherry Glory") = ไฟประจำห้อง (ไม่ใช่ห้องไลฟ์ = null)
+ */
+export type CatalogItem = { id: number; code: string; name: string; category: string; quantity: number; photoUrl: string | null; room?: string | null };
 /** ช่วงที่ของถูกกันไว้ (คำขอที่อนุมัติแล้ว / ยืมอยู่ — ไม่บอกว่าใครยืม) */
 export type Hold = { loanId: number; equipmentId: number; quantity: number; startMs: number; endMs: number };
+/** ช่วงที่ห้องไลฟ์มีไลฟ์ (จาก slot ของช่องนั้น — ต่อกันรวมเป็นช่วงเดียว) */
+export type LiveBlock = { room: string; startMs: number; endMs: number };
+/** ข้อมูลที่ใช้คิดของว่าง: อุปกรณ์ + ที่ถูกยืม + ไลฟ์ของแต่ละห้อง */
+export type Stock = { catalog: CatalogItem[]; holds: Hold[]; live: LiveBlock[] };
 
 /** คืนเลยกำหนด (ยืมอยู่ และเลยเวลาคืนแล้ว) */
 export const isOverdue = (l: Pick<Loan, "status" | "endAt">, now = Date.now()) => l.status === "borrowed" && Date.parse(l.endAt) < now;
@@ -48,9 +55,14 @@ export const isOverdue = (l: Pick<Loan, "status" | "endAt">, now = Date.now()) =
  *   คำขอที่ไม่ซ้อนกันเอง (ยืมจันทร์ 1 / พุธ 1) ในช่วงจันทร์–พุธ = กันสูงสุด 1 ไม่ใช่ 2
  */
 export function peakHeld(holds: Hold[], equipmentId: number, startMs: number, endMs: number, exceptLoan?: number) {
+  return peakOf(holds.filter((h) => h.equipmentId === equipmentId && h.loanId !== exceptLoan), startMs, endMs);
+}
+
+/** จำนวนที่ใช้พร้อมกันสูงสุดในช่วง [start, end) จากหลายช่วง (ช่วงละ quantity) */
+function peakOf(list: { quantity: number; startMs: number; endMs: number }[], startMs: number, endMs: number) {
   const ev: [number, number][] = [];
-  for (const h of holds) {
-    if (h.equipmentId !== equipmentId || h.loanId === exceptLoan || h.endMs <= startMs || h.startMs >= endMs) continue;
+  for (const h of list) {
+    if (h.endMs <= startMs || h.startMs >= endMs) continue;
     ev.push([Math.max(h.startMs, startMs), h.quantity], [Math.min(h.endMs, endMs), -h.quantity]);
   }
   // เวลาเท่ากัน: คืนก่อนยืม (คืน 10:00 แล้วอีกคนยืม 10:00 = ไม่ซ้อน)
@@ -58,6 +70,90 @@ export function peakHeld(holds: Hold[], equipmentId: number, startMs: number, en
   let cur = 0, peak = 0;
   for (const [, q] of ev) { cur += q; peak = Math.max(peak, cur); }
   return peak;
+}
+
+// ---------- ไฟประจำห้องไลฟ์ ----------
+
+/** ห้องไลฟ์ต้องมีไฟประจำห้องกี่ชุดระหว่างมีไลฟ์ (ไฟ + ขา + Softbox อย่างละ 2) */
+export const ROOM_NEED = 2;
+const ROOM_ROLES: LightRole[] = ["light", "stand", "softbox"];
+const ROLE_TEXT: Record<LightRole, string> = { light: "ไฟ", stand: "ขาไฟ", softbox: "Softbox", cable: "สายไฟ" };
+
+/** ของประจำห้องไลฟ์ที่ทำหน้าที่เดียวกัน (ไฟของห้อง Cherry Glory ทั้งหมด) · ไม่ใช่ของประจำห้อง = null */
+function roomGroup(stock: Stock, c: CatalogItem) {
+  const role = lightRole(c);
+  if (!c.room || !role || !ROOM_ROLES.includes(role)) return null;
+  return { room: c.room, role, items: stock.catalog.filter((x) => x.room === c.room && lightRole(x) === role) };
+}
+
+/**
+ * ของประจำห้องที่ยังยืมได้ในช่วงนี้ = ทั้งหมดในห้อง − (ที่ห้องต้องใช้ตอนมีไลฟ์ + ที่ถูกยืมไปแล้ว) ณ เวลาที่ใช้มากสุด
+ *   เช่น ห้องมีไฟ 3 ดวง ไลฟ์ 19:00–23:00 ยืม 18:00–20:00 ได้ 1 ดวง · ห้องมี 2 ดวง = ยืมได้เฉพาะช่วงที่ไม่มีไลฟ์
+ */
+function roomLeft(stock: Stock, g: NonNullable<ReturnType<typeof roomGroup>>, startMs: number, endMs: number, exceptLoan?: number) {
+  const ids = new Set(g.items.map((x) => x.id));
+  const total = g.items.reduce((a, x) => a + x.quantity, 0);
+  const used = [
+    ...stock.holds.filter((h) => ids.has(h.equipmentId) && h.loanId !== exceptLoan),
+    ...stock.live.filter((b) => b.room === g.room).map((b) => ({ ...b, quantity: ROOM_NEED })),
+  ];
+  return Math.max(0, total - peakOf(used, startMs, endMs));
+}
+
+/** เหลือให้ยืมกี่ชิ้นในช่วงนี้ (นับทั้งที่ถูกยืม และไฟที่ห้องไลฟ์ต้องใช้) */
+export function leftOf(stock: Stock, c: CatalogItem, startMs: number, endMs: number, exceptLoan?: number) {
+  const own = availableQty(c, stock.holds, startMs, endMs, exceptLoan);
+  const g = roomGroup(stock, c);
+  return g ? Math.min(own, roomLeft(stock, g, startMs, endMs, exceptLoan)) : own;
+}
+
+/** ที่เก็บที่เป็นห้องไลฟ์ (ของในห้องนี้ = ของประจำห้อง) */
+export const isLiveRoom = (location: string) => /ห้องไลฟ์/.test(location);
+// ชื่อช่องใน slot → คำในชื่อห้อง (ช่อง GLORY MALL แสดงเป็น GLORY VITAL · ห้องชื่อ "ห้องไลฟ์ Glory Vital (Mall)")
+const ROOM_ALIASES: Record<string, string[]> = { "glory mall": ["mall", "glory vital"], "cherry glory": ["cherry"], "skin expert": ["skin expert"] };
+
+/** ห้องไลฟ์ของช่องนี้ (ไม่เจอ = null) */
+export function roomForPlatform(platform: string, rooms: string[]) {
+  const p = platform.trim().toLowerCase();
+  const keys = [p, ...(ROOM_ALIASES[p] ?? [])];
+  return rooms.find((r) => keys.some((k) => r.toLowerCase().includes(k))) ?? null;
+}
+
+/** slot ไลฟ์ → ช่วงที่แต่ละห้องมีไลฟ์ (slot ต่อกัน / ซ้อนกันในห้องเดียวกัน = ช่วงเดียว) */
+export function liveBlocks(slots: { platform: string; startMs: number; endMs: number }[], rooms: string[]): LiveBlock[] {
+  const byRoom = new Map<string, { startMs: number; endMs: number }[]>();
+  for (const s of slots) {
+    const room = roomForPlatform(s.platform, rooms);
+    if (room) byRoom.set(room, [...(byRoom.get(room) ?? []), s]);
+  }
+  const out: LiveBlock[] = [];
+  for (const [room, list] of byRoom) {
+    list.sort((a, b) => a.startMs - b.startMs);
+    let cur: LiveBlock | null = null;
+    for (const s of list) {
+      if (cur && s.startMs <= cur.endMs) cur.endMs = Math.max(cur.endMs, s.endMs);
+      else { if (cur) out.push(cur); cur = { room, startMs: s.startMs, endMs: s.endMs }; }
+    }
+    if (cur) out.push(cur);
+  }
+  return out;
+}
+
+/** ห้องไลฟ์ที่ทำให้ชิ้นนี้ยืมได้น้อยลงในช่วงนี้ ("" = ไม่ติดไลฟ์) */
+export function liveConflict(stock: Stock, c: CatalogItem, startMs: number, endMs: number) {
+  const g = roomGroup(stock, c);
+  if (!g || !stock.live.some((b) => b.room === g.room && b.startMs < endMs && b.endMs > startMs)) return "";
+  return leftOf(stock, c, startMs, endMs) < availableQty(c, stock.holds, startMs, endMs) ? g.room : "";
+}
+
+/**
+ * ห้องไลฟ์ของชิ้นนี้ที่มีไลฟ์ในช่วงนี้ + ยืมได้รวมทั้งห้องกี่ชิ้น (หน้าที่เดียวกัน) · ไม่ใช่ของประจำห้อง / ห้องไม่มีไลฟ์ = null
+ *   key = กลุ่มเดียวกัน (ห้อง + หน้าที่) ใช้หักชิ้นอื่นในห้องเดียวกันที่เลือกไว้แล้ว
+ */
+export function roomInfo(stock: Stock, c: CatalogItem, startMs: number, endMs: number) {
+  const g = roomGroup(stock, c);
+  if (!g || !stock.live.some((b) => b.room === g.room && b.startMs < endMs && b.endMs > startMs)) return null;
+  return { key: `${g.room}|${g.role}`, room: g.room, left: roomLeft(stock, g, startMs, endMs), ids: g.items.map((x) => x.id) };
 }
 
 /** เหลือให้ยืมกี่ชิ้นในช่วงนี้ */
@@ -139,13 +235,30 @@ export function companionsFor(light: CatalogItem, catalog: CatalogItem[], free: 
   };
 }
 
-/** รายการที่ขอเกินจำนวนที่เหลือในช่วงนั้น (ว่าง = ยืมได้ครบ) */
-export function shortages(items: { equipmentId: number; quantity: number }[], catalog: CatalogItem[], holds: Hold[], startMs: number, endMs: number, exceptLoan?: number) {
-  const byId = new Map(catalog.map((c) => [c.id, c]));
-  return items.flatMap((it) => {
+/**
+ * รายการที่ขอเกินจำนวนที่เหลือในช่วงนั้น (ว่าง = ยืมได้ครบ)
+ *   ของประจำห้องไลฟ์ตรวจรวมทั้งกลุ่มด้วย (ขอไฟห้องเดียวกัน 2 ดวง แต่ห้องเหลือให้ยืม 1 = ไม่พอ)
+ */
+export function shortages(items: { equipmentId: number; quantity: number }[], stock: Stock, startMs: number, endMs: number, exceptLoan?: number) {
+  const byId = new Map(stock.catalog.map((c) => [c.id, c]));
+  const out: { equipmentId: number; name: string; want: number; left: number }[] = [];
+  const groups = new Map<string, { g: NonNullable<ReturnType<typeof roomGroup>>; want: number; first: number }>();
+  for (const it of items) {
     const c = byId.get(it.equipmentId);
-    if (!c) return [{ equipmentId: it.equipmentId, name: "อุปกรณ์ที่ให้ยืมไม่ได้แล้ว", want: it.quantity, left: 0 }];
-    const left = availableQty(c, holds, startMs, endMs, exceptLoan);
-    return it.quantity > left ? [{ equipmentId: c.id, name: c.name, want: it.quantity, left }] : [];
-  });
+    if (!c) { out.push({ equipmentId: it.equipmentId, name: "อุปกรณ์ที่ให้ยืมไม่ได้แล้ว", want: it.quantity, left: 0 }); continue; }
+    const left = leftOf(stock, c, startMs, endMs, exceptLoan);
+    if (it.quantity > left) { out.push({ equipmentId: c.id, name: c.name, want: it.quantity, left }); continue; }
+    const g = roomGroup(stock, c);
+    if (g) {
+      const k = `${g.room}|${g.role}`;
+      const cur = groups.get(k) ?? { g, want: 0, first: c.id };
+      cur.want += it.quantity;
+      groups.set(k, cur);
+    }
+  }
+  for (const { g, want, first } of groups.values()) {
+    const left = roomLeft(stock, g, startMs, endMs, exceptLoan);
+    if (want > left) out.push({ equipmentId: first, name: `${ROLE_TEXT[g.role]}ของ${g.room} (ต้องเหลือไว้ไลฟ์)`, want, left });
+  }
+  return out;
 }
