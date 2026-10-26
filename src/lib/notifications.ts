@@ -33,9 +33,10 @@ import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
  *   tawi       ใบ 50 ทวิ พร้อมดาวน์โหลด (ไฟล์ได้เจ้าของครั้งแรก — src/lib/tawi.ts) → เจ้าของไฟล์
  *              เจ้าตัวกรอกชื่อยืนยันตัวตนไม่ตรง (วันละครั้งต่อคน) → Owner ที่ดูเอกสารทำเบิกได้
  *   receipt    Owner ตีกลับเอกสารยืนยันการรับเงิน (src/lib/receipts-db.ts) → เจ้าตัว ให้ส่งใหม่
+ *   quota      Owner เปิดใช้สิทธิ์จองตามแร็งค์ (src/lib/mc-quota-db.ts) → Mc ที่ถูกจำกัด บอกสิทธิ์ + แร็งค์ของตัวเอง
  */
 
-export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "tawi" | "receipt" | "test";
+export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "tawi" | "receipt" | "quota" | "test";
 /** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide) */
 export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide";
 export type Note = { kind: NoteKind; title: string; body: string; page?: NotePage | null; dedupe?: string };

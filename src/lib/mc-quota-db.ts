@@ -7,6 +7,7 @@ import {
   autoQuota, nextMonth, prevMonth, QUOTA_NEW, settleDate, totalQuota, type MyQuota, type MyRank, type QuotaReport, type QuotaRow, type RankDetail, type RankEntry,
 } from "@/lib/mc-quota";
 import { MIN_RANK_HOURS, rankCells, type Tier } from "@/lib/mc-rank";
+import { notifyMany } from "@/lib/notifications";
 import { isTestAccount } from "@/lib/staff-check";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me } from "@/lib/types";
@@ -203,6 +204,45 @@ export async function myRank(settings: Settings, mcId: number): Promise<MyRank> 
   const thisMonth = bkkToday().slice(0, 7);
   const [last, current] = await Promise.all([entry(thisMonth), entry(nextMonth(thisMonth))]);
   return { last, current, minHours: MIN_RANK_HOURS };
+}
+
+const fmtMon = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { month: "short", timeZone: "UTC" });
+const monText = (m: string) => fmtMon.format(new Date(`${m}-01T12:00:00Z`));
+
+/**
+ * Owner กดเปิดใช้สิทธิ์จองตามแร็งค์ → แจ้งเตือน (กระดิ่ง + เด้งมือถือ) Mc ที่ถูกจำกัดทุกคน: สิทธิ์เดือนนี้ + เดือนหน้า + แร็งค์ของตัวเอง
+ *   วันละครั้ง (กดปิด / เปิดซ้ำในวันเดียวกัน ไม่แจ้งซ้ำ) · ไม่แจ้งคนที่กดเปิด
+ */
+export async function notifyQuotaOn(settings: Settings, actorEmail: string) {
+  try {
+    return notifyMany(await quotaOnNotes(settings, actorEmail));
+  } catch (err) {
+    console.error("แจ้งเตือนเปิดสิทธิ์จองไม่สำเร็จ:", err);
+    return 0;
+  }
+}
+
+/** ข้อความแจ้งเตือนตอนเปิดใช้ (แยกไว้ตรวจข้อความก่อนส่งได้) */
+export async function quotaOnNotes(settings: Settings, actorEmail: string) {
+  const today = bkkToday(), thisMonth = today.slice(0, 7), next = nextMonth(thisMonth);
+  const [cur, nxt, staff] = await Promise.all([
+    quotaReport(thisMonth, settings, false), quotaReport(next, settings, false), mcStaff(createAdminClient()),
+  ]);
+  const emailOf = new Map(staff.map((s) => [s.id, s.email?.trim().toLowerCase() ?? ""]));
+  const line = (m: string, r: QuotaRow) =>
+    `${monText(m)}: จองได้ ${r.total} slot ${r.tier && r.score !== null ? `(แร็งค์ ${r.tier} ${Math.round(r.score * 1000) / 10}%)` : "(ยังไม่มีแร็งค์)"} · จองแล้ว ${r.used}`;
+  // เดือนนี้เหลือไม่ถึง 7 วัน = บอกแค่เดือนหน้า (เดือนที่กำลังจะจบ คิวส่วนใหญ่ถูกแพลนไปแล้ว ตัวเลขจะชวนสับสน)
+  const showCur = Date.parse(`${lastDayOf(thisMonth)}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`) >= 7 * 86400_000;
+  return nxt.rows.flatMap((r) => {
+    const email = emailOf.get(r.staffId);
+    if (!email || email === actorEmail.trim().toLowerCase()) return [];
+    const now = showCur ? cur.rows.find((x) => x.staffId === r.staffId) : undefined;
+    return [{
+      email, kind: "quota" as const, page: "mc" as const, dedupe: `quota:${today}`,
+      title: "เปิดใช้สิทธิ์จองตามแร็งค์แล้ว",
+      body: [now ? line(thisMonth, now) : "", line(next, r), "ดูแร็งค์ + วิธีคิด: กดชื่อมุมขวาบน > ตารางของฉัน"].filter(Boolean).join("\n"),
+    }];
+  });
 }
 
 /** ตั้งสิทธิ์เพิ่มพิเศษ + หมายเหตุ (ยังไม่มีแถว = สร้างด้วยสิทธิ์อัตโนมัติของคนยังไม่มีอันดับ) คืนค่าเดิมไว้บันทึกประวัติ */

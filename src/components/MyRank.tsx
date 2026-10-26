@@ -29,7 +29,8 @@ export function useMyRank(open: boolean) {
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    api<{ rank: MyRankData }>("/api/my/rank")
+    // rank: null = Owner ยังไม่เปิดใช้สิทธิ์จองตามแร็งค์ (ไม่แสดงป้าย / กล่องแร็งค์)
+    api<{ rank: MyRankData | null }>("/api/my/rank")
       .then((res) => { if (alive && res.ok) setData(res.rank); })
       .catch(() => undefined);
     return () => { alive = false; };

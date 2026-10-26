@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { fail, ok, requireOwner } from "@/lib/api";
 import { getSettings } from "@/lib/data";
-import { canEditQuota, computeMonth, QUOTA_SQL, quotaReport, setQuotaExtra } from "@/lib/mc-quota-db";
+import { canEditQuota, computeMonth, notifyQuotaOn, QUOTA_SQL, quotaReport, setQuotaExtra } from "@/lib/mc-quota-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me } from "@/lib/types";
 
@@ -56,8 +56,12 @@ export async function POST(request: Request) {
     const on = body.on === true;
     const { error } = await createAdminClient().from("settings").update({ mc_quota_on: on }).eq("id", 1);
     if (error) return fail(/mc_quota_on/.test(error.message) ? QUOTA_SQL : error.message, /mc_quota_on/.test(error.message) ? 409 : 500);
-    after(() => log(r.me, `${on ? "เปิด" : "ปิด"}การจำกัดสิทธิ์จอง Mc ตามแร็งค์`));
-    return ok({ message: on ? "เปิดการจำกัดสิทธิ์จองแล้ว" : "ปิดการจำกัดสิทธิ์จองแล้ว" });
+    after(async () => {
+      await log(r.me, `${on ? "เปิด" : "ปิด"}การจำกัดสิทธิ์จอง Mc ตามแร็งค์`);
+      // เปิดใช้ = แจ้งเตือน Mc ที่ถูกจำกัดทุกคน (สิทธิ์ + แร็งค์ของตัวเอง · วันละครั้ง)
+      if (on) await notifyQuotaOn({ ...(await getSettings()), mc_quota_on: true }, r.me.email);
+    });
+    return ok({ message: on ? "เปิดการจำกัดสิทธิ์จองแล้ว · แจ้งเตือน Mc แล้ว" : "ปิดการจำกัดสิทธิ์จองแล้ว" });
   }
   if (body?.action === "refresh") {
     const month = String(body.month ?? "");
