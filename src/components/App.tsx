@@ -170,7 +170,7 @@ function Shell({ me }: { me: Me | null }) {
     ...(me?.owner?.see.plan && !ownerPage ? ["plan" as const] : []),
     // อุปกรณ์โปรดักชั่น: Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊กในหน้าพนักงาน
     ...(me?.equipment ? ["equipment" as const] : []),
-    // ขอยืมอุปกรณ์: บัญชีทีมอื่นในบริษัท (ทีมเราจัดการคำขอที่หน้าอุปกรณ์ > คำขอยืม)
+    // ขอยืมอุปกรณ์: บัญชีทีมอื่นในบริษัท + Marketing (ทีมเราจัดการคำขอที่หน้าอุปกรณ์ > คำขอยืม)
     ...(me?.borrower ? ["borrow" as const] : []),
     // เทรนนิ่ง (วิดีโอ product training + สไลด์บรีฟ): ทุกคนในทีมไลฟ์ (ไม่รวมบัญชีทีมอื่น)
     ...(me && (me.mc || me.admin || me.owner || me.marketing) ? ["training" as const] : []),

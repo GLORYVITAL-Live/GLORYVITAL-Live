@@ -7,7 +7,7 @@ import {
 
 /**
  * ขอยืมอุปกรณ์ (ตาราง equipment_loans / equipment_loan_items — SQL 20261110000000_equipment_loans) สูตร / ตรวจฟอร์มอยู่ที่ src/lib/loans.ts
- *   ผู้ยืม = บัญชีทีมอื่น (staff role borrower) · ผู้อนุมัติ = คนที่เข้าหน้าอุปกรณ์ได้ (me.equipment)
+ *   ผู้ยืม = บัญชีทีมอื่น (staff role borrower) + Marketing (me.borrower ใน src/lib/auth.ts) · ผู้อนุมัติ = คนที่เข้าหน้าอุปกรณ์ได้ (me.equipment)
  *   แจ้งเตือน: คำขอใหม่ / ผู้ยืมยกเลิก → ผู้อนุมัติ · อนุมัติ / ไม่อนุมัติ / ยกเลิกโดยทีมเรา → ผู้ยืม · ใกล้ถึง / เลยกำหนดคืน (cron)
  */
 

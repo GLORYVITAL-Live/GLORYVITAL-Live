@@ -4,9 +4,10 @@ import { LOANS_SQL, actOnLoan, createLoan, listLoans, loanCatalog } from "@/lib/
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me } from "@/lib/types";
 
-// ขอยืมอุปกรณ์จากทีมอื่น (src/lib/loans-db.ts)
+// ขอยืมอุปกรณ์จากทีมอื่น (src/lib/loans-db.ts) — ผู้ยืม = บัญชีทีมอื่น + Marketing (me.borrower ใน src/lib/auth.ts)
 //   GET                       ผู้ยืม = คำขอของตัวเอง · คนที่เข้าหน้าอุปกรณ์ได้ = คำขอทั้งหมด (+ อุปกรณ์ที่ให้ยืมได้ + ช่วงที่ถูกกันไว้)
-//   POST  { items, location, purpose, phone, team, startAt, endAt }   ส่งคำขอ (บัญชีทีมอื่น)
+//   GET ?mine=1               หน้าขอยืม: เฉพาะคำขอของตัวเองเสมอ
+//   POST  { items, location, purpose, phone, team, startAt, endAt }   ส่งคำขอ (บัญชีทีมอื่น / Marketing)
 //   PATCH { id, action, reason?, note? }   ผู้ยืม: cancel · คนที่เข้าหน้าอุปกรณ์ได้: approve / reject / handover / return / cancel
 
 const ACTIONS: LoanAction[] = ["approve", "reject", "handover", "return", "cancel"];
@@ -23,11 +24,13 @@ async function access() {
   return { me: r.me };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const r = await access();
   if ("res" in r) return r.res;
   try {
-    const manage = r.me.equipment;
+    // ?mine=1 = หน้าขอยืม (เฉพาะคำขอของตัวเอง แม้เป็นคนที่จัดการคำขอได้ด้วย เช่น Owner ที่เป็น Marketing)
+    const mine = new URL(request.url).searchParams.get("mine") === "1" && !!r.me.borrower;
+    const manage = r.me.equipment && !mine;
     const [loans, { catalog, holds }, phone] = await Promise.all([
       listLoans(manage ? undefined : r.me.borrower!.id), loanCatalog(),
       // เบอร์ในรายชื่อ ใส่ให้ในฟอร์มขอยืมเป็นค่าเริ่มต้น
@@ -42,7 +45,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const r = await access();
   if ("res" in r) return r.res;
-  if (!r.me.borrower) return fail("ส่งคำขอยืมได้จากบัญชีทีมอื่นเท่านั้น", 403);
+  if (!r.me.borrower) return fail("ส่งคำขอยืมได้จากบัญชีทีมอื่น / Marketing เท่านั้น", 403);
   const c = cleanLoanInput(await request.json().catch(() => ({})));
   if ("error" in c) return fail(c.error);
   try {

@@ -64,10 +64,13 @@ export async function getMe(): Promise<Me | null> {
     const { data: equip } = await createAdminClient().from("staff").select("can_manage_equipment").eq("id", me.admin.id).maybeSingle();
     me.equipment = equip?.can_manage_equipment === true;
   }
-  // ทีมอื่น: ชื่อทีม / แผนก (ยังไม่ได้รัน SQL = ว่าง)
+  // Marketing ขอยืมอุปกรณ์ได้ด้วย (ในนามทีม Marketing · ใช้ id รายชื่อ Marketing เป็นผู้ขอ)
+  const fromMarketing = !me.borrower && !!me.marketing;
+  if (fromMarketing) me.borrower = { id: me.marketing!.id, name: me.marketing!.name, team: "" };
+  // ทีม / แผนก (ยังไม่ได้รัน SQL = ว่าง · Marketing ที่ไม่ได้ใส่ = "Marketing")
   if (me.borrower) {
     const { data: t } = await createAdminClient().from("staff").select("team_name").eq("id", me.borrower.id).maybeSingle();
-    me.borrower.team = String(t?.team_name ?? "");
+    me.borrower.team = String(t?.team_name ?? "") || (fromMarketing ? "Marketing" : "");
   }
   return me;
 }

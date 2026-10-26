@@ -40,18 +40,18 @@ const STATUS_CLASS: Record<LoanStatus, string> = {
   cancelled: "border-border bg-muted text-muted-foreground",
 };
 
-/** โหลดคำขอ + อุปกรณ์ · now = เวลาที่โหลด (ใช้ตัดสินเลยกำหนดคืน) */
-function useLoans() {
+/** โหลดคำขอ + อุปกรณ์ · now = เวลาที่โหลด (ใช้ตัดสินเลยกำหนดคืน) · mine = เฉพาะคำขอของตัวเอง (หน้าขอยืม) */
+function useLoans(mine = false) {
   const [data, setData] = useState<(LoansData & { now: number }) | null>(null);
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);
   useEffect(() => {
     let alive = true;
-    api<LoansData>("/api/loans")
+    api<LoansData>(mine ? "/api/loans?mine=1" : "/api/loans")
       .then((res) => { if (!alive) return; if (res.ok) { setData({ ...res, now: Date.now() }); setError(""); } else setError(res.message ?? "โหลดไม่สำเร็จ"); })
       .catch((err) => { if (alive) setError((err as Error).message); });
     return () => { alive = false; };
-  }, [tick]);
+  }, [tick, mine]);
   return { data, error, reload: () => setTick((n) => n + 1) };
 }
 
@@ -75,7 +75,7 @@ function WhenField({ label, value, min, onChange }: { label: string; value: When
 // ---------- บัญชีทีมอื่น ----------
 
 export function BorrowPage() {
-  const { data, error, reload } = useLoans();
+  const { data, error, reload } = useLoans(true);
   if (!data) return error ? <LoadError title="โหลดหน้าขอยืมไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock />;
   const mine = data.loans;
   const open = mine.filter((l) => OPEN.includes(l.status));
@@ -196,7 +196,7 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
 
   return (
     <section className="rounded-xl border bg-card p-3">
-      <h2 className="text-lg font-bold">ขอยืมอุปกรณ์</h2>
+      <h2 className="text-lg font-bold">ส่งคำขอยืมใหม่</h2>
       <p className="text-xs text-muted-foreground">
         {data.me ? `ในนาม ${data.me.name}${data.me.team ? ` (${data.me.team})` : ""} · ` : ""}เลือกวันเวลาก่อน ระบบจะบอกว่าแต่ละรายการว่างกี่ชิ้นในช่วงนั้น
       </p>

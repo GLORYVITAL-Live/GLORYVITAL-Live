@@ -822,8 +822,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
 
         {role === "marketing" ? (
           <p className="rounded-lg bg-secondary px-3 py-2 text-xs leading-relaxed text-secondary-foreground">
-            บัญชี Marketing เข้าเว็บแล้วเห็นแค่หน้า <b>CEO Live</b>: ยอดทั้งวันของวันที่มี CEO Live เทียบวันก่อน (ช่องที่ CEO ไลฟ์ และทุกบัญชี)
-            ดูได้อย่างเดียว ส่งออกไฟล์ / สไลด์ได้ — ไม่เห็นข้อมูลวันอื่น ตาราง slot รายชื่อ หรือค่าจ้าง
+            บัญชี Marketing เข้าเว็บแล้วเห็นหน้า <b>CEO Live</b>: ยอดทั้งวันของวันที่มี CEO Live เทียบวันก่อน (ช่องที่ CEO ไลฟ์ และทุกบัญชี)
+            ดูได้อย่างเดียว ส่งออกไฟล์ / สไลด์ได้ + หน้า <b>ขอยืมอุปกรณ์</b> (ส่งคำขอในนามทีม Marketing) + <b>เทรนนิ่ง</b>
+            — ไม่เห็นข้อมูลวันอื่น ตาราง slot รายชื่อ หรือค่าจ้าง
           </p>
         ) : null}
 
