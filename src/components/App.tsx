@@ -12,6 +12,7 @@ import dynamic from "next/dynamic";
 import type { Go } from "@/components/HomeView";
 import { NotificationBell } from "@/components/Notifications";
 import { SlotBoard } from "@/components/SlotBoard";
+import { WorkLocationButton } from "@/components/WorkLocation";
 import { AppProviders, IconButton, LoadingBlock, Notice, StateBox, useToast } from "@/components/shared";
 
 // หน้าอื่นโหลดแยกเมื่อเปิดใช้ (แต่ละคนใช้แค่ 1–2 หน้า ไม่ต้องโหลดทั้งเว็บตอนเปิดครั้งแรก)
@@ -286,6 +287,8 @@ function Shell({ me }: { me: Me | null }) {
               else if (pages.includes(p as Page)) { writeLocal(ROLE_KEY, p); window.scrollTo({ top: 0 }); }
             }} />
           ) : null}
+          {/* โลเคชั่นที่ทำงาน: เฉพาะคนที่มีบัญชี (ตั้งลิงก์ไว้แล้วถึงแสดง) */}
+          {registered ? <WorkLocationButton /> : null}
           <IconButton label={dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด"} onClick={toggleTheme} className="bg-card shadow-card">
             {dark ? <SunIcon /> : <MoonIcon />}
           </IconButton>

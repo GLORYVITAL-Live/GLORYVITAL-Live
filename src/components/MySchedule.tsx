@@ -11,6 +11,7 @@ import {
 } from "@/components/shared";
 import { MyRank, RankChip, useMyRank } from "@/components/MyRank";
 import { MyTawi } from "@/components/MyTawi";
+import { WorkLocationLink } from "@/components/WorkLocation";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -149,6 +150,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             <Button variant="link" className="h-auto px-0 font-semibold" asChild>
               <Link href="/guide"><BookOpenIcon />วิธีใช้ / ลงแอปไว้หน้าจอโฮม</Link>
             </Button>
+            <WorkLocationLink />
           </div>
           <div className="mb-3 empty:hidden"><MyTawi open={open} /></div>
           {error && !items ? (

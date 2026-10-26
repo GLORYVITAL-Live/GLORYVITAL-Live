@@ -23,7 +23,8 @@ export function RulesEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
           : "ข้อความที่ Mc / Admin เห็นในหน้า \"กฎการทำงาน\" (บัญชีนี้ดูได้อย่างเดียว)"}
       </Notice>
       {roles.map((r) => <RoleRules key={r} role={r} readOnly={!edit[r]} />)}
-      {roles.length ? <AdminChatLink role={roles[0]} readOnly={!(edit.mc || edit.admin)} /> : null}
+      {roles.length ? <LinkSetting field="adminChatUrl" role={roles[0]} readOnly={!(edit.mc || edit.admin)} /> : null}
+      {roles.length ? <LinkSetting field="workLocationUrl" role={roles[0]} readOnly={!(edit.mc || edit.admin)} /> : null}
       <Card size="sm">
         <CardHeader>
           <CardTitle className="font-bold">การมาสาย / ไลฟ์ชดเชย (แก้ที่นี่ไม่ได้)</CardTitle>
@@ -51,21 +52,37 @@ export function RulesEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
   );
 }
 
-/** ลิงก์แชทแอดมิน (settings.admin_chat_url): ปุ่ม "ทักแชทแอดมิน" หลัง Mc / Admin เสริมยกเลิกคิว + ในตารางของฉัน */
-function AdminChatLink({ role, readOnly }: { role: "mc" | "admin"; readOnly: boolean }) {
+/**
+ * ลิงก์ที่ Owner ตั้งได้ (settings) — ว่าง = ไม่มีปุ่ม
+ *   adminChatUrl: ปุ่ม "ทักแชทแอดมิน" หลัง Mc / Admin เสริมยกเลิกคิว + ในตารางของฉัน
+ *   workLocationUrl: ปุ่มโลเคชั่นที่ทำงาน (หัวเว็บ + ตารางของฉัน) เห็นเฉพาะคนที่มีบัญชี
+ */
+const LINK_TEXT = {
+  adminChatUrl: {
+    title: "ลิงก์แชทแอดมิน", placeholder: "https://line.me/...",
+    hint: "ปุ่ม \"ทักแชทแอดมิน\" ที่ Mc / Admin เสริมเห็นหลังกดยกเลิกคิว และตอนยกเลิกผ่านเว็บไม่ได้แล้ว (เช่น ลิงก์ LINE OA / กลุ่ม LINE) · ว่าง = ไม่มีปุ่ม",
+  },
+  workLocationUrl: {
+    title: "ลิงก์โลเคชั่นที่ทำงาน", placeholder: "https://maps.app.goo.gl/...",
+    hint: "ปุ่มหมุดแผนที่ที่หัวเว็บ + ลิงก์ \"สถานที่ทำงาน\" ในตารางของฉัน · เห็นเฉพาะคนที่ login และมีบัญชีในระบบ · ว่าง = ไม่มีปุ่ม",
+  },
+} as const;
+
+function LinkSetting({ field, role, readOnly }: { field: keyof typeof LINK_TEXT; role: "mc" | "admin"; readOnly: boolean }) {
   const toast = useToast();
   const [saved, setSaved] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
   const inputId = useId();
+  const t = LINK_TEXT[field];
 
   useEffect(() => {
     let alive = true;
-    api<{ adminChatUrl: string }>(`/api/rules?role=${role}`)
-      .then((res) => { if (alive && res.ok) { setSaved(res.adminChatUrl ?? ""); setText(res.adminChatUrl ?? ""); } })
+    api<Record<typeof field, string>>(`/api/rules?role=${role}`)
+      .then((res) => { if (alive && res.ok) { setSaved(res[field] ?? ""); setText(res[field] ?? ""); } })
       .catch(() => {});
     return () => { alive = false; };
-  }, [role]);
+  }, [role, field]);
 
   const value = text.trim();
   // ตรวจในหน้าเว็บก่อน (เซิร์ฟเวอร์ตรวจซ้ำ): ว่าง = ไม่มีปุ่ม / ต้องเป็น https://
@@ -74,10 +91,10 @@ function AdminChatLink({ role, readOnly }: { role: "mc" | "admin"; readOnly: boo
   async function save() {
     setSaving(true);
     try {
-      const res = await api<{ message: string; adminChatUrl: string }>("/api/rules", { adminChatUrl: value }, "PATCH");
+      const res = await api<{ message: string } & Record<typeof field, string>>("/api/rules", { [field]: value }, "PATCH");
       if (!res.ok) throw new Error(res.message);
-      setSaved(res.adminChatUrl);
-      setText(res.adminChatUrl);
+      setSaved(res[field]);
+      setText(res[field]);
       toast(res.message);
     } catch (err) {
       toast((err as Error).message, "error");
@@ -89,20 +106,18 @@ function AdminChatLink({ role, readOnly }: { role: "mc" | "admin"; readOnly: boo
   return (
     <Card size="sm">
       <CardHeader>
-        <CardTitle className="font-bold">ลิงก์แชทแอดมิน</CardTitle>
-        <CardDescription className="text-xs">
-          ปุ่ม &quot;ทักแชทแอดมิน&quot; ที่ Mc / Admin เสริมเห็นหลังกดยกเลิกคิว และตอนยกเลิกผ่านเว็บไม่ได้แล้ว (เช่น ลิงก์ LINE OA / กลุ่ม LINE) · ว่าง = ไม่มีปุ่ม
-        </CardDescription>
+        <CardTitle className="font-bold">{t.title}</CardTitle>
+        <CardDescription className="text-xs">{t.hint}</CardDescription>
       </CardHeader>
       <CardContent>
         {saved === null ? <LoadingBlock className="my-0 h-9 rounded-lg" /> : readOnly ? (
           <p className="text-sm break-all text-muted-foreground">{saved || "ยังไม่ได้ตั้ง"}</p>
         ) : (
           <>
-            <Label htmlFor={inputId} className="sr-only">ลิงก์แชทแอดมิน</Label>
+            <Label htmlFor={inputId} className="sr-only">{t.title}</Label>
             <Input
               id={inputId} type="url" inputMode="url" value={text} disabled={saving}
-              onChange={(e) => setText(e.target.value)} placeholder="https://line.me/..." aria-invalid={!valid}
+              onChange={(e) => setText(e.target.value)} placeholder={t.placeholder} aria-invalid={!valid}
             />
             {!valid ? <p className="mt-1 text-xs text-destructive">ลิงก์ต้องขึ้นต้นด้วย https://</p> : null}
             <div className="mt-3 flex flex-wrap items-center justify-end gap-2">

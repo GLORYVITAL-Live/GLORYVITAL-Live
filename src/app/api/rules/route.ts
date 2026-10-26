@@ -39,27 +39,41 @@ export async function GET(request: Request) {
     hasCommit,
     // ลิงก์แชทแอดมิน (ปุ่ม "ทักแชทแอดมิน" หลังยกเลิกคิว) — Owner แก้ได้ในหน้ากฎการทำงาน
     adminChatUrl: s.admin_chat_url ?? "",
+    // ลิงก์โลเคชั่นที่ทำงาน (ทุกคนที่มีบัญชีเห็นอยู่แล้วที่หัวเว็บ)
+    workLocationUrl: s.work_location_url ?? "",
   });
 }
 
-/** ลิงก์แชทแอดมิน — PATCH { adminChatUrl } ว่าง = ไม่มีปุ่ม · Owner ที่จัดการได้อย่างน้อยหนึ่งฝั่ง */
+/** ลิงก์ที่ Owner ตั้งได้: ช่องที่ส่งมา -> คอลัมน์ใน settings + ชื่อที่ใช้ในข้อความ */
+const LINKS = {
+  adminChatUrl: { col: "admin_chat_url", label: "ลิงก์แชทแอดมิน", example: "https://line.me/..." },
+  // SQL 20261109000000_work_location
+  workLocationUrl: { col: "work_location_url", label: "ลิงก์โลเคชั่นที่ทำงาน", example: "https://maps.app.goo.gl/..." },
+} as const;
+
+/**
+ * ลิงก์แชทแอดมิน / โลเคชั่นที่ทำงาน — PATCH { adminChatUrl } หรือ { workLocationUrl } ว่าง = ไม่มีปุ่ม
+ *   Owner ที่จัดการได้อย่างน้อยหนึ่งฝั่ง
+ */
 export async function PATCH(request: Request) {
-  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์แก้ลิงก์แชทแอดมิน");
+  const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์แก้ลิงก์นี้");
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
-  if (typeof body?.adminChatUrl !== "string") return fail("ข้อมูลไม่ถูกต้อง");
-  const url = body.adminChatUrl.trim();
+  const key = (Object.keys(LINKS) as (keyof typeof LINKS)[]).find((k) => typeof body?.[k] === "string");
+  if (!key) return fail("ข้อมูลไม่ถูกต้อง");
+  const { col, label, example } = LINKS[key];
+  const url = String(body[key]).trim();
   if (url) {
     let valid = false;
     try { valid = new URL(url).protocol === "https:"; } catch { /* ไม่ใช่ลิงก์ */ }
-    if (!valid || url.length > 500) return fail("ลิงก์ต้องขึ้นต้นด้วย https:// (เช่น https://line.me/...)");
+    if (!valid || url.length > 500) return fail(`ลิงก์ต้องขึ้นต้นด้วย https:// (เช่น ${example})`);
   }
-  const { error } = await createAdminClient().from("settings").update({ admin_chat_url: url }).eq("id", 1);
-  if (error) return fail(error.message, 500);
+  const { error } = await createAdminClient().from("settings").update({ [col]: url }).eq("id", 1);
+  if (error) return fail(/work_location_url/.test(error.message) ? "ต้องรัน SQL 20261109000000_work_location ใน Supabase ก่อน" : error.message, 500);
   await createAdminClient().from("booking_logs").insert({
-    email: r.me.email, role: "Owner", name: r.me.owner?.name ?? "", action: url ? "แก้ลิงก์แชทแอดมิน" : "ลบลิงก์แชทแอดมิน", result: "สำเร็จ",
+    email: r.me.email, role: "Owner", name: r.me.owner?.name ?? "", action: url ? `แก้${label}` : `ลบ${label}`, result: "สำเร็จ",
   });
-  return ok({ message: url ? "บันทึกลิงก์แชทแอดมินแล้ว" : "ลบลิงก์แชทแอดมินแล้ว", adminChatUrl: url });
+  return ok({ message: url ? `บันทึก${label}แล้ว` : `ลบ${label}แล้ว`, [key]: url });
 }
 
 export async function PUT(request: Request) {
