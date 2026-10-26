@@ -88,17 +88,20 @@ async function loanById(id: number) {
   return data ? toLoan(data as unknown as LoanRow) : null;
 }
 
-/** อีเมลคนที่อนุมัติได้: Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊กหน้าอุปกรณ์ (ตรงกับ me.equipment ใน src/lib/auth.ts) */
+/**
+ * อีเมลคนที่อนุมัติได้: Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊กหน้าอุปกรณ์ (ตรงกับ me.equipment ใน src/lib/auth.ts)
+ *   คนเดียวเป็นทั้ง Owner และ Admin (อีเมลเดียวกัน) = นับครั้งเดียว ไม่งั้นได้แจ้งเตือนซ้ำ
+ */
 export async function equipmentManagerEmails() {
   const db = createAdminClient();
   const [owners, admins] = await Promise.all([
     db.from("staff").select("email, can_manage_mc, can_manage_admin").eq("role", "owner").not("email", "is", null),
     db.from("staff").select("email, can_manage_equipment").eq("role", "admin").not("email", "is", null),
   ]);
-  return [
+  return [...new Set([
     ...(owners.data ?? []).filter((o) => o.can_manage_mc !== false || o.can_manage_admin !== false).map((o) => String(o.email)),
     ...(admins.error ? [] : admins.data ?? []).filter((a) => a.can_manage_equipment === true).map((a) => String(a.email)),
-  ];
+  ].map((e) => e.trim().toLowerCase()).filter(Boolean))];
 }
 
 async function log(email: string, name: string, action: string, id: number) {
