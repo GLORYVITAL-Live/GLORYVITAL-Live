@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PhoneIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PhoneIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import {
-  LOAN_STATUS_TEXT, OPEN, availableQty, canAct, isOverdue, shortages, type CatalogItem, type Hold, type Loan, type LoanAction, type LoanStatus,
+  LOAN_STATUS_TEXT, OPEN, availableQty, canAct, companionsFor, isOverdue, lightRole, shortages,
+  type CatalogItem, type Hold, type Loan, type LoanAction, type LoanStatus,
 } from "@/lib/loans";
+import { todayKey } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { DatePicker, TimePicker } from "@/components/date-picker";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,13 +55,22 @@ function useLoans() {
   return { data, error, reload: () => setTick((n) => n + 1) };
 }
 
-/** "YYYY-MM-DDTHH:mm" ของเครื่อง (ค่าในช่อง datetime-local) */
-const localInput = (ms: number) => {
-  const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-/** พรุ่งนี้ HH:00 */
-const tomorrowAt = (h: number) => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(h, 0, 0, 0); return d.getTime(); };
+/** วัน + เวลา (ปฏิทิน / เวลาแบบเดียวกับหน้าอื่นของเว็บ) "YYYY-MM-DD" + "HH:MM" → เวลาเครื่อง */
+type When = { day: string; time: string };
+const msOf = (w: When) => (w.day && w.time ? Date.parse(`${w.day}T${w.time}`) : NaN);
+
+/** กำหนดการยืม / คืน: ปฏิทิน + เวลา (ชั่วโมง / นาที) */
+function WhenField({ label, value, min, onChange }: { label: string; value: When; min?: string; onChange: (w: When) => void }) {
+  return (
+    <div>
+      <Label className="mb-1">{label}</Label>
+      <div className="flex gap-2">
+        <DatePicker value={value.day} min={min} onChange={(day) => onChange({ ...value, day })} aria-label={`${label}: วันที่`} className="h-10 flex-1" />
+        <TimePicker value={value.time} onChange={(time) => onChange({ ...value, time })} aria-label={`${label}: เวลา`} className="h-10 w-28 shrink-0" />
+      </div>
+    </div>
+  );
+}
 
 // ---------- บัญชีทีมอื่น ----------
 
@@ -82,15 +94,16 @@ export function BorrowPage() {
 
 function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent: () => void }) {
   const toast = useToast();
-  const [start, setStart] = useState(() => localInput(tomorrowAt(10)));
-  const [end, setEnd] = useState(() => localInput(tomorrowAt(18)));
+  // ค่าเริ่มต้น: พรุ่งนี้ 10:00 – 18:00
+  const [start, setStart] = useState<When>(() => ({ day: todayKey(1), time: "10:00" }));
+  const [end, setEnd] = useState<When>(() => ({ day: todayKey(1), time: "18:00" }));
   const [picked, setPicked] = useState<Map<number, number>>(new Map());
   const [location, setLocation] = useState("");
   const [purpose, setPurpose] = useState("");
   const [phone, setPhone] = useState(data.me?.phone ?? "");
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
-  const startMs = Date.parse(start), endMs = Date.parse(end);
+  const startMs = msOf(start), endMs = msOf(end);
   const validRange = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs;
   const left = (c: CatalogItem) => (validRange ? availableQty(c, data.holds, startMs, endMs) : c.quantity);
 
@@ -103,7 +116,60 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
   }, [data.catalog, q]);
   const items = [...picked].filter(([, n]) => n > 0).map(([equipmentId, quantity]) => ({ equipmentId, quantity }));
   const short = validRange ? shortages(items, data.catalog, data.holds, startMs, endMs) : [];
-  const setQty = (id: number, n: number) => setPicked((prev) => new Map(prev).set(id, Math.max(0, n)));
+  const byId = useMemo(() => new Map(data.catalog.map((c) => [c.id, c])), [data.catalog]);
+
+  // ยืมไฟเป็นชุด: กด + ที่ไฟ = เพิ่มขา + Softbox (+ สายไฟที่แยกรายการ) ให้ด้วย (src/lib/loans.ts companionsFor)
+  //   links = ไฟแต่ละดวง → ของที่เพิ่มคู่ให้ ทีละครั้งที่กด (กด − ที่ไฟ = เอาชุดล่าสุดออกด้วย)
+  const [asSet, setAsSet] = useState(true);
+  const [links, setLinks] = useState<Map<number, number[][]>>(new Map());
+  /** เอาของที่เพิ่มคู่ไว้ออกจากชุด (ผู้ยืมลดเอง) */
+  const unlink = (m: Map<number, number[][]>, id: number, all: boolean) => {
+    const out = new Map(m);
+    for (const [k, stack] of out) {
+      if (!stack.some((set) => set.includes(id))) continue;
+      out.set(k, stack.map((set) => (all ? set.filter((x) => x !== id) : set)));
+      if (!all) {
+        const i = stack.findLastIndex((set) => set.includes(id));
+        out.set(k, stack.map((set, j) => (j === i ? set.filter((x, xi) => xi !== set.indexOf(id)) : set)));
+        break;
+      }
+    }
+    return out;
+  };
+
+  function add(c: CatalogItem) {
+    const next = new Map(picked);
+    next.set(c.id, (next.get(c.id) ?? 0) + 1);
+    if (asSet && lightRole(c) === "light") {
+      const set = companionsFor(c, data.catalog, (x) => left(x) - (next.get(x.id) ?? 0));
+      for (const x of set.items) next.set(x.id, (next.get(x.id) ?? 0) + 1);
+      setLinks((prev) => new Map(prev).set(c.id, [...(prev.get(c.id) ?? []), set.items.map((x) => x.id)]));
+      const added = set.items.length ? `เพิ่มเป็นชุด: ${set.items.map((x) => x.name).join(" + ")}` : "";
+      const lack = set.missing.length ? `ไม่มี${set.missing.join(" / ")}ว่างในช่วงนี้` : "";
+      toast([added, lack].filter(Boolean).join(" · "), lack ? "error" : undefined);
+    }
+    setPicked(next);
+  }
+  function remove(c: CatalogItem) {
+    const next = new Map(picked);
+    next.set(c.id, Math.max(0, (next.get(c.id) ?? 0) - 1));
+    const stack = links.get(c.id);
+    if (stack?.length) {
+      for (const id of stack[stack.length - 1]) next.set(id, Math.max(0, (next.get(id) ?? 0) - 1));
+      setLinks((prev) => new Map(prev).set(c.id, stack.slice(0, -1)));
+    } else {
+      setLinks((prev) => unlink(prev, c.id, false));
+    }
+    setPicked(next);
+  }
+  /** เอาออกทั้งรายการ (ไฟ = เอาของที่เพิ่มคู่ไว้ออกด้วย) */
+  function clear(id: number) {
+    const next = new Map(picked);
+    next.delete(id);
+    for (const cid of (links.get(id) ?? []).flat()) next.set(cid, Math.max(0, (next.get(cid) ?? 0) - 1));
+    setLinks((prev) => { const m = unlink(prev, id, true); m.delete(id); return m; });
+    setPicked(next);
+  }
 
   async function submit() {
     setBusy(true);
@@ -114,7 +180,7 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
       });
       if (!res.ok) throw new Error(res.message);
       toast(res.message);
-      setPicked(new Map()); setLocation(""); setPurpose("");
+      setPicked(new Map()); setLinks(new Map()); setLocation(""); setPurpose("");
       onSent();
     } catch (err) {
       toast((err as Error).message, "error");
@@ -136,8 +202,12 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
       </p>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <Field label="กำหนดการยืม (รับของ)">{(id) => <Input id={id} type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />}</Field>
-        <Field label="กำหนดการส่งคืน">{(id) => <Input id={id} type="datetime-local" value={end} min={start} onChange={(e) => setEnd(e.target.value)} />}</Field>
+        <WhenField
+          label="กำหนดการยืม (รับของ)" value={start} min={todayKey()}
+          // เลื่อนวันยืมเลยวันคืน = เลื่อนวันคืนตาม
+          onChange={(w) => { setStart(w); if (w.day > end.day) setEnd({ ...end, day: w.day }); }}
+        />
+        <WhenField label="กำหนดการส่งคืน" value={end} min={start.day} onChange={setEnd} />
       </div>
       {!validRange ? <p className="mt-1 text-xs text-destructive">วันเวลาคืนต้องหลังวันเวลายืม</p> : null}
 
@@ -149,6 +219,13 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
             <InputGroupInput type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหา เช่น ไฟ" aria-label="ค้นหาอุปกรณ์" />
           </InputGroup>
         </div>
+        <label className="mb-2 flex cursor-pointer items-start gap-2 rounded-lg bg-secondary px-2.5 py-2 text-xs leading-snug">
+          <input type="checkbox" checked={asSet} onChange={(e) => setAsSet(e.target.checked)} className="mt-0.5 size-4 shrink-0 accent-primary" />
+          <span>
+            <b>ยืมไฟเป็นชุด</b> — กด + ที่ไฟ ระบบเพิ่ม <b>ขาไฟ + Softbox</b> ที่ว่างให้อัตโนมัติ (+ สายไฟ ถ้าแยกรายการ)
+            <span className="block text-muted-foreground">ไม่ต้องการชิ้นไหน กด − ที่ชิ้นนั้นได้ · กด − ที่ไฟ = เอาทั้งชุดออก</span>
+          </span>
+        </label>
         {!data.catalog.length ? <p className="text-sm text-muted-foreground">ตอนนี้ยังไม่มีอุปกรณ์ที่ให้ยืมได้</p> : (
           <div className="max-h-[420px] space-y-3 overflow-y-auto rounded-lg border p-2">
             {groups.map(([cat, list]) => (
@@ -157,6 +234,8 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
                 <ul className="space-y-1">
                   {list.map((c) => {
                     const n = picked.get(c.id) ?? 0, free = left(c);
+                    // ของที่เพิ่มคู่กับไฟดวงนี้ (แสดงใต้ชื่อ)
+                    const mates = [...new Set((links.get(c.id) ?? []).flat())].map((id) => byId.get(id)?.name).filter(Boolean);
                     return (
                       <li key={c.id} className={cn("flex items-center gap-2 rounded-lg px-1.5 py-1", n > 0 && "bg-secondary")}>
                         {c.photoUrl
@@ -164,15 +243,18 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
                           ? <img src={c.photoUrl} alt="" className="size-10 shrink-0 rounded-md object-cover" loading="lazy" />
                           : <span className="grid size-10 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"><PackageIcon className="size-4" /></span>}
                         <span className="min-w-0 flex-1 leading-tight">
-                          <span className="block truncate text-sm font-medium">{c.name}</span>
+                          {/* ชื่อยาว (รุ่น + สายไฟ) แสดงได้ 2 บรรทัด มือถือจะได้เห็นรุ่นครบ */}
+                          <span className="line-clamp-2 text-sm font-medium break-words">{c.name}</span>
                           <span className={cn("block text-[11px]", free ? "text-muted-foreground" : "text-destructive")}>
                             {c.code ? `${c.code} · ` : ""}{free ? `ว่าง ${free}/${c.quantity}` : "ไม่ว่างในช่วงนี้"}
                           </span>
+                          {n && mates.length ? <span className="block text-[11px] text-primary">+ {mates.join(" + ")}</span> : null}
                         </span>
                         <span className="flex shrink-0 items-center gap-1">
-                          <Button size="icon-sm" variant="outline" aria-label={`ลด ${c.name}`} disabled={!n} onClick={() => setQty(c.id, n - 1)}><MinusIcon /></Button>
+                          {/* จอสัมผัส: ปุ่มใหญ่ขึ้น (36px) กดง่าย */}
+                          <Button size="icon-sm" variant="outline" aria-label={`ลด ${c.name}`} disabled={!n} onClick={() => remove(c)} className="pointer-coarse:size-9"><MinusIcon /></Button>
                           <span className={cn("w-6 text-center text-sm tabular-nums", n > free && "font-bold text-destructive")}>{n}</span>
-                          <Button size="icon-sm" variant="outline" aria-label={`เพิ่ม ${c.name}`} disabled={n >= free} onClick={() => setQty(c.id, n + 1)}><PlusIcon /></Button>
+                          <Button size="icon-sm" variant="outline" aria-label={`เพิ่ม ${c.name}`} disabled={n >= free} onClick={() => add(c)} className="pointer-coarse:size-9"><PlusIcon /></Button>
                         </span>
                       </li>
                     );
@@ -185,6 +267,28 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
         )}
         {short.length ? (
           <p className="mt-1 text-xs text-destructive">ของไม่พอในช่วงนี้: {short.map((s) => `${s.name} เหลือ ${s.left} (เลือก ${s.want})`).join(" · ")}</p>
+        ) : null}
+        {/* สรุปที่เลือก (รายการยาว ของที่เพิ่มเป็นชุดอาจอยู่นอกจอ) */}
+        {items.length ? (
+          <div className="mt-2 rounded-lg border border-primary/30 bg-primary/5 p-2">
+            <div className="mb-1 text-xs font-semibold">เลือกแล้ว {items.length} รายการ · {items.reduce((a, i) => a + i.quantity, 0)} ชิ้น</div>
+            <ul className="flex flex-wrap gap-1.5">
+              {items.map((i) => {
+                const c = byId.get(i.equipmentId);
+                return (
+                  <li key={i.equipmentId} className="flex items-center gap-1 rounded-full border bg-card py-0.5 pr-0.5 pl-2 text-xs">
+                    <span className="max-w-48 truncate">{c?.name ?? "?"}</span>
+                    {c?.code ? <span className="text-muted-foreground">{c.code}</span> : null}
+                    <b className="tabular-nums">x{i.quantity}</b>
+                    <button type="button" aria-label={`เอา ${c?.name ?? ""} ออก`} onClick={() => clear(i.equipmentId)}
+                      className="grid size-5 cursor-pointer place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground pointer-coarse:size-7">
+                      <XIcon className="size-3.5" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         ) : null}
       </div>
 
@@ -350,7 +454,7 @@ function LoanCard({ loan: l, now, manage = false, actions, warning = "", onDone 
       {actions.length ? (
         <div className="mt-3 flex flex-wrap justify-end gap-2">
           {actions.map((a) => (
-            <Button key={a} size="sm" variant={ACTION_BUTTON[a].variant} disabled={busy || (a === "approve" && !!warning)} onClick={() => press(a)}>
+            <Button key={a} size="sm" variant={ACTION_BUTTON[a].variant} disabled={busy || (a === "approve" && !!warning)} onClick={() => press(a)} className="pointer-coarse:h-10 pointer-coarse:px-4">
               {ACTION_BUTTON[a].text}
             </Button>
           ))}

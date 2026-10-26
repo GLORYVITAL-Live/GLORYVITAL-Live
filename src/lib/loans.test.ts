@@ -1,6 +1,6 @@
 // เทสขอยืมอุปกรณ์ (bun test)
 import { describe, expect, test } from "bun:test";
-import { availableQty, canAct, cleanLoanInput, isOverdue, peakHeld, shortages, type Hold } from "@/lib/loans";
+import { availableQty, canAct, cleanLoanInput, companionsFor, isOverdue, lightRole, peakHeld, shortages, type Hold } from "@/lib/loans";
 
 const H = 3600_000;
 const T0 = Date.UTC(2026, 10, 2, 3); // 2 พ.ย. 2026 10:00 เวลาไทย
@@ -52,6 +52,42 @@ describe("ฟอร์มขอยืม", () => {
     expect(cleanLoanInput({ ...ok, items: [{ equipmentId: 7, quantity: 0 }] }, T0)).toEqual({ error: "จำนวนต้องเป็นเลขจำนวนเต็มมากกว่า 0" });
     expect(cleanLoanInput(ok, T0 + 2 * H)).toEqual({ error: "วันเวลายืมผ่านไปแล้ว" });
     expect(cleanLoanInput({ ...ok, endAt: new Date(T0 + 91 * 24 * H).toISOString() }, T0)).toEqual({ error: "ยืมได้ครั้งละไม่เกิน 90 วัน" });
+  });
+});
+
+describe("ยืมไฟเป็นชุด", () => {
+  let id = 0;
+  const item = (code: string, name: string, quantity = 1) => ({ id: ++id, code, name, category: "ไฟ", quantity, photoUrl: null });
+  const leones = item("LT01", "leones haven 200bi + สายไฟ leones haven 200bi");
+  const leonesStand = item("LT02", "ขา leones haven 200bi");
+  const lantern = item("LT03", "Lakrone Lantern 65 Softbox");
+  const nanlite = item("LT07", "Nanlite FS-150B + สายไฟ Nanlite FS-150B");
+  const godox = item("LT13", "Godox P260C pro");
+  const godoxCable = item("LT14", "สายไฟ Godox P260C pro");
+  const odigi = item("LT15", "ขาไฟOdigiLife L-2200FP");
+  const godoxBox = item("LT22", "Softbox Godox", 3);
+  const steel = item("LT30", "(ขาไฟสแตนเลส) Stainless Steel Light Stand");
+  const catalog = [leones, leonesStand, lantern, nanlite, godox, godoxCable, odigi, godoxBox, steel];
+  const all = () => 1;
+
+  test("แยกหน้าที่จากชื่อ", () => {
+    expect([leones, leonesStand, lantern, godoxCable, odigi, steel].map(lightRole)).toEqual(["light", "stand", "softbox", "cable", "stand", "stand"]);
+    expect(lightRole({ name: "ขาตั้ง Benro T890", category: "ขาตั้งกล้อง" })).toBeNull();
+  });
+  test("ขารุ่นเดียวกันก่อน", () => {
+    expect(companionsFor(leones, catalog, all).items.map((c) => c.code)).toEqual(["LT02", "LT03"]);
+  });
+  test("ไฟรุ่นอื่น = ขาทั่วไป ไม่เอาขาของรุ่นอื่น", () => {
+    expect(companionsFor(nanlite, catalog, all).items[0].code).toBe("LT15");
+  });
+  test("Softbox ยี่ห้อเดียวกันก่อน + สายไฟที่แยกรายการ", () => {
+    expect(companionsFor(godox, catalog, all).items.map((c) => c.code)).toEqual(["LT15", "LT22", "LT14"]);
+  });
+  test("ของไม่ว่าง = ข้าม / ไม่มีเลย = บอกว่าขาดอะไร", () => {
+    const free = (c: { code: string }) => (["LT02", "LT15"].includes(c.code) ? 0 : 1);
+    expect(companionsFor(leones, catalog, free).items[0].code).toBe("LT30");
+    const none = companionsFor(leones, catalog, (c) => (lightRole(c) === "softbox" ? 0 : 1));
+    expect(none.missing).toEqual(["Softbox"]);
   });
 });
 

@@ -98,6 +98,47 @@ export function cleanLoanInput(raw: Record<string, unknown>, now = Date.now()): 
   };
 }
 
+// ---------- ยืมไฟเป็นชุด (ไฟ + Softbox + ขา) ----------
+
+/** หน้าที่ของอุปกรณ์หมวดไฟ (อ่านจากชื่อ) · ไม่ใช่หมวดไฟ = null */
+export type LightRole = "light" | "stand" | "softbox" | "cable";
+export function lightRole(c: Pick<CatalogItem, "name" | "category">): LightRole | null {
+  if (!/ไฟ|light/i.test(c.category)) return null;
+  const n = c.name.trim().toLowerCase();
+  if (/^\(?ขา|light ?stand/.test(n)) return "stand";
+  if (/softbox|light ?box|lantern/.test(n)) return "softbox";
+  if (/^สายไฟ/.test(n)) return "cable";
+  return "light";
+}
+/** รุ่นของไฟ ("Nanlite FS-150B + สายไฟ Nanlite FS-150B" → "nanlite fs-150b") ใช้จับคู่ขา / สายไฟรุ่นเดียวกัน */
+const modelOf = (name: string) => name.split("+")[0].trim().toLowerCase();
+
+/**
+ * ของที่ยืมคู่กับไฟ 1 ดวง: ขา 1 + Softbox 1 (+ สายไฟของรุ่นนั้นถ้าแยกรายการ เช่น Godox P260C pro)
+ *   ขา: รุ่นเดียวกันก่อน ("ขา leones haven 200bi") → ขาทั่วไป (OdigiLife / สแตนเลส) → ขาของรุ่นอื่น
+ *   Softbox: ยี่ห้อเดียวกันก่อน → ตัวไหนก็ได้ · เลือกเฉพาะตัวที่ยังว่าง (free = ว่างในช่วงนั้น − ที่เลือกไว้แล้ว)
+ *   ไม่มีของว่าง = ไม่มีรายการนั้น (บอกผู้ยืม)
+ */
+export function companionsFor(light: CatalogItem, catalog: CatalogItem[], free: (c: CatalogItem) => number) {
+  const model = modelOf(light.name), brand = model.split(/\s+/)[0];
+  const lightModels = catalog.filter((c) => lightRole(c) === "light").map((c) => modelOf(c.name));
+  const score = (c: CatalogItem, role: LightRole) => {
+    const n = c.name.toLowerCase();
+    if (role === "softbox") return n.includes(brand) ? 2 : 1;
+    if (n.includes(model)) return 3;
+    if (role === "cable") return 0; // สายไฟของรุ่นอื่น = ไม่เอา
+    return lightModels.some((m) => n.includes(m)) ? 1 : 2;
+  };
+  const best = (role: LightRole) => catalog
+    .filter((c) => lightRole(c) === role && free(c) > 0 && score(c, role) > 0)
+    .sort((a, b) => score(b, role) - score(a, role))[0];
+  const cable = catalog.some((c) => lightRole(c) === "cable" && c.name.toLowerCase().includes(model)) ? best("cable") : undefined;
+  return {
+    items: [best("stand"), best("softbox"), cable].filter((c): c is CatalogItem => !!c),
+    missing: [!best("stand") ? "ขาไฟ" : "", !best("softbox") ? "Softbox" : ""].filter(Boolean),
+  };
+}
+
 /** รายการที่ขอเกินจำนวนที่เหลือในช่วงนั้น (ว่าง = ยืมได้ครบ) */
 export function shortages(items: { equipmentId: number; quantity: number }[], catalog: CatalogItem[], holds: Hold[], startMs: number, endMs: number, exceptLoan?: number) {
   const byId = new Map(catalog.map((c) => [c.id, c]));
