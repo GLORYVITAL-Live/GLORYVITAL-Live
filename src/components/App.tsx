@@ -250,7 +250,8 @@ function Shell({ me }: { me: Me | null }) {
 
   async function signOut() {
     const { createClient } = await import("@/lib/supabase/client");
-    await createClient().auth.signOut();
+    // local = ออกเฉพาะเครื่องนี้ (ค่าเริ่มต้นของ Supabase คือ global = เด้งออกทุกเครื่องของบัญชีนี้ เช่น มือถือ + คอม)
+    await createClient().auth.signOut({ scope: "local" });
     toast("ออกจากระบบแล้ว");
     router.refresh();
   }

@@ -36,7 +36,21 @@ export async function api<T>(
   }
   const data = await res.json().catch(() => null);
   if (!data) throw new Error("ระบบตอบกลับผิดรูปแบบ (HTTP " + res.status + ")");
+  if (res.status === 401 && data.authError) reloadSignedOut();
   return data;
+}
+
+/**
+ * หลุดล็อกอินระหว่างเปิดหน้าอยู่ (session หมด / ถูกออกจากระบบ) = โหลดหน้าใหม่ให้เห็นปุ่มเข้าสู่ระบบ
+ *   แทนข้อความ "โหลดไม่สำเร็จ" ค้างทุกส่วน · ไม่เกิน 1 ครั้งต่อนาที (กันโหลดวน)
+ */
+function reloadSignedOut() {
+  try {
+    const key = "glory_auth_reload", last = Number(sessionStorage.getItem(key)) || 0;
+    if (Date.now() - last < 60_000) return;
+    sessionStorage.setItem(key, String(Date.now()));
+  } catch { /* เข้าถึง sessionStorage ไม่ได้ = โหลดใหม่ตามปกติ */ }
+  location.reload();
 }
 
 // ---------- toast (sonner) ----------
