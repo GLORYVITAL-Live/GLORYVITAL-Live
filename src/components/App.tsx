@@ -273,14 +273,15 @@ function Shell({ me }: { me: Me | null }) {
   const canOpenMine = registered && !!role && role !== "owner" && !preview;
   return (
     <div className={cn("mx-auto px-4", wide ? "max-w-[1200px]" : "max-w-[760px]", bottomNav && "pb-20 sm:pb-0")}>
-      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-[calc(14px+env(safe-area-inset-top))] pb-2">
+      {/* มือถือ: ปุ่มหัวเว็บเล็กลง (36px) + ช่องไฟแคบลง ให้โลโก้กับปุ่มอยู่แถวเดียวกันได้ถึงจอ 360px */}
+      <header className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 pt-[calc(14px+env(safe-area-inset-top))] pb-2 sm:gap-x-3">
         <div className="flex min-w-0 items-baseline gap-2 whitespace-nowrap">
           <span className="text-[15px] font-bold tracking-[.12em] sm:text-[17px] sm:tracking-[.14em]" aria-label="GLORY VITAL">
             GL<span className="tracking-normal text-brand-glow">✦</span>RY VITAL
           </span>
           <span className="hidden text-[13px] font-medium text-muted-foreground sm:inline">{mode?.sub ?? "Live booking"}</span>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           {registered ? (
             <NotificationBell onGo={(p) => {
               if (p === "guide") router.push("/guide"); // วิธีแชร์ปฏิทิน
@@ -289,7 +290,7 @@ function Shell({ me }: { me: Me | null }) {
           ) : null}
           {/* โลเคชั่นที่ทำงาน: เฉพาะคนที่มีบัญชี (ตั้งลิงก์ไว้แล้วถึงแสดง) */}
           {registered ? <WorkLocationButton /> : null}
-          <IconButton label={dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด"} onClick={toggleTheme} className="bg-card shadow-card">
+          <IconButton label={dark ? "เปลี่ยนเป็นธีมสว่าง" : "เปลี่ยนเป็นธีมมืด"} onClick={toggleTheme} className="bg-card shadow-card max-sm:size-9">
             {dark ? <SunIcon /> : <MoonIcon />}
           </IconButton>
           {me ? (
@@ -312,7 +313,7 @@ function Shell({ me }: { me: Me | null }) {
                   <span className="truncate text-xs font-normal text-muted-foreground">{me.email}</span>
                 </span>
               </Button>
-              <Button variant="ghost" size="icon" onClick={signOut} aria-label="ออกจากระบบ" title="ออกจากระบบ" className="rounded-full text-muted-foreground">
+              <Button variant="ghost" size="icon" onClick={signOut} aria-label="ออกจากระบบ" title="ออกจากระบบ" className="rounded-full text-muted-foreground max-sm:size-8">
                 <LogOutIcon />
               </Button>
             </div>
@@ -321,7 +322,7 @@ function Shell({ me }: { me: Me | null }) {
       </header>
 
       {showNav ? (
-        <nav aria-label="เมนูหน้า" className={cn("-mx-1 mt-1 overflow-x-auto px-1", bottomNav && "max-sm:hidden")}>
+        <nav aria-label="เมนูหน้า" className={cn("no-scrollbar -mx-1 mt-1 overflow-x-auto px-1", bottomNav && "max-sm:hidden")}>
           <div className="flex w-max gap-1 rounded-full border bg-card p-1 shadow-card">
             {pages.map((p) => {
               const Icon = PAGE_ICON[p];
@@ -330,7 +331,8 @@ function Shell({ me }: { me: Me | null }) {
                 <button
                   key={p} type="button" onClick={() => setRole(p)} aria-current={on ? "page" : undefined}
                   className={cn(
-                    "flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors [&_svg]:size-4",
+                    // มือถือ: ช่องไฟแคบลง (Mc + Admin + หลักฐานไลฟ์ + เทรนนิ่ง พอดีจอ 375px ไม่ต้องเลื่อน)
+                    "flex cursor-pointer items-center gap-1 rounded-full px-2 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors sm:gap-1.5 sm:px-3 [&_svg]:size-4",
                     on ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                   )}
                 >
@@ -433,10 +435,11 @@ function OwnerTabs({ me }: { me: Me }) {
   const canGrantPlan = o.plan;
   const saved = useLocal(OWNER_TAB_KEY);
   // ผลงาน Mc (อันดับ + แคมเปญ) ใช้ยอด GMV ราย Mc จึงเห็นเฉพาะ Owner ที่จัดการ Mc ได้
+  // [id, ชื่อเต็ม, ชื่อสั้นบนมือถือ (5 แท็บชื่อเต็มยาวเกินจอ 375px)]
   const tabs = [
-    ["summary", "สรุปรายเดือน"],
-    ...(scope.mc ? [["performance", "ผลงาน Mc"] as const] : []),
-    ["slots", "ตาราง slot"], ["staff", "พนักงาน"], ["rules", "กฎการทำงาน"],
+    ["summary", "สรุปรายเดือน", "สรุป"],
+    ...(scope.mc ? [["performance", "ผลงาน Mc", "ผลงาน Mc"] as const] : []),
+    ["slots", "ตาราง slot", "ตาราง slot"], ["staff", "พนักงาน", "พนักงาน"], ["rules", "กฎการทำงาน", "กฎ"],
   ] as const;
   // แท็บเดิม "campaign" ย้ายไปอยู่ใน "ผลงาน Mc"
   const wanted = saved === "campaign" ? "performance" : saved;
@@ -450,14 +453,15 @@ function OwnerTabs({ me }: { me: Me }) {
   }
   return (
     <Tabs value={tab} onValueChange={(v) => writeLocal(OWNER_TAB_KEY, v)} className="gap-0">
-      <TabsList aria-label="เมนูเจ้าของ" className="my-3 h-auto! w-full rounded-full border bg-card p-1">
-        {tabs.map(([id, label]) => (
+      <TabsList aria-label="เมนูเจ้าของ" className="no-scrollbar my-3 h-auto! w-full justify-start overflow-x-auto rounded-full border bg-card p-1 sm:justify-center">
+        {tabs.map(([id, label, short]) => (
           <TabsTrigger
             key={id}
             value={id}
+            aria-label={label}
             className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-primary! data-active:text-primary-foreground! sm:text-sm"
           >
-            {label}
+            <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{label}</span>
           </TabsTrigger>
         ))}
       </TabsList>

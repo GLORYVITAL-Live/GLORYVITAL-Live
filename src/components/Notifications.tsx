@@ -210,7 +210,7 @@ export function NotificationBell({ onGo }: { onGo: (page: string) => void }) {
       <PopoverTrigger asChild>
         <Button
           type="button" variant="outline" size="icon-lg" aria-label={unread ? `แจ้งเตือน (ยังไม่อ่าน ${unread})` : "แจ้งเตือน"} title="แจ้งเตือน"
-          className="relative rounded-full bg-card shadow-card"
+          className="relative rounded-full bg-card shadow-card max-sm:size-9"
         >
           {unread ? <BellRingIcon /> : <BellIcon />}
           {unread ? (
@@ -220,7 +220,7 @@ export function NotificationBell({ onGo }: { onGo: (page: string) => void }) {
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={8} className="w-[min(24rem,calc(100vw-1.5rem))] gap-2 p-0">
+      <PopoverContent align="end" sideOffset={8} collisionPadding={12} className="w-[min(24rem,calc(100vw-1.5rem))] gap-2 p-0">
         <div className="flex items-center justify-between gap-2 border-b px-3 pt-3 pb-2">
           <span className="font-bold">แจ้งเตือน</span>
           <PushControl state={push} onEnable={enable} onDisable={disable} onTest={test} compact />

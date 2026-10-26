@@ -37,7 +37,7 @@ export function WorkLocationButton() {
   const url = useWorkLocation(true);
   if (!url) return null;
   return (
-    <Button variant="outline" size="icon-lg" asChild className="rounded-full bg-card shadow-card">
+    <Button variant="outline" size="icon-lg" asChild className="rounded-full bg-card shadow-card max-sm:size-9">
       <a href={url} target="_blank" rel="noopener noreferrer" aria-label={LABEL} title={LABEL}><MapPinIcon /></a>
     </Button>
   );

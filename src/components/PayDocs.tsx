@@ -21,7 +21,8 @@ const HINT: Record<PayDocKind, string> = {
   id_card: "ด้านหน้าบัตร เห็นชัดทั้งใบ (รูป หรือ PDF)",
   bank_book: "หน้าแรกที่มีชื่อและเลขบัญชี หรือแคปหน้าบัญชีจากแอปธนาคาร",
 };
-const fmtUpdated = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Bangkok" });
+// ปี ค.ศ. เหมือนวันที่ส่วนอื่นของเว็บ ("th-TH" เฉยๆ = พ.ศ. 2569)
+const fmtUpdated = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Bangkok" });
 
 /**
  * เอกสารทำเบิกของตัวเอง (หน้าจอง Mc / Admin): ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้

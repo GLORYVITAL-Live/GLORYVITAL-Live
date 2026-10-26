@@ -87,7 +87,11 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             </AvatarFallback>
           </Avatar>
           <span className="min-w-0 flex-1 leading-tight">
-            <span className="block truncate font-semibold">{profile?.name ?? who}{rank ? <RankChip data={rank} /> : null}</span>
+            {/* ป้ายแร็งค์อยู่นอกส่วนที่ตัดคำ (มือถือ: ชื่อยาว / ค่าจ้างยาว ป้ายเคยถูกตัดหาย) */}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-semibold">{profile?.name ?? who}</span>
+              {rank ? <RankChip data={rank} /> : null}
+            </span>
             <span className="block truncate text-xs text-muted-foreground">
               {profile ? [profile.email, profile.phone].filter(Boolean).join(" · ") : " "}
             </span>

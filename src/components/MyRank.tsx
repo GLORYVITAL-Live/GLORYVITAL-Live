@@ -47,12 +47,12 @@ export function RankChip({ data }: { data: MyRankData }) {
       type="button"
       onClick={() => document.getElementById(RANK_ANCHOR)?.scrollIntoView({ behavior: "smooth", block: "start" })}
       className={cn(
-        "ml-1.5 inline-flex items-center rounded-full border px-1.5 align-middle text-[11px] font-bold outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "inline-flex shrink-0 items-center rounded-full border px-1.5 text-[11px] font-bold whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring",
         e?.tier ? TIER_CLASS[e.tier] : "text-muted-foreground",
       )}
-      title={e ? `แร็งค์ ${mon(e.month)}${e === data.current ? " (ชั่วคราว)" : ""} — กดดูรายละเอียด` : "กดดูวิธีได้แร็งค์"}
+      title={e ? `แร็งค์ ${mon(e.month)}${e === data.current ? " (ชั่วคราว)" : ""} — กดดูรายละเอียด` : "ยังไม่มีแร็งค์ — กดดูวิธีได้แร็งค์"}
     >
-      {e?.tier ? `แร็งค์ ${e.tier}` : "ยังไม่มีแร็งค์"}
+      {e?.tier ? `แร็งค์ ${e.tier}` : "แร็งค์ –"}
     </button>
   );
 }

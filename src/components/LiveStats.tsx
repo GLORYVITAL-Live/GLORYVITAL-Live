@@ -972,8 +972,9 @@ function DailyByMonth({ keys, focus, labels, byDay, short, long, metric, onMetri
 }
 
 type CompareMode = PeriodKind | "day" | "range" | "multi";
-const COMPARE_MODES: [CompareMode, string][] = [
-  ["day", "วัน"], ["range", "ช่วงวันที่"], ["month", "เดือน (MoM)"], ["quarter", "ไตรมาส (QoQ)"], ["multi", "หลายเดือน"],
+// [โหมด, ชื่อเต็ม, ชื่อสั้นบนมือถือ (5 ปุ่มชื่อเต็มยาวเกินกล่องบนจอ 375px)]
+const COMPARE_MODES: [CompareMode, string, string][] = [
+  ["day", "วัน", "วัน"], ["range", "ช่วงวันที่", "ช่วงวัน"], ["month", "เดือน (MoM)", "เดือน"], ["quarter", "ไตรมาส (QoQ)", "ไตรมาส"], ["multi", "หลายเดือน", "หลายเดือน"],
 ];
 
 /** แท็บเทียบช่วง: วัน / เดือน / ไตรมาส (เทียบ 2 ช่วง) หรือ หลายเดือน (เดือนหลัก vs เดือนอื่นทีละเดือน) */
@@ -981,10 +982,10 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
   const [mode, setMode] = useState<CompareMode>("month");
   const toggle = (
     <ToggleGroup type="single" spacing={1} value={mode} onValueChange={(v) => { if (v) setMode(v as CompareMode); }}
-      aria-label="เทียบเป็น" className="mb-3 rounded-full border bg-card p-1">
-      {COMPARE_MODES.map(([id, text]) => (
-        <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
-          {text}
+      aria-label="เทียบเป็น" className="no-scrollbar mb-3 max-w-full overflow-x-auto rounded-full border bg-card p-1">
+      {COMPARE_MODES.map(([id, text, short]) => (
+        <ToggleGroupItem key={id} value={id} className="rounded-full! px-2.5 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground! sm:px-3">
+          <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{text}</span>
         </ToggleGroupItem>
       ))}
     </ToggleGroup>

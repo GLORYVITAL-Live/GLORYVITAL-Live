@@ -1090,7 +1090,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   );
 }
 
-const fmtLogAt = new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+const fmtLogAt = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
 
 /** ประวัติการแก้รายชื่อนี้ (ค่าจ้าง / Commit / สิทธิ์ / ข้อมูลติดต่อ) — กดแล้วค่อยโหลด */
 function StaffHistory({ staffId }: { staffId: number }) {

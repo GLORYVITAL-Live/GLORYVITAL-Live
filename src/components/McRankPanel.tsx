@@ -26,7 +26,8 @@ const TIER_CLASS: Record<Tier, string> = {
   C: "border-destructive/40 bg-destructive/10 text-destructive",
 };
 const RANK_PERIOD_KEY = "glory_rank_period";
-const RANK_PERIODS: [RankPeriod, string][] = [["month", "เดือนที่เลือก"], ["30", "30 วันล่าสุด"], ["90", "90 วันล่าสุด"]];
+// [ช่วง, ชื่อเต็ม, ชื่อสั้นบนมือถือ (ชื่อเต็มยาวเกินจอ 375px)]
+const RANK_PERIODS: [RankPeriod, string, string][] = [["month", "เดือนที่เลือก", "รายเดือน"], ["30", "30 วันล่าสุด", "30 วัน"], ["90", "90 วันล่าสุด", "90 วัน"]];
 
 const periodText = (r: RankReport) => (r.period === "month" ? monthLabel(r.month) : `${r.period} วันล่าสุด (${windowText(r.from, r.to)})`);
 const prevPeriodText = (r: RankReport) => (r.period === "month" ? monthLabel(monthKey(-1, r.month)) : `${r.period} วันก่อนหน้า`);
@@ -180,11 +181,12 @@ export function McRankPanel() {
         <ToggleGroup
           type="single" spacing={1} value={period}
           onValueChange={(v) => { if (v) writeLocal(RANK_PERIOD_KEY, v); }}
-          aria-label="ช่วงที่ใช้จัดอันดับ" className="rounded-full border bg-card p-1"
+          aria-label="ช่วงที่ใช้จัดอันดับ" className="no-scrollbar max-w-full overflow-x-auto rounded-full border bg-card p-1"
         >
-          {RANK_PERIODS.map(([id, text]) => (
+          {RANK_PERIODS.map(([id, text, short]) => (
             <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
-              {id === "month" ? `${text} (${monthLabel(month)})` : text}
+              <span className="sm:hidden">{short}</span>
+              <span className="max-sm:hidden">{id === "month" ? `${text} (${monthLabel(month)})` : text}</span>
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
