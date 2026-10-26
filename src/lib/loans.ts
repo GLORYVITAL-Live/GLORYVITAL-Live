@@ -37,7 +37,7 @@ export type Loan = {
 };
 /**
  * อุปกรณ์ที่ให้ยืมได้ (สถานะใช้งานได้) — ไม่มีราคา / Serial
- *   room = ที่เก็บเป็นห้องไลฟ์ ("ห้องไลฟ์ Cherry Glory") = ไฟประจำห้อง (ไม่ใช่ห้องไลฟ์ = null)
+ *   room = ที่เก็บเป็นห้องไลฟ์ ("ห้องไลฟ์ Cherry Glory") = ของประจำห้อง (ไม่ใช่ห้องไลฟ์ = null)
  */
 export type CatalogItem = { id: number; code: string; name: string; category: string; quantity: number; photoUrl: string | null; room?: string | null };
 /** ช่วงที่ของถูกกันไว้ (คำขอที่อนุมัติแล้ว / ยืมอยู่ — ไม่บอกว่าใครยืม) */
@@ -72,18 +72,45 @@ function peakOf(list: { quantity: number; startMs: number; endMs: number }[], st
   return peak;
 }
 
-// ---------- ไฟประจำห้องไลฟ์ ----------
+// ---------- ไฟ / กล้องประจำห้องไลฟ์ ----------
 
-/** ห้องไลฟ์ต้องมีไฟประจำห้องกี่ชุดระหว่างมีไลฟ์ (ไฟ + ขา + Softbox อย่างละ 2) */
+/** ห้องไลฟ์ต้องมีไฟประจำห้องกี่ชุดระหว่างมีไลฟ์ (ไฟ + ขา + Softbox อย่างละ 2) · ชุดกล้อง (กล้อง / แบตดัมมี่ / ขาตั้ง / Capture Card + สาย) = อย่างละ 1 */
 export const ROOM_NEED = 2;
+export const ROOM_CAMERA_NEED = 1;
 const ROOM_ROLES: LightRole[] = ["light", "stand", "softbox"];
-const ROLE_TEXT: Record<LightRole, string> = { light: "ไฟ", stand: "ขาไฟ", softbox: "Softbox", cable: "สายไฟ" };
+type CameraRole = "camera" | "cameraPower" | "tripod" | "capture" | "captureCable";
+type RoomRole = LightRole | CameraRole;
+const ROLE_TEXT: Record<RoomRole, string> = {
+  light: "ไฟ", stand: "ขาไฟ", softbox: "Softbox", cable: "สายไฟ",
+  camera: "กล้อง", cameraPower: "แบตดัมมี่ / อะแดปเตอร์กล้อง", tripod: "ขาตั้งกล้อง", capture: "Capture Card", captureCable: "สาย Capture Card",
+};
+
+/** ตัวกล้อง (หมวดกล้อง ไม่ใช่แบตดัมมี่ / สาย / อะแดปเตอร์ / เลนส์) */
+export const isCameraBody = (c: Pick<CatalogItem, "name" | "category">) =>
+  /กล้อง|camera/i.test(c.category) && !/ขาตั้ง/.test(c.category) && !/dummy|coupler|adapter|battery|แบต|สาย|lens|เลนส์/i.test(c.name);
+
+/** ของชุดกล้องที่ห้องไลฟ์ต้องใช้ (อ่านจากหมวด + ชื่อ) · ไม่ใช่ = null */
+export function cameraRole(c: Pick<CatalogItem, "name" | "category">): CameraRole | null {
+  if (/capture/i.test(c.category)) return /^สาย/.test(c.name.trim()) ? "captureCable" : "capture";
+  if (/ขาตั้งกล้อง/.test(c.category)) return "tripod";
+  if (isCameraBody(c)) return "camera";
+  if (/กล้อง|camera/i.test(c.category) && /dummy|coupler|adapter|battery|แบต/i.test(c.name)) return "cameraPower";
+  return null;
+}
+
+/** หน้าที่ในห้องไลฟ์ + ห้องต้องเหลือไว้กี่ชิ้นตอนมีไลฟ์ (ไฟ / ขา / Softbox ห้องละ 2 · ชุดกล้องอย่างละ 1) · ของที่ไม่ต้องกันไว้ = null */
+function roomRole(c: CatalogItem): { role: RoomRole; need: number } | null {
+  const l = lightRole(c);
+  if (l && ROOM_ROLES.includes(l)) return { role: l, need: ROOM_NEED };
+  const cam = cameraRole(c);
+  return cam ? { role: cam, need: ROOM_CAMERA_NEED } : null;
+}
 
 /** ของประจำห้องไลฟ์ที่ทำหน้าที่เดียวกัน (ไฟของห้อง Cherry Glory ทั้งหมด) · ไม่ใช่ของประจำห้อง = null */
 function roomGroup(stock: Stock, c: CatalogItem) {
-  const role = lightRole(c);
-  if (!c.room || !role || !ROOM_ROLES.includes(role)) return null;
-  return { room: c.room, role, items: stock.catalog.filter((x) => x.room === c.room && lightRole(x) === role) };
+  const r = roomRole(c);
+  if (!c.room || !r) return null;
+  return { room: c.room, role: r.role, need: r.need, items: stock.catalog.filter((x) => x.room === c.room && roomRole(x)?.role === r.role) };
 }
 
 /**
@@ -95,7 +122,7 @@ function roomLeft(stock: Stock, g: NonNullable<ReturnType<typeof roomGroup>>, st
   const total = g.items.reduce((a, x) => a + x.quantity, 0);
   const used = [
     ...stock.holds.filter((h) => ids.has(h.equipmentId) && h.loanId !== exceptLoan),
-    ...stock.live.filter((b) => b.room === g.room).map((b) => ({ ...b, quantity: ROOM_NEED })),
+    ...stock.live.filter((b) => b.room === g.room).map((b) => ({ ...b, quantity: g.need })),
   ];
   return Math.max(0, total - peakOf(used, startMs, endMs));
 }

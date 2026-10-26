@@ -26,7 +26,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 type LoansData = {
   manage: boolean; loans: Loan[]; catalog: CatalogItem[]; holds: Hold[];
-  /** ช่วงที่ห้องไลฟ์มีไลฟ์ (ไฟประจำห้องต้องเหลือไว้) — เว็บเก่าไม่ส่ง = ไม่มี */
+  /** ช่วงที่ห้องไลฟ์มีไลฟ์ (ไฟ / กล้องประจำห้องต้องเหลือไว้) — เว็บเก่าไม่ส่ง = ไม่มี */
   live?: LiveBlock[];
   me: { name: string; team: string; phone: string } | null;
 };
@@ -108,7 +108,7 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
   const [busy, setBusy] = useState(false);
   const startMs = msOf(start), endMs = msOf(end);
   const validRange = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs;
-  // ว่างในช่วงนี้ = หักที่ถูกยืม + ไฟประจำห้องไลฟ์ที่ต้องเหลือไว้ตอนมีไลฟ์
+  // ว่างในช่วงนี้ = หักที่ถูกยืม + ไฟ / กล้องประจำห้องไลฟ์ที่ต้องเหลือไว้ตอนมีไลฟ์
   //   ของประจำห้องเดียวกัน (เช่น ไฟห้อง Cherry 3 ดวง ไลฟ์อยู่ ยืมได้รวม 1) = หักชิ้นอื่นในห้องที่เลือกไว้แล้วด้วย
   const stock = useMemo(() => stockOf(data), [data]);
   const left = (c: CatalogItem) => {
@@ -258,7 +258,7 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
                         <span className="min-w-0 flex-1 leading-tight">
                           {/* ชื่อยาว (รุ่น + สายไฟ) แสดงได้ 2 บรรทัด มือถือจะได้เห็นรุ่นครบ */}
                           <span className="line-clamp-2 text-sm font-medium break-words">{c.name}</span>
-                          {/* ไฟประจำห้องไลฟ์ต้องเหลือไว้ห้องละ 2 ชุดตอนมีไลฟ์: ห้องไม่เหลือให้ยืม = ติดไลฟ์ / เหลือ = บอกว่ายืมรวมได้กี่ชิ้น */}
+                          {/* ห้องไลฟ์ต้องเหลือไฟห้องละ 2 ชุด / กล้อง 1 ตัวตอนมีไลฟ์: ห้องไม่เหลือให้ยืม = ติดไลฟ์ / เหลือ = บอกว่ายืมรวมได้กี่ชิ้น */}
                           <span className={cn("block text-[11px]", free ? "text-muted-foreground" : "text-destructive")}>
                             {c.code ? `${c.code} · ` : ""}
                             {room && !room.left ? `ติดไลฟ์${room.room.replace(/^ห้องไลฟ์\s*/, "ห้อง ")}`

@@ -1,7 +1,7 @@
 // เทสขอยืมอุปกรณ์ (bun test)
 import { describe, expect, test } from "bun:test";
 import {
-  availableQty, canAct, cleanLoanInput, companionsFor, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, peakHeld, roomForPlatform, roomInfo, shortages, type Hold,
+  availableQty, cameraRole, canAct, cleanLoanInput, companionsFor, isCameraBody, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, peakHeld, roomForPlatform, roomInfo, shortages, type Hold,
 } from "@/lib/loans";
 
 const H = 3600_000;
@@ -72,6 +72,26 @@ describe("ไฟประจำห้องไลฟ์ (ต้องเหล�
     expect(roomInfo(stock, get(16), T0 + 10 * H, T0 + 12 * H)).toEqual({ key: `${CHERRY}|light`, room: CHERRY, left: 1, ids: [13, 16, 19] });
     expect(roomInfo(stock, get(16), T0 + 2 * H, T0 + 8 * H)).toBeNull();
     expect(roomInfo(stock, get(28), T0, T0 + 2 * H)).toBeNull();
+  });
+  test("กล้องประจำห้อง: ไลฟ์อยู่ = ยืมไม่ได้ (รวมแบตดัมมี่ของห้อง) · Sony สำรอง ยืมได้", () => {
+    const cam = (id: number, name: string, room: string | null) => ({ id, code: `CM${id}`, name, category: "กล้อง", quantity: 1, photoUrl: null, room });
+    const cams = [cam(10, "กล้อง lumix g97", MALL), cam(13, "DC Coupler DMW-DCC8 for Panasonic DMW-BLC12 Dummy Battery", MALL), cam(1, "กล้อง sony a7iii", null), cam(17, "Sony a7R", null)];
+    expect(cams.map(isCameraBody)).toEqual([true, false, true, true]);
+    const s = { ...stock, catalog: [...catalog, ...cams] };
+    expect(leftOf(s, cams[0], T0, T0 + H)).toBe(0);
+    expect(shortages([{ equipmentId: 10, quantity: 1 }], s, T0, T0 + H)[0].left).toBe(0);
+    expect(leftOf(s, cams[0], T0 + 3 * H, T0 + 5 * H)).toBe(1);
+    // แบตดัมมี่ในห้องที่มีไลฟ์ = กันไว้ด้วย · Sony สำรอง ยืมได้
+    expect(leftOf(s, cams[1], T0, T0 + H)).toBe(0);
+    expect(leftOf(s, cams[2], T0, T0 + H)).toBe(1);
+  });
+  test("ของเสริมกล้อง: แยกหน้าที่จากหมวด + ชื่อ", () => {
+    expect(cameraRole({ category: "ขาตั้งกล้อง", name: "ขาตั้ง Benro T890" })).toBe("tripod");
+    expect(cameraRole({ category: "Capture Card", name: "AVERMEDIA STREAMLINE MINI PLUS (GC311G2)" })).toBe("capture");
+    expect(cameraRole({ category: "Capture Card", name: "สาย USB Type-C เป็น Type-A AVERMEDIA" })).toBe("captureCable");
+    expect(cameraRole({ category: "กล้อง", name: "สาย Kingma LP-E6 LPE6NH Dummy แบตเตอรี่ AC Power Supply Adapter" })).toBe("cameraPower");
+    expect(cameraRole({ category: "กล้อง", name: "กล้อง Canon EOS R50V" })).toBe("camera");
+    expect(cameraRole({ category: "ไฟ", name: "ขา leones haven 200bi" })).toBeNull();
   });
   test("ไฟสำรอง (ไม่อยู่ห้องไลฟ์) ยืมได้เสมอ / ไฟห้องที่ถูกยืมไปแล้วนับรวม", () => {
     expect(leftOf(stock, get(28), T0, T0 + 2 * H)).toBe(1);
