@@ -1,0 +1,384 @@
+"use client";
+
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PhoneIcon, PlusIcon, SearchIcon } from "lucide-react";
+import {
+  LOAN_STATUS_TEXT, OPEN, availableQty, canAct, isOverdue, shortages, type CatalogItem, type Hold, type Loan, type LoanAction, type LoanStatus,
+} from "@/lib/loans";
+import { cn } from "@/lib/utils";
+import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast } from "@/components/shared";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+
+/**
+ * ขอยืมอุปกรณ์จากทีมอื่น (src/lib/loans.ts · /api/loans)
+ *   BorrowPage  = บัญชีทีมอื่น: ฟอร์มขอยืม (วันเวลายืม / คืน → เลือกอุปกรณ์ที่ว่าง + จำนวน → สถานที่ใช้งาน) + คำขอของฉัน
+ *   LoanManager = คนที่เข้าหน้าอุปกรณ์ได้ (หน้าอุปกรณ์ > คำขอยืม): อนุมัติ / ไม่อนุมัติ → ส่งของ → รับคืน
+ */
+
+type LoansData = {
+  manage: boolean; loans: Loan[]; catalog: CatalogItem[]; holds: Hold[];
+  me: { name: string; team: string; phone: string } | null;
+};
+
+const fmtWhen = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+const when = (iso: string) => fmtWhen.format(new Date(iso));
+const STATUS_CLASS: Record<LoanStatus, string> = {
+  pending: "border-warning-border bg-warning text-warning-foreground",
+  approved: "border-primary/40 bg-primary/10 text-primary",
+  borrowed: "border-p2/40 bg-p2/15 text-p2",
+  returned: "border-success/40 bg-success/15 text-success",
+  rejected: "border-destructive/40 bg-destructive/10 text-destructive",
+  cancelled: "border-border bg-muted text-muted-foreground",
+};
+
+/** โหลดคำขอ + อุปกรณ์ · now = เวลาที่โหลด (ใช้ตัดสินเลยกำหนดคืน) */
+function useLoans() {
+  const [data, setData] = useState<(LoansData & { now: number }) | null>(null);
+  const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    api<LoansData>("/api/loans")
+      .then((res) => { if (!alive) return; if (res.ok) { setData({ ...res, now: Date.now() }); setError(""); } else setError(res.message ?? "โหลดไม่สำเร็จ"); })
+      .catch((err) => { if (alive) setError((err as Error).message); });
+    return () => { alive = false; };
+  }, [tick]);
+  return { data, error, reload: () => setTick((n) => n + 1) };
+}
+
+/** "YYYY-MM-DDTHH:mm" ของเครื่อง (ค่าในช่อง datetime-local) */
+const localInput = (ms: number) => {
+  const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+/** พรุ่งนี้ HH:00 */
+const tomorrowAt = (h: number) => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(h, 0, 0, 0); return d.getTime(); };
+
+// ---------- บัญชีทีมอื่น ----------
+
+export function BorrowPage() {
+  const { data, error, reload } = useLoans();
+  if (!data) return error ? <LoadError title="โหลดหน้าขอยืมไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock />;
+  const mine = data.loans;
+  const open = mine.filter((l) => OPEN.includes(l.status));
+  return (
+    <div className="space-y-4 pb-10">
+      <LoanForm data={data} onSent={reload} />
+      <section>
+        <h2 className="mb-2 text-lg font-bold">คำขอของฉัน {open.length ? <span className="text-sm font-normal text-muted-foreground">(ยังไม่จบ {open.length})</span> : null}</h2>
+        {!mine.length ? <StateBox title="ยังไม่มีคำขอยืม">กรอกฟอร์มด้านบนแล้วกดส่งคำขอ ทีมงานจะอนุมัติและแจ้งเตือนกลับ</StateBox> : (
+          <div className="space-y-2">{mine.map((l) => <LoanCard key={l.id} loan={l} now={data.now} actions={canAct(l.status, "cancel") ? ["cancel"] : []} onDone={reload} />)}</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent: () => void }) {
+  const toast = useToast();
+  const [start, setStart] = useState(() => localInput(tomorrowAt(10)));
+  const [end, setEnd] = useState(() => localInput(tomorrowAt(18)));
+  const [picked, setPicked] = useState<Map<number, number>>(new Map());
+  const [location, setLocation] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [phone, setPhone] = useState(data.me?.phone ?? "");
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const startMs = Date.parse(start), endMs = Date.parse(end);
+  const validRange = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs;
+  const left = (c: CatalogItem) => (validRange ? availableQty(c, data.holds, startMs, endMs) : c.quantity);
+
+  const q = search.trim().toLowerCase();
+  const groups = useMemo(() => {
+    const list = data.catalog.filter((c) => !q || [c.name, c.code, c.category].some((v) => v.toLowerCase().includes(q)));
+    const m = new Map<string, CatalogItem[]>();
+    for (const c of list) m.set(c.category || "อื่นๆ", [...(m.get(c.category || "อื่นๆ") ?? []), c]);
+    return [...m];
+  }, [data.catalog, q]);
+  const items = [...picked].filter(([, n]) => n > 0).map(([equipmentId, quantity]) => ({ equipmentId, quantity }));
+  const short = validRange ? shortages(items, data.catalog, data.holds, startMs, endMs) : [];
+  const setQty = (id: number, n: number) => setPicked((prev) => new Map(prev).set(id, Math.max(0, n)));
+
+  async function submit() {
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/loans", {
+        items, location, purpose, phone, team: data.me?.team ?? "",
+        startAt: new Date(startMs).toISOString(), endAt: new Date(endMs).toISOString(),
+      });
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      setPicked(new Map()); setLocation(""); setPurpose("");
+      onSent();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const missing = !validRange ? "เลือกวันเวลายืม / คืนให้ถูกต้อง (คืนต้องหลังยืม)"
+    : !items.length ? "เลือกอุปกรณ์อย่างน้อย 1 รายการ"
+      : !location.trim() ? "ใส่สถานที่ใช้งาน"
+        : short.length ? "ช่วงนี้ของบางรายการไม่พอ" : "";
+
+  return (
+    <section className="rounded-xl border bg-card p-3">
+      <h2 className="text-lg font-bold">ขอยืมอุปกรณ์</h2>
+      <p className="text-xs text-muted-foreground">
+        {data.me ? `ในนาม ${data.me.name}${data.me.team ? ` (${data.me.team})` : ""} · ` : ""}เลือกวันเวลาก่อน ระบบจะบอกว่าแต่ละรายการว่างกี่ชิ้นในช่วงนั้น
+      </p>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="กำหนดการยืม (รับของ)">{(id) => <Input id={id} type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />}</Field>
+        <Field label="กำหนดการส่งคืน">{(id) => <Input id={id} type="datetime-local" value={end} min={start} onChange={(e) => setEnd(e.target.value)} />}</Field>
+      </div>
+      {!validRange ? <p className="mt-1 text-xs text-destructive">วันเวลาคืนต้องหลังวันเวลายืม</p> : null}
+
+      <div className="mt-4">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <Label className="font-semibold">ยืมอะไร {items.length ? <span className="font-normal text-muted-foreground">· เลือกแล้ว {items.length} รายการ</span> : null}</Label>
+          <InputGroup className="h-9 w-full bg-background sm:w-60">
+            <InputGroupAddon><SearchIcon /></InputGroupAddon>
+            <InputGroupInput type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหา เช่น ไฟ" aria-label="ค้นหาอุปกรณ์" />
+          </InputGroup>
+        </div>
+        {!data.catalog.length ? <p className="text-sm text-muted-foreground">ตอนนี้ยังไม่มีอุปกรณ์ที่ให้ยืมได้</p> : (
+          <div className="max-h-[420px] space-y-3 overflow-y-auto rounded-lg border p-2">
+            {groups.map(([cat, list]) => (
+              <div key={cat}>
+                <div className="mb-1 text-xs font-semibold text-muted-foreground">{cat}</div>
+                <ul className="space-y-1">
+                  {list.map((c) => {
+                    const n = picked.get(c.id) ?? 0, free = left(c);
+                    return (
+                      <li key={c.id} className={cn("flex items-center gap-2 rounded-lg px-1.5 py-1", n > 0 && "bg-secondary")}>
+                        {c.photoUrl
+                          // eslint-disable-next-line @next/next/no-img-element
+                          ? <img src={c.photoUrl} alt="" className="size-10 shrink-0 rounded-md object-cover" loading="lazy" />
+                          : <span className="grid size-10 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"><PackageIcon className="size-4" /></span>}
+                        <span className="min-w-0 flex-1 leading-tight">
+                          <span className="block truncate text-sm font-medium">{c.name}</span>
+                          <span className={cn("block text-[11px]", free ? "text-muted-foreground" : "text-destructive")}>
+                            {c.code ? `${c.code} · ` : ""}{free ? `ว่าง ${free}/${c.quantity}` : "ไม่ว่างในช่วงนี้"}
+                          </span>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          <Button size="icon-sm" variant="outline" aria-label={`ลด ${c.name}`} disabled={!n} onClick={() => setQty(c.id, n - 1)}><MinusIcon /></Button>
+                          <span className={cn("w-6 text-center text-sm tabular-nums", n > free && "font-bold text-destructive")}>{n}</span>
+                          <Button size="icon-sm" variant="outline" aria-label={`เพิ่ม ${c.name}`} disabled={n >= free} onClick={() => setQty(c.id, n + 1)}><PlusIcon /></Button>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+            {!groups.length ? <p className="py-3 text-center text-sm text-muted-foreground">ไม่พบอุปกรณ์ที่ค้นหา</p> : null}
+          </div>
+        )}
+        {short.length ? (
+          <p className="mt-1 text-xs text-destructive">ของไม่พอในช่วงนี้: {short.map((s) => `${s.name} เหลือ ${s.left} (เลือก ${s.want})`).join(" · ")}</p>
+        ) : null}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <Field label="สถานที่ใช้งาน *">{(id) => <Input id={id} value={location} onChange={(e) => setLocation(e.target.value)} placeholder="เช่น ห้องประชุมชั้น 3 / ออกบูธที่ ..." maxLength={200} />}</Field>
+        <Field label="เบอร์ติดต่อ">{(id) => <Input id={id} type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />}</Field>
+      </div>
+      <div className="mt-3">
+        <Field label="ใช้ทำอะไร (ไม่บังคับ)">{(id) => <Textarea id={id} value={purpose} onChange={(e) => setPurpose(e.target.value)} rows={2} maxLength={500} placeholder="เช่น ถ่ายวิดีโอสินค้าใหม่" />}</Field>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+        {missing ? <span className="mr-auto text-xs text-muted-foreground">{missing}</span> : null}
+        <Button size="lg" disabled={busy || !!missing} onClick={submit}>{busy ? "กำลังส่ง..." : "ส่งคำขอยืม"}</Button>
+      </div>
+    </section>
+  );
+}
+
+function Field({ label, children }: { label: string; children: (id: string) => ReactNode }) {
+  const id = `loan-${label.replace(/\W+/g, "")}-${label.length}`;
+  return (
+    <div>
+      <Label htmlFor={id} className="mb-1">{label}</Label>
+      {children(id)}
+    </div>
+  );
+}
+
+// ---------- คนที่เข้าหน้าอุปกรณ์ได้ ----------
+
+type ManageFilter = "todo" | "all";
+
+export function LoanManager() {
+  const { data, error, reload } = useLoans();
+  const [filter, setFilter] = useState<ManageFilter>("todo");
+  if (!data) return error ? <LoadError title="โหลดคำขอยืมไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock />;
+  const now = data.now;
+  const count = (s: LoanStatus) => data.loans.filter((l) => l.status === s).length;
+  const late = data.loans.filter((l) => isOverdue(l, now)).length;
+  // ต้องจัดการ: รออนุมัติก่อน แล้วรอรับของ ยืมอยู่ (เลยกำหนดก่อน)
+  const order: LoanStatus[] = ["pending", "approved", "borrowed"];
+  const list = filter === "todo"
+    ? data.loans.filter((l) => OPEN.includes(l.status))
+      .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || Number(isOverdue(b, now)) - Number(isOverdue(a, now)) || a.startAt.localeCompare(b.startAt))
+    : data.loans;
+  const actionsOf = (l: Loan): LoanAction[] => (["approve", "reject", "handover", "return", "cancel"] as LoanAction[])
+    .filter((a) => canAct(l.status, a) && !(a === "reject" && l.status === "approved"));
+
+  return (
+    <div className="space-y-3 pb-10">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <Badge className={STATUS_CLASS.pending}>รออนุมัติ {count("pending")}</Badge>
+        <Badge className={STATUS_CLASS.approved}>รอรับของ {count("approved")}</Badge>
+        <Badge className={STATUS_CLASS.borrowed}>ยืมอยู่ {count("borrowed")}</Badge>
+        {late ? <Badge className={STATUS_CLASS.rejected}>เลยกำหนดคืน {late}</Badge> : null}
+        <ToggleGroup type="single" variant="outline" size="sm" spacing={0} value={filter} onValueChange={(v) => { if (v) setFilter(v as ManageFilter); }} aria-label="แสดง" className="ml-auto bg-card">
+          <ToggleGroupItem value="todo" className="text-xs">ต้องจัดการ</ToggleGroupItem>
+          <ToggleGroupItem value="all" className="text-xs">ทั้งหมด</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      <Notice>
+        ทีมอื่นส่งคำขอได้เมื่อมีบัญชี (หน้าเจ้าของ &gt; พนักงาน &gt; ทีมอื่น) · ของที่อนุมัติแล้ว / ยืมอยู่ ถูกกันจำนวนไว้ในช่วงนั้น คำขอใหม่ขอเกินไม่ได้
+      </Notice>
+      {!list.length ? <StateBox title={filter === "todo" ? "ไม่มีคำขอที่ต้องจัดการ" : "ยังไม่มีคำขอยืม"}>คำขอใหม่จะแจ้งเตือนที่กระดิ่ง</StateBox> : (
+        <div className="space-y-2">
+          {list.map((l) => {
+            const short = l.status === "pending"
+              ? shortages(l.items, data.catalog, data.holds, Date.parse(l.startAt), Date.parse(l.endAt), l.id) : [];
+            return <LoanCard key={l.id} loan={l} now={now} manage actions={actionsOf(l)} warning={short.length ? `ของไม่พอแล้ว: ${short.map((s) => `${s.name} เหลือ ${s.left} (ขอ ${s.want})`).join(" · ")}` : ""} onDone={reload} />;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- การ์ดคำขอ ----------
+
+const ACTION_BUTTON: Record<LoanAction, { text: string; variant: "default" | "outline" | "destructive" }> = {
+  approve: { text: "อนุมัติ", variant: "default" },
+  reject: { text: "ไม่อนุมัติ", variant: "outline" },
+  handover: { text: "ส่งของให้ยืมแล้ว", variant: "default" },
+  return: { text: "รับคืนแล้ว", variant: "default" },
+  cancel: { text: "ยกเลิกคำขอ", variant: "outline" },
+};
+
+function LoanCard({ loan: l, now, manage = false, actions, warning = "", onDone }: {
+  loan: Loan; now: number; manage?: boolean; actions: LoanAction[]; warning?: string; onDone: () => void;
+}) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [asking, setAsking] = useState<LoanAction | null>(null);
+  const [busy, setBusy] = useState(false);
+  const late = isOverdue(l, now);
+
+  async function run(action: LoanAction, extra: { reason?: string; note?: string } = {}) {
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/loans", { id: l.id, action, ...extra }, "PATCH");
+      if (!res.ok) throw new Error(res.message);
+      toast(`${ACTION_BUTTON[action].text}แล้ว`);
+      setAsking(null);
+      onDone();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function press(action: LoanAction) {
+    // ต้องใส่ข้อความ: ไม่อนุมัติ (เหตุผล) / รับคืน (สภาพของ) / ยกเลิกโดยทีมเรา (เหตุผล)
+    if (action === "reject" || action === "return" || (action === "cancel" && manage)) { setAsking(action); return; }
+    const ok = await confirm({
+      title: action === "approve" ? "อนุมัติคำขอนี้?" : action === "handover" ? "ส่งของให้ผู้ยืมแล้ว?" : "ยกเลิกคำขอยืมนี้?",
+      description: `${l.items.map((i) => `${i.name} x${i.quantity}`).join(", ")} · ${when(l.startAt)} – ${when(l.endAt)}`,
+      confirmText: ACTION_BUTTON[action].text, destructive: action === "cancel",
+    });
+    if (ok) await run(action);
+  }
+
+  return (
+    <article className={cn("rounded-xl border bg-card p-3", late && "border-destructive/50")}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          {manage ? (
+            <div className="font-semibold">
+              {l.requester.name}{l.requester.team ? <span className="font-normal text-muted-foreground"> · {l.requester.team}</span> : null}
+            </div>
+          ) : null}
+          <div className="text-xs text-muted-foreground">คำขอ #{l.id} · ส่งเมื่อ {when(l.createdAt)}</div>
+        </div>
+        <span className="flex flex-wrap gap-1">
+          <Badge className={STATUS_CLASS[l.status]}>{LOAN_STATUS_TEXT[l.status]}</Badge>
+          {late ? <Badge className={STATUS_CLASS.rejected}>เลยกำหนดคืน</Badge> : null}
+        </span>
+      </div>
+      <ul className="mt-2 flex flex-wrap gap-1.5">
+        {l.items.map((i) => (
+          <li key={i.equipmentId} className="rounded-full border bg-background px-2 py-0.5 text-xs">
+            {i.name}{i.code ? <span className="text-muted-foreground"> {i.code}</span> : null} <b className="tabular-nums">x{i.quantity}</b>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-2 space-y-0.5 text-sm">
+        <div className="flex items-start gap-1.5"><CalendarClockIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />ยืม {when(l.startAt)} → คืน {when(l.endAt)}</div>
+        <div className="flex items-start gap-1.5"><MapPinIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />{l.location}</div>
+        {manage && l.requester.phone ? (
+          <div className="flex items-start gap-1.5"><PhoneIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <a className="text-primary underline" href={`tel:${l.requester.phone.replace(/[^0-9+]/g, "")}`}>{l.requester.phone}</a>
+          </div>
+        ) : null}
+        {l.purpose ? <p className="text-xs text-muted-foreground">ใช้ทำ: {l.purpose}</p> : null}
+      </div>
+      {/* ประวัติ */}
+      <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+        {l.decidedAt ? <div>{l.status === "rejected" ? "ไม่อนุมัติ" : "อนุมัติ"}โดย {l.decidedBy} · {when(l.decidedAt)}</div> : null}
+        {l.rejectReason ? <div className="text-destructive">เหตุผล: {l.rejectReason}</div> : null}
+        {l.handedAt ? <div>ส่งของโดย {l.handedBy} · {when(l.handedAt)}</div> : null}
+        {l.returnedAt ? <div>รับคืนโดย {l.returnedBy} · {when(l.returnedAt)}{l.returnNote ? ` · สภาพ: ${l.returnNote}` : ""}</div> : null}
+      </div>
+      {warning ? <p className="mt-2 text-xs font-semibold text-destructive">{warning}</p> : null}
+      {actions.length ? (
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          {actions.map((a) => (
+            <Button key={a} size="sm" variant={ACTION_BUTTON[a].variant} disabled={busy || (a === "approve" && !!warning)} onClick={() => press(a)}>
+              {ACTION_BUTTON[a].text}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      {asking ? <AskDialog action={asking} busy={busy} onClose={() => setAsking(null)} onSubmit={(text) => run(asking, asking === "return" ? { note: text } : { reason: text })} /> : null}
+    </article>
+  );
+}
+
+/** ใส่ข้อความก่อนกด: ไม่อนุมัติ (เหตุผล บังคับ) / ยกเลิก (เหตุผล) / รับคืน (สภาพของ) */
+function AskDialog({ action, busy, onClose, onSubmit }: { action: LoanAction; busy: boolean; onClose: () => void; onSubmit: (text: string) => void }) {
+  const [text, setText] = useState("");
+  const need = action === "reject";
+  const label = action === "return" ? "สภาพตอนรับคืน (ไม่บังคับ)" : `เหตุผล${need ? "" : " (ไม่บังคับ)"} — ผู้ยืมจะเห็นข้อความนี้`;
+  return (
+    <AppDialog open onClose={onClose} busy={busy} title={ACTION_BUTTON[action].text}>
+      <DialogBody>
+        <Label htmlFor="loan-ask" className="mb-1">{label}</Label>
+        <Textarea id="loan-ask" value={text} onChange={(e) => setText(e.target.value)} rows={3} maxLength={300}
+          placeholder={action === "return" ? "เช่น ครบ สภาพดี / ไฟ 1 ดวงสายหลวม" : "เช่น ช่วงนั้นทีมไลฟ์ต้องใช้"} />
+      </DialogBody>
+      <DialogActions>
+        <Button variant="outline" size="lg" disabled={busy} onClick={onClose}>ยกเลิก</Button>
+        <Button size="lg" variant={action === "return" ? "default" : "destructive"} disabled={busy || (need && !text.trim())} onClick={() => onSubmit(text.trim())}>
+          {busy ? "กำลังบันทึก..." : ACTION_BUTTON[action].text}
+        </Button>
+      </DialogActions>
+    </AppDialog>
+  );
+}

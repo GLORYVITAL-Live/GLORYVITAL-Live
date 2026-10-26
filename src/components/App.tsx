@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
-  GraduationCapIcon, PackageIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
+  GraduationCapIcon, PackageIcon, PackageOpenIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
 } from "lucide-react";
 import { isShopeeRole } from "@/lib/live-team";
 import type { Me, OwnerScope, Role } from "@/lib/types";
@@ -31,6 +31,7 @@ const RulesEditor = dynamic(() => import("@/components/RulesEditor").then((m) =>
 const SlotWorkspace = dynamic(() => import("@/components/SlotWorkspace").then((m) => m.SlotWorkspace), { loading: Loading });
 const StaffManager = dynamic(() => import("@/components/StaffManager").then((m) => m.StaffManager), { loading: Loading });
 const TrainingPage = dynamic(() => import("@/components/TrainingPage").then((m) => m.TrainingPage), { loading: Loading });
+const BorrowPage = dynamic(() => import("@/components/Loans").then((m) => m.BorrowPage), { loading: Loading });
 // หน้าต่าง / ป้ายในหน้าจอง (ไม่ต้องมีตัวโหลด)
 const MySchedule = dynamic(() => import("@/components/MySchedule").then((m) => m.MySchedule), { loading: Nothing });
 const PayDocs = dynamic(() => import("@/components/PayDocs").then((m) => m.PayDocs), { loading: Nothing });
@@ -90,6 +91,11 @@ export const MODES = {
     hint: "วิดีโอ product training และสไลด์บรีฟโปรดักต์ กดเล่นในหน้านี้ได้เลย",
     rule: "",
   },
+  borrow: {
+    sub: "Borrow", title: "ขอยืมอุปกรณ์", label: "ขอยืมอุปกรณ์",
+    hint: "ยืมอุปกรณ์โปรดักชั่นของทีมไลฟ์: เลือกวันเวลายืม / คืน แล้วเลือกของที่ว่าง ใส่สถานที่ใช้งาน ส่งคำขอให้ทีมงานอนุมัติ",
+    rule: "",
+  },
   plan: {
     sub: "Plan slot", title: "Plan Slot Live", label: "Plan Slot Live",
     hint: "แพลน slot ไลฟ์ทั้งเดือนเป็นร่างก่อน แล้วกดบันทึก ระบบจะเขียนลงชีตทั้งแท็บ \"ลงตาราง Deal Mc\" และ \"ลงตาราง Admin เสริม\" (กำหนด Mc / Admin ต่อที่หน้าจัดการ slot)",
@@ -101,17 +107,17 @@ export const MODES = {
  * หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ / Plan Slot Live (Owner ที่ติ๊กสิทธิ์)
  *   + CEO Live (บัญชี Marketing — Owner ดูได้ที่แท็บ CEO Live ในหน้าสถิติไลฟ์) + เทรนนิ่ง (ทุกคน)
  */
-type Page = Role | "home" | "proof" | "stats" | "plan" | "ceo" | "equipment" | "training";
+type Page = Role | "home" | "proof" | "stats" | "plan" | "ceo" | "equipment" | "training" | "borrow";
 /** ลำดับในเมนูเลือกหน้า */
-const PAGE_ORDER: Page[] = ["home", "owner", "stats", "ceo", "plan", "mc", "admin", "proof", "equipment", "training"];
+const PAGE_ORDER: Page[] = ["home", "owner", "stats", "ceo", "plan", "mc", "admin", "proof", "equipment", "borrow", "training"];
 /** ชื่อสั้น + ไอคอนในแถบเมนู */
 const PAGE_SHORT: Record<Page, string> = {
   home: "หน้าแรก", owner: "เจ้าของ", stats: "สถิติไลฟ์", ceo: "CEO Live", plan: "แพลน slot", mc: "Mc", admin: "Admin", proof: "หลักฐานไลฟ์", equipment: "อุปกรณ์",
-  training: "เทรนนิ่ง",
+  training: "เทรนนิ่ง", borrow: "ขอยืม",
 };
 const PAGE_ICON: Record<Page, LucideIcon> = {
   home: HouseIcon, owner: BriefcaseIcon, stats: ChartColumnIcon, ceo: CrownIcon, plan: CalendarRangeIcon, mc: MicIcon, admin: HeadsetIcon, proof: CameraIcon, equipment: PackageIcon,
-  training: GraduationCapIcon,
+  training: GraduationCapIcon, borrow: PackageOpenIcon,
 };
 
 const ROLE_KEY = "glory_booking_role";
@@ -164,7 +170,9 @@ function Shell({ me }: { me: Me | null }) {
     ...(me?.owner?.see.plan && !ownerPage ? ["plan" as const] : []),
     // อุปกรณ์โปรดักชั่น: Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊กในหน้าพนักงาน
     ...(me?.equipment ? ["equipment" as const] : []),
-    // เทรนนิ่ง (วิดีโอ product training + สไลด์บรีฟ): ทุกคนที่ลงทะเบียน
+    // ขอยืมอุปกรณ์: บัญชีทีมอื่นในบริษัท (ทีมเราจัดการคำขอที่หน้าอุปกรณ์ > คำขอยืม)
+    ...(me?.borrower ? ["borrow" as const] : []),
+    // เทรนนิ่ง (วิดีโอ product training + สไลด์บรีฟ): ทุกคนในทีมไลฟ์ (ไม่รวมบัญชีทีมอื่น)
     ...(me && (me.mc || me.admin || me.owner || me.marketing) ? ["training" as const] : []),
   ].sort((a, b) => PAGE_ORDER.indexOf(a) - PAGE_ORDER.indexOf(b));
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
@@ -263,7 +271,8 @@ function Shell({ me }: { me: Me | null }) {
       : me && (page === "home" || page === "stats" || page === "plan") ? me.owner?.name || ""
         : me && page === "ceo" ? me.marketing?.name || ""
           : me && page === "equipment" ? me.owner?.name || me.admin?.name || ""
-            : me && page === "training" ? me.owner?.name || (me.mc ? `Mc ${me.mc.name}` : "") || me.admin?.name || me.marketing?.name || "" : "";
+            : me && page === "training" ? me.owner?.name || (me.mc ? `Mc ${me.mc.name}` : "") || me.admin?.name || me.marketing?.name || ""
+              : me && page === "borrow" ? me.borrower?.name || "" : "";
 
   // เมนูหน้า: จอกว้าง = แถบปุ่มใต้หัวเว็บ / มือถือ = แถบล่าง (หน้าจองคิวมีแถบจองอยู่ล่างแล้ว จึงใช้แถบบนแทน)
   const showNav = pages.length > 1 && !!page;
@@ -402,6 +411,7 @@ function Shell({ me }: { me: Me | null }) {
       {me && registered && page === "ceo" ? <CeoLive /> : null}
       {me && registered && page === "equipment" ? <EquipmentPage /> : null}
       {me && registered && page === "training" ? <TrainingPage /> : null}
+      {me && registered && page === "borrow" ? <BorrowPage /> : null}
       {!me || !registered ? (
         <StateBox title="เข้าสู่ระบบเพื่อดูตาราง">Mc จะเห็น slot ที่เปิดให้จอง ส่วน Admin จะเห็น slot ที่รอ Admin</StateBox>
       ) : null}

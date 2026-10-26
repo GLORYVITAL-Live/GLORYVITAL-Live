@@ -10,6 +10,7 @@ import { money, parseKey } from "@/lib/format";
 import { shrinkImage } from "@/lib/image";
 import type { ExportBook } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
+import { LoanManager } from "@/components/Loans";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, StateBox, Stats, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,7 +51,29 @@ const valueOf = (x: Equipment) => (x.price ?? 0) * x.quantity;
 const PHOTO_REFRESH_MS = 50 * 60_000;
 const codeKey = (c: string) => c.trim().toUpperCase();
 
+const EQUIP_TAB_KEY = "glory_equipment_tab";
+
+/** หน้าอุปกรณ์: รายการอุปกรณ์ | คำขอยืมจากทีมอื่น (src/components/Loans.tsx) */
 export function EquipmentPage() {
+  const tab = useLocal(EQUIP_TAB_KEY) === "loans" ? "loans" : "list";
+  return (
+    <>
+      <ToggleGroup
+        type="single" spacing={1} value={tab} onValueChange={(v) => { if (v) writeLocal(EQUIP_TAB_KEY, v); }}
+        aria-label="หน้าอุปกรณ์" className="mt-1 mb-3 rounded-full border bg-card p-1"
+      >
+        {([["list", "รายการอุปกรณ์"], ["loans", "คำขอยืม"]] as const).map(([id, text]) => (
+          <ToggleGroupItem key={id} value={id} className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+            {text}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+      {tab === "loans" ? <LoanManager /> : <EquipmentList />}
+    </>
+  );
+}
+
+function EquipmentList() {
   const [items, setItems] = useState<Equipment[] | null>(null);
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);

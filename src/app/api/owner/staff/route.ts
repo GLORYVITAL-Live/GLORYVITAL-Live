@@ -21,8 +21,9 @@ import type { Me } from "@/lib/types";
 //         รายชื่อและสิทธิ์ของ Owner / รายชื่อ Marketing จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
 // Marketing (SQL 20261021000000_marketing) = ชื่อ / อีเมล / เบอร์ เท่านั้น เห็นแค่หน้า CEO Live
 
-type Role = "mc" | "admin" | "owner" | "marketing";
-const ROLES: Role[] = ["mc", "admin", "owner", "marketing"];
+// borrower = บัญชีทีมอื่นในบริษัท เห็นแค่หน้าขอยืมอุปกรณ์ (SQL 20261110000000_equipment_loans)
+type Role = "mc" | "admin" | "owner" | "marketing" | "borrower";
+const ROLES: Role[] = ["mc", "admin", "owner", "marketing", "borrower"];
 /** Mc / Admin = มีคิว ค่าจ้าง ปฏิทิน (Owner / Marketing ไม่มี) */
 const isCrew = (role: Role): role is "mc" | "admin" => role === "mc" || role === "admin";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -30,7 +31,7 @@ const TABLE: Record<"mc" | "admin", { table: "mc_slots" | "admin_slots"; col: st
   mc: { table: "mc_slots", col: "mc_id" },
   admin: { table: "admin_slots", col: "admin_id" },
 };
-const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
+const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing", borrower: "ทีมอื่น" };
 
 const requireOwner = (access: Access = "write") => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน", access);
 /** สิทธิ์ "ดูได้อย่างเดียว" ของ Owner (บันทึกเฉพาะตอนส่งมา ยังไม่ได้รัน SQL = ไม่แตะ) */
@@ -67,6 +68,11 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
   }
   if (!partial || "phone" in body) out.phone = String(body.phone ?? "").trim().slice(0, 30) || null;
   if (role === "marketing") return { data: out };
+  // ทีมอื่น: ชื่อ / อีเมล / เบอร์ + ชื่อทีม / แผนก
+  if (role === "borrower") {
+    if (!partial || "team_name" in body) out.team_name = String(body.team_name ?? "").trim().replace(/\s+/g, " ").slice(0, 100);
+    return { data: out };
+  }
   if (!partial || "hourly_rate" in body) {
     const raw = String(body.hourly_rate ?? "").replace(/[,\s฿]/g, "");
     const rate = raw === "" ? null : Number(raw);
@@ -168,7 +174,7 @@ export async function GET() {
     .select(`id, role, name, email, phone, hourly_rate, commit_tiers, is_extra_admin, is_salaried, can_manage_mc, can_manage_admin, can_manage_proofs, can_view_analytics${extra}`)
     .order("name").overrideTypes<Row[], { merge: false }>());
   if (error) return fail(error.message, 500);
-  const edit: Record<Role, boolean> = { mc: r.scope.edit.mc, admin: r.scope.edit.admin, owner: r.scope.full, marketing: r.scope.full };
+  const edit: Record<Role, boolean> = { mc: r.scope.edit.mc, admin: r.scope.edit.admin, owner: r.scope.full, marketing: r.scope.full, borrower: r.scope.full };
   const staff = (rows ?? [])
     .filter((s) => (ROLES.includes(s.role as Role) && canRole(r.scope, s.role as Role)) || s.id === r.me.owner?.id)
     // ฝั่งที่ดูได้อย่างเดียว: ไม่ส่งค่าจ้าง / Commit
@@ -205,6 +211,9 @@ export async function GET() {
     const old = await db.from("staff").select("id, can_view_pay_docs").eq("role", "owner");
     return (old.data ?? []) as { id: number; can_view_pay_docs: boolean; can_view_pay_docs_admin?: boolean }[];
   })();
+  // ชื่อทีม / แผนกของบัญชีทีมอื่น (ยังไม่ได้รัน SQL 20261110000000_equipment_loans = ไม่มีช่องนี้)
+  const { data: teamNameRows, error: teamNameErr } = await db.from("staff").select("id, team_name").eq("role", "borrower");
+  const teamName = new Map((teamNameErr ? [] : teamNameRows ?? []).map((x) => [x.id as number, String(x.team_name ?? "")]));
   // Owner ที่ติ๊ก "กำหนดสิทธิ์จอง Mc" (ยังไม่ได้รัน SQL 20261107000000_mc_quota = ไม่มีช่องนี้)
   const { data: quotaRows, error: quotaErr } = await db.from("staff").select("id, can_manage_quota").eq("role", "owner");
   const quotaMgr = new Map((quotaErr ? [] : quotaRows ?? []).map((x) => [x.id as number, x.can_manage_quota === true]));
@@ -225,6 +234,7 @@ export async function GET() {
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
       ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
       ...(quotaMgr.has(s.id) ? { can_manage_quota: quotaMgr.get(s.id) } : {}),
+      ...(teamName.has(s.id) ? { team_name: teamName.get(s.id) } : {}),
       ...(docViewers.get(s.id) ?? {}),
       ...(s.email ? pushOf(s.email) : {}),
     })),
@@ -263,6 +273,9 @@ export async function POST(request: Request) {
   const { data, error } = await createAdminClient().from("staff").insert({ role, ...c.data }).select("id").single();
   if (error && role === "marketing" && /staff_role_check|check constraint/.test(error.message)) {
     return fail("ต้องรัน SQL 20261021000000_marketing ใน Supabase ก่อน ถึงจะเพิ่มบัญชี Marketing ได้");
+  }
+  if (error && role === "borrower" && /staff_role_check|check constraint|team_name/.test(error.message)) {
+    return fail("ต้องรัน SQL 20261110000000_equipment_loans ใน Supabase ก่อน ถึงจะเพิ่มบัญชีทีมอื่นได้");
   }
   if (error) return fail(docsSql(needViewSql(dupMessage(error.message))));
   const detail = staffChangeText({}, Object.fromEntries(Object.entries(c.data!).filter(([k]) => ["hourly_rate", "is_salaried", "is_extra_admin", "live_platform"].includes(k))));
@@ -338,6 +351,13 @@ export async function PATCH(request: Request) {
     }
   }
 
+  // ทีม / แผนกเดิมของบัญชีทีมอื่น (ไว้บันทึกประวัติ · ไม่เปลี่ยน = ไม่ส่ง)
+  if ("team_name" in changes) {
+    const { data: t } = await db.from("staff").select("team_name").eq("id", id).maybeSingle();
+    const before = String(t?.team_name ?? "");
+    if (changes.team_name === before) delete changes.team_name;
+    else (cur as Record<string, unknown>).team_name = before;
+  }
   // ค่าเดิมของสิทธิ์หน้าอุปกรณ์ (ไว้บันทึกประวัติ — ไม่อยู่ใน cur เพราะคอลัมน์อาจยังไม่มี)
   const equipBefore = "can_manage_equipment" in changes
     ? (await db.from("staff").select("can_manage_equipment").eq("id", id).maybeSingle()).data?.can_manage_equipment
@@ -352,6 +372,7 @@ export async function PATCH(request: Request) {
   const { error } = await db.from("staff").update(changes).eq("id", id);
   if (error) {
     if (/can_manage_equipment/.test(error.message)) return fail("ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน ถึงจะตั้งสิทธิ์หน้าอุปกรณ์ได้");
+    if (/team_name/.test(error.message)) return fail("ต้องรัน SQL 20261110000000_equipment_loans ใน Supabase ก่อน");
     return fail(docsSql(needViewSql(dupMessage(error.message))));
   }
 

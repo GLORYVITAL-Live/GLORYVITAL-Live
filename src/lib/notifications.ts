@@ -34,11 +34,13 @@ import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
  *              เจ้าตัวกรอกชื่อยืนยันตัวตนไม่ตรง (วันละครั้งต่อคน) → Owner ที่ดูเอกสารทำเบิกได้
  *   receipt    Owner ตีกลับเอกสารยืนยันการรับเงิน (src/lib/receipts-db.ts) → เจ้าตัว ให้ส่งใหม่
  *   quota      Owner เปิดใช้สิทธิ์จองตามแร็งค์ (src/lib/mc-quota-db.ts) → Mc ที่ถูกจำกัด บอกสิทธิ์ + แร็งค์ของตัวเอง
+ *   loan       ขอยืมอุปกรณ์ (src/lib/loans-db.ts): คำขอใหม่ / ผู้ยืมยกเลิก → คนที่อนุมัติได้ · อนุมัติ / ไม่อนุมัติ → ผู้ยืม
+ *              ใกล้ถึง / เลยกำหนดคืน (cron) → ผู้ยืม (+ คนที่อนุมัติได้ ถ้าเลยกำหนด)
  */
 
-export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "tawi" | "receipt" | "quota" | "test";
-/** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide) */
-export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide";
+export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "tawi" | "receipt" | "quota" | "loan" | "test";
+/** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide · borrow = หน้าขอยืมของทีมอื่น) */
+export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide" | "equipment" | "borrow";
 export type Note = { kind: NoteKind; title: string; body: string; page?: NotePage | null; dedupe?: string };
 type Side = "mc" | "admin";
 type Table = "mc_slots" | "admin_slots";

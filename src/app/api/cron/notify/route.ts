@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySummary, sendWorkReminders } from "@/lib/notifications";
+import { sendLoanReminders } from "@/lib/loans-db";
 import { sendReceiptReminders } from "@/lib/receipts-db";
 import { processSheetJobs } from "@/lib/sheet-sync";
 
@@ -23,10 +24,12 @@ export async function GET(request: Request) {
     const weekly = await sendWeeklySummary().then((x) => ({ sent: x.sent })).catch(fail);
     // ยังไม่ส่งเอกสารรับเงิน (เดือนที่บังคับ) → เตือนทุก 3 วัน
     const receipt = await sendReceiptReminders().then((x) => ({ sent: x.sent })).catch(fail);
+    // ยืมอุปกรณ์: ใกล้ถึง / เลยกำหนดคืน → ผู้ยืม (+ คนที่อนุมัติได้ ถ้าเลยกำหนด)
+    const loans = await sendLoanReminders().then((sent) => ({ sent })).catch(fail);
     // งานเขียนชีตที่ค้าง (เช่น แท็บเปิดตัวกรองอยู่ตอนเพิ่ม slot) → ลองใหม่ทุก 15 นาที
     const sheet = await processSheetJobs().catch(fail);
     await pruneNotifications().catch(() => undefined);
-    return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, sheet });
+    return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, loans, sheet });
   } catch (err) {
     return NextResponse.json({ ok: false, message: String((err as Error)?.message ?? err) }, { status: 500 });
   }

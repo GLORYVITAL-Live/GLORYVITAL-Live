@@ -44,6 +44,7 @@ export async function getMe(): Promise<Me | null> {
     if (r.role === "mc") me.mc = { id: r.id, name: r.name, platform: liveTeamOf(r.live_platform) };
     if (r.role === "admin") me.admin = { id: r.id, name: r.name, isExtra: r.is_extra_admin, platform: liveTeamOf(r.live_platform) };
     if (r.role === "marketing") me.marketing = { id: r.id, name: r.name };
+    if (r.role === "borrower") me.borrower = { id: r.id, name: r.name, team: "" };
     if (r.role === "owner") {
       // สิทธิ์เดิม = จัดการได้ / can_view_* = ดูได้อย่างเดียว / Data analytics: ติ๊กแล้วดูได้ จัดการได้ถ้าไม่ได้ตั้งเป็นดูอย่างเดียว
       const mc = r.can_manage_mc !== false, admin = r.can_manage_admin !== false, proofs = r.can_manage_proofs === true;
@@ -63,9 +64,17 @@ export async function getMe(): Promise<Me | null> {
     const { data: equip } = await createAdminClient().from("staff").select("can_manage_equipment").eq("id", me.admin.id).maybeSingle();
     me.equipment = equip?.can_manage_equipment === true;
   }
+  // ทีมอื่น: ชื่อทีม / แผนก (ยังไม่ได้รัน SQL = ว่าง)
+  if (me.borrower) {
+    const { data: t } = await createAdminClient().from("staff").select("team_name").eq("id", me.borrower.id).maybeSingle();
+    me.borrower.team = String(t?.team_name ?? "");
+  }
   return me;
 }
 
 export function isRegistered(me: Me) {
-  return !!(me.mc || me.admin || me.owner || me.marketing);
+  return !!(me.mc || me.admin || me.owner || me.marketing || me.borrower);
 }
+
+/** คนในทีมไลฟ์ (ไม่ใช่บัญชีทีมอื่นที่มาขอยืมอุปกรณ์อย่างเดียว) — ใช้กับหน้าที่ "ทุกคนที่ลงทะเบียน" เห็น เช่น เทรนนิ่ง */
+export const isStaff = (me: Me) => !!(me.mc || me.admin || me.owner || me.marketing);

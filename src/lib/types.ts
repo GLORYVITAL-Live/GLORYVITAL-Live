@@ -21,6 +21,8 @@ export type Me = {
   } | null;
   /** Marketing = เห็นแค่หน้า CEO Live (ดูอย่างเดียว) */
   marketing: { id: number; name: string } | null;
+  /** ทีมอื่นในบริษัท = เห็นแค่หน้า "ขอยืมอุปกรณ์" (SQL 20261110000000_equipment_loans) ไม่มี = ไม่ได้ส่งมา */
+  borrower?: { id: number; name: string; team: string } | null;
   /** หน้าอุปกรณ์โปรดักชั่น (ดู / เพิ่ม / แก้ได้): Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊ก can_manage_equipment */
   equipment: boolean;
 };

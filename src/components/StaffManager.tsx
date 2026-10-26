@@ -26,7 +26,8 @@ import type { LiveTeam } from "@/lib/live-team";
 import { isTestAccount } from "@/lib/staff-check";
 import type { CommitTier, OwnerScope } from "@/lib/types";
 
-type Role = "mc" | "admin" | "owner" | "marketing";
+// borrower = บัญชีทีมอื่นในบริษัท เห็นแค่หน้าขอยืมอุปกรณ์
+type Role = "mc" | "admin" | "owner" | "marketing" | "borrower";
 
 /** ข้อความวิธีเปิดแจ้งเตือนในมือถือ (คัดลอกส่ง LINE) */
 const pushHowTo = (site: string) => `📢 เปิดแจ้งเตือนเว็บ GLORY VITAL Live ในมือถือ (ทำครั้งเดียว)
@@ -65,6 +66,8 @@ type Person = {
   can_view_pay_docs_admin?: boolean;
   /** Owner: ตั้งสิทธิ์จอง Mc ต่อเดือน (เพิ่มพิเศษ / เปิดปิด) ได้ (ไม่มี = ยังไม่ได้รัน SQL 20261107000000_mc_quota) */
   can_manage_quota?: boolean;
+  /** ทีมอื่น: ชื่อทีม / แผนก (ไม่มี = ยังไม่ได้รัน SQL 20261110000000_equipment_loans) */
+  team_name?: string;
 };
 type StaffData = {
   staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean>; payDocsViewer?: boolean;
@@ -72,11 +75,11 @@ type StaffData = {
   docsScope?: { mc: boolean; admin: boolean };
 };
 
-const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
+const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing", borrower: "ทีมอื่น" };
 const displayName = (p: Pick<Person, "role" | "name">) => (p.role === "mc" ? `Mc ${p.name}` : p.name);
 /** บทบาทที่ Owner คนนี้เปิดดูได้ (รายชื่อ Owner / Marketing = ต้องมีสิทธิ์ทั้ง Mc และ Admin) */
 const rolesOf = (scope: OwnerScope): Role[] =>
-  [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : []), ...(scope.mc && scope.admin ? ["owner" as const, "marketing" as const] : [])];
+  [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : []), ...(scope.mc && scope.admin ? ["owner" as const, "marketing" as const, "borrower" as const] : [])];
 const phoneDigits = (v: string | null | undefined) => String(v ?? "").replace(/\D/g, "");
 
 // ---------- รายชื่อที่น่าจะซ้ำ (Mc / Admin) ----------
@@ -183,7 +186,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   }, [tick]);
 
   const counts = useMemo(() => {
-    const c = { mc: 0, admin: 0, owner: 0, marketing: 0, noEmail: 0 };
+    const c = { mc: 0, admin: 0, owner: 0, marketing: 0, borrower: 0, noEmail: 0 };
     for (const p of data?.staff ?? []) {
       if (p.role in c) c[p.role]++;
       if (p.role === role && !p.email) c.noEmail++;
@@ -249,7 +252,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           value={role}
           onValueChange={(v) => { if (v) { setRole(v as Role); setOnlyNoEmail(false); } }}
           aria-label="บทบาท"
-          className="bg-card"
+          className="no-scrollbar max-w-full overflow-x-auto bg-card"
         >
           {roles.map((r) => (
             <ToggleGroupItem key={r} value={r} className="font-semibold">
@@ -378,6 +381,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
                   {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">{p.role === "mc" ? "Mc" : "Admin"} ประจำ</Badge> : null}
                   {p.can_manage_equipment ? <Badge className="bg-p2/15 text-[11px] text-p2">อุปกรณ์</Badge> : null}
+                  {p.role === "borrower" && p.team_name ? <Badge variant="outline" className="text-[11px] text-muted-foreground">{p.team_name}</Badge> : null}
                   {p.live_platform === "shopee" ? (
                     <Badge className="bg-p1/15 text-[11px] text-p1" title="ทีม Shopee — ยังไม่เห็นและจองคิวไลฟ์ TikTok ไม่ได้ ใช้ได้แค่ตารางของฉัน">Shopee</Badge>
                   ) : null}
@@ -626,6 +630,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   const [name, setName] = useState(person?.name ?? "");
   const [email, setEmail] = useState(person?.email ?? "");
   const [phone, setPhone] = useState(person?.phone ?? "");
+  // ทีมอื่น: ชื่อทีม / แผนก
+  const [team, setTeam] = useState(person?.team_name ?? "");
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
   const [salaried, setSalaried] = useState(person?.is_salaried ?? false);
@@ -693,6 +699,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
       } : {};
       const fields = {
         name, email, phone, hourly_rate: rate, is_extra_admin: extra, is_salaried: salaried,
+        ...(role === "borrower" ? { team_name: team } : {}),
         ...(isCrew(role) ? { commit_tiers: tiers } : {}),
         ...(role === "admin" && equipReady && (person || equipment) ? { can_manage_equipment: salaried && equipment } : {}),
         // ทีมไลฟ์: ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
@@ -788,9 +795,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
             value={role}
             onValueChange={(v) => { if (v) setRole(v as Role); }}
             aria-label="บทบาท"
-            className="w-full"
+            className="no-scrollbar w-full overflow-x-auto"
           >
-            {roles.map((r) => <ToggleGroupItem key={r} value={r} className="flex-1 font-semibold">{ROLE_LABEL[r]}</ToggleGroupItem>)}
+            {roles.map((r) => <ToggleGroupItem key={r} value={r} className="flex-1 px-2 font-semibold">{ROLE_LABEL[r]}</ToggleGroupItem>)}
           </ToggleGroup>
         ) : null}
 
@@ -818,6 +825,21 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
             บัญชี Marketing เข้าเว็บแล้วเห็นแค่หน้า <b>CEO Live</b>: ยอดทั้งวันของวันที่มี CEO Live เทียบวันก่อน (ช่องที่ CEO ไลฟ์ และทุกบัญชี)
             ดูได้อย่างเดียว ส่งออกไฟล์ / สไลด์ได้ — ไม่เห็นข้อมูลวันอื่น ตาราง slot รายชื่อ หรือค่าจ้าง
           </p>
+        ) : null}
+
+        {role === "borrower" ? (
+          <>
+            <Field label="ทีม / แผนก">
+              {(id) => <Input id={id} value={team} onChange={(e) => setTeam(e.target.value)} placeholder="เช่น ทีม Marketing / ฝ่ายขาย" />}
+            </Field>
+            <Field label="เบอร์โทร">
+              {(id) => <Input id={id} type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08x-xxx-xxxx" />}
+            </Field>
+            <p className="rounded-lg bg-secondary px-3 py-2 text-xs leading-relaxed text-secondary-foreground">
+              บัญชีทีมอื่นเข้าเว็บแล้วเห็นแค่หน้า <b>ขอยืมอุปกรณ์</b>: เลือกอุปกรณ์ที่ว่าง + จำนวน · สถานที่ใช้งาน · วันเวลายืม / คืน แล้วส่งคำขอให้ทีมเราอนุมัติ
+              — ไม่เห็นราคา Serial ตาราง slot รายชื่อ หรือข้อมูลอื่น · คำขอเข้าที่หน้าอุปกรณ์ &gt; คำขอยืม
+            </p>
+          </>
         ) : null}
 
         {isCrew(role) ? (

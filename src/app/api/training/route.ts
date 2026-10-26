@@ -1,4 +1,5 @@
 import { fail, ok, requireMe } from "@/lib/api";
+import { isStaff } from "@/lib/auth";
 import {
   TRAINING_ITEMS_SQL, addTrainingClip, loadTraining, logTrainingView, removeTrainingClip, renameTraining, setTrainingHidden, trainingViews,
 } from "@/lib/training";
@@ -18,9 +19,12 @@ export const maxDuration = 60;
 
 const canManage = (me: Me) => !!me.owner && (me.owner.mc || me.owner.admin);
 
+const noTeam = () => fail("หน้าเทรนนิ่งสำหรับทีมไลฟ์เท่านั้น", 403);
+
 export async function GET(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
+  if (!isStaff(r.me)) return noTeam();
   try {
     // ?views=<วัน> (0 = ทั้งหมด) = ประวัติการเข้าชม (Owner ที่จัดการได้)
     const views = new URL(request.url).searchParams.get("views");
@@ -38,6 +42,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
+  if (!isStaff(r.me)) return noTeam();
   const body = await request.json().catch(() => ({}));
   // บันทึกการเข้าชม: ทุกคนที่ลงทะเบียน (พลาด = เงียบ ไม่กระทบการดู)
   if (body?.action === "view") {

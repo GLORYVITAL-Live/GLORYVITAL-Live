@@ -11,6 +11,7 @@ const LABEL: Record<string, string> = {
   can_view_mc: "ดู Mc", can_view_admin: "ดู Admin", can_view_proofs: "ดูหลักฐานไลฟ์", can_view_plan: "ดู Plan Slot Live",
   notify_cancel_mc: "รับเมลยกเลิก Mc", notify_cancel_admin: "รับเมลยกเลิก Admin", live_platform: "ทีมไลฟ์",
   can_view_pay_docs: "ดูเอกสารของ Mc", can_view_pay_docs_admin: "ดูเอกสารของ Admin", can_manage_quota: "กำหนดสิทธิ์จอง Mc",
+  team_name: "ทีม / แผนก",
 };
 
 function show(key: string, v: unknown) {
