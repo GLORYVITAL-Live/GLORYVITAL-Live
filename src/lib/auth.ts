@@ -57,7 +57,13 @@ export async function getMe(): Promise<Me | null> {
         },
       };
       if (mc || admin) me.equipment = true; // Owner ที่จัดการ Mc หรือ Admin ได้ ใช้หน้าอุปกรณ์ได้เสมอ
+      if (mc) me.briefs = true; // Owner ที่จัดการ Mc ได้ จัดการบรีฟการแต่งตัวได้เสมอ
     }
+  }
+  // Admin ที่ติ๊ก "จัดการบรีฟการแต่งตัว" (เทรนนิ่ง > เฟรมไลฟ์ · ยังไม่ได้รัน SQL 20261113000000_live_frames = ไม่ได้ ไม่กระทบการ login)
+  if (me.admin && !me.briefs) {
+    const { data: b } = await createAdminClient().from("staff").select("can_manage_briefs").eq("id", me.admin.id).maybeSingle();
+    me.briefs = b?.can_manage_briefs === true;
   }
   // Admin ที่ติ๊ก "จัดการอุปกรณ์โปรดักชั่น" (ถามเฉพาะคนที่เป็น Admin · ยังไม่ได้รัน SQL 20261025000000_equipment = ไม่ได้ ไม่กระทบการ login)
   if (me.admin && !me.equipment) {

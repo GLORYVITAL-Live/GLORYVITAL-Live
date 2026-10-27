@@ -1,11 +1,13 @@
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, mySlots } from "@/lib/data";
+import { framesForSlots } from "@/lib/live-frames";
 import { isLiveRoom, roomForPlatform } from "@/lib/loans";
 import { cleanTiers } from "@/lib/pay";
 import { paymentsOf } from "@/lib/pay-months";
 import { lockedRates } from "@/lib/pay-rates";
 import { createAdminClient } from "@/lib/supabase/server";
+import type { BriefView, FrameFile } from "@/lib/types";
 
 // "ตารางของฉัน" รายเดือน (?role=mc|admin&month=YYYY-MM) — แทน action "mySlots" / "adminMySlots"
 // + โปรไฟล์ของตัวเอง และค่าจ้างต่อชั่วโมง (ของคนนี้ ไม่ตั้ง = ค่าเริ่มต้นใน settings เหมือนหน้าสรุปของเจ้าของ)
@@ -32,6 +34,9 @@ export async function GET(request: Request) {
   ]);
   if (staff.error) return fail(staff.error.message, 500);
   const roomNames = [...new Set((rooms.data ?? []).map((x) => String(x.location)).filter(isLiveRoom))];
+  // เฟรมไลฟ์ + บรีฟการแต่งตัวของช่อง + วัน (ชื่อช่องเดิม GLORY MALL) · อ่านชีตเฟรมไม่ได้ = ไม่แสดง
+  const frames = await framesForSlots(items.filter((i) => !i.cancelled).map((i) => ({ platform: i.platform, date: i.date })))
+    .catch(() => new Map<string, { frame: FrameFile | null; brief: BriefView | null }>());
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
   const lock = locked.get(person.id);
   const salaried = lock ? lock.salaried : !!staff.data.is_salaried;
@@ -42,7 +47,9 @@ export async function GET(request: Request) {
     adminChatUrl: settings.admin_chat_url,
     canCancel: role === "mc" || !!r.me.admin?.isExtra,
     // หาห้องจากชื่อช่องเดิมก่อน (GLORY MALL) แล้วค่อยเปลี่ยนเป็นชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
-    items: withPlatformLabels(items.map((i) => ({ ...i, room: roomForPlatform(i.platform, roomNames) }))),
+    items: withPlatformLabels(items.map((i) => ({
+      ...i, room: roomForPlatform(i.platform, roomNames), ...(frames.get(`${i.platform}|${i.date}`) ?? {}),
+    }))),
     profile: {
       name: role === "mc" ? `Mc ${staff.data.name}` : staff.data.name,
       email: staff.data.email ?? r.me.email,

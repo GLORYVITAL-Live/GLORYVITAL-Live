@@ -25,7 +25,18 @@ export type Me = {
   borrower?: { id: number; name: string; team: string } | null;
   /** หน้าอุปกรณ์โปรดักชั่น (ดู / เพิ่ม / แก้ได้): Owner ที่จัดการ Mc หรือ Admin ได้ + Admin ที่ติ๊ก can_manage_equipment */
   equipment: boolean;
+  /** จัดการบรีฟการแต่งตัว (เทรนนิ่ง > เฟรมไลฟ์): Owner ที่จัดการ Mc ได้ + Admin ที่ติ๊ก can_manage_briefs */
+  briefs?: boolean;
 };
+
+/** ไฟล์ในไดรฟ์ที่แสดงในเว็บ (เปิดผ่าน /api/frames/media?id=) */
+export type FrameFile = { id: string; kind: "video" | "image" | "file"; name: string };
+/** บรีฟการแต่งตัวของเฟรม (ช่อง + ช่วงวัน) · images = ลิงก์ชั่วคราว 1 ชม. */
+export type BriefView = { note: string; images: { path: string; url: string }[]; updatedBy: string; updatedAt: string };
+/** เฟรมไลฟ์ของช่อง + ช่วงวัน (จากแท็บ "Frame live" ในชีตวางแผน) + บรีฟการแต่งตัว */
+export type FrameView = { key: string; platform: string; from: string; to: string; frame: FrameFile | null; product: FrameFile | null; brief: BriefView | null };
+/** เทรนนิ่ง > เฟรมไลฟ์ · ready = ตั้งชีตแล้ว · message = อ่านชีตไม่สำเร็จ / ยังไม่ได้รัน SQL */
+export type FramesResponse = { ready: boolean; message: string | null; canEdit: boolean; frames: FrameView[] };
 
 export const EQUIPMENT_STATUSES = ["ใช้งานได้", "ชำรุด", "ส่งซ่อม", "หาย", "เลิกใช้"] as const;
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
@@ -143,6 +154,8 @@ export type Training = {
   ready: boolean; message: string | null; slides: string | null; groups: TrainingGroup[];
   manage: { ready: boolean; message: string | null } | null;
   gate?: { on: boolean; applies: boolean; passed: boolean; done: string[] } | null;
+  /** เห็นแท็บเฟรมไลฟ์ + จัดการบรีฟการแต่งตัวได้ (me.briefs) */
+  frames?: boolean;
 };
 
 /** คลิปบังคับที่ยังไม่ได้ดู (หน้าจองคิว) — ไม่ส่ง = ไม่บังคับ / ดูครบแล้ว */
@@ -255,6 +268,9 @@ export type MyItem = {
   campaign?: string;
   /** ห้องไลฟ์ของช่องนี้ (ชื่อห้องจากหน้าอุปกรณ์ · ไม่เจอ = null) */
   room?: string | null;
+  /** เฟรมไลฟ์ + บรีฟการแต่งตัวของช่อง + วันนี้ (ไม่มี = ไม่แสดง) */
+  frame?: FrameFile | null;
+  brief?: BriefView | null;
 };
 
 /** เอกสารทำเบิกที่ส่งแล้ว (ข้อมูลกรอก + มีไฟล์หรือยัง) — เห็นเฉพาะเจ้าตัว และ Owner ที่ดูเอกสารทำเบิกได้ */

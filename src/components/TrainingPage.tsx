@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CheckIcon, ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, ListChecksIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
-  RefreshCwIcon, RotateCcwIcon, RotateCwIcon, Settings2Icon, Trash2Icon, UsersIcon, VideoIcon, Volume2Icon, VolumeXIcon, XIcon,
+  RefreshCwIcon, RotateCcwIcon, RotateCwIcon, Settings2Icon, ShirtIcon, Trash2Icon, UsersIcon, VideoIcon, Volume2Icon, VolumeXIcon, XIcon,
 } from "lucide-react";
+import { LiveFrames } from "@/components/LiveFrames";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,7 +36,7 @@ export function TrainingPage() {
   const [data, setData] = useState<Training | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  const [tab, setTab] = useState<"video" | "slides" | "views">("video");
+  const [tab, setTab] = useState<"video" | "slides" | "views" | "frames">("video");
   const [playing, setPlaying] = useState<TrainingVideo | null>(null);
   const [manage, setManage] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -129,14 +130,19 @@ export function TrainingPage() {
             setTab(v as typeof tab);
           }}
         >
-          {/* Owner มี 3 แท็บ: จอมือถือใช้ชื่อสั้น */}
-          <ToggleGroupItem value="video" className="flex-1 font-semibold sm:flex-none">
-            <VideoIcon />{canManage ? <><span className="sm:hidden">วิดีโอ</span><span className="max-sm:hidden">วิดีโอเทรนนิ่ง</span></> : "วิดีโอเทรนนิ่ง"} ({shown})
+          {/* Owner / คนที่จัดการบรีฟได้ มี 3–4 แท็บ: จอมือถือใช้ชื่อสั้น */}
+          <ToggleGroupItem value="video" aria-label="วิดีโอเทรนนิ่ง" className="flex-1 font-semibold sm:flex-none">
+            <VideoIcon />{canManage || data.frames ? <><span className="sm:hidden">วิดีโอ</span><span className="max-sm:hidden">วิดีโอเทรนนิ่ง</span></> : "วิดีโอเทรนนิ่ง"} ({shown})
           </ToggleGroupItem>
-          <ToggleGroupItem value="slides" className="flex-1 font-semibold sm:flex-none">
-            <PresentationIcon />{canManage ? <><span className="sm:hidden">สไลด์</span><span className="max-sm:hidden">สไลด์บรีฟโปรดักต์</span></> : "สไลด์บรีฟโปรดักต์"}
+          <ToggleGroupItem value="slides" aria-label="สไลด์บรีฟโปรดักต์" className="flex-1 font-semibold sm:flex-none">
+            <PresentationIcon />{canManage || data.frames ? <><span className="sm:hidden">สไลด์</span><span className="max-sm:hidden">สไลด์บรีฟโปรดักต์</span></> : "สไลด์บรีฟโปรดักต์"}
           </ToggleGroupItem>
-          {canManage ? <ToggleGroupItem value="views" className="flex-1 font-semibold sm:flex-none"><UsersIcon />ผู้เข้าชม</ToggleGroupItem> : null}
+          {data.frames ? (
+            <ToggleGroupItem value="frames" aria-label="เฟรมไลฟ์ + บรีฟการแต่งตัว" className="flex-1 font-semibold sm:flex-none">
+              <ShirtIcon /><span className="sm:hidden">เฟรม</span><span className="max-sm:hidden">เฟรมไลฟ์</span>
+            </ToggleGroupItem>
+          ) : null}
+          {canManage ? <ToggleGroupItem value="views" aria-label="ผู้เข้าชม" className="flex-1 font-semibold sm:flex-none"><UsersIcon /><span className="sm:hidden">คนดู</span><span className="max-sm:hidden">ผู้เข้าชม</span></ToggleGroupItem> : null}
         </ToggleGroup>
         {canManage && tab === "video" ? (
           <Button variant={manage ? "default" : "outline"} className="rounded-full sm:ml-auto" onClick={() => setManage(!manage)} aria-pressed={manage}>
@@ -145,7 +151,7 @@ export function TrainingPage() {
         ) : null}
       </div>
 
-      {tab === "views" && canManage ? <><RequiredProgress /><ViewsPanel /></> : tab === "slides" ? (
+      {tab === "frames" && data.frames ? <LiveFrames /> : tab === "views" && canManage ? <><RequiredProgress /><ViewsPanel /></> : tab === "slides" ? (
         data.slides ? (
           <SlidesView id={data.slides} />
         ) : <Notice>ยังไม่ได้ตั้งสไลด์บรีฟโปรดักต์ (settings.training_slides)</Notice>

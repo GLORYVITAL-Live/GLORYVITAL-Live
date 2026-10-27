@@ -6,8 +6,9 @@ import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, m
 import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPay, sumPay, tiersLabel } from "@/lib/pay";
 import Link from "next/link";
 import {
-  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, UserIcon, WalletIcon,
+  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ShirtIcon, UserIcon, WalletIcon,
 } from "lucide-react";
+import { FrameMedia } from "@/components/FrameMedia";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
@@ -403,6 +404,25 @@ function SlotDetail({ item, role, rate, now, canCancel, tooLate, minH, adminChat
               </DetailRow>
             ) : null}
           </dl>
+          {/* เฟรมไลฟ์ของช่อง + วันนี้ (ชีตเฟรม) + บรีฟการแต่งตัวที่ทีมงานแนบไว้ */}
+          {!i.cancelled && (i.frame || i.brief) ? (
+            <section className="mt-3 rounded-xl border bg-card p-3">
+              <h3 className="mb-2 flex items-center gap-1.5 text-sm font-bold"><ShirtIcon className="size-4 text-primary" />เฟรมไลฟ์ & การแต่งตัว</h3>
+              {i.frame ? <FrameMedia file={i.frame} /> : null}
+              {i.brief?.note ? <p className="mt-2 text-sm leading-relaxed whitespace-pre-line">{i.brief.note}</p> : null}
+              {i.brief?.images.length ? (
+                <div className="mt-2 grid grid-cols-3 gap-1.5">
+                  {i.brief.images.map((img) => (
+                    <a key={img.path} href={img.url} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded-lg border">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- ลิงก์ชั่วคราวจาก Supabase Storage */}
+                      <img src={img.url} alt="ชุดตัวอย่าง" loading="lazy" className="aspect-square w-full object-cover" />
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+              {!i.brief?.note && !i.brief?.images.length ? <p className="mt-2 text-xs text-muted-foreground">ยังไม่มีบรีฟการแต่งตัวสำหรับช่วงนี้</p> : null}
+            </section>
+          ) : null}
           {tooLate ? (
             <p className="mt-3 text-xs text-muted-foreground">
               ยกเลิกผ่านเว็บไม่ได้แล้ว (เหลือไม่ถึง {minH} ชม.){" "}

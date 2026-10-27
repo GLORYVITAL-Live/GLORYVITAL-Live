@@ -43,7 +43,7 @@ export async function GET(request: Request) {
       return ok<TrainingProgress>(await trainingProgress());
     }
     const [training, gate] = await Promise.all([loadTraining(canManage(r.me)), myTrainingGate(r.me).catch(() => null)]);
-    return ok<Training>({ ...training, gate });
+    return ok<Training>({ ...training, gate, frames: !!r.me.briefs });
   } catch (err) {
     return fail((err as Error).message, 500);
   }
@@ -109,7 +109,7 @@ export async function POST(request: Request) {
     }
     const [training, gate] = await Promise.all([loadTraining(true, body?.action === "refresh"), myTrainingGate(r.me).catch(() => null)]);
     if (body?.action === "refresh") message = `อ่านรายชื่อในไดรฟ์ใหม่แล้ว (${training.groups.reduce((n, g) => n + g.videos.length, 0)} คลิป)`;
-    return ok<Training & { notice: string }>({ ...training, gate, notice: message });
+    return ok<Training & { notice: string }>({ ...training, gate, frames: !!r.me.briefs, notice: message });
   } catch (err) {
     const msg = (err as Error).message;
     return fail(msg, msg === TRAINING_ITEMS_SQL || msg === TRAINING_GATE_SQL ? 409 : 400);

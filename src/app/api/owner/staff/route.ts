@@ -110,6 +110,8 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
   if (role === "admin" && (!partial || "is_extra_admin" in body)) out.is_extra_admin = !!body.is_extra_admin;
   // หน้าอุปกรณ์โปรดักชั่น (SQL 20261025000000_equipment): บันทึกเฉพาะตอนส่งมา
   if (role === "admin" && "can_manage_equipment" in body) out.can_manage_equipment = body.can_manage_equipment === true;
+  // บรีฟการแต่งตัว (เทรนนิ่ง > เฟรมไลฟ์ · SQL 20261113000000_live_frames): บันทึกเฉพาะตอนส่งมา
+  if (role === "admin" && "can_manage_briefs" in body) out.can_manage_briefs = body.can_manage_briefs === true;
   // ทีมไลฟ์ tiktok / shopee (SQL 20261031000000_live_platform): บันทึกเฉพาะตอนส่งมา
   if (isCrew(role) && "live_platform" in body) out.live_platform = liveTeamOf(body.live_platform);
   // Mc ประจำ / Admin ประจำ (เงินเดือน) = ไม่คิดค่าจ้างรายชั่วโมง (Mc ประจำ ไม่ต้องแนบหลักฐานไลฟ์ด้วย)
@@ -216,6 +218,9 @@ export async function GET() {
   // สิทธิ์หน้าอุปกรณ์ของ Admin (ยังไม่ได้รัน SQL = ไม่มีช่องนี้)
   const { data: equipRows, error: equipErr } = await db.from("staff").select("id, can_manage_equipment").eq("role", "admin");
   const equip = new Map((equipErr ? [] : equipRows ?? []).map((x) => [x.id as number, x.can_manage_equipment === true]));
+  // สิทธิ์บรีฟการแต่งตัวของ Admin (ยังไม่ได้รัน SQL = ไม่มีช่องนี้)
+  const { data: briefRows, error: briefErr } = await db.from("staff").select("id, can_manage_briefs").eq("role", "admin");
+  const briefs = new Map((briefErr ? [] : briefRows ?? []).map((x) => [x.id as number, x.can_manage_briefs === true]));
   // ทีมไลฟ์ของ Mc / Admin (ยังไม่ได้รัน SQL 20261031000000_live_platform = ไม่มีช่องนี้ ทุกคนเป็น TikTok)
   const { data: teamRows, error: teamErr } = await db.from("staff").select("id, live_platform").in("role", ["mc", "admin"]);
   const team = new Map((teamErr ? [] : teamRows ?? []).map((x) => [x.id as number, liveTeamOf(x.live_platform)]));
@@ -248,6 +253,7 @@ export async function GET() {
       // สถานะเอกสารทำเบิก: เฉพาะคนฝั่งที่ดูเอกสารได้
       ...(payDocs.has(s.id) && docsCan(docsScope, s.role) ? { payDocs: payDocs.get(s.id) } : {}),
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
+      ...(briefs.has(s.id) ? { can_manage_briefs: briefs.get(s.id) } : {}),
       ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
       ...(quotaMgr.has(s.id) ? { can_manage_quota: quotaMgr.get(s.id) } : {}),
       ...(teamName.has(s.id) ? { team_name: teamName.get(s.id) } : {}),
@@ -381,6 +387,9 @@ export async function PATCH(request: Request) {
   const equipBefore = "can_manage_equipment" in changes
     ? (await db.from("staff").select("can_manage_equipment").eq("id", id).maybeSingle()).data?.can_manage_equipment
     : undefined;
+  const briefsBefore = "can_manage_briefs" in changes
+    ? (await db.from("staff").select("can_manage_briefs").eq("id", id).maybeSingle()).data?.can_manage_briefs
+    : undefined;
   // ทีมไลฟ์เดิม (ไว้บันทึกประวัติ · ไม่เปลี่ยน = ไม่ส่ง จะได้บันทึกได้แม้ยังไม่ได้รัน SQL ซึ่งทุกคนเป็น TikTok)
   let teamBefore: LiveTeam | undefined;
   if ("live_platform" in changes) {
@@ -399,6 +408,7 @@ export async function PATCH(request: Request) {
   const { error } = await db.from("staff").update(changes).eq("id", id);
   if (error) {
     if (/can_manage_equipment/.test(error.message)) return fail("ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน ถึงจะตั้งสิทธิ์หน้าอุปกรณ์ได้");
+    if (/can_manage_briefs/.test(error.message)) return fail("ต้องรัน SQL 20261113000000_live_frames ใน Supabase ก่อน ถึงจะตั้งสิทธิ์บรีฟการแต่งตัวได้");
     if (/team_name/.test(error.message)) return fail("ต้องรัน SQL 20261110000000_equipment_loans ใน Supabase ก่อน");
     return fail(docsSql(needViewSql(dupMessage(error.message))));
   }
@@ -423,7 +433,7 @@ export async function PATCH(request: Request) {
     if (renamed || contactChanged) after(() => processSyncJobs().then(() => undefined));
   }
   // ประวัติ: เปลี่ยนอะไร จากเท่าไรเป็นเท่าไร (ไม่มีอะไรเปลี่ยนจริง = ไม่บันทึก)
-  const diff = staffChangeText({ ...cur, can_manage_equipment: equipBefore, live_platform: teamBefore }, changes);
+  const diff = staffChangeText({ ...cur, can_manage_equipment: equipBefore, can_manage_briefs: briefsBefore, live_platform: teamBefore }, changes);
   if (diff) after(() => log(r.me, `แก้พนักงาน ${role} "${cur.name}": ${diff}`, id));
   return ok({ message: "บันทึกแล้ว" });
 }

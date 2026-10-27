@@ -57,6 +57,8 @@ type Person = {
   pushDevices?: number;
   /** Admin: เข้าหน้าอุปกรณ์โปรดักชั่นได้ (ไม่มี = ยังไม่ได้รัน SQL 20261025000000_equipment) */
   can_manage_equipment?: boolean;
+  /** Admin: จัดการบรีฟการแต่งตัว (เทรนนิ่ง > เฟรมไลฟ์ · ไม่มี = ยังไม่ได้รัน SQL 20261113000000_live_frames) */
+  can_manage_briefs?: boolean;
   /** Mc / Admin: ทีมไลฟ์ (ไม่มี = ยังไม่ได้รัน SQL 20261031000000_live_platform ทุกคนเป็น TikTok) */
   live_platform?: LiveTeam;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
@@ -383,6 +385,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {p.is_extra_admin ? <Badge className="bg-p2/15 text-[11px] text-p2">Admin เสริม</Badge> : null}
                   {p.is_salaried ? <Badge className="bg-p2/15 text-[11px] text-p2">{p.role === "mc" ? "Mc" : "Admin"} ประจำ</Badge> : null}
                   {p.can_manage_equipment ? <Badge className="bg-p2/15 text-[11px] text-p2">อุปกรณ์</Badge> : null}
+                  {p.can_manage_briefs ? <Badge className="bg-p2/15 text-[11px] text-p2">บรีฟแต่งตัว</Badge> : null}
                   {p.role === "borrower" && p.team_name ? <Badge variant="outline" className="text-[11px] text-muted-foreground">{p.team_name}</Badge> : null}
                   {p.live_platform === "shopee" ? (
                     <Badge className="bg-p1/15 text-[11px] text-p1" title="ทีม Shopee — ยังไม่เห็นและจองคิวไลฟ์ TikTok ไม่ได้ ใช้ได้แค่ตารางของฉัน">Shopee</Badge>
@@ -643,6 +646,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   // Admin ประจำ: เข้าหน้าอุปกรณ์โปรดักชั่น (ส่งเมื่อรัน SQL แล้ว = มีค่ามากับรายชื่อ หรือเพิ่มคนใหม่)
   const [equipment, setEquipment] = useState(person?.can_manage_equipment ?? false);
   const equipReady = person ? person.can_manage_equipment !== undefined : true;
+  // Admin (ประจำ / เสริม): จัดการบรีฟการแต่งตัว (เทรนนิ่ง > เฟรมไลฟ์) — ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
+  const [briefs, setBriefs] = useState(person?.can_manage_briefs ?? false);
+  const briefsReady = person ? person.can_manage_briefs !== undefined : true;
   // ทีม Shopee: ไม่เห็น / จองคิวไลฟ์ TikTok ไม่ได้ (ยังใช้ตารางของฉันได้)
   const [shopee, setShopee] = useState(person?.live_platform === "shopee");
   // เทียร์ Commit (กรอกเป็นข้อความ ชั่วโมงพิมพ์เป็นช่วงได้ เช่น "10-20" ระบบใช้เลขตัวแรก)
@@ -718,6 +724,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
         ...(role === "borrower" ? { team_name: team } : {}),
         ...(isCrew(role) ? { commit_tiers: tiers } : {}),
         ...(role === "admin" && equipReady && (person || equipment) ? { can_manage_equipment: salaried && equipment } : {}),
+        ...(role === "admin" && briefsReady && (person || briefs) ? { can_manage_briefs: briefs } : {}),
         // ทีมไลฟ์: ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(isCrew(role) && (teamReady || shopee) ? { live_platform: shopee ? "shopee" : "tiktok" } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
@@ -939,6 +946,20 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
           <Label className="leading-snug font-normal">
             <Checkbox checked={extra} onCheckedChange={(v) => { setExtra(v === true); if (v === true) setSalaried(false); }} />
             Admin เสริม (รับคิวและยกเลิกคิวผ่านเว็บได้เอง)
+          </Label>
+        ) : null}
+
+        {role === "admin" ? (
+          <Label className="items-start leading-snug font-normal">
+            <Checkbox checked={briefs} disabled={!briefsReady} onCheckedChange={(v) => setBriefs(v === true)} className="mt-0.5" />
+            <span>
+              จัดการบรีฟการแต่งตัว
+              <span className="block text-xs text-muted-foreground">
+                {briefsReady
+                  ? "เห็นแท็บ \"เฟรมไลฟ์\" ในหน้าเทรนนิ่ง: ดูเฟรมทุกช่วง + เขียนบรีฟ / แนบรูปชุดตัวอย่างให้ Mc"
+                  : "ต้องรัน SQL 20261113000000_live_frames ใน Supabase ก่อน"}
+              </span>
+            </span>
           </Label>
         ) : null}
 
