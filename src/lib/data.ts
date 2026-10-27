@@ -1,4 +1,5 @@
 import "server-only";
+import { canonicalCampaign } from "@/lib/campaign";
 import { gmvCoverage } from "@/lib/gmv";
 import {
   bonusPaidMinutes, checkInOf, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours,
@@ -256,23 +257,23 @@ export async function openAdminSlots(settings: Settings, personId?: number | nul
   });
 }
 
-/** { slotKey: { name, phone } } ของอีกฝั่งในช่วงวันที่ (เฉพาะคิวที่ยังไม่ยกเลิก) */
+/** { slotKey: { name, phone, campaign } } ของอีกฝั่งในช่วงวันที่ (เฉพาะคิวที่ยังไม่ยกเลิก) · campaign มีเฉพาะฝั่ง Mc */
 async function pairMap(table: "mc_slots" | "admin_slots", firstDate: string, lastDate: string) {
   const db = createAdminClient();
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
-  type Row = SlotRow & { person: { name: string; phone: string | null } | null };
+  type Row = SlotRow & { person: { name: string; phone: string | null } | null; campaign?: string | null };
   const rows = await fetchAll<Row>((from, to) =>
     db.from(table)
-      .select(`${SLOT_COLS}, person:staff!${personCol}(name, phone)`)
+      .select(`${SLOT_COLS}, ${table === "mc_slots" ? "campaign, " : ""}person:staff!${personCol}(name, phone)`)
       .not(personCol, "is", null)
       .gte("live_date", firstDate)
       // เผื่อ slot ข้ามเที่ยงคืนที่ไปตรงกับวันถัดไป
       .lte("live_date", lastDate)
       .range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
   );
-  const map = new Map<string, { name: string; phone: string }>();
+  const map = new Map<string, { name: string; phone: string; campaign: string }>();
   for (const r of rows) {
-    if (r.person && isActive(r)) map.set(slotKey(r), { name: r.person.name, phone: r.person.phone ?? "" });
+    if (r.person && isActive(r)) map.set(slotKey(r), { name: r.person.name, phone: r.person.phone ?? "", campaign: canonicalCampaign(r.campaign) });
   }
   return map;
 }
@@ -282,11 +283,12 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
   const db = createAdminClient();
   const table = role === "mc" ? "mc_slots" : "admin_slots";
   const personCol = role === "mc" ? "mc_id" : "admin_id";
-  const rows = await fetchAll<SlotRow & { remark: string | null }>((from, to) =>
-    db.from(table).select(`${SLOT_COLS}, remark`).eq(personCol, personId)
+  type Row = SlotRow & { remark: string | null; campaign?: string | null };
+  const rows = await fetchAll<Row>((from, to) =>
+    db.from(table).select(`${SLOT_COLS}, remark${role === "mc" ? ", campaign" : ""}`).eq(personCol, personId)
       .gte("live_date", first).lte("live_date", last)
       .or("confirmed.is.null,confirmed.eq.true")
-      .order("starts_at").range(from, to),
+      .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
   );
   const [pairs, proofs] = await Promise.all([
     pairMap(role === "mc" ? "admin_slots" : "mc_slots", first, last),
@@ -309,6 +311,8 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
       checkIn: ci.checkIn,
       pairName: p ? (role === "admin" ? `Mc ${p.name}` : p.name) : "",
       pairPhone: p?.phone ?? "",
+      // Campaign อยู่ที่ slot ของ Mc (Admin ใช้ของ slot Mc ที่ไลฟ์ด้วยกัน)
+      campaign: role === "mc" ? canonicalCampaign(r.campaign) : p?.campaign ?? "",
     };
   });
 }

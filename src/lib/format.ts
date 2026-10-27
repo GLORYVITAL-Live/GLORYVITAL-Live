@@ -3,6 +3,7 @@
 const opts = (o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("th-TH-u-ca-gregory", { timeZone: "UTC", ...o });
 
 export const fmtDayLong = opts({ weekday: "long", day: "numeric", month: "long" });
+export const fmtDayFull = opts({ weekday: "long", day: "numeric", month: "long", year: "numeric" });
 export const fmtDayShort = opts({ weekday: "short", day: "numeric", month: "short" });
 export const fmtWeekShort = opts({ weekday: "short" });
 export const fmtMonthShort = opts({ month: "short" });

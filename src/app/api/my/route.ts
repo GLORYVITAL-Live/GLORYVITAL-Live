@@ -1,6 +1,7 @@
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, mySlots } from "@/lib/data";
+import { isLiveRoom, roomForPlatform } from "@/lib/loans";
 import { cleanTiers } from "@/lib/pay";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -16,12 +17,16 @@ export async function GET(request: Request) {
   const person = role === "mc" ? r.me.mc : role === "admin" ? r.me.admin : null;
   if (!person) return fail("บัญชีนี้ไม่มีสิทธิ์ดูตารางนี้", 403);
 
-  const [settings, items, staff] = await Promise.all([
+  const db = createAdminClient();
+  const [settings, items, staff, rooms] = await Promise.all([
     getSettings(),
     mySlots(role as "mc" | "admin", person.id, first, last),
-    createAdminClient().from("staff").select("name, email, phone, hourly_rate, commit_tiers, is_salaried").eq("id", person.id).single(),
+    db.from("staff").select("name, email, phone, hourly_rate, commit_tiers, is_salaried").eq("id", person.id).single(),
+    // ห้องไลฟ์ (ตำแหน่งอุปกรณ์ที่ชื่อขึ้นต้น "ห้องไลฟ์") ไว้บอกในรายละเอียด slot · โหลดไม่ได้ = ไม่บอกห้อง
+    db.from("equipment").select("location").ilike("location", "%ห้องไลฟ์%"),
   ]);
   if (staff.error) return fail(staff.error.message, 500);
+  const roomNames = [...new Set((rooms.data ?? []).map((x) => String(x.location)).filter(isLiveRoom))];
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
 
   return ok({
@@ -29,7 +34,8 @@ export async function GET(request: Request) {
     cancelMinHours: Number(settings.cancel_min_hours),
     adminChatUrl: settings.admin_chat_url,
     canCancel: role === "mc" || !!r.me.admin?.isExtra,
-    items: withPlatformLabels(items), // ชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
+    // หาห้องจากชื่อช่องเดิมก่อน (GLORY MALL) แล้วค่อยเปลี่ยนเป็นชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
+    items: withPlatformLabels(items.map((i) => ({ ...i, room: roomForPlatform(i.platform, roomNames) }))),
     profile: {
       name: role === "mc" ? `Mc ${staff.data.name}` : staff.data.name,
       email: staff.data.email ?? r.me.email,

@@ -1,24 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
-import { fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
+import { fmtDayFull, fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPay, sumPay, tiersLabel } from "@/lib/pay";
 import Link from "next/link";
-import { BookOpenIcon, ClipboardListIcon, IdCardIcon } from "lucide-react";
+import {
+  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, UserIcon, WalletIcon,
+} from "lucide-react";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
 import { MyRank, RankChip, useMyRank } from "@/components/MyRank";
 import { MyTawi } from "@/components/MyTawi";
-import { WorkLocationLink } from "@/components/WorkLocation";
+import { WorkLocationLink, useWorkLocation } from "@/components/WorkLocation";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
-/** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + ยกเลิกคิว */
+/** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + รายละเอียด slot + ยกเลิกคิว */
 export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDocs, canBook = true }: {
   open: boolean;
   onClose: () => void;
@@ -36,6 +38,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const [failed, setFailed] = useState<{ month: string; message: string } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [cancelItem, setCancelItem] = useState<MyItem | null>(null);
+  const [detail, setDetail] = useState<MyItem | null>(null);
   // แร็งค์ของ Mc (ป้ายข้างชื่อ + กล่องท้ายรายการคิว)
   const rank = useMyRank(open && role === "mc");
 
@@ -77,9 +80,16 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const bonusMin = active.reduce((a, i) => a + bonusPaidMinutes(i.bonusMinutes), 0);
   const bonusMoney = Math.round((bonusMin / 60) * rate);
 
+  const minH = data?.cancelMinHours ?? 6;
+  const cancelOf = (i: MyItem) => {
+    const canCancel = !!data?.canCancel && !i.cancelled && i.startMs - now >= minH * 3600_000;
+    // ยังไม่เริ่มแต่เหลือไม่ถึง N ชม. = ไม่มีปุ่มยกเลิก บอกเหตุผล + ทางติดต่อ
+    return { canCancel, tooLate: !!data?.canCancel && !i.cancelled && !canCancel && i.startMs > now };
+  };
+
   return (
     <>
-      <AppDialog open={open && !cancelItem} onClose={onClose} title="ตารางของฉัน">
+      <AppDialog open={open && !cancelItem && !detail} onClose={onClose} title="ตารางของฉัน">
         <div className="flex items-center gap-3 rounded-xl border px-3 py-2">
           <Avatar size="lg" aria-hidden>
             <AvatarFallback className="bg-primary text-base font-bold text-primary-foreground">
@@ -179,15 +189,19 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                   <DayBadge label={relLabel(k)} />
                 </h3>
                 {list.map((i) => {
-                  const minH = data?.cancelMinHours ?? 6;
-                  const canCancel = !!data?.canCancel && !i.cancelled && i.startMs - now >= minH * 3600_000;
-                  // ยังไม่เริ่มแต่เหลือไม่ถึง N ชม. = ไม่มีปุ่มยกเลิก บอกเหตุผล + ทางติดต่อ
-                  const tooLate = !!data?.canCancel && !i.cancelled && !canCancel && i.startMs > now;
+                  const { canCancel, tooLate } = cancelOf(i);
                   return (
                     <div
                       key={i.id}
-                      className={cn("mb-1.5 rounded-xl border px-3 py-2", i.cancelled && "opacity-60", i.endMs < now ? "bg-muted" : "bg-card")}
+                      className={cn("relative mb-1.5 rounded-xl border px-3 py-2", i.cancelled && "opacity-60", i.endMs < now ? "bg-muted" : "bg-card")}
                     >
+                      {/* กดตรงไหนของการ์ดก็ได้ = ดูรายละเอียด slot · ลิงก์โทร / ปุ่มยกเลิกอยู่ชั้นบน (z-10) กดแยกได้ */}
+                      <button
+                        type="button"
+                        aria-label={`ดูรายละเอียด ${i.start}–${i.end} ${platformOf(i)}`}
+                        className="absolute inset-0 rounded-xl outline-none hover:bg-primary/5 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                        onClick={() => setDetail(i)}
+                      />
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={cn("font-semibold tabular-nums", i.cancelled && "line-through")}>{i.start} – {i.end}</span>
                         <PlatformBadge name={platformOf(i)} index={0} />
@@ -213,6 +227,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                                 ) : null}
                                 {rate ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rate))} บาท</span> : null}
                               </>}
+                          <ChevronRightIcon aria-hidden className="-mr-1 ml-0.5 inline size-4 align-[-3px]" />
                         </span>
                       </div>
                       {!i.cancelled ? (
@@ -220,15 +235,15 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                           <span>
                             {i.pairName
                               ? <>{role === "admin" ? `ไลฟ์กับ ${i.pairName}` : `Admin: ${i.pairName}`}
-                                {i.pairPhone ? <> · <a className="text-primary underline" href={`tel:${i.pairPhone.replace(/[^0-9+]/g, "")}`}>{i.pairPhone}</a></> : null}</>
+                                {i.pairPhone ? <> · <a className="relative z-10 text-primary underline" href={`tel:${telOf(i.pairPhone)}`}>{i.pairPhone}</a></> : null}</>
                               : role === "admin" ? "Mc: ยังไม่มี Mc จอง" : "Admin: ยังไม่มี Admin"}
                           </span>
                           {canCancel ? (
-                            <Button variant="destructive" size="xs" className="rounded-full font-semibold" onClick={() => setCancelItem(i)}>
+                            <Button variant="destructive" size="xs" className="relative z-10 rounded-full font-semibold" onClick={() => setCancelItem(i)}>
                               ยกเลิกคิว
                             </Button>
                           ) : tooLate ? (
-                            <span className="shrink-0 text-right text-[11px] leading-tight">
+                            <span className="relative z-10 shrink-0 text-right text-[11px] leading-tight">
                               ยกเลิกผ่านเว็บไม่ได้แล้ว (เหลือไม่ถึง {minH} ชม.)
                               <span className="block">
                                 {data?.adminChatUrl
@@ -250,6 +265,18 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
         </DialogBody>
       </AppDialog>
 
+      <SlotDetail
+        item={detail}
+        role={role}
+        rate={rate}
+        now={now}
+        minH={minH}
+        adminChatUrl={data?.adminChatUrl ?? ""}
+        onCancel={() => { setCancelItem(detail); setDetail(null); }}
+        onClose={() => setDetail(null)}
+        {...(detail ? cancelOf(detail) : { canCancel: false, tooLate: false })}
+      />
+
       <CancelDialog
         key={cancelItem?.id ?? 0}
         item={cancelItem}
@@ -262,6 +289,121 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
         }}
       />
     </>
+  );
+}
+
+const telOf = (phone: string) => phone.replace(/[^0-9+]/g, "");
+
+/** แถวในรายละเอียด slot: ไอคอน + หัวข้อ + ค่า */
+function DetailRow({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-3 px-3 py-2.5">
+      <span aria-hidden className="mt-0.5 text-muted-foreground [&_svg]:size-4">{icon}</span>
+      <dt className="w-16 shrink-0 text-sm text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 flex-1 font-medium break-words">{children}</dd>
+    </div>
+  );
+}
+
+const Note = ({ className, children }: { className?: string; children: ReactNode }) =>
+  <span className={cn("mt-0.5 block text-xs font-normal text-muted-foreground", className)}>{children}</span>;
+
+/** รายละเอียด slot ของฉัน (กดที่การ์ด): ช่อง · วันเวลา · ค่าจ้าง · สถานที่ · คู่ไลฟ์ (Admin ของ Mc / Mc ของ Admin) + เบอร์ */
+function SlotDetail({ item, role, rate, now, canCancel, tooLate, minH, adminChatUrl, onCancel, onClose }: {
+  item: MyItem | null;
+  role: "mc" | "admin";
+  rate: number;
+  now: number;
+  canCancel: boolean;
+  tooLate: boolean;
+  minH: number;
+  adminChatUrl: string;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
+  const mapUrl = useWorkLocation(!!item);
+  const i = item;
+  const status = !i ? null
+    : i.cancelled ? { text: i.status || "ยกเลิก", className: "bg-destructive/10 text-destructive" }
+    : i.endMs <= now ? { text: "ไลฟ์แล้ว", className: "bg-muted text-muted-foreground" }
+    : i.startMs <= now ? { text: "กำลังไลฟ์", className: "bg-success/15 text-success" }
+    : { text: "รอไลฟ์", className: "bg-primary/10 text-primary" };
+  const late = i && !i.cancelled ? lateCut(i.lateMinutes) : 0;
+
+  return (
+    <AppDialog open={!!i} onClose={onClose} title={i ? platformOf(i) : "รายละเอียด slot"}>
+      {i && status ? (
+        <DialogBody>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            <Badge className={cn("font-semibold", status.className)}>{status.text}</Badge>
+            <DayBadge label={relLabel(i.date)} />
+            {i.campaign ? <Badge variant="outline" className="font-semibold">แคมเปญ {i.campaign}</Badge> : null}
+          </div>
+          <dl className="divide-y rounded-xl border bg-card">
+            <DetailRow icon={<CalendarIcon />} label="วันที่">{fmtDayFull.format(parseKey(i.date))}</DetailRow>
+            <DetailRow icon={<ClockIcon />} label="เวลา">
+              <span className="tabular-nums">{i.start} – {i.end}</span>
+              <span className="font-normal text-muted-foreground"> ({fmtHours(i.checkIn?.slotHours ?? i.hours)})</span>
+              {i.checkIn ? <Note>เข้างาน {i.checkIn.time} คิดเงิน {fmtHours(i.hours)}</Note> : null}
+            </DetailRow>
+            {/* Mc / Admin ประจำ (เงินเดือน) หรือยังไม่ตั้งค่าจ้าง = ไม่มีแถวนี้ */}
+            {rate ? (
+              <DetailRow icon={<WalletIcon />} label="ค่าจ้าง">
+                {i.cancelled ? "ไม่คิดเงิน (ยกเลิกแล้ว)" : (
+                  <>
+                    <span className="text-lg font-bold text-primary tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rate))} บาท</span>
+                    <Note className="tabular-nums">{fmtHours(i.hours)} × {money(rate)} บาท/ชม.</Note>
+                    {late > 0 ? (
+                      <Note className="font-semibold text-destructive">
+                        สาย {i.lateMinutes} นาที หัก {Math.round(late * 100)}%{i.lateFromProof ? " (จากหลักฐานไลฟ์)" : ""}
+                      </Note>
+                    ) : null}
+                    {bonusPaidMinutes(i.bonusMinutes) > 0 ? (
+                      <Note className="font-semibold text-success">
+                        ไลฟ์ชดเชย +{i.bonusMinutes} นาที +{money((bonusPaidMinutes(i.bonusMinutes) / 60) * rate)} บาท{i.bonusFromProof ? " (จากหลักฐานไลฟ์)" : ""}
+                      </Note>
+                    ) : null}
+                  </>
+                )}
+              </DetailRow>
+            ) : null}
+            <DetailRow icon={<MapPinIcon />} label="สถานที่">
+              {i.room ?? "สถานที่ทำงาน"}
+              {mapUrl ? (
+                <a className="mt-0.5 block text-sm font-semibold text-primary underline" href={mapUrl} target="_blank" rel="noopener noreferrer">
+                  เปิด Google Maps
+                </a>
+              ) : null}
+            </DetailRow>
+            {/* คิวที่ยกเลิกแล้วไม่บอกคู่ไลฟ์ (เหมือนการ์ดในรายการ) */}
+            {!i.cancelled ? (
+              <DetailRow icon={<UserIcon />} label={role === "mc" ? "Admin" : "Mc"}>
+                {i.pairName || <span className="font-normal text-muted-foreground">{role === "mc" ? "ยังไม่มี Admin" : "ยังไม่มี Mc จอง"}</span>}
+              </DetailRow>
+            ) : null}
+            {i.pairPhone && !i.cancelled ? (
+              <DetailRow icon={<PhoneIcon />} label="เบอร์โทร">
+                <a className="font-semibold text-primary underline tabular-nums" href={`tel:${telOf(i.pairPhone)}`}>{i.pairPhone}</a>
+              </DetailRow>
+            ) : null}
+          </dl>
+          {tooLate ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              ยกเลิกผ่านเว็บไม่ได้แล้ว (เหลือไม่ถึง {minH} ชม.){" "}
+              {adminChatUrl
+                ? <a className="font-semibold text-primary underline" href={adminChatUrl} target="_blank" rel="noopener">ติดต่อแอดมิน</a>
+                : "ติดต่อแอดมิน"}
+            </p>
+          ) : null}
+        </DialogBody>
+      ) : null}
+      <DialogActions>
+        {canCancel ? (
+          <Button variant="outline" size="lg" className="font-semibold text-destructive hover:text-destructive" onClick={onCancel}>ยกเลิกคิว</Button>
+        ) : null}
+        <Button size="lg" onClick={onClose}>ปิด</Button>
+      </DialogActions>
+    </AppDialog>
   );
 }
 
