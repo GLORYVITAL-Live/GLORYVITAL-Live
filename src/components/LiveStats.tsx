@@ -555,7 +555,7 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
 function TableView({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Collapsible className="group/tv mt-2">
-      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 rounded text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 rounded text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50 pointer-coarse:py-2">
         <ChevronDownIcon className="size-3.5 transition-transform group-data-[state=open]/tv:rotate-180" />{title}
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-2">{children}</CollapsibleContent>

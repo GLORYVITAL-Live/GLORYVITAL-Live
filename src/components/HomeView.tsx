@@ -134,14 +134,16 @@ export function HomeView({ go }: { go: Go }) {
               {data.live.map((s) => (
                 <li key={s.id} className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm", s.status === "done" && "text-muted-foreground")}>
                   <span className="w-24 font-semibold tabular-nums">{s.start}–{s.end}</span>
-                  <span className="w-24 truncate text-xs text-muted-foreground">{s.platform}</span>
-                  <span className="min-w-0 flex-1 truncate">
+                  <span className="w-24 truncate text-xs text-muted-foreground max-sm:w-auto max-sm:flex-1">{s.platform}</span>
+                  {/* มือถือ: บรรทัดบน เวลา / ช่อง / สถานะ · บรรทัดล่าง ชื่อ Mc · Admin + หลักฐาน / GMV (บรรทัดเดียวชื่อเหลือแค่ 2–3 ตัวอักษร) */}
+                  <span className="min-w-0 flex-1 truncate max-sm:order-2">
                     {s.mc ?? <span className="font-semibold text-warning-foreground">ยังไม่มี Mc</span>}
                     <span className="text-muted-foreground"> · {s.admin ?? "ยังไม่มี Admin"}</span>
                   </span>
                   <StatusChip status={s.status} />
+                  <span aria-hidden className="hidden max-sm:order-1 max-sm:block max-sm:basis-full" />
                   {s.status === "done" ? (
-                    <span className="flex gap-1">
+                    <span className="flex gap-1 max-sm:order-3">
                       <Check ok={s.proof || s.noProof} label={s.noProof ? "Mc ประจำ ไม่ต้องแนบ" : "หลักฐาน"} />
                       <Check ok={s.gmv} label="GMV" />
                     </span>
@@ -487,7 +489,7 @@ function IssueGroup({ title, note, items, action, chips = false }: {
         {shown.map((x, i) => <li key={i} className={cn(item, chips ? "rounded-full px-2.5 py-0.5" : "rounded-lg px-2.5 py-1.5")}>{x}</li>)}
       </ul>
       {items.length > shown.length ? (
-        <button type="button" onClick={() => setAll(true)} className="mt-1 cursor-pointer text-xs font-semibold text-primary underline">ดูอีก {items.length - shown.length} รายการ</button>
+        <button type="button" onClick={() => setAll(true)} className="mt-1 cursor-pointer text-xs font-semibold text-primary underline pointer-coarse:py-2">ดูอีก {items.length - shown.length} รายการ</button>
       ) : null}
     </div>
   );
@@ -539,7 +541,7 @@ function ByDate({ items, empty, render }: { items: HomeSlot[]; empty: string; re
         );
       })}
       {days.length > shown.length ? (
-        <button type="button" onClick={() => setAll(true)} className="cursor-pointer text-xs font-semibold text-primary underline">ดูอีก {days.length - shown.length} วัน</button>
+        <button type="button" onClick={() => setAll(true)} className="cursor-pointer text-xs font-semibold text-primary underline pointer-coarse:py-2">ดูอีก {days.length - shown.length} วัน</button>
       ) : null}
     </div>
   );

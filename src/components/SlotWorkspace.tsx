@@ -23,10 +23,11 @@ const ROLE_VIEW_KEY = "glory_slot_view_role";
  * plan = สิทธิ์แพลนทั้งเดือน: edit = บันทึกได้ / view = ดูอย่างเดียว / null = ไม่เห็นแท็บนี้
  */
 export function SlotWorkspace({ me, scope, edit, plan }: { me: Me; scope: OwnerScope; edit: OwnerScope; plan: "edit" | "view" | null }) {
+  // [id, ชื่อเต็ม, ชื่อสั้นบนมือถือ (ชื่อเต็มขึ้น 2 บรรทัด)]
   const views = [
-    ["daily", (edit.mc || edit.admin) ? "รายวัน · ใส่คน / สถานะ" : "รายวัน"],
-    ...(plan ? [["plan", "แพลนทั้งเดือน"] as const] : []),
-    ["view", "มุมมอง Mc / Admin"],
+    ["daily", (edit.mc || edit.admin) ? "รายวัน · ใส่คน / สถานะ" : "รายวัน", "รายวัน"],
+    ...(plan ? [["plan", "แพลนทั้งเดือน", "แพลนทั้งเดือน"] as const] : []),
+    ["view", "มุมมอง Mc / Admin", "มุมมอง Mc"],
   ] as const;
   const saved = useLocal(SLOT_VIEW_KEY);
   const view = views.some(([id]) => id === saved) ? saved! : "daily";
@@ -42,7 +43,11 @@ export function SlotWorkspace({ me, scope, edit, plan }: { me: Me; scope: OwnerS
         onValueChange={(v) => { if (v) writeLocal(SLOT_VIEW_KEY, v); }}
         aria-label="ตาราง slot" className="mb-2 flex-wrap rounded-full border bg-card p-1"
       >
-        {views.map(([id, text]) => <ToggleGroupItem key={id} value={id} className={pill}>{text}</ToggleGroupItem>)}
+        {views.map(([id, text, short]) => (
+          <ToggleGroupItem key={id} value={id} aria-label={text} className={pill}>
+            <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{text}</span>
+          </ToggleGroupItem>
+        ))}
       </ToggleGroup>
 
       {view === "daily" ? (

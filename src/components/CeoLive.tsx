@@ -120,7 +120,7 @@ export function CeoLiveView({ data, onChanged }: { data: CeoLiveData; onChanged?
               <button
                 key={e.date} type="button" onClick={() => toggle(e.date)} aria-pressed={on} title={e.label}
                 className={cn(
-                  "cursor-pointer rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors",
+                  "cursor-pointer rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors pointer-coarse:px-3 pointer-coarse:py-2",
                   on ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground line-through",
                 )}
               >
