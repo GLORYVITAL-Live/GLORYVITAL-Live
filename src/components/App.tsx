@@ -516,13 +516,29 @@ function ShopeeSoon({ onOpenMine }: { onOpenMine: () => void }) {
   );
 }
 
-/** raised = มือถือมีแถบเมนูล่าง ยกปุ่มขึ้นเหนือแถบ */
+/**
+ * raised = มือถือมีแถบเมนูล่าง ยกปุ่มขึ้นเหนือแถบ
+ *   จอสัมผัส: ขึ้นเฉพาะตอนเลื่อนขึ้น แล้วหายเมื่อเลื่อนลง / หยุดเลื่อน 2.5 วินาที — ปุ่มลอยเคยทับวงกลมติ๊กของการ์ด slot
+ *   และปุ่มในหน้า (ย้ายมุมก็ไปทับปุ่มอื่นแทน) · คอม: ขึ้นเมื่อเลื่อนลงมาเกิน 250px เหมือนเดิม (มุมขวาอยู่นอกเนื้อหา)
+ */
 function ToTop({ raised = false }: { raised?: boolean }) {
   const [show, setShow] = useState(false);
   useEffect(() => {
-    const onScroll = () => setShow(window.scrollY > 250);
+    let last = window.scrollY;
+    let timer = 0;
+    const onScroll = () => {
+      const y = window.scrollY;
+      if (!matchMedia("(pointer: coarse)").matches) setShow(y > 250);
+      else if (Math.abs(y - last) > 2) {
+        // ตำแหน่งเดิม (ท้ายการเลื่อนแบบนุ่ม) = ไม่เปลี่ยน
+        setShow(y > 250 && y < last);
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => setShow(false), 2500);
+      }
+      last = y;
+    };
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    return () => { window.removeEventListener("scroll", onScroll); window.clearTimeout(timer); };
   }, []);
   return (
     <IconButton
