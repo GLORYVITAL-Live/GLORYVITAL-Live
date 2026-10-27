@@ -1,7 +1,7 @@
 // เทสขอยืมอุปกรณ์ (bun test)
 import { describe, expect, test } from "bun:test";
 import {
-  availableQty, cameraRole, canAct, cleanLoanInput, companionsFor, isCameraBody, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, peakHeld, roomForPlatform, roomInfo, shortages, type Hold,
+  availableQty, cameraRole, canAct, cleanLoanInput, companionsFor, isCameraBody, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, loanLiveClashes, peakHeld, roomForPlatform, roomInfo, shortages, type Hold,
 } from "@/lib/loans";
 
 const H = 3600_000;
@@ -97,6 +97,19 @@ describe("ไฟประจำห้องไลฟ์ (ต้องเหล�
     expect(leftOf(stock, get(28), T0, T0 + 2 * H)).toBe(1);
     const lent = { ...stock, holds: [{ loanId: 5, equipmentId: 13, quantity: 1, startMs: T0 + 8 * H, endMs: T0 + 10 * H }] };
     expect(leftOf(lent, get(16), T0 + 9 * H, T0 + 12 * H)).toBe(0);
+  });
+  test("อนุมัติให้ยืมไปแล้ว แล้วเพิ่มไลฟ์ทีหลังในช่วงนั้น = ชน (บอกห้อง / ของ / ไลฟ์ที่ชน)", () => {
+    // ยืมไฟ Mall 1 ดวง 14:00–18:00 (ตอนอนุมัติไม่มีไลฟ์) → เพิ่มไลฟ์ Mall 15:00–17:00 = ห้องเหลือไฟ 1 ไม่พอ 2
+    const loan = { id: 7, startMs: T0 + 4 * H, endMs: T0 + 8 * H, items: [{ equipmentId: 1, quantity: 1 }] };
+    const before = { ...stock, holds: [{ loanId: 7, equipmentId: 1, quantity: 1, startMs: loan.startMs, endMs: loan.endMs }] };
+    expect(loanLiveClashes(before, loan)).toEqual([]);
+    const added = { ...before, live: [...before.live, { room: MALL, startMs: T0 + 5 * H, endMs: T0 + 7 * H }] };
+    expect(loanLiveClashes(added, loan)).toEqual([{ room: MALL, what: "ไฟ", want: 1, left: 0, lives: [{ room: MALL, startMs: T0 + 5 * H, endMs: T0 + 7 * H }] }]);
+    // ห้อง Cherry มีไฟ 3 ดวง: ยืมไป 1 ดวงช่วงไลฟ์ = ยังพอ (ไม่ชน)
+    const cherryLoan = { id: 8, startMs: T0 + 10 * H, endMs: T0 + 12 * H, items: [{ equipmentId: 16, quantity: 1 }] };
+    expect(loanLiveClashes({ ...stock, holds: [{ loanId: 8, equipmentId: 16, quantity: 1, startMs: cherryLoan.startMs, endMs: cherryLoan.endMs }] }, cherryLoan)).toEqual([]);
+    // ไฟสำรอง (ไม่อยู่ห้องไหน) = ไม่เกี่ยวกับไลฟ์
+    expect(loanLiveClashes(added, { ...loan, items: [{ equipmentId: 28, quantity: 1 }] })).toEqual([]);
   });
 });
 

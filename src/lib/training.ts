@@ -1,8 +1,10 @@
 import "server-only";
 import { Readable } from "stream";
 import { driveClient, driveError } from "@/lib/drive";
+import { notifyMany } from "@/lib/notifications";
+import { isTestAccount } from "@/lib/staff-check";
 import { createAdminClient } from "@/lib/supabase/server";
-import type { Me, Training, TrainingGroup, TrainingVideo, TrainingViews } from "@/lib/types";
+import type { Me, Training, TrainingBlock, TrainingGroup, TrainingProgress, TrainingVideo, TrainingViews } from "@/lib/types";
 
 /**
  * หน้าเทรนนิ่ง — SQL 20261103000000_training + 20261104000000_training_items
@@ -21,7 +23,7 @@ const TTL = 10 * 60_000;
 type Db = ReturnType<typeof createAdminClient>;
 type DriveVideo = { id: string; name: string; minutes: number | null };
 type DriveGroup = { folderId: string; name: string; videos: DriveVideo[] };
-type Item = { ref: string; added: boolean; title: string | null; group_name: string | null; hidden: boolean };
+type Item = { ref: string; added: boolean; title: string | null; group_name: string | null; hidden: boolean; required?: boolean };
 
 let cache: { key: string; at: number; groups: DriveGroup[] } | null = null;
 
@@ -86,10 +88,12 @@ async function driveGroups(folder: string, exclude: Set<string>, force: boolean)
   return groups;
 }
 
-/** ที่ Owner ตั้งไว้ (ยังไม่ได้รัน SQL = null) */
+/** ที่ Owner ตั้งไว้ (ยังไม่ได้รัน SQL = null · ยังไม่ได้รัน SQL pay_sync = ไม่มีคลิปบังคับ) */
 async function loadItems(db: Db): Promise<Item[] | null> {
-  const { data, error } = await db.from("training_items").select("ref, added, title, group_name, hidden").order("id");
-  return error ? null : ((data ?? []) as Item[]);
+  const cols = "ref, added, title, group_name, hidden";
+  const first = await db.from("training_items").select(`${cols}, required`).order("id");
+  const res = first.error && /required/.test(first.error.message) ? await db.from("training_items").select(cols).order("id") : first;
+  return res.error ? null : ((res.data ?? []) as Item[]);
 }
 
 /**
@@ -120,16 +124,20 @@ export async function loadTraining(manage: boolean, refresh = false): Promise<Tr
     }
   }
 
-  const video = (ref: string, fileTitle: string, minutes: number | null, added: boolean): TrainingVideo => {
+  // บังคับดู: ติ๊กที่คลิป หรือทั้งกลุ่ม (กลุ่มโฟลเดอร์ในไดรฟ์)
+  const video = (ref: string, fileTitle: string, minutes: number | null, added: boolean, groupRequired = false): TrainingVideo => {
     const it = itemOf.get(ref);
     const [kind, id] = ref.split(":") as ["drive" | "youtube", string];
-    return { ref, kind, id, title: it?.title?.trim() || fileTitle, fileTitle, minutes, hidden: !!it?.hidden, added };
+    return {
+      ref, kind, id, title: it?.title?.trim() || fileTitle, fileTitle, minutes, hidden: !!it?.hidden, added,
+      required: groupRequired || !!it?.required,
+    };
   };
   const groups: TrainingGroup[] = drive.map((g) => {
     const it = itemOf.get(`folder:${g.folderId}`);
     return {
-      ref: `folder:${g.folderId}`, name: it?.title?.trim() || g.name, folderName: g.name, hidden: !!it?.hidden,
-      videos: g.videos.map((v) => video(`drive:${v.id}`, v.name, v.minutes, false)),
+      ref: `folder:${g.folderId}`, name: it?.title?.trim() || g.name, folderName: g.name, hidden: !!it?.hidden, required: !!it?.required,
+      videos: g.videos.map((v) => video(`drive:${v.id}`, v.name, v.minutes, false, !!it?.required)),
     };
   });
   // คลิปที่เพิ่มจากลิงก์: เข้ากลุ่มที่ชื่อตรงกัน ไม่มี = กลุ่มใหม่ (ท้ายสุด)
@@ -138,10 +146,10 @@ export async function loadTraining(manage: boolean, refresh = false): Promise<Tr
     const name = it.group_name?.trim() || "คลิปเพิ่มเติม";
     let g = groups.find((x) => x.name === name);
     if (!g) {
-      g = { ref: null, name, folderName: null, hidden: false, videos: [] };
+      g = { ref: null, name, folderName: null, hidden: false, required: false, videos: [] };
       groups.push(g);
     }
-    g.videos.push(video(it.ref, it.title?.trim() || "ไม่มีชื่อ", null, true));
+    g.videos.push(video(it.ref, it.title?.trim() || "ไม่มีชื่อ", null, true, g.required));
   }
   for (const g of groups) g.videos.sort((a, b) => byName(a.title, b.title));
 
@@ -279,15 +287,18 @@ function viewerOf(me: Me) {
   return { who: me.marketing?.name ?? me.email, role: "marketing" };
 }
 
-/** บันทึกการเข้าชม (คนเดิม + เรื่องเดิม ภายใน 30 นาที = ไม่บันทึกซ้ำ) · ยังไม่ได้รัน SQL / พลาด = ไม่เป็นไร (ไม่กระทบการดู) */
+/**
+ * บันทึกการเข้าชม (คนเดิม + เรื่องเดิม ภายใน 30 นาที = ไม่บันทึกซ้ำ) · ยังไม่ได้รัน SQL / พลาด = ไม่เป็นไร (ไม่กระทบการดู)
+ *   'done' = ดูคลิปจบ (ใช้กับคลิปบังคับก่อนจอง) บันทึกครั้งเดียวต่อคลิป
+ */
 export async function logTrainingView(me: Me, kind: unknown, ref: unknown, title: unknown) {
-  if (kind !== "page" && kind !== "video" && kind !== "slides") return;
-  const clip = kind === "video" && okRef(ref) && !ref.startsWith("folder:") ? ref : null;
-  if (kind === "video" && !clip) return;
+  if (kind !== "page" && kind !== "video" && kind !== "slides" && kind !== "done") return;
+  const clip = (kind === "video" || kind === "done") && okRef(ref) && !ref.startsWith("folder:") ? ref : null;
+  if ((kind === "video" || kind === "done") && !clip) return;
   const db = createAdminClient();
   const email = me.email.trim().toLowerCase();
-  let q = db.from("training_views").select("id").eq("email", email).eq("kind", kind)
-    .gte("created_at", new Date(Date.now() - VIEW_GAP).toISOString()).limit(1);
+  let q = db.from("training_views").select("id").eq("email", email).eq("kind", kind).limit(1);
+  if (kind !== "done") q = q.gte("created_at", new Date(Date.now() - VIEW_GAP).toISOString());
   q = clip ? q.eq("ref", clip) : q;
   const { data, error } = await q;
   if (error || data?.length) return;
@@ -340,6 +351,122 @@ export async function trainingViews(days: number): Promise<TrainingViews> {
     people: [...people.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)),
     never: [...never.values()].sort((a, b) => a.localeCompare(b, "th")),
   };
+}
+
+// ---------- คลิปบังคับก่อนจองคิว (SQL 20261111000000_pay_sync) ----------
+//   Owner ติ๊ก "บังคับดู" ที่คลิป / ทั้งกลุ่ม + เปิดใช้ (settings.training_required) → Mc / Admin เสริมต้องดูจบครบก่อนจองผ่านเว็บ
+//   ดูจบ = ตัวเล่นของเว็บ (คลิปในไดรฟ์) เล่นจริงเกือบทั้งคลิป · YouTube = กด "ดูจบแล้ว" เอง · staff.training_passed = Owner ให้ผ่าน
+
+export const TRAINING_GATE_SQL = "ต้องรัน SQL 20261111000000_pay_sync ใน Supabase ก่อน (คลิปบังคับก่อนจอง)";
+const gateSqlMissing = (msg: string) => /required|training_passed|schema cache|does not exist/i.test(msg);
+
+/** คลิปบังคับที่ทีมเห็น (ไม่นับที่ซ่อน) */
+async function requiredClips() {
+  const t = await loadTraining(false);
+  return t.groups.flatMap((g) => g.videos).filter((v) => v.required).map((v) => ({ ref: v.ref, title: v.title }));
+}
+
+/** ref ที่ดูจบแล้วของอีเมลนี้ */
+async function doneRefs(email: string) {
+  const { data } = await createAdminClient().from("training_views").select("ref").eq("email", email.trim().toLowerCase()).eq("kind", "done");
+  return new Set((data ?? []).map((r) => String(r.ref)));
+}
+
+/** เปิดใช้อยู่ไหม (ยังไม่ได้รัน SQL = ปิด) */
+async function gateOn() {
+  const { data, error } = await createAdminClient().from("settings").select("training_required").eq("id", 1).maybeSingle();
+  return !error && data?.training_required === true;
+}
+
+/** คนนี้ Owner ให้ผ่านแล้ว */
+async function passed(staffId: number) {
+  const { data, error } = await createAdminClient().from("staff").select("training_passed").eq("id", staffId).maybeSingle();
+  return !error && data?.training_passed === true;
+}
+
+/**
+ * หน้าจอง / ตอนจอง: ยังดูคลิปบังคับไม่ครบ = { total, done, missing } · null = จองได้ (ปิดอยู่ / ไม่มีคลิปบังคับ / ให้ผ่านแล้ว / ดูครบ)
+ *   on = ค่าตั้งที่โหลดมาแล้ว (ไม่ส่ง = อ่านเอง)
+ */
+export async function trainingBlock(email: string, staffId: number, on?: boolean): Promise<TrainingBlock | null> {
+  if (!(on ?? (await gateOn())) || (await passed(staffId))) return null;
+  const clips = await requiredClips();
+  if (!clips.length) return null;
+  const done = await doneRefs(email);
+  const missing = clips.filter((c) => !done.has(c.ref));
+  return missing.length ? { total: clips.length, done: clips.length - missing.length, missing: missing.map((c) => c.title) } : null;
+}
+
+/** หน้าเทรนนิ่งของคนนี้: เปิดใช้ไหม / ต้องดูไหม (Mc / Admin เสริม) / ให้ผ่านแล้วไหม / ดูจบคลิปไหนแล้ว */
+export async function myTrainingGate(me: Me): Promise<Training["gate"]> {
+  const person = me.mc ?? (me.admin?.isExtra ? me.admin : null);
+  const [on, done, ok] = await Promise.all([gateOn(), doneRefs(me.email), person ? passed(person.id) : Promise.resolve(false)]);
+  return { on, applies: !!person, passed: ok, done: [...done] };
+}
+
+/** ความคืบหน้ารายคน (Owner): Mc ทุกคน + Admin เสริม ที่มีอีเมล (ไม่รวมบัญชีทดสอบ) */
+export async function trainingProgress(): Promise<TrainingProgress> {
+  const db = createAdminClient();
+  const [on, clips, staff, views] = await Promise.all([
+    gateOn(),
+    requiredClips(),
+    db.from("staff").select("id, role, name, email, is_extra_admin, training_passed").in("role", ["mc", "admin"]).not("email", "is", null).order("name"),
+    db.from("training_views").select("email, ref").eq("kind", "done"),
+  ]);
+  if (staff.error) throw new Error(gateSqlMissing(staff.error.message) ? TRAINING_GATE_SQL : staff.error.message);
+  const refs = new Set(clips.map((c) => c.ref));
+  const doneOf = new Map<string, Set<string>>();
+  for (const v of views.data ?? []) {
+    const e = String(v.email);
+    if (refs.has(String(v.ref))) doneOf.set(e, (doneOf.get(e) ?? new Set()).add(String(v.ref)));
+  }
+  const people = (staff.data ?? [])
+    .filter((s) => (s.role === "mc" || s.is_extra_admin) && !isTestAccount(s.name))
+    .map((s) => ({
+      id: Number(s.id), who: s.role === "mc" ? `Mc ${s.name}` : String(s.name), role: s.role as "mc" | "admin",
+      done: doneOf.get(String(s.email).trim().toLowerCase())?.size ?? 0, passed: s.training_passed === true,
+    }));
+  return { on, total: clips.length, people };
+}
+
+/** ติ๊ก / เอาติ๊กบังคับดู (คลิป หรือทั้งกลุ่ม) */
+export async function setTrainingRequired(ref: unknown, required: boolean, by: string) {
+  if (!okRef(ref)) throw new Error("ไม่พบคลิปนี้");
+  try {
+    await upsert(ref, { required }, by);
+  } catch (err) {
+    throw new Error(gateSqlMissing((err as Error).message) ? TRAINING_GATE_SQL : (err as Error).message);
+  }
+}
+
+/**
+ * เปิด / ปิด บังคับดูก่อนจอง · เปิด = แจ้งคนที่ยังดูไม่ครบ (วันละครั้ง)
+ *   คืนจำนวนคนที่แจ้ง
+ */
+export async function setTrainingGate(on: boolean) {
+  const db = createAdminClient();
+  const { error } = await db.from("settings").update({ training_required: on }).eq("id", 1);
+  if (error) throw new Error(gateSqlMissing(error.message) ? TRAINING_GATE_SQL : error.message);
+  if (!on) return 0;
+  const p = await trainingProgress();
+  if (!p.total) return 0;
+  const ids = p.people.filter((x) => !x.passed && x.done < p.total).map((x) => x.id);
+  if (!ids.length) return 0;
+  const { data } = await db.from("staff").select("id, role, email").in("id", ids);
+  const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  return notifyMany((data ?? []).filter((s) => s.email).map((s) => ({
+    email: String(s.email).trim().toLowerCase(), kind: "training" as const, page: s.role === "mc" ? "mc" as const : "admin" as const,
+    dedupe: `training_gate:${today}`,
+    title: "ต้องดูคลิปเทรนนิ่งที่บังคับให้ครบก่อนจองคิว",
+    body: `มีคลิปบังคับ ${p.total} คลิป — เปิดเมนู "เทรนนิ่ง" แล้วดูให้จบ ระบบนับให้อัตโนมัติ ครบแล้วจองคิวได้ตามปกติ`,
+  })));
+}
+
+/** Owner ให้ผ่าน / ยกเลิกให้ผ่าน (เช่น เทรนนอกเว็บแล้ว) */
+export async function setTrainingPassed(staffId: number, value: boolean) {
+  const { data, error } = await createAdminClient().from("staff").update({ training_passed: value }).eq("id", staffId).in("role", ["mc", "admin"]).select("id");
+  if (error) throw new Error(gateSqlMissing(error.message) ? TRAINING_GATE_SQL : error.message);
+  if (!data?.length) throw new Error("ไม่พบรายชื่อนี้");
 }
 
 /** ลบคลิปที่เพิ่มจากลิงก์ (ไฟล์ในไดรฟ์ / YouTube ไม่ถูกลบ) */

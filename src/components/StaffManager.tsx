@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { money } from "@/lib/format";
+import { fmtMonthShort, money, monthKey } from "@/lib/format";
 import { parseTierHours, tiersLabel } from "@/lib/pay";
 import type { LiveTeam } from "@/lib/live-team";
 import { isTestAccount } from "@/lib/staff-check";
@@ -73,6 +73,8 @@ type StaffData = {
   staff: Person[]; meId: number | null; canEdit?: Record<Role, boolean>; payDocsViewer?: boolean;
   /** ฝั่งที่คนที่เปิดดูเอกสารได้ (Mc / Admin) */
   docsScope?: { mc: boolean; admin: boolean };
+  /** ลบรายชื่อ Mc / Admin ได้ (เฉพาะเจ้าของระบบ — ตั้งด้วย SQL) */
+  canDeleteCrew?: boolean;
 };
 
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing", borrower: "ทีมอื่น" };
@@ -459,6 +461,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           roles={roles.filter(canEditRole)}
           defaultRole={role}
           isMe={editing !== "new" && editing.id === data.meId}
+          canDelete={editing !== "new" && (!isCrew(editing.role) || !!data.canDeleteCrew)}
           canGrantPlan={canGrantPlan && data.staff.some((p) => p.can_plan_slots !== undefined)}
           viewReady={data.staff.some((p) => p.can_view_mc !== undefined)}
           notifyReady={data.staff.some((p) => p.notify_cancel_mc !== undefined)}
@@ -602,8 +605,10 @@ function DuplicatePanel({ role, groups, onMerged }: { role: "mc" | "admin"; grou
   );
 }
 
-function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady, notifyReady, teamReady, docsScope, docsAdminReady, quotaReady, others, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan, viewReady, notifyReady, teamReady, docsScope, docsAdminReady, quotaReady, others, onClose }: {
   person: Person | null;
+  /** แสดงปุ่มลบคนนี้ (Mc / Admin = เฉพาะเจ้าของระบบ) */
+  canDelete: boolean;
   /** รัน SQL 20261107000000_mc_quota แล้ว (มีคอลัมน์กำหนดสิทธิ์จอง Mc) */
   quotaReady: boolean;
   roles: Role[];
@@ -665,6 +670,17 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
   // ฝั่ง Mc ครอบหลักฐานไลฟ์อยู่แล้ว (จัดการ Mc = จัดการหลักฐานได้ / ดู Mc = ดูหลักฐานได้)
   const proofsLevel: Level = RANK[perm.mc] > RANK[perm.proofs] ? perm.mc : perm.proofs;
   const [saving, setSaving] = useState(false);
+  // เปลี่ยนเรท / Commit / พนักงานประจำ: เลือกเดือนที่เริ่มใช้ (เดือนก่อนหน้านั้นคิดเรทเดิม — server ล็อกไว้)
+  const thisMonth = monthKey();
+  const [rateFrom, setRateFrom] = useState(thisMonth);
+  const tierKey = (list: CommitTier[]) => JSON.stringify([...list].sort((a, b) => a.hours - b.hours).map((t) => [t.hours, Number(t.rate)]));
+  const rateDirty = !!person && isCrew(role) && (
+    (Number(rate.replace(/[,\s]/g, "")) || null) !== (Number(person.hourly_rate) || null)
+    || tierKey(filledTiers) !== tierKey(person.commit_tiers ?? [])
+    || salaried !== person.is_salaried);
+  // เอาอีเมลออกทั้งที่ยังมีคิวข้างหน้า = เข้าเว็บไม่ได้แต่คิวยังอยู่ในชื่อ → เลือกปล่อยคิวพร้อมบันทึกได้
+  const emailCleared = !!person?.email && !email.trim() && isCrew(role) && person.upcoming > 0;
+  const [releaseOnSave, setReleaseOnSave] = useState(false);
 
   const emailChanged = (person?.email ?? "") !== email.trim().toLowerCase();
   const renamed = !!person && person.name !== name.trim().replace(/^mc\s*/i, "");
@@ -718,11 +734,17 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         ...(role === "owner" && !isMe && (quotaReady || quota) ? { can_manage_quota: quota } : {}),
         // รับอีเมลแจ้งยกเลิก (ตั้งให้ตัวเองได้) ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(role === "owner" && (notifyReady || anyNotify) ? { notify_cancel_mc: notifyOn.mc, notify_cancel_admin: notifyOn.admin } : {}),
+        ...(rateDirty ? { rate_from: rateFrom } : {}),
       };
       const res = person
         ? await api("/api/owner/staff", { id: person.id, ...fields }, "PATCH")
         : await api("/api/owner/staff", { role, ...fields });
       if (!res.ok) throw new Error(res.message);
+      if (person && emailCleared && releaseOnSave) {
+        const rel = await api<{ message: string }>("/api/owner/staff", { id: person.id, action: "release" }, "PATCH");
+        onClose(rel.ok ? `บันทึกแล้ว · ${rel.message}` : `บันทึกแล้ว แต่ปล่อยคิวไม่สำเร็จ: ${rel.message}`);
+        return;
+      }
       onClose(person ? "บันทึกแล้ว" : "เพิ่มแล้ว");
     } catch (err) {
       toast((err as Error).message, "error");
@@ -758,6 +780,24 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
       });
       if (!ok) { setSaving(false); return; }
       const res = await api<{ message: string }>("/api/owner/staff/merge", { sourceId: person.id, targetId: Number(mergeTo) });
+      if (!res.ok) throw new Error(res.message);
+      onClose(res.message);
+    } catch (err) {
+      toast((err as Error).message, "error");
+      setSaving(false);
+    }
+  }
+
+  /** ปล่อยคิวข้างหน้าที่ยังไม่เริ่มให้คนอื่นจอง (คนนี้เลิกไลฟ์แล้ว) แล้วปิดหน้าต่าง (รายชื่อโหลดใหม่) */
+  async function release() {
+    if (!person || !(await confirm({
+      title: `ปล่อยคิวข้างหน้าของ ${displayName(person)}?`,
+      description: `คิวที่ยังไม่เริ่ม (ตั้งแต่วันนี้ ${person.upcoming} คิว) จะว่างให้คนอื่นจอง — ลบนัดในปฏิทิน เขียนชีต และแจ้ง Mc / Admin เสริมที่จองแทนได้ · ย้อนกลับต้องใส่ชื่อกลับทีละ slot`,
+      confirmText: "ปล่อยคิว", destructive: true,
+    }))) return;
+    setSaving(true);
+    try {
+      const res = await api<{ message: string }>("/api/owner/staff", { id: person.id, action: "release" }, "PATCH");
       if (!res.ok) throw new Error(res.message);
       onClose(res.message);
     } catch (err) {
@@ -819,6 +859,15 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
         >
           {(id) => <Input id={id} type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={isMe} placeholder="name@gmail.com" autoComplete="off" />}
         </Field>
+        {emailCleared ? (
+          <div className="-mt-2 rounded-lg border border-warning-border bg-warning px-3 py-2 text-warning-foreground">
+            <span className="block text-xs">เอาอีเมลออก = คนนี้เข้าเว็บไม่ได้ แต่ยังมีคิวข้างหน้า <b>{person!.upcoming} คิว</b> อยู่ในชื่อ</span>
+            <Label className="mt-1.5 items-start leading-snug font-normal">
+              <Checkbox checked={releaseOnSave} onCheckedChange={(v) => setReleaseOnSave(v === true)} className="mt-0.5 bg-card" />
+              <span>ปล่อยคิวที่ยังไม่เริ่มให้คนอื่นจองด้วย (ตอนกดบันทึก)</span>
+            </Label>
+          </div>
+        ) : null}
 
         {role === "marketing" ? (
           <p className="rounded-lg bg-secondary px-3 py-2 text-xs leading-relaxed text-secondary-foreground">
@@ -921,6 +970,30 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
               </span>
             </span>
           </Label>
+        ) : null}
+
+        {rateDirty ? (
+          <div className="rounded-lg border border-warning-border bg-warning px-3 py-2 text-warning-foreground">
+            <span className="font-semibold">ค่าจ้างใหม่มีผลตั้งแต่เดือน</span>
+            <ToggleGroup
+              type="single" variant="outline" size="sm" spacing={0} value={rateFrom}
+              onValueChange={(v) => { if (v) setRateFrom(v); }}
+              aria-label="ค่าจ้างใหม่มีผลตั้งแต่เดือน" className="mt-1.5 bg-card"
+            >
+              {[-2, -1, 0, 1].map((n) => {
+                const m = monthKey(n, thisMonth);
+                return (
+                  <ToggleGroupItem key={m} value={m} className="px-2.5 text-xs font-semibold data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+                    {fmtMonthShort.format(new Date(`${m}-01T12:00:00Z`))}{n === 0 ? " (เดือนนี้)" : ""}
+                  </ToggleGroupItem>
+                );
+              })}
+            </ToggleGroup>
+            <span className="mt-1 block text-xs">
+              เดือนก่อนหน้านั้นคิดเรทเดิมเสมอ (สรุปรายเดือน / ไฟล์เบิก / ตารางของฉัน ไม่เปลี่ยนตาม)
+              {rateFrom < thisMonth ? " · เดือนย้อนหลังที่เลือกจะคิดเรทใหม่ ถ้าบันทึกโอนไปแล้วจะขึ้นยอดค้าง / เกินตามเรทใหม่" : ""}
+            </span>
+          </div>
         ) : null}
 
         {/* ทีมไลฟ์: คิวในระบบตอนนี้เป็นบัญชี TikTok ทั้งหมด (หน้าจองคิว Shopee ยังไม่เปิด) */}
@@ -1071,6 +1144,18 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
 
         {person && isCrew(person.role) && docsScope[person.role as "mc" | "admin"] && person.email ? <PayDocsPanel staffId={person.id} name={person.name} /> : null}
 
+        {person && isCrew(person.role) && person.upcoming > 0 ? (
+          <fieldset className="space-y-2 rounded-xl border p-3">
+            <legend className="px-1 font-semibold">คิวข้างหน้า {person.upcoming} คิว</legend>
+            <p className="text-xs text-muted-foreground">
+              คนนี้เลิกไลฟ์แล้ว? ปล่อยคิวที่ยังไม่เริ่มให้คนอื่นจอง — ลบนัดในปฏิทิน เขียนชีต และแจ้งคนที่จองแทนได้ให้อัตโนมัติ
+            </p>
+            <Button variant="outline" disabled={saving} onClick={release} className="font-semibold text-destructive hover:text-destructive">
+              ปล่อยคิวข้างหน้าทั้งหมด
+            </Button>
+          </fieldset>
+        ) : null}
+
         {person ? <StaffHistory staffId={person.id} /> : null}
 
         {person && isCrew(person.role) && others.length ? (
@@ -1097,7 +1182,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canGrantPlan, viewReady,
       </DialogBody>
 
       <DialogActions>
-        {person && !isMe ? (
+        {person && !isMe && canDelete ? (
           <Button variant="destructive" size="lg" onClick={remove} disabled={saving} className="mr-auto">ลบคนนี้</Button>
         ) : null}
         <Button variant="outline" size="lg" disabled={saving} onClick={() => onClose()}>ยกเลิก</Button>

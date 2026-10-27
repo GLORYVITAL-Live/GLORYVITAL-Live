@@ -2,7 +2,7 @@ import "server-only";
 import { notify, notifyMany, type Note } from "@/lib/notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
-  ACTION_TO, HOLDING, LOAN_STATUS_TEXT, canAct, isLiveRoom, liveBlocks, shortages,
+  ACTION_TO, HOLDING, LOAN_STATUS_TEXT, canAct, isLiveRoom, liveBlocks, loanLiveClashes, shortages,
   type Loan, type LoanAction, type LoanInput, type LoanStatus, type Stock,
 } from "@/lib/loans";
 
@@ -10,6 +10,7 @@ import {
  * ขอยืมอุปกรณ์ (ตาราง equipment_loans / equipment_loan_items — SQL 20261110000000_equipment_loans) สูตร / ตรวจฟอร์มอยู่ที่ src/lib/loans.ts
  *   ผู้ยืม = บัญชีทีมอื่น (staff role borrower) + Marketing (me.borrower ใน src/lib/auth.ts) · ผู้อนุมัติ = คนที่เข้าหน้าอุปกรณ์ได้ (me.equipment)
  *   แจ้งเตือน: คำขอใหม่ / ผู้ยืมยกเลิก → ผู้อนุมัติ · อนุมัติ / ไม่อนุมัติ / ยกเลิกโดยทีมเรา → ผู้ยืม · ใกล้ถึง / เลยกำหนดคืน (cron)
+ *     เพิ่มไลฟ์ทีหลังจนชนของที่ให้ยืมไปแล้ว → ผู้อนุมัติ (cron + ตอนบันทึก Plan Slot Live)
  */
 
 export const LOANS_SQL = "ต้องรัน SQL 20261110000000_equipment_loans ใน Supabase ก่อน";
@@ -195,6 +196,48 @@ export async function actOnLoan(id: number, action: LoanAction, actor: { email: 
     log(actor.email, actor.name, `${ACTION_TEXT[action]}คำขอยืม #${id} ของ ${whoText(loan)}${reason ? ` (${reason})` : ""}${note ? ` · สภาพ: ${note}` : ""}`, id),
   ]);
   return { ok: true };
+}
+
+const fmtHm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+const roomShort = (room: string) => room.replace(/^ห้องไลฟ์\s*/, "ห้อง ");
+
+/**
+ * คำขอที่อนุมัติ / ยืมอยู่ (ยังไม่ถึงกำหนดคืน) ที่ตอนนี้ชนกับไลฟ์ — เพิ่ม / ย้ายไลฟ์หลังอนุมัติ จนไฟ / กล้องประจำห้องไม่พอ
+ *   lines = ข้อความต่อห้อง เช่น "ห้อง Cherry Glory มีไลฟ์ 29 ต.ค. 19:30–23:30 — ไฟให้ยืมได้ 0 แต่ยืมไป 1"
+ */
+export async function loanLiveIssues(now = Date.now()) {
+  const held = await createAdminClient().from("equipment_loans").select(SELECT).in("status", HOLDING).gt("end_at", new Date(now).toISOString());
+  if (held.error) throw new Error(sqlMsg(held.error.message));
+  // ไม่มีของที่ให้ยืมอยู่ (ส่วนใหญ่) = ไม่ต้องโหลดรายการอุปกรณ์ทั้งหมด
+  if (!held.data?.length) return [];
+  const stock = await loanCatalog();
+  return ((held.data ?? []) as unknown as LoanRow[]).map(toLoan).flatMap((loan) => {
+    const clashes = loanLiveClashes(stock, { id: loan.id, startMs: Date.parse(loan.startAt), endMs: Date.parse(loan.endAt), items: loan.items });
+    if (!clashes.length) return [];
+    const lines = clashes.map((c) => {
+      const lives = c.lives.slice(0, 3).map((b) => `${when(b.startMs)}–${fmtHm.format(new Date(b.endMs))}`).join(", ") + (c.lives.length > 3 ? ` และอีก ${c.lives.length - 3} ช่วง` : "");
+      return `${roomShort(c.room)} มีไลฟ์ ${lives} — ${c.what}ให้ยืมได้ ${c.left} แต่ยืมไป ${c.want}`;
+    });
+    return [{ loan, who: whoText(loan), lines, key: clashes.map((c) => `${c.room}@${c.lives[0].startMs}`).join("|") }];
+  });
+}
+
+/** ไลฟ์ชนของที่ให้ยืมไปแล้ว (cron ทุก 15 นาที) → คนจัดการอุปกรณ์ (ครั้งเดียวต่อคำขอ + ไลฟ์ชุดเดิม) */
+export async function sendLoanLiveAlerts(now = Date.now(), dryRun = false) {
+  try {
+    const issues = await loanLiveIssues(now);
+    if (!issues.length) return 0;
+    const managers = await equipmentManagerEmails();
+    const items: (Note & { email: string })[] = issues.flatMap(({ loan, lines, key }) => managers.map((email) => ({
+      email, kind: "loan" as const, page: "equipment" as const, dedupe: `loan_live:${loan.id}:${key}`.slice(0, 200),
+      title: `[ไลฟ์ชนของที่ให้ยืม] ${whoText(loan)}`,
+      body: `${itemsText(loan)} (${periodText(loan)})\n${lines.join("\n")}\nติดต่อผู้ยืมให้คืนก่อนไลฟ์ หรือย้ายเวลาไลฟ์`,
+    })));
+    return dryRun ? items.length : notifyMany(items);
+  } catch (err) {
+    console.error("ตรวจไลฟ์ชนของที่ให้ยืมไม่สำเร็จ:", err);
+    return 0;
+  }
 }
 
 /**

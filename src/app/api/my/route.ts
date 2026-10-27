@@ -3,6 +3,8 @@ import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, mySlots } from "@/lib/data";
 import { isLiveRoom, roomForPlatform } from "@/lib/loans";
 import { cleanTiers } from "@/lib/pay";
+import { paymentsOf } from "@/lib/pay-months";
+import { lockedRates } from "@/lib/pay-rates";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // "ตารางของฉัน" รายเดือน (?role=mc|admin&month=YYYY-MM) — แทน action "mySlots" / "adminMySlots"
@@ -18,16 +20,21 @@ export async function GET(request: Request) {
   if (!person) return fail("บัญชีนี้ไม่มีสิทธิ์ดูตารางนี้", 403);
 
   const db = createAdminClient();
-  const [settings, items, staff, rooms] = await Promise.all([
+  const [settings, items, staff, rooms, locked, paid] = await Promise.all([
     getSettings(),
     mySlots(role as "mc" | "admin", person.id, first, last),
     db.from("staff").select("name, email, phone, hourly_rate, commit_tiers, is_salaried").eq("id", person.id).single(),
     // ห้องไลฟ์ (ตำแหน่งอุปกรณ์ที่ชื่อขึ้นต้น "ห้องไลฟ์") ไว้บอกในรายละเอียด slot · โหลดไม่ได้ = ไม่บอกห้อง
     db.from("equipment").select("location").ilike("location", "%ห้องไลฟ์%"),
+    // เรทที่ล็อกไว้ของเดือนนี้ (เปลี่ยนเรทภายหลัง / โอนแล้ว) + การโอน — ตัวเลขเดียวกับหน้าสรุปของเจ้าของ
+    lockedRates(key, [person.id]),
+    paymentsOf(key, [person.id]),
   ]);
   if (staff.error) return fail(staff.error.message, 500);
   const roomNames = [...new Set((rooms.data ?? []).map((x) => String(x.location)).filter(isLiveRoom))];
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
+  const lock = locked.get(person.id);
+  const salaried = lock ? lock.salaried : !!staff.data.is_salaried;
 
   return ok({
     month: key,
@@ -41,8 +48,9 @@ export async function GET(request: Request) {
       email: staff.data.email ?? r.me.email,
       phone: staff.data.phone ?? "",
       // Mc ประจำ / Admin ประจำ (เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง
-      rate: staff.data.is_salaried ? 0 : Number(staff.data.hourly_rate) || defaultRate,
-      commitTiers: staff.data.is_salaried ? [] : cleanTiers(staff.data.commit_tiers),
+      rate: salaried ? 0 : lock ? lock.rate : Number(staff.data.hourly_rate) || defaultRate,
+      commitTiers: salaried ? [] : lock ? lock.tiers : cleanTiers(staff.data.commit_tiers),
     },
+    payments: (paid.map.get(person.id) ?? []).map((p) => ({ amount: p.amount, paidOn: p.paidOn })),
   });
 }

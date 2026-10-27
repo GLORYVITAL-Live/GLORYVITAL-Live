@@ -88,7 +88,11 @@ export async function POST(request: Request) {
     await db.from("settings").update({ [key]: { ...w, only } }).eq("id", 1);
   }
 
-  // 4) ลบรายชื่อซ้ำ
+  // 4) บันทึกการโอนค่าจ้างย้ายไปด้วย (ลบรายชื่อ = ลบรายการของรายชื่อนั้น) · เรทที่ล็อกไว้รายเดือนของรายชื่อซ้ำไม่ย้าย (ใช้ของคนที่เก็บไว้)
+  //    ยังไม่ได้รัน SQL 20261111000000_pay_sync = ข้าม
+  await db.from("pay_payments").update({ staff_id: targetId }).eq("staff_id", sourceId);
+
+  // 5) ลบรายชื่อซ้ำ
   const del = await db.from("staff").delete().eq("id", sourceId);
   await db.from("booking_logs").insert({
     email: r.me.email, role: "Owner", name: r.me.owner?.name ?? "",

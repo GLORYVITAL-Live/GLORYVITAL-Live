@@ -5,6 +5,7 @@ import { bookingRange, getSettings, personPeriod, writeLogs } from "@/lib/data";
 import { notifyBooked } from "@/lib/notifications";
 import { myQuotas } from "@/lib/mc-quota-db";
 import { createAdminClient } from "@/lib/supabase/server";
+import { trainingBlock } from "@/lib/training";
 import { rangeText } from "@/lib/window";
 import type { ActionResult } from "@/lib/types";
 
@@ -35,6 +36,11 @@ export async function POST(request: Request) {
 
   const db = createAdminClient();
   const table = role === "mc" ? "mc_slots" : "admin_slots";
+  // คลิปเทรนนิ่งที่บังคับ (เปิดใช้อยู่) ต้องดูครบก่อน · ตรวจไม่ได้ (เช่น อ่านไดรฟ์ไม่ได้) = ไม่บล็อก
+  if (settings.training_required) {
+    const block = await trainingBlock(r.me.email, role === "mc" ? r.me.mc!.id : r.me.admin!.id, true).catch(() => null);
+    if (block) return fail(`ต้องดูคลิปเทรนนิ่งที่บังคับให้ครบก่อน${role === "mc" ? "จองคิว" : "รับคิว"} (ดูแล้ว ${block.done}/${block.total} คลิป) — เมนู "เทรนนิ่ง"`, 403);
+  }
 
   // ช่วงเปิดจองของคนนี้ (เจ้าของตั้งไว้) slot นอกช่วงไม่ส่งไปจอง (กันหน้าเว็บที่ยังไม่รีเฟรช)
   // ส่วนวันที่ผ่านไปแล้ว / วันสุดท้ายที่จองได้ ฐานข้อมูลตรวจอีกชั้นอยู่แล้ว

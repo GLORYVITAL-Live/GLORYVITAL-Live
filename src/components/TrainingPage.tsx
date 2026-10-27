@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
+  CheckIcon, ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, ListChecksIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
   RefreshCwIcon, RotateCcwIcon, RotateCwIcon, Settings2Icon, Trash2Icon, UsersIcon, VideoIcon, Volume2Icon, VolumeXIcon, XIcon,
 } from "lucide-react";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import type { Training, TrainingGroup, TrainingVideo, TrainingViews } from "@/lib/types";
+import type { Training, TrainingGroup, TrainingProgress, TrainingVideo, TrainingViews } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -41,6 +41,8 @@ export function TrainingPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [rename, setRename] = useState<Rename | null>(null);
   const [adding, setAdding] = useState(false);
+  // คลิปที่ดูจบแล้วในรอบนี้ (รวมกับที่เซิร์ฟเวอร์ส่งมา) — ป้าย "ดูแล้ว" ขึ้นทันทีไม่ต้องโหลดใหม่
+  const [justDone, setJustDone] = useState<string[]>([]);
   const player = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -94,6 +96,18 @@ export function TrainingPage() {
     requestAnimationFrame(() => player.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
   const toggleHidden = (ref: string, hidden: boolean) => run(`hide${ref}`, { action: "hide", ref, hidden });
+  const toggleRequired = (ref: string, required: boolean) => run(`req${ref}`, { action: "required", ref, required });
+  // คลิปบังคับก่อนจองคิว (ที่ทีมเห็น) + ดูจบแล้วกี่คลิป
+  const gate = data.gate;
+  const done = new Set([...(gate?.done ?? []), ...justDone]);
+  const requiredClips = data.groups.filter((g) => !g.hidden).flatMap((g) => g.videos.filter((v) => !v.hidden && v.required));
+  const requiredDone = requiredClips.filter((v) => done.has(v.ref)).length;
+  const markDone = (v: TrainingVideo) => {
+    if (done.has(v.ref)) return;
+    track("done", v);
+    setJustDone((d) => [...d, v.ref]);
+    if (v.required) toast(`ดูจบแล้ว: ${v.title}`);
+  };
   async function removeClip(v: TrainingVideo) {
     const ok = await confirm({
       title: `ลบ "${v.title}" ออกจากหน้าเทรนนิ่ง?`,
@@ -131,19 +145,30 @@ export function TrainingPage() {
         ) : null}
       </div>
 
-      {tab === "views" && canManage ? <ViewsPanel /> : tab === "slides" ? (
+      {tab === "views" && canManage ? <><RequiredProgress /><ViewsPanel /></> : tab === "slides" ? (
         data.slides ? (
           <SlidesView id={data.slides} />
         ) : <Notice>ยังไม่ได้ตั้งสไลด์บรีฟโปรดักต์ (settings.training_slides)</Notice>
       ) : (
         <>
           {data.message ? <Notice variant="warning" icon title="อ่านรายชื่อวิดีโอไม่สำเร็จ">{data.message}</Notice> : null}
+          {/* Mc / Admin เสริม: คลิปบังคับก่อนจองคิว */}
+          {!editing && gate?.on && gate.applies && requiredClips.length ? (
+            gate.passed || requiredDone >= requiredClips.length ? (
+              <Notice className="mb-3" title={gate.passed ? "ผ่านเทรนนิ่งแล้ว (ทีมงานให้ผ่าน)" : `ดูคลิปบังคับครบแล้ว ${requiredDone}/${requiredClips.length} ✓`}>จองคิวได้ตามปกติ</Notice>
+            ) : (
+              <Notice variant="warning" icon className="mb-3" title={`ดูคลิปที่มีป้าย "บังคับ" ให้ครบก่อนจองคิว — ดูแล้ว ${requiredDone}/${requiredClips.length}`}>
+                เล่นในหน้านี้จนจบ ระบบนับให้อัตโนมัติ (คลิป YouTube กด &quot;ดูจบแล้ว&quot; ใต้คลิป) ครบแล้วกลับไปจองได้เลย
+              </Notice>
+            )
+          ) : null}
           {editing ? (
             data.manage?.ready ? (
               <div className="mb-4 rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm">
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   ซ่อน = ทีมไม่เห็นในหน้าเทรนนิ่ง (ไฟล์ในไดรฟ์ไม่ถูกลบ กดแสดงกลับได้) · แก้ชื่อ = เปลี่ยนเฉพาะชื่อที่แสดงในเว็บ
                   · คลิปใหม่ในโฟลเดอร์ไดรฟ์ขึ้นเองภายใน 10 นาที (กดรีเฟรชให้ขึ้นทันที)
+                  · บังคับ = Mc / Admin เสริมต้องดูจบก่อนจองคิว (ติ๊กที่คลิป หรือทั้งกลุ่ม)
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button size="sm" disabled={!!busy} onClick={() => setAdding(true)}><PlusIcon />เพิ่มคลิปจากลิงก์</Button>
@@ -151,6 +176,7 @@ export function TrainingPage() {
                     <RefreshCwIcon className={cn(busy === "refresh" && "animate-spin")} />{busy === "refresh" ? "กำลังอ่าน..." : "รีเฟรชจากไดรฟ์"}
                   </Button>
                 </div>
+                <GateToggle on={!!gate?.on} count={requiredClips.length} onChanged={() => setAttempt((n) => n + 1)} />
               </div>
             ) : <Notice variant="warning" icon title="ยังจัดการคลิปในเว็บไม่ได้">{data.manage?.message}</Notice>
           ) : null}
@@ -159,7 +185,7 @@ export function TrainingPage() {
             {playing ? (
               <div className="mb-4">
                 {playing.kind === "drive" ? (
-                  <VideoPlayer key={playing.ref} id={playing.id} title={playing.title} />
+                  <VideoPlayer key={playing.ref} id={playing.id} title={playing.title} onDone={() => markDone(playing)} />
                 ) : (
                   <Frame
                     key={playing.ref} src={playerUrl(playing)} title={playing.title}
@@ -169,6 +195,12 @@ export function TrainingPage() {
                         <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
                           <a href={openUrl(playing)} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดใน YouTube</a>
                         </Button>
+                        {/* YouTube: เว็บรู้ไม่ได้ว่าดูจบหรือยัง → กดเองเมื่อดูจบ (คลิปบังคับ) */}
+                        {playing.required ? (
+                          <Button size="sm" variant={done.has(playing.ref) ? "outline" : "default"} disabled={done.has(playing.ref)} onClick={() => markDone(playing)}>
+                            <CheckIcon />{done.has(playing.ref) ? "ดูจบแล้ว" : "ดูจบแล้ว กดยืนยัน"}
+                          </Button>
+                        ) : null}
                       </>
                     )}
                   />
@@ -188,8 +220,12 @@ export function TrainingPage() {
                     {g.name} <span className="text-sm font-normal text-muted-foreground">({g.videos.length})</span>
                   </h2>
                   {editing && g.hidden ? <Badge variant="outline" className="text-[11px]">ซ่อนทั้งกลุ่ม</Badge> : null}
+                  {editing && g.required ? <Badge className="text-[11px]">บังคับทั้งกลุ่ม</Badge> : null}
                   {editing && g.ref ? (
-                    <span className="ml-auto flex gap-1">
+                    <span className="ml-auto flex flex-wrap gap-1">
+                      <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => toggleRequired(g.ref!, !g.required)}>
+                        <ListChecksIcon />{g.required ? "เลิกบังคับกลุ่ม" : "บังคับทั้งกลุ่ม"}
+                      </Button>
                       <Button
                         size="sm" variant="ghost" disabled={!!busy}
                         onClick={() => setRename({ ref: g.ref!, title: g.name === g.folderName ? "" : g.name, original: g.folderName ?? "", required: false, kind: "group" })}
@@ -219,10 +255,12 @@ export function TrainingPage() {
                           {v.minutes ? (
                             <span className="absolute right-1.5 bottom-1.5 rounded bg-black/70 px-1.5 text-[11px] font-semibold text-white tabular-nums">{v.minutes} นาที</span>
                           ) : null}
-                          {editing && (v.hidden || v.added) ? (
-                            <span className="absolute top-1.5 left-1.5 flex gap-1">
-                              {v.hidden ? <span className="rounded bg-black/70 px-1.5 text-[11px] font-semibold text-white">ซ่อนอยู่</span> : null}
-                              {v.added ? <span className="rounded bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">{v.kind === "youtube" ? "YouTube" : "เพิ่มจากลิงก์"}</span> : null}
+                          {(editing && (v.hidden || v.added)) || v.required || done.has(v.ref) ? (
+                            <span className="absolute top-1.5 left-1.5 flex flex-wrap gap-1">
+                              {v.required ? <span className="rounded bg-warning px-1.5 text-[11px] font-semibold text-warning-foreground">บังคับ</span> : null}
+                              {done.has(v.ref) ? <span className="rounded bg-success px-1.5 text-[11px] font-semibold text-white">ดูแล้ว ✓</span> : null}
+                              {editing && v.hidden ? <span className="rounded bg-black/70 px-1.5 text-[11px] font-semibold text-white">ซ่อนอยู่</span> : null}
+                              {editing && v.added ? <span className="rounded bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">{v.kind === "youtube" ? "YouTube" : "เพิ่มจากลิงก์"}</span> : null}
                             </span>
                           ) : null}
                         </span>
@@ -237,6 +275,14 @@ export function TrainingPage() {
                           <ClipButton label={v.hidden ? "แสดง" : "ซ่อน"} disabled={!!busy} onClick={() => toggleHidden(v.ref, !v.hidden)}>
                             {v.hidden ? <EyeIcon /> : <EyeOffIcon />}
                           </ClipButton>
+                          {/* บังคับทั้งกลุ่มอยู่ = ตั้งที่หัวกลุ่ม */}
+                          {!g.required ? (
+                            <ClipButton
+                              label="บังคับ" aria-pressed={v.required} title={v.required ? "กดเพื่อเลิกบังคับ" : "ต้องดูจบก่อนจองคิว"}
+                              disabled={!!busy} onClick={() => toggleRequired(v.ref, !v.required)}
+                              className={cn(v.required && "bg-warning text-warning-foreground hover:bg-warning")}
+                            ><ListChecksIcon /></ClipButton>
+                          ) : null}
                           {v.added ? (
                             <ClipButton label="ลบ" disabled={!!busy} className="text-destructive" onClick={() => removeClip(v)}><Trash2Icon /></ClipButton>
                           ) : null}
@@ -263,12 +309,114 @@ export function TrainingPage() {
   );
 }
 
-/** บันทึกการเข้าชม (เงียบ — พลาดไม่เป็นไร ไม่แจ้งผู้ใช้) */
-function track(kind: "page" | "video" | "slides", v?: TrainingVideo) {
+/** บันทึกการเข้าชม (เงียบ — พลาดไม่เป็นไร ไม่แจ้งผู้ใช้) · done = ดูคลิปจบ (นับคลิปบังคับก่อนจอง) */
+function track(kind: "page" | "video" | "slides" | "done", v?: TrainingVideo) {
   fetch("/api/training", {
     method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
     body: JSON.stringify({ action: "view", kind, ref: v?.ref, title: v?.title }),
   }).catch(() => undefined);
+}
+
+/** โหมดจัดการ: เปิด / ปิด บังคับดูคลิปก่อนจองคิว */
+function GateToggle({ on, count, onChanged }: { on: boolean; count: number; onChanged: () => void }) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  async function set(next: boolean) {
+    if (next && !(await confirm({
+      title: "เปิดบังคับดูคลิปก่อนจองคิว?",
+      description: `Mc / Admin เสริมที่ยังดูคลิปบังคับ (${count} คลิป) ไม่ครบ จะจองคิวผ่านเว็บไม่ได้จนกว่าจะดูครบ — ระบบแจ้งเตือนคนที่ยังไม่ครบให้ · ให้ผ่านรายคนได้ที่แท็บ "ผู้เข้าชม"`,
+      confirmText: "เปิดใช้",
+    }))) return;
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/training", { action: "gate", on: next });
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onChanged();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-primary/20 pt-3">
+      <span className="min-w-0 flex-1 leading-snug">
+        <b>บังคับดูก่อนจองคิว: {on ? "เปิดอยู่" : "ปิดอยู่"}</b>
+        <span className="block text-xs text-muted-foreground">
+          {count ? `คลิปบังคับ ${count} คลิป` : "ยังไม่มีคลิปบังคับ — กด \"บังคับดู\" ที่คลิป หรือ \"บังคับทั้งกลุ่ม\""}
+          {on ? " · Mc / Admin เสริมที่ยังดูไม่ครบจองคิวไม่ได้" : ""}
+        </span>
+      </span>
+      <Button size="sm" variant={on ? "outline" : "default"} className={cn(on && "bg-card")} disabled={busy || (!on && !count)} onClick={() => set(!on)}>
+        {busy ? "กำลังบันทึก..." : on ? "ปิดใช้" : "เปิดใช้"}
+      </Button>
+    </div>
+  );
+}
+
+/** แท็บผู้เข้าชม: ดูคลิปบังคับครบกี่คน + ให้ผ่านรายคน (เทรนนอกเว็บแล้ว) */
+function RequiredProgress() {
+  const toast = useToast();
+  const [data, setData] = useState<TrainingProgress | null>(null);
+  const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+  const [busy, setBusy] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<TrainingProgress>("/api/training?progress=1")
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) { setData(res); setError(""); }
+      })
+      .catch((err) => { if (alive) setError((err as Error).message); });
+    return () => { alive = false; };
+  }, [tick]);
+
+  if (error) return <Notice variant="warning" icon className="mb-4" title="โหลดความคืบหน้าคลิปบังคับไม่สำเร็จ">{error}</Notice>;
+  if (!data || !data.total) return null;
+  async function pass(id: number, passed: boolean) {
+    setBusy(id);
+    try {
+      const res = await api<{ message: string }>("/api/training", { action: "pass", staffId: id, passed });
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      setTick((n) => n + 1);
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+  const ok = (p: TrainingProgress["people"][number]) => p.passed || p.done >= data.total;
+  const people = [...data.people].sort((a, b) => Number(ok(a)) - Number(ok(b)) || a.who.localeCompare(b.who, "th"));
+  return (
+    <section className="mb-5">
+      <h3 className="text-sm font-semibold">
+        คลิปบังคับก่อนจองคิว ({data.total} คลิป) · ครบแล้ว {data.people.filter(ok).length}/{data.people.length} คน
+        <span className="font-normal text-muted-foreground"> · {data.on ? "เปิดใช้อยู่" : "ยังไม่เปิดใช้ (เปิดที่ จัดการคลิป)"}</span>
+      </h3>
+      <ul className="scroll-thin mt-1.5 max-h-80 divide-y overflow-y-auto rounded-xl border bg-card">
+        {people.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-sm">
+            <span className="min-w-0 flex-1 truncate">{p.who}</span>
+            <span className={cn("text-xs font-semibold tabular-nums", ok(p) ? "text-success" : "text-destructive")}>
+              {p.passed ? "ให้ผ่านแล้ว" : `${p.done}/${data.total}${p.done >= data.total ? " ✓" : ""}`}
+            </span>
+            {p.done < data.total ? (
+              <Button size="xs" variant="outline" disabled={busy === p.id} onClick={() => pass(p.id, !p.passed)}>
+                {p.passed ? "ยกเลิกให้ผ่าน" : "ให้ผ่าน"}
+              </Button>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        ดูจบ = เล่นในเว็บจริงเกิน 85% ของคลิป (เลื่อนข้ามไม่นับ) · คลิป YouTube = กด &quot;ดูจบแล้ว&quot; เอง · ให้ผ่าน = จองได้โดยไม่ต้องดู (เช่น เทรนนอกเว็บแล้ว)
+      </p>
+    </section>
+  );
 }
 
 const ROLE_LABEL: Record<string, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing" };
@@ -469,6 +617,13 @@ function SlidesView({ id }: { id: string }) {
 const streamUrl = (id: string) => `/api/training/video?id=${encodeURIComponent(id)}`;
 const SPEEDS = [1, 1.25, 1.5, 2, 0.75];
 const POS_KEY = (id: string) => `glory_training_pos_${id}`;
+/** วินาทีที่เล่นจริงสะสม (เลื่อนข้ามไม่นับ) ใช้ตัดสินว่าดูจบ — จำในเครื่องนี้ ดูต่อวันอื่นได้ */
+const WATCH_KEY = (id: string) => `glory_training_watched_${id}`;
+/** เล่นจริงเกินเท่านี้ของความยาวคลิป = ดูจบ */
+const DONE_RATIO = 0.85;
+const readWatched = (id: string) => {
+  try { return Number(localStorage.getItem(WATCH_KEY(id))) || 0; } catch { return 0; }
+};
 /** "1:02:03" / "4:05" */
 const clock = (s: number) => {
   if (!Number.isFinite(s) || s < 0) s = 0;
@@ -482,8 +637,12 @@ const clock = (s: number) => {
  *   ปุ่มซ่อนเองหลังเล่น 3 วินาที (แตะ / ขยับเมาส์ = แสดง) · คีย์บอร์ด: เว้นวรรค = เล่น / หยุด · ← → = 10 วิ
  *   เล่นไม่ได้ (Google จำกัดการดาวน์โหลดชั่วคราว / เน็ตหลุด) = ข้อความ + ปุ่มเปิดในไดรฟ์
  */
-function VideoPlayer({ id, title }: { id: string; title: string }) {
+function VideoPlayer({ id, title, onDone }: { id: string; title: string; onDone?: () => void }) {
   const toast = useToast();
+  // ดูจบ: นับเวลาที่เล่นจริง (ช่วงห่างของ timeupdate < 3 วินาที = เล่นต่อเนื่อง · เลื่อนข้าม = ไม่นับ) ครบ 85% → onDone ครั้งเดียว
+  const watched = useRef<number | null>(null);
+  const lastT = useRef<number | null>(null);
+  const doneSent = useRef(false);
   const box = useRef<HTMLDivElement>(null);
   const vid = useRef<HTMLVideoElement>(null);
   const hideAt = useRef(0);
@@ -570,7 +729,16 @@ function VideoPlayer({ id, title }: { id: string; title: string }) {
             onTimeUpdate={(e) => {
               const el = e.currentTarget;
               setTime(el.currentTime);
-              if (Date.now() - lastSave.current > 5000) { lastSave.current = Date.now(); savePos(el.currentTime, el.duration); }
+              watched.current ??= readWatched(id);
+              const step = lastT.current === null ? 0 : el.currentTime - lastT.current;
+              if (!el.paused && step > 0 && step < 3) watched.current = Math.min(el.duration || Infinity, watched.current + step);
+              lastT.current = el.currentTime;
+              if (!doneSent.current && el.duration && watched.current >= el.duration * DONE_RATIO) { doneSent.current = true; onDone?.(); }
+              if (Date.now() - lastSave.current > 5000) {
+                lastSave.current = Date.now();
+                savePos(el.currentTime, el.duration);
+                try { localStorage.setItem(WATCH_KEY(id), String(Math.floor(watched.current))); } catch { /* ไม่มีที่เก็บ = นับเฉพาะรอบนี้ */ }
+              }
             }}
             onPlay={() => { setPaused(false); poke(); }}
             onPause={(e) => { setPaused(true); savePos(e.currentTarget.currentTime, e.currentTarget.duration); }}

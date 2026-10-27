@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlarmClockIcon, BellIcon, BellRingIcon, CalendarCheckIcon, CalendarClockIcon, CalendarPlusIcon, CalendarRangeIcon, CameraIcon, CalendarXIcon, FileTextIcon, PackageOpenIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon, TrophyIcon,
-  type LucideIcon,
+  AlarmClockIcon, BellIcon, BellRingIcon, CalendarCheckIcon, CalendarClockIcon, CalendarPlusIcon, CalendarRangeIcon, CameraIcon, CalendarXIcon, FileTextIcon, GraduationCapIcon, PackageOpenIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon, TrophyIcon,
+  WalletIcon, type LucideIcon,
 } from "lucide-react";
 import { api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,7 @@ const KIND_ICON: Record<string, LucideIcon> = {
   booked: CalendarPlusIcon, cancelled: CalendarXIcon, slot_open: SparklesIcon, changed: RefreshCwIcon,
   reminder: AlarmClockIcon, open_soon: TriangleAlertIcon, proof: CameraIcon, calendar: CalendarCheckIcon,
   data: TriangleAlertIcon, weekly: CalendarRangeIcon, window: CalendarClockIcon, tawi: FileTextIcon, receipt: FileTextIcon,
-  quota: TrophyIcon, loan: PackageOpenIcon,
+  quota: TrophyIcon, loan: PackageOpenIcon, pay: WalletIcon, training: GraduationCapIcon,
 };
 
 /** "เมื่อสักครู่" / "5 นาทีที่แล้ว" / "3 ชม.ที่แล้ว" / "17 ต.ค. 09:30" */

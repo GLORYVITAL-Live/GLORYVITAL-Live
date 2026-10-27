@@ -183,6 +183,30 @@ export function roomInfo(stock: Stock, c: CatalogItem, startMs: number, endMs: n
   return { key: `${g.room}|${g.role}`, room: g.room, left: roomLeft(stock, g, startMs, endMs), ids: g.items.map((x) => x.id) };
 }
 
+/**
+ * คำขอที่กันของไว้แล้ว (อนุมัติ / ยืมอยู่) แต่ตอนนี้ห้องไลฟ์มีไลฟ์ในช่วงนั้นจนของประจำห้องไม่พอ (เพิ่ม / ย้ายไลฟ์ทีหลัง)
+ *   ต่อห้อง + หน้าที่: ยืมไป want ชิ้น แต่ยืมได้จริง left ชิ้น · lives = ไลฟ์ของห้องนั้นที่ซ้อนกับช่วงยืม
+ */
+export function loanLiveClashes(stock: Stock, loan: { id: number; startMs: number; endMs: number; items: { equipmentId: number; quantity: number }[] }) {
+  const byId = new Map(stock.catalog.map((c) => [c.id, c]));
+  const groups = new Map<string, { g: NonNullable<ReturnType<typeof roomGroup>>; want: number }>();
+  for (const it of loan.items) {
+    const c = byId.get(it.equipmentId);
+    const g = c ? roomGroup(stock, c) : null;
+    if (!g) continue;
+    const k = `${g.room}|${g.role}`;
+    groups.set(k, { g, want: (groups.get(k)?.want ?? 0) + it.quantity });
+  }
+  const out: { room: string; what: string; want: number; left: number; lives: LiveBlock[] }[] = [];
+  for (const { g, want } of groups.values()) {
+    const left = roomLeft(stock, g, loan.startMs, loan.endMs, loan.id);
+    if (want <= left) continue;
+    const lives = stock.live.filter((b) => b.room === g.room && b.startMs < loan.endMs && b.endMs > loan.startMs);
+    if (lives.length) out.push({ room: g.room, what: ROLE_TEXT[g.role], want, left, lives });
+  }
+  return out;
+}
+
 /** เหลือให้ยืมกี่ชิ้นในช่วงนี้ */
 export const availableQty = (item: Pick<CatalogItem, "id" | "quantity">, holds: Hold[], startMs: number, endMs: number, exceptLoan?: number) =>
   Math.max(0, item.quantity - peakHeld(holds, item.id, startMs, endMs, exceptLoan));

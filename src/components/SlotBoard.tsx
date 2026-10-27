@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { useLocal, writeLocal } from "@/lib/hooks";
+import { PAGE_KEY, useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { CalendarGuideDialog } from "@/components/CalendarGuide";
 
@@ -229,6 +229,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   function blockReason(s: OpenSlot): { full: string; short: string } {
     const same = (x: string) => ({ full: x, short: x });
     if (isLocked) return same(t.lockMsg);
+    if (data?.training) return same(`ดูคลิปเทรนนิ่งที่บังคับให้ครบก่อน (${data.training.done}/${data.training.total})`);
     const chosen = [...selected.values()];
     const booked = mineByDay.get(s.date) ?? [];
     const hit = (x: Span) => s.startMs < x.endMs && s.endMs > x.startMs;
@@ -401,6 +402,15 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
         </NoticeStrip>
       ) : null}
       <CalendarGuideDialog open={guideOpen} onClose={() => setGuideOpen(false)} onCheck={checkCalendar} checking={checking} />
+      {!preview && data?.training ? (
+        <NoticeStrip
+          variant="warning" title={`ดูคลิปเทรนนิ่งที่บังคับให้ครบก่อน${t.verb} (ดูแล้ว ${data.training.done}/${data.training.total})`}
+          action={<Button size="xs" onClick={() => writeLocal(PAGE_KEY, "training")}>ไปดูคลิป</Button>}
+        >
+          ยังไม่ได้ดู: {data.training.missing.slice(0, 5).join(" · ")}{data.training.missing.length > 5 ? ` และอีก ${data.training.missing.length - 5} คลิป` : ""}
+          {" "}— ดูจนจบในหน้าเทรนนิ่ง ระบบนับให้อัตโนมัติ ครบแล้วกลับมา{t.verb}ได้เลย
+        </NoticeStrip>
+      ) : null}
       {data && slots.length ? (
         <p className="my-1 text-xs text-muted-foreground">
           {role === "admin" ? "รับคิว" : "จอง"}ได้ไม่เกิน {limits.slotsPerDay} slot และ {limits.hoursPerDay} ชม. ต่อวัน

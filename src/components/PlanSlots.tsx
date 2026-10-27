@@ -799,7 +799,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         if (res.kept) toast(`มี ${res.kept} slot ที่มีคนจองแล้ว ไม่ได้ลบ`, "error");
       }
       if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length) {
-        const res = await api<{ created: number; skipped: number; updated: number; assignSkipped: number }>("/api/plan", {
+        const res = await api<{ created: number; skipped: number; updated: number; assignSkipped: number; loanWarnings?: string[] }>("/api/plan", {
           create: create.map((s) => ({
             date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: s.campaign, mcId: s.assign?.id ?? null,
           })),
@@ -810,6 +810,10 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         });
         if (!res.ok) throw new Error(res.message);
         if (res.assignSkipped) toast(`มี ${res.assignSkipped} slot ที่มี Mc จองเข้ามาก่อน ไม่ได้ลงชื่อ Mc ประจำ`, "error");
+        // ไลฟ์ที่เพิ่มชนของที่อนุมัติให้ยืมไปแล้ว (ไฟ / กล้องประจำห้องไม่พอ) — แจ้งคนจัดการอุปกรณ์ให้แล้ว
+        if (res.loanWarnings?.length) {
+          toast(`ไลฟ์ชนอุปกรณ์ที่ให้ยืมอยู่: ${res.loanWarnings.join(" | ")} — แจ้งคนจัดการอุปกรณ์แล้ว`, "error");
+        }
       }
       update((d) => ({ ...EMPTY, ranges: d.ranges }));
       toast(create.length || campaigns.length || deletes.length || assigns.length

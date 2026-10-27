@@ -3,7 +3,10 @@ import { fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/
 import { VIEW_COL_RE, VIEW_COLS } from "@/lib/auth";
 import { missingCalendarCounts } from "@/lib/calendar";
 import { bkkToday } from "@/lib/data";
+import { monthKey } from "@/lib/format";
+import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
 import { parseTierHours } from "@/lib/pay";
+import { lockBeforeRateChange } from "@/lib/pay-months";
 import { LIVE_PLATFORM_RE, liveTeamOf, type LiveTeam } from "@/lib/live-team";
 import { docsCan, payDocsScope, payDocsStatus } from "@/lib/pay-docs-db";
 import { staffChangeText } from "@/lib/staff-history";
@@ -16,7 +19,9 @@ import type { Me } from "@/lib/types";
 //   POST    เพิ่มคน
 //   PATCH   แก้ชื่อ / อีเมล / เบอร์ / ค่าจ้าง / Commit / Admin เสริม / Mc ประจำ / สิทธิ์ Owner (Mc / Admin / หลักฐานไลฟ์ / Data analytics / Plan Slot Live)
 //           / รับอีเมลแจ้งยกเลิกคิว (Owner) / ทีม Shopee (Mc / Admin) / กำหนดสิทธิ์จอง Mc (Owner)
-//   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว)
+//           เปลี่ยนเรท: rate_from = เดือนที่เริ่มใช้ (เดือนก่อนหน้าล็อกเรทเดิม — src/lib/pay-months.ts)
+//           { action: "release", id } = ปล่อยคิวข้างหน้าที่ยังไม่เริ่มของคนนี้ให้คนอื่นจอง
+//   DELETE  ลบคน (เฉพาะคนที่ไม่เคยมีคิว · Mc / Admin = เฉพาะ Owner ที่ตั้ง can_delete_staff ด้วย SQL)
 // สิทธิ์: Owner ที่ติ๊ก Mc จัดการรายชื่อ Mc ได้ / ติ๊ก Admin จัดการรายชื่อ Admin ได้
 //         รายชื่อและสิทธิ์ของ Owner / รายชื่อ Marketing จัดการได้เฉพาะ Owner ที่ติ๊กทั้งคู่ (แก้สิทธิ์ตัวเองไม่ได้)
 // Marketing (SQL 20261021000000_marketing) = ชื่อ / อีเมล / เบอร์ เท่านั้น เห็นแค่หน้า CEO Live
@@ -158,6 +163,17 @@ const needViewSql = (msg: string) =>
     : VIEW_COL_RE.test(msg) ? "ต้องรัน SQL 20261018000000_view_only ใน Supabase ก่อน ถึงจะตั้งสิทธิ์แบบดูได้อย่างเดียวได้" : msg;
 const noPlanGrant = () => fail("ติ๊ก / เอาสิทธิ์ Plan Slot Live ออกได้เฉพาะคนที่มีสิทธิ์นี้", 403);
 
+/**
+ * ลบรายชื่อ Mc / Admin ได้ไหม — staff.can_delete_staff (SQL 20261112000000_delete_staff · ตั้งด้วย SQL เท่านั้น ไม่มีช่องในหน้าพนักงาน)
+ *   Owner ที่ติ๊กจัดการ Mc / Admin ยังลบไม่ได้ · ยังไม่ได้รัน SQL = ไม่มีใครลบได้
+ */
+const NO_DELETE = "ลบรายชื่อ Mc / Admin ได้เฉพาะเจ้าของระบบ (ถ้าไม่ให้เข้าระบบแล้ว ให้ลบอีเมลออก หรือปล่อยคิวข้างหน้าแทน)";
+async function canDeleteStaff(me: Me) {
+  if (!me.owner) return false;
+  const { data, error } = await createAdminClient().from("staff").select("can_delete_staff").eq("id", me.owner.id).maybeSingle();
+  return !error && data?.can_delete_staff === true;
+}
+
 const dupMessage = (msg: string) =>
   /staff_role_email_key/.test(msg) ? "อีเมลนี้มีคนในบทบาทเดียวกันใช้อยู่แล้ว"
     : /staff_role_name_key|duplicate key/.test(msg) ? "ชื่อนี้มีอยู่แล้วในบทบาทเดียวกัน" : msg;
@@ -243,6 +259,8 @@ export async function GET() {
     canEdit: edit,
     payDocsViewer,
     docsScope,
+    // ปุ่มลบรายชื่อ Mc / Admin (เฉพาะเจ้าของระบบ)
+    canDeleteCrew: await canDeleteStaff(r.me),
   });
 }
 
@@ -291,6 +309,7 @@ export async function PATCH(request: Request) {
   const body = await request.json().catch(() => ({}));
   const id = Number(body?.id);
   if (!Number.isInteger(id)) return fail("ไม่พบรายชื่อนี้");
+  if (body?.action === "release") return releaseUpcoming(r, id);
 
   const db = createAdminClient();
   type Cur = {
@@ -369,6 +388,14 @@ export async function PATCH(request: Request) {
     teamBefore = tErr ? "tiktok" : liveTeamOf(t?.live_platform);
     if (changes.live_platform === teamBefore) delete changes.live_platform;
   }
+  // เปลี่ยนเรท / Commit / พนักงานประจำ: เดือนก่อน "มีผลตั้งแต่" ล็อกเรทเดิมไว้ (สรุป / ไฟล์เบิก / ตารางของฉันของเดือนเก่าไม่เปลี่ยนตาม)
+  if (isCrew(role)) {
+    const old = cur as unknown as { id: number; role: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
+    const rateChanged = ("hourly_rate" in changes && (Number(changes.hourly_rate) || null) !== (Number(old.hourly_rate) || null))
+      || ("commit_tiers" in changes && JSON.stringify(changes.commit_tiers ?? []) !== JSON.stringify(old.commit_tiers ?? []))
+      || ("is_salaried" in changes && !!changes.is_salaried !== !!old.is_salaried);
+    if (rateChanged) await lockBeforeRateChange(old, rateFrom(body?.rate_from));
+  }
   const { error } = await db.from("staff").update(changes).eq("id", id);
   if (error) {
     if (/can_manage_equipment/.test(error.message)) return fail("ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน ถึงจะตั้งสิทธิ์หน้าอุปกรณ์ได้");
@@ -401,6 +428,50 @@ export async function PATCH(request: Request) {
   return ok({ message: "บันทึกแล้ว" });
 }
 
+/** เดือนที่เรทใหม่เริ่มใช้: เลือกได้ 2 เดือนก่อน ถึงเดือนหน้า (ไม่ส่ง / นอกช่วง = เดือนนี้) */
+function rateFrom(raw: unknown) {
+  const now = bkkToday().slice(0, 7);
+  const ok = [-2, -1, 0, 1].map((n) => monthKey(n, now));
+  return typeof raw === "string" && ok.includes(raw) ? raw : now;
+}
+
+/**
+ * ปล่อยคิวข้างหน้าของคนนี้ (เช่น เลิกไลฟ์แล้ว / เอาอีเมลออก) — เหมือน Owner เอาคนออกจาก slot ทีละคิว
+ *   เฉพาะคิวที่ยังไม่เริ่ม · ลบ event ปฏิทิน + เขียนชีต (trigger) · แจ้งคนเดิม (ถ้ายังมีอีเมล) + คนที่จองแทนได้
+ */
+async function releaseUpcoming(r: { me: Me; scope: Scope }, id: number) {
+  const db = createAdminClient();
+  const { data: p } = await db.from("staff").select("id, role, name").eq("id", id).maybeSingle();
+  if (!p) return fail("ไม่พบรายชื่อนี้");
+  const role = p.role as Role;
+  if (!isCrew(role)) return fail("รายชื่อนี้ไม่มีคิว");
+  if (!canRole(r.scope, role)) return noRole(role);
+  const { table, col } = TABLE[role];
+  const now = new Date().toISOString();
+  const ids: number[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from(table).select("id").eq(col, id).eq("is_cancelled", false)
+      .gt("starts_at", now).order("id").range(from, from + 999);
+    if (error) return fail(error.message, 500);
+    ids.push(...(data ?? []).map((x) => Number(x.id)));
+    if (!data || data.length < 1000) break;
+  }
+  if (!ids.length) return ok({ message: "ไม่มีคิวข้างหน้าที่ยังไม่เริ่ม", released: 0 });
+  for (let i = 0; i < ids.length; i += 200) {
+    // .eq(col, id) กันคิวที่เพิ่งเปลี่ยนคนไปแล้ว
+    const { error } = await db.from(table).update({ [col]: null, confirmed: null }).in("id", ids.slice(i, i + 200)).eq(col, id);
+    if (error) return fail(error.message, 500);
+  }
+  await db.from("calendar_jobs").insert(ids.map((slot_id) => ({ slot_table: table, slot_id })));
+  after(async () => {
+    await processSyncJobs();
+    await log(r.me, `ปล่อยคิวข้างหน้าของ ${role === "mc" ? "Mc " : ""}${p.name} ${ids.length} คิว (ให้คนอื่นจอง)`, id);
+    await notifySlotChanges(table, ids.map((sid) => ({ id: sid, oldPerson: id, newPerson: null, oldCancelled: false })), r.me.email);
+    await notifyNewSlots(role, ids, r.me.email);
+  });
+  return ok({ message: `ปล่อย ${ids.length} คิวแล้ว slot ว่างให้คนอื่นจอง`, released: ids.length });
+}
+
 /** slot ทั้งหมดของคนนี้ (upcomingOnly = เฉพาะตั้งแต่วันนี้และไม่ยกเลิก) */
 async function slotIds(table: string, col: string, personId: number, upcomingOnly: boolean) {
   const db = createAdminClient();
@@ -429,6 +500,8 @@ export async function DELETE(request: Request) {
   const { data: cur } = await db.from("staff").select("role, name").eq("id", id).maybeSingle();
   if (!cur) return fail("ไม่พบรายชื่อนี้");
   if (!canRole(r.scope, cur.role as Role)) return noRole(cur.role as Role);
+  // ลบรายชื่อ Mc / Admin: เฉพาะ Owner ที่ตั้ง can_delete_staff (ติ๊กสิทธิ์จัดการ Mc / Admin อย่างเดียวไม่พอ)
+  if (isCrew(cur.role as Role) && !(await canDeleteStaff(r.me))) return fail(NO_DELETE, 403);
   const { error } = await db.from("staff").delete().eq("id", id);
   if (error) {
     return fail(error.code === "23503"

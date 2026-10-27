@@ -1,6 +1,7 @@
 import "server-only";
 import { canonicalCampaign } from "@/lib/campaign";
 import { gmvCoverage } from "@/lib/gmv";
+import { lockedRates } from "@/lib/pay-rates";
 import {
   bonusPaidMinutes, checkInOf, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours,
 } from "@/lib/pay";
@@ -32,6 +33,7 @@ export type Settings = {
   book_window_admin?: unknown;
   mc_quota_on?: boolean; // จำกัดสิทธิ์จองของ Mc ต่อเดือนตามแร็งค์ (SQL 20261107000000_mc_quota · src/lib/mc-quota-db.ts)
   work_location_url?: string; // ลิงก์โลเคชั่นที่ทำงาน เห็นเฉพาะคนที่มีบัญชี (SQL 20261109000000_work_location) ว่าง = ไม่แสดง
+  training_required?: boolean; // ต้องดูคลิปเทรนนิ่งที่บังคับให้ครบก่อนจอง (SQL 20261111000000_pay_sync · src/lib/training.ts)
 };
 
 type SlotRow = {
@@ -387,15 +389,16 @@ async function webCancels(db: Db, first: string, last: string) {
 /** สรุปรายเดือนสำหรับเจ้าของ (ชั่วโมง/slot/วัน/ค่าจ้าง ของ Mc และ Admin) */
 export async function ownerSummary(key: string, first: string, last: string): Promise<Omit<OwnerSummary, "scope">> {
   const db = createAdminClient();
-  const settings = await getSettings(db);
-  type Person = { name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
+  // เรทที่ล็อกไว้ของเดือนนี้ (เปลี่ยนเรทภายหลัง / โอนแล้ว — src/lib/pay-months.ts) ไม่มี = เรทปัจจุบัน
+  const [settings, locked] = await Promise.all([getSettings(db), lockedRates(key)]);
+  type Person = { id: number; name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
   type Row = SlotRow & { person: Person | null; campaign?: string | null; remark?: string | null };
 
   const load = (table: "mc_slots" | "admin_slots", personCol: string) =>
     fetchAll<Row>((from, to) =>
       db.from(table)
         // Campaign อยู่ที่ slot ของ Mc (ฝั่ง Admin ใช้ของ slot Mc เดียวกัน)
-        .select(`${SLOT_COLS}, remark, ${table === "mc_slots" ? "campaign, " : ""}person:staff!${personCol}(name, hourly_rate, commit_tiers, is_salaried)`)
+        .select(`${SLOT_COLS}, remark, ${table === "mc_slots" ? "campaign, " : ""}person:staff!${personCol}(id, name, hourly_rate, commit_tiers, is_salaried)`)
         .not(personCol, "is", null)
         .gte("live_date", first).lte("live_date", last)
         .or("confirmed.is.null,confirmed.eq.true")
@@ -506,14 +509,16 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         // ค่าจ้าง/ชม. ของเดือนนี้: รายคน (ไม่ตั้ง = ค่าเริ่มต้น) แล้วดูเทียร์ Commit จากชั่วโมงที่จองทั้งเดือน
         // Mc ประจำ / Admin ประจำ (เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง
         const info = persons.get(`${type}|${name}`);
-        const salaried = !!info?.is_salaried;
-        const base = salaried ? 0 : Number(info?.hourly_rate) || defaultRate;
-        const m = monthRate(base, salaried ? [] : cleanTiers(info?.commit_tiers), p.hours);
+        const lock = info ? locked.get(Number(info.id)) : undefined;
+        const salaried = lock ? lock.salaried : !!info?.is_salaried;
+        const base = salaried ? 0 : lock ? lock.rate : Number(info?.hourly_rate) || defaultRate;
+        const m = monthRate(base, salaried ? [] : lock ? lock.tiers : cleanTiers(info?.commit_tiers), p.hours);
         if (m.rate) (type === "Mc" ? rates.mc : rates.admin)[name] = m.rate;
         return {
           name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, bonusMinutes: p.bonus,
           days: p.days.size, cancelled: p.cancelled, salaried,
           commit: m.hasCommit ? { tiers: m.tiers, baseRate: base, tier: m.tier, next: m.next } : null,
+          ...(info ? { staffId: Number(info.id) } : {}),
         };
       })
       .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name, "th"));

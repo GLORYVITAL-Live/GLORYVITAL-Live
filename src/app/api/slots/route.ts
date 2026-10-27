@@ -4,6 +4,7 @@ import { withPlatformLabels } from "@/lib/platform";
 import { enqueueIfShared, missingCalendarCounts, processCalendarJobs, usesCalendar } from "@/lib/calendar";
 import { bookingLimits, getSettings, openAdminSlots, openMcSlots, scheduleNotice, upcomingQueues } from "@/lib/data";
 import { myQuotas } from "@/lib/mc-quota-db";
+import { trainingBlock } from "@/lib/training";
 
 // หน้าแรก: ประกาศ + slot ที่ว่าง (?role=mc | admin) — แทน action "init" / "adminInit"
 // Owner ที่มีสิทธิ์ฝั่งนั้นเปิดดูได้ (ดูอย่างเดียว เห็นแบบเดียวกับ Mc / Admin เสริม)
@@ -55,6 +56,10 @@ export async function GET(request: Request) {
       return null;
     })
     : null;
+  // คลิปเทรนนิ่งบังคับยังดูไม่ครบ = หน้าจองบอก + เลือก slot ไม่ได้ (ปิดใช้อยู่ = ไม่อ่านอะไรเพิ่ม)
+  const training = settings.training_required && personId
+    ? await trainingBlock(r.me.email, personId, true).catch(() => null)
+    : null;
   if (calendarMissing && personId && new URL(request.url).searchParams.get("check") === "1") {
     after(async () => {
       const queued = await enqueueIfShared(role, personId, r.me.email).catch(() => 0);
@@ -72,5 +77,6 @@ export async function GET(request: Request) {
     cancelMinHours: Number(settings.cancel_min_hours) || 6,
     calendarMissing,
     ...(quota ? { quota } : {}),
+    ...(training ? { training } : {}),
   });
 }

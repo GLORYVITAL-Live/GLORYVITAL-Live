@@ -3,6 +3,7 @@ import { platformLabel, platformRaw } from "@/lib/platform";
 import { firstClash, ownerText, type PlanSpan } from "@/lib/plan-clash";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
 import { canonicalCampaign } from "@/lib/campaign";
+import { loanLiveIssues, sendLoanLiveAlerts } from "@/lib/loans-db";
 import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
 import { deleteSheetRows } from "@/lib/sheet-sync";
 import { processSyncJobs } from "@/lib/sync";
@@ -341,10 +342,16 @@ export async function POST(request: Request) {
       mcIds.forEach((id, i) => { const p = (newMc[i] as { mc_id?: number }).mc_id; if (p) personOf.set(id, p); });
       for (const a of assigns) if (assigned.includes(a.slotId)) personOf.set(a.slotId, a.personId);
       await notifySlotChanges("mc_slots", [...personOf].map(([id, p]) => ({ id, oldPerson: null, newPerson: p, oldCancelled: false })), r.me.email);
+      // ไลฟ์ใหม่ชนของที่อนุมัติให้ยืมไปแล้ว → คนจัดการอุปกรณ์ทันที (ไม่รอ cron)
+      if (mcIds.length) await sendLoanLiveAlerts();
     });
+    // ไลฟ์ใหม่ทำให้ไฟ / กล้องประจำห้องไม่พอ เพราะอนุมัติให้ยืมไปแล้ว → บอกคนแพลนทันที (ตรวจไม่ได้ = ไม่บอก)
+    const loanWarnings = mcIds.length
+      ? (await loanLiveIssues().catch(() => [])).map((x) => `${x.who} (คำขอยืม #${x.loan.id}): ${x.lines.join(" · ")}`)
+      : [];
     return ok({
       created: mcIds.length, adminCreated: adminIds.length, skipped: create.length - Math.max(mcIds.length, adminIds.length), updated, agencyAdded, agencyRemoved,
-      assigned: withPerson.length, assignSkipped: assigns.length - assigned.length,
+      assigned: withPerson.length, assignSkipped: assigns.length - assigned.length, loanWarnings,
     });
   } catch (err) {
     return fail((err as Error).message, 500);

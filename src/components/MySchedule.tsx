@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
-import { fmtDayFull, fmtDayLong, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
+import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPay, sumPay, tiersLabel } from "@/lib/pay";
 import Link from "next/link";
 import {
@@ -79,6 +79,9 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const lateCutMoney = Math.round(active.reduce((a, i) => a + i.hours - paidHours(i.hours, i.lateMinutes), 0) * rate);
   const bonusMin = active.reduce((a, i) => a + bonusPaidMinutes(i.bonusMinutes), 0);
   const bonusMoney = Math.round((bonusMin / 60) * rate);
+  // โอนแล้ว (Owner บันทึกที่หน้าสรุป) · ค้างจ่าย = ยอดรวมทั้งเดือน − ที่โอนแล้ว
+  const payments = data?.month === month ? data.payments ?? [] : [];
+  const paid = payments.reduce((a, p) => a + p.amount, 0);
 
   const minH = data?.cancelMinHours ?? 6;
   const cancelOf = (i: MyItem) => {
@@ -131,6 +134,19 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                 <span>ไลฟ์แล้ว {money(earned)} บาท</span>
                 <span>รอไลฟ์ {money(total - earned)} บาท</span>
               </div>
+              {paid > 0 ? (
+                <div className="mt-1.5 border-t pt-1.5 text-xs tabular-nums">
+                  <div className="flex justify-between gap-2 font-semibold">
+                    <span className="text-success">จ่ายแล้ว {money(paid)} บาท</span>
+                    <span className={total - paid > 0 ? "text-foreground" : "text-muted-foreground"}>
+                      {total - paid > 0 ? `ค้างจ่าย ${money(total - paid)} บาท` : total - paid < 0 ? `รับเกิน ${money(paid - total)} บาท` : "ครบแล้ว ✓"}
+                    </span>
+                  </div>
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                    โอน {payments.map((p) => `${fmtDayMonth.format(parseKey(p.paidOn))} ${money(p.amount)}`).join(" · ")}
+                  </span>
+                </div>
+              ) : null}
               {lateCutMoney > 0 ? (
                 <div className="mt-1 text-xs font-semibold text-destructive tabular-nums">หักมาสายแล้ว {money(lateCutMoney)} บาท (ดูกฎการทำงาน)</div>
               ) : null}

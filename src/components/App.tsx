@@ -41,7 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { todayKey } from "@/lib/format";
-import { SLOT_VIEW_KEY, useIsDark, useIsHydrated, useLocal, writeLocal } from "@/lib/hooks";
+import { PAGE_KEY, SLOT_VIEW_KEY, useIsDark, useIsHydrated, useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
 export const MODES = {
@@ -120,7 +120,7 @@ const PAGE_ICON: Record<Page, LucideIcon> = {
   training: GraduationCapIcon, borrow: PackageOpenIcon,
 };
 
-const ROLE_KEY = "glory_booking_role";
+const ROLE_KEY = PAGE_KEY;
 const THEME_KEY = "glory_booking_theme";
 
 /**

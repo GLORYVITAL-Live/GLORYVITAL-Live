@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PhoneIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import {
-  LOAN_STATUS_TEXT, OPEN, canAct, companionsFor, isOverdue, leftOf, lightRole, roomInfo, shortages,
+  LOAN_STATUS_TEXT, OPEN, canAct, companionsFor, isOverdue, leftOf, lightRole, loanLiveClashes, roomInfo, shortages,
   type CatalogItem, type Hold, type LiveBlock, type Loan, type LoanAction, type LoanStatus, type Stock,
 } from "@/lib/loans";
 import { todayKey } from "@/lib/format";
@@ -375,9 +375,15 @@ export function LoanManager() {
       {!list.length ? <StateBox title={filter === "todo" ? "ไม่มีคำขอที่ต้องจัดการ" : "ยังไม่มีคำขอยืม"}>คำขอใหม่จะแจ้งเตือนที่กระดิ่ง</StateBox> : (
         <div className="space-y-2">
           {list.map((l) => {
-            const short = l.status === "pending"
-              ? shortages(l.items, stockOf(data), Date.parse(l.startAt), Date.parse(l.endAt), l.id) : [];
-            return <LoanCard key={l.id} loan={l} now={now} manage actions={actionsOf(l)} warning={short.length ? `ของไม่พอแล้ว: ${short.map((s) => `${s.name} เหลือ ${s.left} (ขอ ${s.want})`).join(" · ")}` : ""} onDone={reload} />;
+            const span = { startMs: Date.parse(l.startAt), endMs: Date.parse(l.endAt) };
+            const short = l.status === "pending" ? shortages(l.items, stockOf(data), span.startMs, span.endMs, l.id) : [];
+            // อนุมัติ / ยืมอยู่ แล้วมีไลฟ์เพิ่มทีหลังในช่วงนั้น = ไฟ / กล้องประจำห้องไม่พอ (ให้ผู้ยืมคืนก่อน หรือย้ายไลฟ์)
+            const clash = (l.status === "approved" || l.status === "borrowed") && span.endMs > now
+              ? loanLiveClashes(stockOf(data), { id: l.id, ...span, items: l.items }) : [];
+            const warning = short.length ? `ของไม่พอแล้ว: ${short.map((s) => `${s.name} เหลือ ${s.left} (ขอ ${s.want})`).join(" · ")}`
+              : clash.length ? `ชนไลฟ์ที่เพิ่มทีหลัง: ${clash.map((c) => `${c.room.replace(/^ห้องไลฟ์\s*/, "ห้อง ")} มีไลฟ์ ${c.what}ให้ยืมได้ ${c.left} แต่ยืมไป ${c.want}`).join(" · ")} — ติดต่อผู้ยืมให้คืนก่อน หรือย้ายเวลาไลฟ์`
+                : "";
+            return <LoanCard key={l.id} loan={l} now={now} manage actions={actionsOf(l)} warning={warning} onDone={reload} />;
           })}
         </div>
       )}

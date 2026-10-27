@@ -126,18 +126,32 @@ export type HomeTawi = {
  * วิดีโอเทรนนิ่ง 1 คลิป: ref = 'drive:<id>' / 'youtube:<id>' · title = ชื่อที่แสดง (Owner แก้ได้) · fileTitle = ชื่อไฟล์เดิม
  *   minutes = ความยาว (ไม่รู้ = null) · hidden = Owner ซ่อนไว้ · added = เพิ่มจากลิงก์ (ไม่อยู่ในโฟลเดอร์)
  */
+/** required = ต้องดูก่อนจองคิว (ติ๊กที่คลิป หรือทั้งกลุ่ม) */
 export type TrainingVideo = {
   ref: string; kind: "drive" | "youtube"; id: string; title: string; fileTitle: string; minutes: number | null; hidden: boolean; added: boolean;
+  required: boolean;
 };
-/** กลุ่มวิดีโอ: ref = 'folder:<id>' (โฟลเดอร์ในไดรฟ์ — ซ่อน / แก้ชื่อได้) · null = กลุ่มของคลิปที่เพิ่มจากลิงก์ */
-export type TrainingGroup = { ref: string | null; name: string; folderName: string | null; hidden: boolean; videos: TrainingVideo[] };
+/** กลุ่มวิดีโอ: ref = 'folder:<id>' (โฟลเดอร์ในไดรฟ์ — ซ่อน / แก้ชื่อได้) · null = กลุ่มของคลิปที่เพิ่มจากลิงก์ · required = บังคับทั้งกลุ่ม */
+export type TrainingGroup = { ref: string | null; name: string; folderName: string | null; hidden: boolean; required: boolean; videos: TrainingVideo[] };
 /**
  * หน้าเทรนนิ่ง: ready = รัน SQL แล้ว · slides = id Google Slides · message = อ่านไดรฟ์ไม่สำเร็จ
  *   manage = Owner ที่จัดการได้ (null = ดูอย่างเดียว ไม่เห็นที่ซ่อน) · manage.ready = รัน SQL training_items แล้ว
+ *   gate = คลิปบังคับก่อนจองคิว: on = เปิดใช้ · applies = คนดูอยู่ต้องดู (Mc / Admin เสริม) · passed = Owner ให้ผ่านแล้ว
+ *     · done = ref ที่คนดูอยู่ดูจบแล้ว
  */
 export type Training = {
   ready: boolean; message: string | null; slides: string | null; groups: TrainingGroup[];
   manage: { ready: boolean; message: string | null } | null;
+  gate?: { on: boolean; applies: boolean; passed: boolean; done: string[] } | null;
+};
+
+/** คลิปบังคับที่ยังไม่ได้ดู (หน้าจองคิว) — ไม่ส่ง = ไม่บังคับ / ดูครบแล้ว */
+export type TrainingBlock = { total: number; done: number; missing: string[] };
+
+/** ความคืบหน้าคลิปบังคับรายคน (Owner) */
+export type TrainingProgress = {
+  on: boolean; total: number;
+  people: { id: number; who: string; role: "mc" | "admin"; done: number; passed: boolean }[];
 };
 
 /**
@@ -212,6 +226,8 @@ export type SlotsResponse = {
   calendarMissing?: number;
   /** สิทธิ์จองต่อเดือนตามแร็งค์ของ Mc คนนี้ (ไม่ส่ง = ไม่จำกัด) — src/lib/mc-quota.ts */
   quota?: MyQuota[];
+  /** ยังดูคลิปเทรนนิ่งที่บังคับไม่ครบ = จองไม่ได้ (src/lib/training.ts trainingBlock) */
+  training?: TrainingBlock;
 };
 
 export type ActionResult = { id: number; success: boolean; message: string };
@@ -355,6 +371,8 @@ export type MyResponse = {
    * commitTiers = เทียร์ Commit (ว่าง = ไม่มี) จองถึงเทียร์ไหน ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
    */
   profile: { name: string; email: string; phone: string; rate: number; commitTiers: CommitTier[] };
+  /** การโอนค่าจ้างของเดือนนี้ (ยังไม่มี / ยังไม่ได้รัน SQL = ว่าง) */
+  payments?: { amount: number; paidOn: string }[];
 };
 
 export type OwnerDetail = {
@@ -434,9 +452,14 @@ export type OwnerPerson = {
   salaried?: boolean;
   /** Commit แบบเทียร์ (null = ไม่มี) tier = เทียร์ที่เดือนนี้จองถึง (null = ยังไม่ถึงเทียร์แรก ใช้ baseRate) */
   commit: { tiers: CommitTier[]; baseRate: number; tier: CommitTier | null; next: CommitTier | null } | null;
+  /** id ในตาราง staff (ใช้บันทึกการโอน) */
+  staffId?: number;
 };
 
 export type CommitTier = { hours: number; rate: number };
+
+/** การโอนค่าจ้าง 1 ครั้ง (src/lib/pay-months.ts) */
+export type PaymentView = { id: number; amount: number; paidOn: string; note: string; by: string; at: string };
 
 export type OwnerSummary = {
   ok: true;
@@ -456,6 +479,13 @@ export type OwnerSummary = {
   periodLog?: { side: "mc" | "admin"; closedAt: string; closedBy: string; reopenedAt: string | null; reopenedBy: string | null }[];
   /** คนที่ดูอยู่ปิด / เปิดงวดได้ (Owner ที่ตั้ง can_close_periods) */
   canClose?: boolean;
+  /**
+   * การโอนค่าจ้างของเดือนนี้ รายคน (key = staffId) — เฉพาะฝั่งที่จัดการได้ (เห็นค่าจ้าง)
+   *   paySides = ฝั่งที่บันทึกโอนได้ · paySql = ยังไม่ได้รัน SQL pay_sync (ข้อความ)
+   */
+  payments?: Record<string, PaymentView[]>;
+  paySides?: { mc: boolean; admin: boolean };
+  paySql?: string;
 };
 
 /** ส่วนต่างของคนหนึ่ง: before = ตอนปิดงวด / after = ข้อมูลตอนนี้ */

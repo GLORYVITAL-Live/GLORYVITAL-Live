@@ -6,6 +6,8 @@ import { useSyncExternalStore } from "react";
 
 /** หน้าเจ้าของ > ตาราง slot: มุมมองที่เลือกล่าสุด (อยู่ที่นี่ ไม่ใช่ใน SlotWorkspace เพื่อให้หน้านั้นโหลดแยกได้) */
 export const SLOT_VIEW_KEY = "glory_slot_view";
+/** หน้าที่เปิดอยู่ (App.tsx) — หน้าอื่นสั่งเปลี่ยนหน้าได้ด้วย writeLocal(PAGE_KEY, "training") */
+export const PAGE_KEY = "glory_booking_role";
 
 export function readLocal(key: string) {
   try { return localStorage.getItem(key); } catch { return null; }

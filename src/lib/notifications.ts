@@ -38,7 +38,7 @@ import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
  *              ใกล้ถึง / เลยกำหนดคืน (cron) → ผู้ยืม (+ คนที่อนุมัติได้ ถ้าเลยกำหนด)
  */
 
-export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "tawi" | "receipt" | "quota" | "loan" | "test";
+export type NoteKind = "booked" | "cancelled" | "slot_open" | "changed" | "reminder" | "open_soon" | "proof" | "calendar" | "data" | "weekly" | "window" | "tawi" | "receipt" | "quota" | "loan" | "pay" | "training" | "test";
 /** หน้าที่เปิดเมื่อกด (guide = หน้าวิธีแชร์ปฏิทิน /guide · borrow = หน้าขอยืมของทีมอื่น) */
 export type NotePage = "home" | "owner" | "mc" | "admin" | "proof" | "guide" | "equipment" | "borrow";
 export type Note = { kind: NoteKind; title: string; body: string; page?: NotePage | null; dedupe?: string };

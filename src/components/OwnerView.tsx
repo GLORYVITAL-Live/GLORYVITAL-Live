@@ -2,16 +2,20 @@
 
 import { Fragment, useEffect, useState } from "react";
 import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
-import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey } from "@/lib/format";
+import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey, todayKey } from "@/lib/format";
 import { fmtGmv } from "@/lib/gmv";
 import { bonusPaidMinutes, lateCut, slotPay, sumPay, tiersLabel } from "@/lib/pay";
 import { ChevronRightIcon, LockIcon, LockOpenIcon } from "lucide-react";
 import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
-import { LoadError, LoadingBlock, MonthNav, Notice, Stats, api, useConfirm, useToast } from "@/components/shared";
+import { DatePicker } from "@/components/date-picker";
+import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, MonthNav, Notice, Stats, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableFooter, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
@@ -437,7 +441,8 @@ export function OwnerView({ requester = "" }: { requester?: string }) {
             </span>
           </h2>
           <PeriodBar data={data} side={type === "Mc" ? "mc" : "admin"} onChanged={reloadMonth} />
-          <SumTable data={data} type={type} rows={rows} />
+          <PayBar data={data} type={type} rows={rows} onChanged={reloadMonth} />
+          <SumTable data={data} type={type} rows={rows} onChanged={reloadMonth} />
         </section>
       ))}
     </div>
@@ -536,12 +541,206 @@ function PeriodBar({ data, side, onChanged }: { data: OwnerSummary; side: "mc" |
   );
 }
 
+// ---------- การโอนค่าจ้าง (src/lib/pay-months.ts) ----------
+
+/** รายการโอนของคนนี้ในเดือนนี้ */
+const paymentsOfPerson = (data: OwnerSummary, r: OwnerPerson) => (r.staffId ? data.payments?.[r.staffId] ?? [] : []);
+const paidOf = (data: OwnerSummary, r: OwnerPerson) => paymentsOfPerson(data, r).reduce((a, p) => a + p.amount, 0);
+/** บันทึกโอนฝั่งนี้ได้ (จัดการฝั่งนี้ได้ + รัน SQL แล้ว) */
+const canPayOf = (data: OwnerSummary, type: Type) => !!data.paySides?.[type === "Mc" ? "mc" : "admin"] && !data.paySql;
+const personPay = (data: OwnerSummary, type: Type, r: OwnerPerson) => sumPay(slotsOf(data, type, r.name), rateOf(data, type, r.name));
+
+/** สถานะโอนสั้นๆ ใต้ยอดเงิน: ยังไม่บันทึกโอน = ไม่แสดง */
+function PaidStatus({ total, paid, className }: { total: number; paid: number; className?: string }) {
+  if (!paid) return null;
+  const left = total - paid;
+  return (
+    <span className={cn("text-[11px] font-semibold", left > 0 ? "text-destructive" : left < 0 ? "text-warning-foreground" : "text-success", className)}>
+      {left > 0 ? `ค้าง ${money(left)}` : left < 0 ? `โอนเกิน ${money(-left)}` : "โอนครบ ✓"}
+    </span>
+  );
+}
+
+/** แถบสรุปการโอนของฝั่งนี้ + ปุ่มบันทึกโอนครบทุกคนที่ค้าง (เดือนที่จบแล้ว) */
+function PayBar({ data, type, rows, onChanged }: { data: OwnerSummary; type: Type; rows: OwnerPerson[]; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (payHiddenOf(data, type)) return null;
+  if (data.paySql && data.paySides?.[type === "Mc" ? "mc" : "admin"]) {
+    return <p className="mb-2 text-xs text-muted-foreground">บันทึกการโอนค่าจ้าง: {data.paySql}</p>;
+  }
+  if (!canPayOf(data, type)) return null;
+  const payable = rows.filter((r) => !r.salaried && r.staffId && rateOf(data, type, r.name) > 0)
+    .map((r) => ({ r, total: personPay(data, type, r), paid: paidOf(data, r) }))
+    .filter((x) => x.total > 0);
+  const ended = data.month < monthKey();
+  // เดือนที่ยังไม่จบและยังไม่มีใครโอน = ยังไม่ถึงรอบจ่าย ไม่ขึ้น "ค้าง" (บันทึกรายคนได้ที่แถวที่กาง)
+  if (!payable.length || (!ended && !payable.some((x) => x.paid))) return null;
+  const due = payable.filter((x) => x.total - x.paid > 0);
+  const done = payable.filter((x) => x.paid >= x.total).length;
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm">
+      {/* มือถือ: ข้อความเต็มบรรทัด ปุ่มลงบรรทัดใหม่เต็มกว้าง */}
+      <span className="min-w-60 flex-1 leading-snug">
+        โอนครบแล้ว <b>{done}/{payable.length}</b> คน
+        {due.length ? <> · ค้าง <b className="text-destructive tabular-nums">{money(due.reduce((a, x) => a + x.total - x.paid, 0))} บาท</b> ({due.length} คน)</> : " ✓"}
+        <span className="block text-xs text-muted-foreground">กดที่ชื่อเพื่อบันทึกโอนรายคน · บันทึกแล้วแจ้งเตือนคนนั้น และขึ้น &quot;จ่ายแล้ว / ค้างจ่าย&quot; ในตารางของฉัน</span>
+      </span>
+      {ended && due.length ? (
+        <Button size="sm" onClick={() => setOpen(true)} className="max-sm:w-full pointer-coarse:h-10">บันทึกโอนครบทุกคนที่ค้าง ({due.length})</Button>
+      ) : null}
+      {open ? (
+        <PayDialog
+          month={data.month}
+          title={`บันทึกโอนค่าจ้าง ${type} ${monthLabel(data.month)} — ${due.length} คน`}
+          items={due.map((x) => ({ staffId: x.r.staffId!, name: x.r.name, amount: x.total - x.paid }))}
+          onClose={(changed) => { setOpen(false); if (changed) onChanged(); }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** ในแถวที่กางของคนหนึ่ง: รายการโอน + บันทึกโอน / ยกเลิกรายการ */
+function PaymentsPanel({ data, type, person, total, onChanged }: {
+  data: OwnerSummary; type: Type; person: OwnerPerson; total: number; onChanged: () => void;
+}) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const list = paymentsOfPerson(data, person);
+  const canPay = canPayOf(data, type);
+  if (!canPay && !list.length) return null;
+  const paid = list.reduce((a, p) => a + p.amount, 0);
+
+  async function voidOne(id: number, amount: number) {
+    if (!(await confirm({ title: `ยกเลิกรายการโอน ${money(amount)} บาท?`, description: "ใช้เมื่อบันทึกผิด — รายการเก็บไว้ในประวัติ (ไม่แจ้งเตือนคนนั้น)", confirmText: "ยกเลิกรายการ", destructive: true }))) return;
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/owner/payments", { action: "void", id });
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onChanged();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    // กว้างพอดีเนื้อหา (ตารางกว้างกว่าจอมือถือ: ปุ่มไม่ไปอยู่ขอบขวาที่ต้องเลื่อนไปดู)
+    <div className="mt-2 w-fit max-w-[18rem] rounded-lg border bg-card px-3 py-2 text-xs sm:max-w-md">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-0 font-semibold tabular-nums">
+          การโอน: {paid ? `โอนแล้ว ${money(paid)} / ${money(total)} บาท` : `ยังไม่บันทึกโอน (ยอด ${money(total)} บาท)`}
+          {paid ? <PaidStatus total={total} paid={paid} className="ml-1.5" /> : null}
+        </span>
+        {canPay && total - paid > 0 ? <Button size="xs" disabled={busy} onClick={() => setOpen(true)}>บันทึกโอน</Button> : null}
+      </div>
+      {list.length ? (
+        <ul className="mt-1 space-y-0.5">
+          {list.map((p) => (
+            <li key={p.id} className="flex flex-wrap items-baseline gap-x-2">
+              <span className="tabular-nums">{fmtDayShort.format(parseKey(p.paidOn))} · <b>{money(p.amount)} บาท</b></span>
+              <span className="text-muted-foreground">โดย {p.by}{p.note ? ` · ${p.note}` : ""}</span>
+              {canPay ? (
+                <Button variant="link" size="xs" disabled={busy} onClick={() => voidOne(p.id, p.amount)} className="h-auto px-0 text-destructive">ยกเลิกรายการ</Button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {open ? (
+        <PayDialog
+          month={data.month}
+          title={`บันทึกโอนค่าจ้าง ${person.name} ${monthLabel(data.month)}`}
+          items={[{ staffId: person.staffId!, name: person.name, amount: total - paid }]}
+          onClose={(changed) => { setOpen(false); if (changed) onChanged(); }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** กรอกการโอน: คนเดียว = แก้จำนวนเงินได้ (โอนบางส่วน) · หลายคน = ยอดค้างของแต่ละคน */
+function PayDialog({ month, title, items, onClose }: {
+  month: string; title: string; items: { staffId: number; name: string; amount: number }[]; onClose: (changed: boolean) => void;
+}) {
+  const toast = useToast();
+  const single = items.length === 1;
+  const [amount, setAmount] = useState(String(Math.round(items[0]?.amount ?? 0)));
+  const [paidOn, setPaidOn] = useState(todayKey());
+  const [note, setNote] = useState("");
+  // ลงย้อนหลังเดือนเก่า (โอนไปนานแล้ว) ไม่ต้องแจ้งเตือน — ค่าเริ่มต้น: แจ้งเฉพาะเดือนที่แล้ว / เดือนนี้
+  const [notify, setNotify] = useState(month >= monthKey(-1));
+  const [busy, setBusy] = useState(false);
+  const total = single ? Number(amount.replace(/[,\s]/g, "")) || 0 : items.reduce((a, x) => a + x.amount, 0);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      const list = single ? [{ staffId: items[0].staffId, amount: total }] : items.map((x) => ({ staffId: x.staffId, amount: x.amount }));
+      const res = await api<{ message: string }>("/api/owner/payments", { action: "add", month, paidOn, note, notify, items: list });
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onClose(true);
+    } catch (err) {
+      toast((err as Error).message, "error");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppDialog open onClose={() => onClose(false)} busy={busy} title={title} description="บันทึกแล้วขึ้นยอดจ่ายแล้ว / ค้างจ่ายในตารางของฉัน · เรทของเดือนนี้ถูกล็อกไว้">
+      <DialogBody className="space-y-3 text-sm">
+        {single ? (
+          <div>
+            <Label htmlFor="pay-amount" className="mb-1">จำนวนเงินที่โอน (บาท)</Label>
+            <Input id="pay-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <span className="mt-1 block text-xs text-muted-foreground">ค่าเริ่มต้น = ยอดที่ยังค้าง · โอนบางส่วนได้ (แก้ตัวเลข)</span>
+          </div>
+        ) : (
+          <ul className="scroll-thin max-h-56 divide-y overflow-y-auto rounded-lg border">
+            {items.map((x) => (
+              <li key={x.staffId} className="flex justify-between gap-2 px-3 py-1.5">
+                <span className="truncate">{x.name}</span>
+                <span className="shrink-0 font-semibold tabular-nums">{money(x.amount)} บาท</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div>
+          <Label className="mb-1">วันที่โอน</Label>
+          <DatePicker value={paidOn} onChange={setPaidOn} aria-label="วันที่โอน" className="w-full" />
+        </div>
+        <div>
+          <Label htmlFor="pay-note" className="mb-1">หมายเหตุ (ไม่บังคับ)</Label>
+          <Input id="pay-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="เช่น โอนรอบแรก / หักภาษี ณ ที่จ่ายแล้ว" />
+        </div>
+        <Label className="items-start leading-snug font-normal">
+          <Checkbox checked={notify} onCheckedChange={(v) => setNotify(v === true)} className="mt-0.5" />
+          <span>
+            แจ้งเตือนคนที่ได้รับ (กระดิ่ง + มือถือ)
+            <span className="block text-xs text-muted-foreground">ลงย้อนหลังเดือนเก่าที่โอนไปนานแล้ว เอาติ๊กออกได้</span>
+          </span>
+        </Label>
+        <p className="font-semibold tabular-nums">รวม {money(total)} บาท{single ? "" : ` · ${items.length} คน`}</p>
+      </DialogBody>
+      <DialogActions>
+        <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>
+        <Button size="lg" disabled={busy || !(total > 0) || !paidOn} onClick={submit}>{busy ? "กำลังบันทึก..." : "บันทึกโอน"}</Button>
+      </DialogActions>
+    </AppDialog>
+  );
+}
+
 const SUM_COLS: [string, string][] = [
   ["slots", "slot"], ["hours", "ชั่วโมง"], ["days", "วัน"], ["cancelled", "ยกเลิก"], ["late", "สาย"],
   ["bonus", "ชดเชย"], ["proof", "หลักฐาน"], ["gmv", "GMV"], ["pay", "ยอดเงิน"],
 ];
 
-function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; rows: OwnerPerson[] }) {
+function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; type: Type; rows: OwnerPerson[]; onChanged: () => void }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<SortState>(null);
   if (!base.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
@@ -621,6 +820,7 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                     {/* มือถือ: ยอดเงิน + ชั่วโมงอยู่ใต้ชื่อ (คอลัมน์ชื่อค้างไว้) ไม่ต้องเลื่อนขวาไปคอลัมน์สุดท้าย */}
                     <span className="mt-0.5 block text-xs font-semibold text-primary tabular-nums sm:hidden">
                       {num(r.hours)} ชม.{showPay ? ` · ${r.salaried ? "เงินเดือน" : rate ? `${money(payOf(r))} บาท` : "ไม่มีค่าจ้าง"}` : ""}
+                      {showPay && !r.salaried && rate ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="ml-1" /> : null}
                     </span>
                     {r.salaried ? (
                       <Badge title={`${type} ประจำ (ได้เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง และไม่อยู่ในไฟล์เบิก`} className="ml-1.5 bg-p2/15 text-[11px] text-p2">
@@ -673,6 +873,7 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                   {showPay ? (
                     <TableCell className={cn(num_, "px-3", r.salaried && "text-xs text-muted-foreground")}>
                       {r.salaried ? "เงินเดือน" : rate ? money(payOf(r)) : "–"}
+                      {!r.salaried && rate ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="block" /> : null}
                     </TableCell>
                   ) : null}
                 </TableRow>
@@ -734,6 +935,9 @@ function SumTable({ data, type, rows: base }: { data: OwnerSummary; type: Type; 
                             </li>
                           ))}
                         </ul>
+                      ) : null}
+                      {showPay && rate && !r.salaried && r.staffId ? (
+                        <PaymentsPanel data={data} type={type} person={r} total={payOf(r)} onChanged={onChanged} />
                       ) : null}
                       {cancels.length ? (
                         <ul className="mt-2 space-y-1 border-t pt-2 text-xs">
