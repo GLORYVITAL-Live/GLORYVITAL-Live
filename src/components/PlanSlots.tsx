@@ -24,6 +24,7 @@ import { fmtDayLong, fmtDayMonth, fmtWeekShort, monthKey, monthLabel, num, parse
 import { readLocal, useLocal, writeLocal } from "@/lib/hooks";
 import { canonicalCampaign, standardCampaigns } from "@/lib/campaign";
 import { platformLabel, platformRaw } from "@/lib/platform";
+import { clashes, firstClash, ownerText } from "@/lib/plan-clash";
 import { cn } from "@/lib/utils";
 
 // ---------- ข้อมูล ----------
@@ -416,11 +417,13 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
           existing: null, agencyId: null, deleting: false, campaignChanged: false, overlap: false, assign: s.agency ? null : assignOf(s.mcId),
         })),
     ].sort((a, b) => a.date.localeCompare(b.date) || a.platform.localeCompare(b.platform) || dayOrder(a.start, a.platform) - dayOrder(b.start, b.platform));
-    // เวลาทับกันในช่องเดียวกัน (รวมของเรากับ Agency เพราะไลฟ์ช่องเดียวกัน)
+    // เวลาทับกันในช่องเดียวกัน (รวมของเรากับ Agency เพราะไลฟ์บัญชีเดียวกัน — src/lib/plan-clash.ts) เทียบทุกคู่ในวัน + ช่องเดียวกัน
     const live = list.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
-    for (let i = 1; i < live.length; i++) {
-      const a = live[i - 1], b = live[i];
-      if (a.date === b.date && a.platform === b.platform && dayOrder(b.start, b.platform) < dayOrder(a.start, a.platform) + lenOf(a)) a.overlap = b.overlap = true;
+    const span = (x: Item) => ({ date: x.date, platform: x.platform, start: x.start, end: x.end, owner: x.agency });
+    for (let i = 0; i < live.length; i++) {
+      for (let j = i + 1; j < live.length && live[j].date === live[i].date && live[j].platform === live[i].platform; j++) {
+        if (clashes(span(live[i]), span(live[j]))) live[i].overlap = live[j].overlap = true;
+      }
     }
     return list;
   }, [plan, draft, month, existingMap, agencyMap]);
@@ -485,6 +488,21 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
       if (a !== agency && isOn(d, k, a)) return a;
     }
     return undefined;
+  }
+  /**
+   * ช่องเดียวกัน (บัญชีเดียวกัน เช่น GLORY VITAL กับ Agency TDH) ไลฟ์ทับเวลากันไม่ได้เด็ดขาด — ต่อกันพอดีได้
+   *   ตรวจ slot นี้ในร่าง d (ของเดิมที่ยังไม่ลบ / ยกเลิกในชีต = ไม่นับ + แพลน Agency + ร่างใหม่) คืนข้อความแจ้ง (null = ไม่ทับ)
+   */
+  function channelClash(d: Draft, slot: { date: string; platform: string; start: string; end: string }, agency: string | null) {
+    const others = [
+      ...(plan?.slots ?? []).filter((s) => !d.del.includes(s.key) && !s.mc?.cancelled).map((s) => ({ ...s, owner: null })),
+      ...(plan?.agencySlots ?? []).filter((s) => !d.agencyDel.includes(agencyKey(s.agency, keyOf(s)))).map((s) => ({ ...s, owner: s.agency })),
+      ...d.add.filter((s) => (s.agency ? !agencyMap.has(agencyKey(s.agency, keyOf(s))) : !existingMap.has(keyOf(s)))).map((s) => ({ ...s, owner: s.agency ?? null })),
+    ];
+    const hit = firstClash({ ...slot, owner: agency }, others);
+    return hit
+      ? `เวลาทับกับ ${ownerText(hit.owner)} ${hit.start}–${hit.end} (${platformLabel(slot.platform)} บัญชีเดียวกัน ไลฟ์ต่อกันได้ แต่ทับกันไม่ได้)`
+      : null;
   }
   /** ติ๊ก: ร่างใหม่ / ยกเลิกการลบ slot เดิม */
   function withOn(d: Draft, slot: Omit<NewSlot, "campaign">, agency: string | null, campaign?: string): Draft {
@@ -561,9 +579,16 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     const other = otherOwner(draft, k, null, slot.platform);
     if (other !== undefined) {
       if (locked(k, other)) { toast(`เวลานี้มี slot ${ownerName(other)}ที่มีคนจองแล้ว ย้ายไม่ได้`, "error"); return; }
+      const moved = withOn(withOff(draft, k, other), slot, null);
+      const clash = channelClash(moved, slot, null);
+      if (clash) { toast(clash, "error"); return; }
       update((d) => withMc(withOn(withOff(d, k, other), slot, null), k, mcId));
       toast(`ย้าย ${platformLabel(slot.platform)} ${slot.start}–${slot.end} จาก ${ownerName(other)} เป็น ${name}`);
       return;
+    }
+    if (!on) {
+      const clash = channelClash(draft, slot, null);
+      if (clash) { toast(clash, "error"); return; }
     }
     update((d) => withMc(on ? d : withOn(d, slot, null), k, mcId));
   }
@@ -582,6 +607,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         if (mcOf(next, k) === mcId) next = ex ? withMc(next, k, null) : withOff(next, k, null);
       } else if (mcOf(next, k) !== mcId) {
         if ((ex?.mc && !ex.mc.free) || otherOwner(next, k, null, platform) !== undefined || mcBusy(next, mcId, s)) kept++;
+        else if (!isOn(next, k, null) && channelClash(next, s, null)) kept++; // ทับกับ Agency ในบัญชีเดียวกัน
         else next = withMc(isOn(next, k, null) ? next : withOn(next, s, null), k, mcId);
       }
     }
@@ -606,10 +632,15 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     const other = otherOwner(draft, k, agency, platform);
     if (other !== undefined) {
       if (locked(k, other)) { toast(`เวลานี้มี slot ${ownerName(other)}ที่มีคนจองแล้ว ย้ายไม่ได้`, "error"); return; }
+      // ย้ายเวลาเดียวกันมาอีกฝั่ง: ตรวจหลังเอาของอีกฝั่งออกแล้ว (ช่วงอื่นของอีกฝั่งอาจยังทับอยู่)
+      const clash = channelClash(withOff(draft, k, other), slot, agency);
+      if (clash) { toast(clash, "error"); return; }
       update((d) => withOn(withOff(d, k, other), slot, agency));
       toast(`ย้าย ${platformLabel(platform)} ${t.start}–${t.end} จาก ${ownerName(other)} เป็น ${ownerName(agency)}`);
       return;
     }
+    const clash = channelClash(draft, slot, agency);
+    if (clash) { toast(clash, "error"); return; }
     update((d) => withOn(d, slot, agency));
   }
 
@@ -630,32 +661,36 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         else next = withOff(next, k, agency);
       } else if (!isOn(next, k, agency)) {
         if (otherOwner(next, k, agency, platform) !== undefined) kept++; // เป็นของอีกฝั่งอยู่แล้ว ไม่ย้ายให้ทั้งคอลัมน์
+        else if (channelClash(next, s, agency)) kept++; // ทับเวลากับอีกฝั่งในบัญชีเดียวกัน
         else next = withOn(next, s, agency);
       }
     }
     const result = next;
     update(() => result);
     toast(`${allOn ? "เอาติ๊กออก" : "ติ๊ก"} ${agency ? `${ownerLabel(agency)} ` : ""}${platformLabel(platform)} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
-      + (kept ? ` (คงไว้ ${kept} slot ที่มีคนจองแล้ว / เป็นของอีกฝั่ง)` : ""));
+      + (kept ? ` (ข้าม ${kept} slot ที่มีคนจองแล้ว / เป็นของอีกฝั่ง / เวลาทับกับอีกฝั่ง)` : ""));
   }
 
   // เพิ่ม slot ลงร่าง (ข้ามที่มีอยู่แล้ว / เวลาที่อีกฝั่งใช้อยู่ ถ้าเป็นของเดิมที่กดลบไว้ = ยกเลิกการลบ)
   function addSlots(list: NewSlot[]) {
     let next = draft;
-    let added = 0, skipped = 0;
+    let added = 0, skipped = 0, clashed = 0;
     for (const s of list) {
       const k = keyOf(s);
       const agency = s.agency ?? null;
       if (isOn(next, k, agency) || otherOwner(next, k, agency, s.platform) !== undefined) { skipped++; continue; }
+      if (channelClash(next, s, agency)) { clashed++; continue; }
       next = withOn(next, s, agency, s.campaign);
       added++;
     }
     const result = next;
     update(() => result);
-    return { added, skipped };
+    return { added, skipped, clashed };
   }
-  const report = ({ added, skipped }: { added: number; skipped: number }) =>
-    toast(added ? `เพิ่มลงร่าง ${added} slot${skipped ? ` (ข้าม ${skipped} ที่มีอยู่แล้ว)` : ""}` : "ไม่มี slot ใหม่ (มีอยู่แล้วทั้งหมด)");
+  const report = ({ added, skipped, clashed }: { added: number; skipped: number; clashed: number }) => {
+    const notes = [skipped ? `ข้าม ${skipped} ที่มีอยู่แล้ว` : "", clashed ? `ข้าม ${clashed} ที่เวลาทับกับอีกฝั่งในบัญชีเดียวกัน` : ""].filter(Boolean);
+    toast(`${added ? `เพิ่มลงร่าง ${added} slot` : "ไม่มี slot ใหม่"}${notes.length ? ` (${notes.join(" · ")})` : ""}`, clashed && !added ? "error" : undefined);
+  };
 
   const removeNew = (key: string) => update((d) => ({ ...d, add: d.add.filter((s) => s.agency || keyOf(s) !== key) }));
   const toggleDelete = (key: string) =>
@@ -805,6 +840,8 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
   const agencyNames = [...new Set(agencyLive.map((x) => x.agency!))];
   const days = daysOf(month);
   const overlaps = shownItems.filter((x) => x.overlap).length;
+  // slot ใหม่ในร่าง (ของเรา / Agency / ยกเลิกการลบ) ที่ทับกันในช่องเดียวกัน = บันทึกไม่ได้ (ของเดิมที่ทับอยู่แล้ว = เตือนอย่างเดียว)
+  const newClashes = items.filter((x) => x.overlap && !x.deleting && (x.agency ? !x.agencyId : !x.existing)).length;
   const allHours = [...live, ...agencyLive].reduce((h, x) => h + lenOf(x) / 60, 0);
   /** ชั่วโมงรวมของรายการ slot */
   const hrs = (list: { start: string; end: string }[]) => list.reduce((h, x) => h + lenOf(x) / 60, 0);
@@ -964,7 +1001,10 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
           ) : null}
           <Legend tick={view === "tick" || mode === "shopee"} />
           {overlaps ? (
-            <Notice variant="warning">มี {overlaps} slot ที่เวลาทับกันในแพลตฟอร์มเดียวกัน (กรอบสีส้ม) ตรวจดูก่อนบันทึก</Notice>
+            <Notice variant="warning">
+              มี {overlaps} slot ที่เวลาทับกันในช่องเดียวกัน (กรอบสีส้ม) — ช่องเดียวกันใช้บัญชีเดียวกัน (เช่น GLORY VITAL กับ Agency TDH) ไลฟ์ทับกันไม่ได้
+              ต้องไลฟ์ต่อกัน เช่น ของเรา 07:30–21:30 → Agency TDH 21:30–02:30 · เอาติ๊กฝั่งใดฝั่งหนึ่งออก{newClashes ? " (บันทึกไม่ได้จนกว่าจะแก้ slot ใหม่ที่ทับ)" : ""}
+            </Notice>
           ) : null}
 
           {view === "tick" || mode === "shopee" ? (
@@ -1024,9 +1064,14 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
                     ? `แพลนในเว็บ +${changes.agencyCreate.length} (${num(hrs(changes.agencyCreate))} ชม.)${changes.agencyDelete.length ? ` / ลบ ${changes.agencyDelete.length}` : ""}` : "",
                 ].filter(Boolean).join(" · ")} — ยังไม่บันทึกจนกว่าจะกดบันทึก
               </span>
+              {newClashes ? (
+                <span className="block text-xs font-semibold text-destructive">
+                  มี {newClashes} slot ใหม่ที่เวลาทับกับอีกฝั่งในบัญชีเดียวกัน (กรอบสีส้ม) เอาติ๊กออกก่อนถึงจะบันทึกได้
+                </span>
+              ) : null}
             </div>
             <Button variant="outline" size="lg" disabled={saving} onClick={clearDraft}>ล้างร่าง</Button>
-            <Button size="lg" disabled={saving} onClick={save}>
+            <Button size="lg" disabled={saving || !!newClashes} onClick={save}>
               {saving ? <><Spinner />กำลังบันทึก...</> : "บันทึก"}
             </Button>
           </div>
@@ -1720,7 +1765,7 @@ function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemove
   platforms: string[];
   tagIndex: (p: string) => number;
   readOnly: boolean; // ดูได้อย่างเดียว: เห็นรายการ + Campaign แต่แก้ / เพิ่ม / ลบไม่ได้
-  onAdd: (s: NewSlot) => { added: number; skipped: number };
+  onAdd: (s: NewSlot) => { added: number; skipped: number; clashed: number };
   onRemoveNew: (key: string) => void;
   onToggleDelete: (key: string) => void;
   onCampaign: (keys: string[], campaign: string) => void;
@@ -1742,7 +1787,10 @@ function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemove
   function add() {
     if (!platform.trim() || !start || !end || start === end) return;
     const res = onAdd({ date, platform: platform.trim(), start, end, campaign: campaign.trim() });
-    if (!res.added) { toast("มี slot นี้อยู่แล้ว", "error"); return; }
+    if (!res.added) {
+      toast(res.clashed ? "เวลาทับกับ slot อื่นในบัญชีเดียวกัน (เช่น Agency TDH) — ไลฟ์ต่อกันได้ แต่ทับกันไม่ได้" : "มี slot นี้อยู่แล้ว", "error");
+      return;
+    }
     const len = lenOf({ start, end }) || 120;
     setStart(end);
     setEnd(fmtMin(toMin(end) + len));

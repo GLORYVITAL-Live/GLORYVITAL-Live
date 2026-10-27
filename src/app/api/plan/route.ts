@@ -1,5 +1,6 @@
 import { after } from "next/server";
-import { platformRaw } from "@/lib/platform";
+import { platformLabel, platformRaw } from "@/lib/platform";
+import { firstClash, ownerText, type PlanSpan } from "@/lib/plan-clash";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
 import { canonicalCampaign } from "@/lib/campaign";
 import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
@@ -199,6 +200,40 @@ export async function POST(request: Request) {
   if (campaigns.length > MAX_CREATE) return fail(`แก้ Campaign ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
 
   const db = createAdminClient();
+  // ช่องเดียวกัน (บัญชีเดียวกัน เช่น GLORY VITAL กับ Agency TDH) ไลฟ์ทับเวลากันไม่ได้เด็ดขาด (src/lib/plan-clash.ts)
+  //   ตรวจ slot ใหม่ทุกตัวกับ slot ที่มีอยู่ (ของเราที่ไม่ยกเลิก + แพลน Agency ที่ไม่ได้ลบในคำขอนี้) และกับ slot ใหม่ด้วยกัน
+  const fresh: PlanSpan[] = [
+    ...create.map((x) => ({ date: x.date, platform: x.platform, start: x.start, end: x.end, owner: null })),
+    ...agencyCreate.map((x) => ({ date: x.live_date, platform: x.platform, start: x.start_time, end: x.end_time, owner: x.agency })),
+  ];
+  if (fresh.length) {
+    try {
+      const dates = [...new Set(fresh.map((x) => x.date))], platforms = [...new Set(fresh.map((x) => x.platform))];
+      type Row = { id?: number; agency?: string; platform: string; live_date: string; start_time: string; end_time: string };
+      const [ours, theirs] = await Promise.all([
+        all<Row>((a, b) => db.from("mc_slots").select("platform, live_date, start_time, end_time")
+          .in("platform", platforms).in("live_date", dates).eq("is_cancelled", false).order("id").range(a, b)),
+        all<Row>((a, b) => db.from("agency_slots").select("id, agency, platform, live_date, start_time, end_time")
+          .in("platform", platforms).in("live_date", dates).order("id").range(a, b)).catch((err: Error) => {
+          if (noAgencyTable(err.message)) return [] as Row[];
+          throw err;
+        }),
+      ]);
+      const dropped = new Set(agencyDelete);
+      const span = (r: Row, owner: string | null): PlanSpan => ({ date: r.live_date, platform: r.platform, start: hm(r.start_time), end: hm(r.end_time), owner });
+      const others = [...ours.map((r) => span(r, null)), ...theirs.filter((r) => !dropped.has(Number(r.id))).map((r) => span(r, r.agency ?? null))];
+      for (let i = 0; i < fresh.length; i++) {
+        const hit = firstClash(fresh[i], [...others, ...fresh.slice(i + 1)]);
+        if (hit) {
+          const a = fresh[i];
+          return fail(`เวลาทับกันในช่องเดียวกัน: ${a.date} ${platformLabel(a.platform)} ${ownerText(a.owner)} ${a.start}–${a.end} ทับ ${ownerText(hit.owner)} ${hit.start}–${hit.end}`
+            + " — บัญชีเดียวกันไลฟ์ต่อกันได้ แต่ทับกันไม่ได้ ยังไม่ได้บันทึกอะไร");
+        }
+      }
+    } catch (err) {
+      return fail((err as Error).message, 500);
+    }
+  }
   // Mc ที่จะลงชื่อต้องมีอยู่จริงในรายชื่อ Mc
   const personIds = [...new Set([...create.map((x) => x.mcId), ...assigns.map((a) => a.personId)].filter((x): x is number => x !== null))];
   if (personIds.length) {
