@@ -983,7 +983,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
               {[-2, -1, 0, 1].map((n) => {
                 const m = monthKey(n, thisMonth);
                 return (
-                  <ToggleGroupItem key={m} value={m} className="px-2.5 text-xs font-semibold data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+                  <ToggleGroupItem key={m} value={m} className="px-2.5 text-xs font-semibold pointer-coarse:h-9 pointer-coarse:px-3 data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
                     {fmtMonthShort.format(new Date(`${m}-01T12:00:00Z`))}{n === 0 ? " (เดือนนี้)" : ""}
                   </ToggleGroupItem>
                 );

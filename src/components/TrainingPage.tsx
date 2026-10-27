@@ -345,11 +345,11 @@ function GateToggle({ on, count, onChanged }: { on: boolean; count: number; onCh
       <span className="min-w-0 flex-1 leading-snug">
         <b>บังคับดูก่อนจองคิว: {on ? "เปิดอยู่" : "ปิดอยู่"}</b>
         <span className="block text-xs text-muted-foreground">
-          {count ? `คลิปบังคับ ${count} คลิป` : "ยังไม่มีคลิปบังคับ — กด \"บังคับดู\" ที่คลิป หรือ \"บังคับทั้งกลุ่ม\""}
+          {count ? `คลิปบังคับ ${count} คลิป` : "ยังไม่มีคลิปบังคับ — กด \"บังคับ\" ใต้คลิป หรือ \"บังคับทั้งกลุ่ม\" ที่หัวกลุ่ม"}
           {on ? " · Mc / Admin เสริมที่ยังดูไม่ครบจองคิวไม่ได้" : ""}
         </span>
       </span>
-      <Button size="sm" variant={on ? "outline" : "default"} className={cn(on && "bg-card")} disabled={busy || (!on && !count)} onClick={() => set(!on)}>
+      <Button size="sm" variant={on ? "outline" : "default"} className={cn("pointer-coarse:h-10", on && "bg-card")} disabled={busy || (!on && !count)} onClick={() => set(!on)}>
         {busy ? "กำลังบันทึก..." : on ? "ปิดใช้" : "เปิดใช้"}
       </Button>
     </div>
@@ -405,7 +405,7 @@ function RequiredProgress() {
               {p.passed ? "ให้ผ่านแล้ว" : `${p.done}/${data.total}${p.done >= data.total ? " ✓" : ""}`}
             </span>
             {p.done < data.total ? (
-              <Button size="xs" variant="outline" disabled={busy === p.id} onClick={() => pass(p.id, !p.passed)}>
+              <Button size="xs" variant="outline" disabled={busy === p.id} onClick={() => pass(p.id, !p.passed)} className="pointer-coarse:h-9 pointer-coarse:px-3">
                 {p.passed ? "ยกเลิกให้ผ่าน" : "ให้ผ่าน"}
               </Button>
             ) : null}

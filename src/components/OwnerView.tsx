@@ -636,7 +636,7 @@ function PaymentsPanel({ data, type, person, total, onChanged }: {
           การโอน: {paid ? `โอนแล้ว ${money(paid)} / ${money(total)} บาท` : `ยังไม่บันทึกโอน (ยอด ${money(total)} บาท)`}
           {paid ? <PaidStatus total={total} paid={paid} className="ml-1.5" /> : null}
         </span>
-        {canPay && total - paid > 0 ? <Button size="xs" disabled={busy} onClick={() => setOpen(true)}>บันทึกโอน</Button> : null}
+        {canPay && total - paid > 0 ? <Button size="xs" disabled={busy} onClick={() => setOpen(true)} className="pointer-coarse:h-9 pointer-coarse:px-3">บันทึกโอน</Button> : null}
       </div>
       {list.length ? (
         <ul className="mt-1 space-y-0.5">
@@ -645,7 +645,7 @@ function PaymentsPanel({ data, type, person, total, onChanged }: {
               <span className="tabular-nums">{fmtDayShort.format(parseKey(p.paidOn))} · <b>{money(p.amount)} บาท</b></span>
               <span className="text-muted-foreground">โดย {p.by}{p.note ? ` · ${p.note}` : ""}</span>
               {canPay ? (
-                <Button variant="link" size="xs" disabled={busy} onClick={() => voidOne(p.id, p.amount)} className="h-auto px-0 text-destructive">ยกเลิกรายการ</Button>
+                <Button variant="link" size="xs" disabled={busy} onClick={() => voidOne(p.id, p.amount)} className="h-auto px-0 text-destructive pointer-coarse:py-2">ยกเลิกรายการ</Button>
               ) : null}
             </li>
           ))}

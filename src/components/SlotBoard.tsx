@@ -405,7 +405,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       {!preview && data?.training ? (
         <NoticeStrip
           variant="warning" title={`ดูคลิปเทรนนิ่งที่บังคับให้ครบก่อน${t.verb} (ดูแล้ว ${data.training.done}/${data.training.total})`}
-          action={<Button size="xs" onClick={() => writeLocal(PAGE_KEY, "training")}>ไปดูคลิป</Button>}
+          action={<Button size="xs" onClick={() => writeLocal(PAGE_KEY, "training")} className="pointer-coarse:h-8 pointer-coarse:px-3">ไปดูคลิป</Button>}
         >
           ยังไม่ได้ดู: {data.training.missing.slice(0, 5).join(" · ")}{data.training.missing.length > 5 ? ` และอีก ${data.training.missing.length - 5} คลิป` : ""}
           {" "}— ดูจนจบในหน้าเทรนนิ่ง ระบบนับให้อัตโนมัติ ครบแล้วกลับมา{t.verb}ได้เลย
