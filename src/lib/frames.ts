@@ -117,6 +117,16 @@ export function parseFrameSheet(rows: unknown[][], today: string): FrameWindow[]
   return [...out.values()].sort((a, b) => a.from.localeCompare(b.from) || a.platform.localeCompare(b.platform));
 }
 
+/**
+ * บรีฟการแต่งตัว 1 ชุดต่อช่วงวัน ใช้กับทุกช่อง (ส่วนใหญ่แคมเปญเดียวกัน เฟรมคล้ายกัน) — เก็บใน live_briefs ช่อง "all"
+ *   บรีฟแยกช่องแบบเดิม (ก่อนมีบรีฟรวม) ยังใช้กับช่องนั้นจนกว่าจะเขียนบรีฟรวมของช่วงนั้น
+ */
+export const BRIEF_ALL = "all";
+export const briefKey = (from: string, to: string) => `${BRIEF_ALL}|${from}|${to}`;
+/** บรีฟของเฟรมนี้: บรีฟรวมของช่วงวัน ก่อนบรีฟแยกช่องแบบเดิม (byKey = "ช่อง|วันเริ่ม|วันจบ") */
+export const pickBrief = <T,>(byKey: Map<string, T>, w: Pick<FrameWindow, "key" | "from" | "to">) =>
+  byKey.get(briefKey(w.from, w.to)) ?? byKey.get(w.key) ?? null;
+
 /** เฟรมของ slot (ช่อง + วันไลฟ์) — หลายช่วงครอบวันเดียวกัน = ช่วงที่สั้นที่สุด (เจาะจงกว่า) · ไม่มี = null */
 export function frameFor(windows: FrameWindow[], platform: string, date: string) {
   const p = framePlatform(platform);

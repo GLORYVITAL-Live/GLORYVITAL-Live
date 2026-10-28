@@ -1,6 +1,8 @@
 // เทสอ่านแท็บ "Frame live" (bun test)
 import { describe, expect, test } from "bun:test";
-import { driveIdOf, frameFor, framePlatform, frameSheetError, parseFrameRange, parseFrameSheet, spreadsheetIdOf } from "@/lib/frames";
+import {
+  briefKey, driveIdOf, frameFor, framePlatform, frameSheetError, parseFrameRange, parseFrameSheet, pickBrief, spreadsheetIdOf,
+} from "@/lib/frames";
 
 const TODAY = "2026-10-27";
 const link = (id: string) => `https://drive.google.com/file/d/${id}/view?usp=sharing`;
@@ -76,5 +78,21 @@ describe("ค่า settings.frame_sheet_id", () => {
     expect(frameSheetError("This operation is not supported for this document")).toContain("ไม่ใช่ Google Sheets");
     expect(frameSheetError("The caller does not have permission")).toContain("แชร์ชีต");
     expect(frameSheetError("socket hang up")).toBeNull();
+  });
+});
+
+describe("บรีฟการแต่งตัว 1 ชุดต่อช่วงวัน ใช้กับทุกช่อง", () => {
+  const w = { key: "Cherry Glory|2026-10-25|2026-10-31", from: "2026-10-25", to: "2026-10-31" };
+  test("บรีฟรวมของช่วงวันใช้กับทุกช่อง", () => {
+    const byKey = new Map([[briefKey("2026-10-25", "2026-10-31"), "รวม"]]);
+    expect(pickBrief(byKey, w)).toBe("รวม");
+    expect(pickBrief(byKey, { ...w, key: "Shopee|2026-10-25|2026-10-31" })).toBe("รวม");
+  });
+  test("บรีฟรวมก่อนบรีฟแยกช่องแบบเดิม · ไม่มีบรีฟรวม = ใช้แบบเดิม", () => {
+    expect(pickBrief(new Map([[w.key, "เดิม"], [briefKey(w.from, w.to), "รวม"]]), w)).toBe("รวม");
+    expect(pickBrief(new Map([[w.key, "เดิม"]]), w)).toBe("เดิม");
+  });
+  test("ช่วงวันอื่น = ไม่มีบรีฟ", () => {
+    expect(pickBrief(new Map([[briefKey("2026-11-01", "2026-11-07"), "รวม"]]), w)).toBeNull();
   });
 });

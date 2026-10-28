@@ -31,12 +31,16 @@ export type Me = {
 
 /** ไฟล์ในไดรฟ์ที่แสดงในเว็บ (เปิดผ่าน /api/frames/media?id=) */
 export type FrameFile = { id: string; kind: "video" | "image" | "file"; name: string };
-/** บรีฟการแต่งตัวของเฟรม (ช่อง + ช่วงวัน) · images = ลิงก์ชั่วคราว 1 ชม. */
+/** บรีฟการแต่งตัวของช่วงวัน (ใช้กับทุกช่อง) · images = ลิงก์ชั่วคราว 1 ชม. */
 export type BriefView = { note: string; images: { path: string; url: string }[]; updatedBy: string; updatedAt: string };
 /** เฟรมไลฟ์ของช่อง + ช่วงวัน (จากแท็บ "Frame live" ในชีตวางแผน) + บรีฟการแต่งตัว */
 export type FrameView = { key: string; platform: string; from: string; to: string; frame: FrameFile | null; product: FrameFile | null; brief: BriefView | null };
 /** เทรนนิ่ง > เฟรมไลฟ์ · ready = ตั้งชีตแล้ว · message = อ่านชีตไม่สำเร็จ / ยังไม่ได้รัน SQL */
-export type FramesResponse = { ready: boolean; message: string | null; canEdit: boolean; frames: FrameView[] };
+export type FramesResponse = {
+  ready: boolean; message: string | null; canEdit: boolean; frames: FrameView[];
+  /** บรีฟรวมของแต่ละช่วงวัน key = "วันเริ่ม|วันจบ" (ยังไม่เขียน = null) */
+  briefs: Record<string, BriefView | null>;
+};
 
 export const EQUIPMENT_STATUSES = ["ใช้งานได้", "ชำรุด", "ส่งซ่อม", "หาย", "เลิกใช้"] as const;
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];

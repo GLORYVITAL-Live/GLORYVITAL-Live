@@ -9,15 +9,17 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { fmtDayMonth, parseKey, todayKey } from "@/lib/format";
+import { briefKey } from "@/lib/frames";
 import { shrinkImage } from "@/lib/image";
 import { platformLabel } from "@/lib/platform";
-import type { FrameView, FramesResponse } from "@/lib/types";
+import type { BriefView, FrameView, FramesResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
  * เทรนนิ่ง > เฟรมไลฟ์ (Owner ที่จัดการ Mc ได้ + Admin ที่ติ๊กสิทธิ์บรีฟการแต่งตัว)
  *   เฟรมจากแท็บ "Frame live" ในชีตวางแผน (แก้เฟรมที่ชีต — เว็บอ่านใหม่ทุก 10 นาที / กดรีเฟรช)
- *   บรีฟการแต่งตัว (ข้อความ + รูปชุดตัวอย่าง) ต่อช่อง + ช่วงวัน → Mc / Admin เห็นในรายละเอียด slot ของตัวเอง
+ *   บรีฟการแต่งตัว (ข้อความ + รูปชุดตัวอย่าง) 1 ชุดต่อช่วงวัน ใช้กับทุกช่อง (ส่วนใหญ่แคมเปญเดียวกัน เฟรมคล้ายกัน)
+ *     → Mc / Admin เห็นในรายละเอียด slot ของตัวเอง
  */
 
 const MAX_IMAGES = 12;
@@ -69,7 +71,7 @@ export function LiveFrames() {
   return (
     <div>
       <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-        เฟรมมาจากแท็บ &quot;Frame live&quot; ในชีตวางแผน (แก้ / เพิ่มเฟรมที่ชีต) · เขียนบรีฟการแต่งตัว + แนบรูปชุดตัวอย่างของแต่ละช่อง / ช่วงวันได้ที่นี่
+        เฟรมมาจากแท็บ &quot;Frame live&quot; ในชีตวางแผน (แก้ / เพิ่มเฟรมที่ชีต) · เขียนบรีฟการแต่งตัว + แนบรูปชุดตัวอย่าง 1 ชุดต่อช่วงวัน ใช้กับทุกช่อง
         — Mc / Admin เห็นเฟรมและบรีฟในรายละเอียด slot ของตัวเอง (ตารางของฉัน)
       </p>
       {data.message ? <Notice variant="warning" icon className="mb-3" title="อ่านชีตเฟรม">{data.message}</Notice> : null}
@@ -104,8 +106,13 @@ export function LiveFrames() {
                 {rangeText(from, to)}
                 {now ? <Badge>ตอนนี้</Badge> : to < today ? <Badge variant="outline" className="text-muted-foreground">ผ่านแล้ว</Badge> : null}
               </h2>
-              <ul className="grid gap-3 sm:grid-cols-2">
-                {list.map((f) => <FrameCard key={f.key} f={f} onChanged={reload} />)}
+              {/* บรีฟเดียวของช่วงวันนี้ ใช้กับทุกช่อง (นับช่องจากเฟรมทั้งหมด ไม่ใช่เฉพาะที่กรองอยู่) */}
+              <BriefEditor
+                key={k} apiKey={briefKey(from, to)} brief={data.briefs?.[k] ?? null}
+                count={data.frames.filter((f) => f.from === from && f.to === to).length} onChanged={reload}
+              />
+              <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+                {list.map((f) => <FrameCard key={f.key} f={f} />)}
               </ul>
             </section>
           );
@@ -115,20 +122,31 @@ export function LiveFrames() {
   );
 }
 
-/** 1 ช่อง + ช่วงวัน: พรีวิวเฟรม + บรีฟการแต่งตัว (ข้อความ / รูปชุดตัวอย่าง) */
-function FrameCard({ f, onChanged }: { f: FrameView; onChanged: () => void }) {
+/** 1 ช่อง + ช่วงวัน: พรีวิวเฟรม */
+function FrameCard({ f }: { f: FrameView }) {
+  return (
+    <li className="rounded-xl border bg-card p-3">
+      <b className="mb-2 block text-sm">{platformLabel(f.platform)}</b>
+      {f.frame ? <FrameMedia file={f.frame} /> : <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">ยังไม่มีลิงก์เฟรมในชีต</p>}
+    </li>
+  );
+}
+
+/** บรีฟการแต่งตัวของช่วงวัน (ข้อความ / รูปชุดตัวอย่าง) ใช้กับทุกช่องในช่วงนี้ · count = จำนวนช่องที่มีเฟรมช่วงนี้ */
+function BriefEditor({ apiKey, brief, count, onChanged }: { apiKey: string; brief: BriefView | null; count: number; onChanged: () => void }) {
   const toast = useToast();
   const confirm = useConfirm();
-  const saved = f.brief?.note ?? "";
+  const saved = brief?.note ?? "";
   const [note, setNote] = useState(saved);
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement>(null);
-  const images = f.brief?.images ?? [];
+  const images = brief?.images ?? [];
+  const id = `brief-${apiKey}`;
 
   async function saveNote() {
     setBusy(true);
     try {
-      const res = await api<{ message: string }>("/api/frames", { key: f.key, note }, "PATCH");
+      const res = await api<{ message: string }>("/api/frames", { key: apiKey, note }, "PATCH");
       if (!res.ok) throw new Error(res.message);
       toast(res.message);
       onChanged();
@@ -148,7 +166,7 @@ function FrameCard({ f, onChanged }: { f: FrameView; onChanged: () => void }) {
     try {
       for (const p of picked) {
         const fd = new FormData();
-        fd.append("key", f.key);
+        fd.append("key", apiKey);
         fd.append("photo", await shrinkImage(p, 1600), "brief.jpg");
         const res = await fetch("/api/frames", { method: "POST", body: fd });
         const json = await res.json().catch(() => null) as { ok?: boolean; message?: string } | null;
@@ -169,7 +187,7 @@ function FrameCard({ f, onChanged }: { f: FrameView; onChanged: () => void }) {
     if (!(await confirm({ title: "ลบรูปชุดตัวอย่างนี้?", confirmText: "ลบรูป", destructive: true }))) return;
     setBusy(true);
     try {
-      const res = await api<{ message: string }>("/api/frames", { key: f.key, path }, "DELETE");
+      const res = await api<{ message: string }>("/api/frames", { key: apiKey, path }, "DELETE");
       if (!res.ok) throw new Error(res.message);
       toast(res.message);
       onChanged();
@@ -181,16 +199,14 @@ function FrameCard({ f, onChanged }: { f: FrameView; onChanged: () => void }) {
   }
 
   return (
-    <li className="rounded-xl border bg-card p-3">
-      <div className="mb-2 flex items-center gap-2">
-        <b className="text-sm">{platformLabel(f.platform)}</b>
-        {f.brief?.updatedBy ? <span className="ml-auto truncate text-[11px] text-muted-foreground">แก้ล่าสุด {f.brief.updatedBy}</span> : null}
+    <div className="rounded-xl border bg-card p-3">
+      <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
+        <label htmlFor={id} className="text-sm font-semibold">บรีฟการแต่งตัว</label>
+        <span className="text-xs text-muted-foreground">ใช้กับทุกช่องในช่วงนี้{count > 1 ? ` (${count} ช่อง)` : ""}</span>
+        {brief?.updatedBy ? <span className="ml-auto truncate text-[11px] text-muted-foreground">แก้ล่าสุด {brief.updatedBy}</span> : null}
       </div>
-      {f.frame ? <FrameMedia file={f.frame} /> : <p className="rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">ยังไม่มีลิงก์เฟรมในชีต</p>}
-
-      <label htmlFor={`brief-${f.key}`} className="mt-3 mb-1 block text-sm font-semibold">บรีฟการแต่งตัว</label>
       <Textarea
-        id={`brief-${f.key}`} value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={2000}
+        id={id} value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={2000}
         placeholder="เช่น โทนสีชมพู-ขาว ให้เข้ากับเฟรม · เสื้อแขนยาว ไม่มีลาย · ห้ามสีเขียว"
       />
       <div className="mt-1.5 flex justify-end">
@@ -198,7 +214,7 @@ function FrameCard({ f, onChanged }: { f: FrameView; onChanged: () => void }) {
       </div>
 
       <span className="mt-2 mb-1 block text-sm font-semibold">รูปชุดตัวอย่าง <span className="font-normal text-muted-foreground">({images.length}/{MAX_IMAGES})</span></span>
-      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4">
+      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
         {images.map((img) => (
           <div key={img.path} className="relative">
             <a href={img.url} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded-lg border">
@@ -223,6 +239,6 @@ function FrameCard({ f, onChanged }: { f: FrameView; onChanged: () => void }) {
         ) : null}
       </div>
       <input ref={file} type="file" accept="image/*" multiple hidden onChange={(e) => void addImages(e.target.files)} />
-    </li>
+    </div>
   );
 }

@@ -10,7 +10,8 @@ import type { FramesResponse } from "@/lib/types";
 //   PATCH { key, note }        แก้ข้อความบรีฟ
 //   POST  multipart key+photo  เพิ่มรูปชุดตัวอย่าง (JPG / PNG / WebP ไม่เกิน 4 MB)
 //   DELETE { key, path }       ลบรูป
-// key = "ช่อง|วันเริ่ม|วันจบ" ของเฟรมในชีต · ทุกการแก้บันทึกใน booking_logs (slot_table = "live_briefs")
+// key = "all|วันเริ่ม|วันจบ" = บรีฟรวมของช่วงวัน ใช้กับทุกช่อง (บรีฟแยกช่องแบบเดิม = "ช่อง|วันเริ่ม|วันจบ")
+//   ทุกการแก้บันทึกใน booking_logs (slot_table = "live_briefs")
 
 const MAX_BYTES = 4 * 1024 * 1024;
 
@@ -24,7 +25,7 @@ async function requireBriefs() {
 async function log(email: string, who: string, action: string) {
   await createAdminClient().from("booking_logs").insert({ email, role: "บรีฟการแต่งตัว", name: who, action, slot_table: "live_briefs", slot_id: 0, result: "สำเร็จ" });
 }
-const keyText = (key: string) => key.split("|").join(" ");
+const keyText = (key: string) => key.replace(/^all\|/, "ทุกช่อง|").split("|").join(" ");
 
 export async function GET(request: Request) {
   const r = await requireBriefs();

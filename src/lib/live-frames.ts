@@ -1,7 +1,9 @@
 import "server-only";
 import { driveClient, driveError } from "@/lib/drive";
 import { todayKey } from "@/lib/format";
-import { frameFor, frameSheetError, parseFrameSheet, spreadsheetIdOf, type FrameWindow } from "@/lib/frames";
+import {
+  BRIEF_ALL, briefKey, frameFor, frameSheetError, parseFrameSheet, pickBrief, spreadsheetIdOf, type FrameWindow,
+} from "@/lib/frames";
 import { sheetsApi } from "@/lib/sheet";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { BriefView, FrameFile, FrameView } from "@/lib/types";
@@ -10,7 +12,8 @@ import type { BriefView, FrameFile, FrameView } from "@/lib/types";
  * เฟรมไลฟ์ + บรีฟการแต่งตัว — SQL 20261113000000_live_frames
  *   เฟรม: แท็บ "Frame live" ในชีตวางแผน (settings.frame_sheet_id ตั้งด้วย SQL — ลิงก์ชีตเต็มหรือ id ก็ได้) อ่านจำไว้ 10 นาที
  *     โครงชีตอ่านที่ src/lib/frames.ts
- *   บรีฟ: ตาราง live_briefs (ช่อง + ช่วงวันของเฟรม) ข้อความ + รูปชุดตัวอย่างใน bucket live-briefs
+ *   บรีฟ: ตาราง live_briefs 1 ชุดต่อช่วงวันของเฟรม ใช้กับทุกช่อง (platform = "all") ข้อความ + รูปชุดตัวอย่างใน bucket live-briefs
+ *     บรีฟแยกช่องแบบเดิมยังแสดงกับช่องนั้นจนกว่าจะเขียนบรีฟรวมของช่วงนั้น (pickBrief ใน src/lib/frames.ts)
  *   ไฟล์ในไดรฟ์เปิดผ่านเว็บ (/api/frames/media) ได้เฉพาะไฟล์ที่อยู่ในชีตเฟรม
  */
 
@@ -93,11 +96,13 @@ async function briefsBetween(first: string, last: string) {
  * เทรนนิ่ง > เฟรมไลฟ์: เฟรมที่ยังไม่จบ (ตั้งแต่ since) + บรีฟ
  *   ใส่ชนิดไฟล์ (วิดีโอ / รูป) ให้เฉพาะเฟรมที่แสดง
  */
-export async function listFrames(since: string): Promise<{ ready: boolean; message: string | null; frames: FrameView[] }> {
+export async function listFrames(since: string): Promise<{
+  ready: boolean; message: string | null; frames: FrameView[]; briefs: Record<string, BriefView | null>;
+}> {
   const r = await frameWindows();
-  if (!r.ready) return { ready: false, message: r.message, frames: [] };
+  if (!r.ready) return { ready: false, message: r.message, frames: [], briefs: {} };
   const shown = r.windows.filter((w) => w.to >= since);
-  if (!shown.length) return { ready: true, message: r.message, frames: [] };
+  if (!shown.length) return { ready: true, message: r.message, frames: [], briefs: {} };
   const [file, briefs] = await Promise.all([
     filesOf(shown.flatMap((w) => [w.frameId, w.productId])),
     briefsBetween(shown[0].from < since ? shown[0].from : since, shown.reduce((a, w) => (w.to > a ? w.to : a), since)),
@@ -106,8 +111,10 @@ export async function listFrames(since: string): Promise<{ ready: boolean; messa
     ready: true, message: r.message,
     frames: shown.map((w) => ({
       key: w.key, platform: w.platform, from: w.from, to: w.to,
-      frame: file(w.frameId), product: file(w.productId), brief: briefs.get(w.key) ?? null,
+      frame: file(w.frameId), product: file(w.productId), brief: pickBrief(briefs, w),
     })),
+    // บรีฟรวมของแต่ละช่วงวัน (หน้าแก้บรีฟ) key = "วันเริ่ม|วันจบ"
+    briefs: Object.fromEntries(shown.map((w) => [`${w.from}|${w.to}`, briefs.get(briefKey(w.from, w.to)) ?? null])),
   };
 }
 
@@ -122,7 +129,7 @@ export async function framesForSlots(slots: { platform: string; date: string }[]
   if (!used.length) return out;
   const dates = slots.map((s) => s.date).sort();
   const [file, briefs] = await Promise.all([filesOf(used.map((w) => w.frameId)), briefsBetween(dates[0], dates[dates.length - 1])]);
-  for (const [k, w] of hit) if (w) out.set(k, { frame: file(w.frameId), brief: briefs.get(w.key) ?? null });
+  for (const [k, w] of hit) if (w) out.set(k, { frame: file(w.frameId), brief: pickBrief(briefs, w) });
   return out;
 }
 
@@ -132,21 +139,25 @@ export async function isFrameFile(id: string) {
   return r.windows.some((w) => w.frameId === id || w.productId === id);
 }
 
-/** เฟรมของ key นี้ (ต้องมีในชีตตอนนี้) */
-async function windowOf(key: string) {
-  const w = (await frameWindows()).windows.find((x) => x.key === key);
-  if (!w) throw new Error("ไม่พบเฟรมช่วงนี้ในชีตแล้ว (ชีตอาจถูกแก้) โหลดหน้าใหม่");
-  return w;
+type Target = Pick<FrameWindow, "platform" | "from" | "to">;
+
+/** บรีฟที่จะแก้: "all|วันเริ่ม|วันจบ" = บรีฟรวมของช่วงวัน (ต้องมีเฟรมช่วงนี้ในชีต) · "ช่อง|วันเริ่ม|วันจบ" = บรีฟแยกช่องแบบเดิม */
+async function briefTarget(key: string): Promise<Target> {
+  const { windows } = await frameWindows();
+  const [platform, from, to] = key.split("|");
+  const hit = platform === BRIEF_ALL ? windows.some((w) => w.from === from && w.to === to) : windows.some((w) => w.key === key);
+  if (!hit) throw new Error("ไม่พบเฟรมช่วงนี้ในชีตแล้ว (ชีตอาจถูกแก้) โหลดหน้าใหม่");
+  return { platform, from, to };
 }
 
-async function currentImages(w: FrameWindow) {
+async function currentImages(w: Target) {
   const { data, error } = await createAdminClient().from("live_briefs").select("images")
     .eq("platform", w.platform).eq("date_from", w.from).eq("date_to", w.to).maybeSingle();
   if (error) throw new Error(noSql(error.message) ? FRAMES_SQL : error.message);
   return pathsOf(data?.images);
 }
 
-async function save(w: FrameWindow, patch: Partial<Pick<BriefRow, "note">> & { images?: string[] }, by: string) {
+async function save(w: Target, patch: Partial<Pick<BriefRow, "note">> & { images?: string[] }, by: string) {
   const { error } = await createAdminClient().from("live_briefs").upsert(
     { platform: w.platform, date_from: w.from, date_to: w.to, ...patch, updated_by: by, updated_at: new Date().toISOString() },
     { onConflict: "platform,date_from,date_to" },
@@ -156,12 +167,12 @@ async function save(w: FrameWindow, patch: Partial<Pick<BriefRow, "note">> & { i
 
 /** แก้ข้อความบรีฟ */
 export async function saveBriefNote(key: string, note: unknown, by: string) {
-  await save(await windowOf(key), { note: String(note ?? "").replace(/\r\n/g, "\n").trim().slice(0, 2000) }, by);
+  await save(await briefTarget(key), { note: String(note ?? "").replace(/\r\n/g, "\n").trim().slice(0, 2000) }, by);
 }
 
 /** เพิ่มรูปชุดตัวอย่าง (ตรวจชนิด / ขนาดที่ route แล้ว) */
 export async function addBriefImage(key: string, file: File, type: string, by: string) {
-  const w = await windowOf(key);
+  const w = await briefTarget(key);
   const images = await currentImages(w);
   if (images.length >= MAX_BRIEF_IMAGES) throw new Error(`รูปตัวอย่างได้ไม่เกิน ${MAX_BRIEF_IMAGES} รูปต่อช่วง`);
   const ext = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
@@ -179,7 +190,7 @@ export async function addBriefImage(key: string, file: File, type: string, by: s
 
 /** ลบรูปชุดตัวอย่าง */
 export async function removeBriefImage(key: string, path: unknown, by: string) {
-  const w = await windowOf(key);
+  const w = await briefTarget(key);
   const images = await currentImages(w);
   if (typeof path !== "string" || !images.includes(path)) throw new Error("ไม่พบรูปนี้ (อาจถูกลบไปแล้ว)");
   await save(w, { images: images.filter((p) => p !== path) }, by);
