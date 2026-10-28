@@ -29,6 +29,20 @@ export function cleanTiers(v: unknown): CommitTier[] {
 }
 
 /**
+ * เปลี่ยนเรท / Commit / พนักงานประจำ "มีผลตั้งแต่ from" (YYYY-MM): เดือนที่ต้องล็อกเรทเดิมไว้ (src/lib/pay-months.ts)
+ *   = เดือนที่มีคิวก่อน from + ทุกเดือนตั้งแต่เดือนนี้ถึงก่อน from แม้ยังไม่มีคิว (จองทีหลังต้องได้เรทเดิม)
+ */
+export function monthsToLock(slotMonths: Iterable<string>, from: string, thisMonth: string) {
+  const out = new Set([...slotMonths].filter((m) => m < from));
+  for (let m = thisMonth; m < from; m = nextMonth(m)) out.add(m);
+  return [...out].sort();
+}
+const nextMonth = (m: string) => {
+  const [y, mo] = m.split("-").map(Number);
+  return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, "0")}`;
+};
+
+/**
  * ค่าจ้างต่อชั่วโมงของเดือน (Commit แบบเทียร์รายคน)
  *   ชั่วโมงที่จองในเดือน (ไม่นับคิวที่ยกเลิก) ถึงเทียร์สูงสุดเท่าไร -> ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
  *   ยังไม่ถึงเทียร์แรก / ไม่มี Commit -> baseRate

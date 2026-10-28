@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   bonusPaidMinutes, cleanTiers, lateCut, monthRate, paidHours, parseBonusMinutes, parseLateMinutes, parseTierHours,
-  checkInOf, resolveLateBonus, slotPaidHours, slotPay, sumPay,
+  checkInOf, monthsToLock, resolveLateBonus, slotPaidHours, slotPay, sumPay,
 } from "@/lib/pay";
 
 describe("หักเงินมาสาย", () => {
@@ -112,5 +112,23 @@ describe("เวลาเข้างานจริงจากหมายเ�
     expect(parseLateMinutes("เข้า 10:00")).toBeNull();
     expect(parseBonusMinutes("เข้า 10:00")).toBeNull();
     expect(parseLateMinutes("เข้า10.00")).toBeNull();
+  });
+});
+
+describe("เปลี่ยนเรท: เดือนที่ล็อกเรทเดิมไว้", () => {
+  test("มีผลเดือนหน้า เดือนนี้ยังไม่มีคิว = ล็อกเดือนนี้ด้วย", () => {
+    expect(monthsToLock([], "2026-12", "2026-11")).toEqual(["2026-11"]);
+  });
+  test("รวมเดือนเก่าที่มีคิว ไม่เอาเดือนตั้งแต่ที่มีผล", () => {
+    expect(monthsToLock(["2026-09", "2026-11", "2026-12", "2027-01"], "2026-12", "2026-11")).toEqual(["2026-09", "2026-11"]);
+  });
+  test("มีผลเดือนนี้ = ล็อกแค่เดือนเก่าที่มีคิว", () => {
+    expect(monthsToLock(["2026-10"], "2026-11", "2026-11")).toEqual(["2026-10"]);
+  });
+  test("มีผลย้อนหลัง (เดือนก่อน) = ไม่ล็อกเดือนนี้", () => {
+    expect(monthsToLock(["2026-08", "2026-10"], "2026-10", "2026-11")).toEqual(["2026-08"]);
+  });
+  test("ข้ามปี", () => {
+    expect(monthsToLock([], "2027-01", "2026-12")).toEqual(["2026-12"]);
   });
 });

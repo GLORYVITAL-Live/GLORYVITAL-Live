@@ -1,7 +1,7 @@
 import "server-only";
-import { fmtDayMonth, monthLabel, money, parseKey } from "@/lib/format";
+import { fmtDayMonth, monthLabel, money, parseKey, todayKey } from "@/lib/format";
 import { notifyMany, type Note } from "@/lib/notifications";
-import { cleanTiers } from "@/lib/pay";
+import { cleanTiers, monthsToLock } from "@/lib/pay";
 import type { MonthRate } from "@/lib/pay-rates";
 import { receiptGaps } from "@/lib/receipts-db";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -41,7 +41,8 @@ async function lockMonths(staffId: number, months: string[], r: MonthRate) {
 }
 
 /**
- * ก่อนเปลี่ยนเรท / Commit / พนักงานประจำ: เดือนที่มีคิวก่อนเดือน from ล็อกเรทเดิมไว้ · ตั้งแต่ from ไปใช้เรทใหม่ (ปลดล็อก)
+ * ก่อนเปลี่ยนเรท / Commit / พนักงานประจำ: เดือนที่มีคิวก่อนเดือน from + เดือนนี้ถึงก่อน from (แม้ยังไม่มีคิว) ล็อกเรทเดิมไว้
+ *   ตั้งแต่ from ไปใช้เรทใหม่ (ปลดล็อก)
  *   ยังไม่ได้รัน SQL = ข้าม (เปลี่ยนเรทได้ตามเดิม แต่เดือนเก่าเปลี่ยนตาม)
  */
 export async function lockBeforeRateChange(s: StaffPay, from: string) {
@@ -57,7 +58,8 @@ export async function lockBeforeRateChange(s: StaffPay, from: string) {
       for (const r of data ?? []) months.add(String(r.live_date).slice(0, 7));
       if (!data || data.length < 1000) break;
     }
-    await lockMonths(s.id, [...months], await currentRate(s));
+    // เลือก "มีผลเดือนหน้า" แต่เดือนนี้ยังไม่มีคิว = ล็อกเดือนนี้ด้วย (ไม่อย่างนั้นคิวที่จองทีหลังได้เรทใหม่)
+    await lockMonths(s.id, monthsToLock(months, from, todayKey().slice(0, 7)), await currentRate(s));
     const { error } = await db.from("pay_month_rates").delete().eq("staff_id", s.id).gte("month", from);
     if (error) throw new Error(error.message);
   } catch (err) {
