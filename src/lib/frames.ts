@@ -57,6 +57,32 @@ export function driveIdOf(raw: unknown) {
   return s.match(/\/d\/([\w-]{10,})/)?.[1] ?? s.match(/folders\/([\w-]{10,})/)?.[1] ?? s.match(/[?&]id=([\w-]{10,})/)?.[1] ?? null;
 }
 
+/**
+ * id ชีตเฟรมจากค่าที่ตั้งใน settings.frame_sheet_id: ลิงก์ชีตเต็ม หรือ id อย่างเดียว (เครื่องหมายคำพูด / ช่องว่างติดมาได้)
+ *   วาง id ซ้ำติดกัน 2 รอบ = ใช้ชุดเดียว · ไม่ใช่ลิงก์ / id = null
+ */
+export function spreadsheetIdOf(raw: unknown) {
+  const s = String(raw ?? "").trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+  const id = s.match(/\/d\/([\w-]{20,})/)?.[1] ?? s.match(/[?&]id=([\w-]{20,})/)?.[1] ?? (/^[\w-]{20,}$/.test(s) ? s : null);
+  if (!id) return null;
+  const half = id.length / 2;
+  return id.length % 2 === 0 && id.slice(0, half) === id.slice(half) ? id.slice(0, half) : id;
+}
+
+/** error ตอนอ่านชีตเฟรม → บอกว่าต้องแก้อะไร (ไม่รู้จัก = null ใช้ข้อความเดิม) */
+export function frameSheetError(msg: string) {
+  if (/requested entity was not found|not found/i.test(msg)) {
+    return "ไม่พบชีตตามลิงก์ / id ที่ตั้งไว้ (settings.frame_sheet_id) — ตรวจว่าคัดลอกครบ ไม่ซ้ำ และเป็นไฟล์ Google Sheets";
+  }
+  if (/not supported for this document/i.test(msg)) {
+    return "ไฟล์นี้ไม่ใช่ Google Sheets (เช่น .xlsx) — เปิดไฟล์แล้วกด ไฟล์ > บันทึกเป็น Google ชีต แล้วตั้งลิงก์ของไฟล์ใหม่";
+  }
+  if (/caller does not have permission|permission denied/i.test(msg)) {
+    return "บัญชีระบบเปิดชีตเฟรมไม่ได้ — แชร์ชีตให้บัญชี Google ที่เว็บใช้อยู่ (อย่างน้อยผู้มีสิทธิ์อ่าน)";
+  }
+  return null;
+}
+
 /** อ่านทั้งแท็บ (แถว x คอลัมน์ เป็นข้อความ) → เฟรมทุกช่อง ทุกช่วงวัน */
 export function parseFrameSheet(rows: unknown[][], today: string): FrameWindow[] {
   const cell = (i: number, j: number) => String(rows[i]?.[j] ?? "").trim();

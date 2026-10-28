@@ -1,6 +1,6 @@
 // เทสอ่านแท็บ "Frame live" (bun test)
 import { describe, expect, test } from "bun:test";
-import { driveIdOf, frameFor, framePlatform, parseFrameRange, parseFrameSheet } from "@/lib/frames";
+import { driveIdOf, frameFor, framePlatform, frameSheetError, parseFrameRange, parseFrameSheet, spreadsheetIdOf } from "@/lib/frames";
 
 const TODAY = "2026-10-27";
 const link = (id: string) => `https://drive.google.com/file/d/${id}/view?usp=sharing`;
@@ -52,5 +52,29 @@ describe("อ่านทั้งแท็บ", () => {
     expect(frameFor(w, "Cherry Glory", "2026-10-27")).toBeNull();
     const special = [...w, { key: "x", platform: "GLORY MALL", from: "2026-10-27", to: "2026-10-27", frameId: "frameCEOLIVE1", productId: null, stickerId: null }];
     expect(frameFor(special, "GLORY MALL", "2026-10-27")?.frameId).toBe("frameCEOLIVE1");
+  });
+});
+
+describe("ค่า settings.frame_sheet_id", () => {
+  const ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd";
+  test("id อย่างเดียว / ลิงก์เต็ม / มีเครื่องหมายคำพูด", () => {
+    expect(spreadsheetIdOf(ID)).toBe(ID);
+    expect(spreadsheetIdOf(`https://docs.google.com/spreadsheets/d/${ID}/edit?gid=123#gid=123`)).toBe(ID);
+    expect(spreadsheetIdOf(`https://docs.google.com/spreadsheets/u/1/d/${ID}/edit`)).toBe(ID);
+    expect(spreadsheetIdOf(` '${ID}' `)).toBe(ID);
+  });
+  test("วาง id ซ้ำ 2 รอบ = ชุดเดียว", () => {
+    expect(spreadsheetIdOf(ID + ID)).toBe(ID);
+  });
+  test("ไม่ใช่ลิงก์ / id", () => {
+    expect(spreadsheetIdOf("ใส่ id ชีตตรงนี้")).toBeNull();
+    expect(spreadsheetIdOf("1AbCdEfGh...XyZ")).toBeNull();
+    expect(spreadsheetIdOf("")).toBeNull();
+  });
+  test("error จาก Google เป็นข้อความที่บอกว่าต้องแก้อะไร", () => {
+    expect(frameSheetError("Requested entity was not found.")).toContain("ไม่พบชีต");
+    expect(frameSheetError("This operation is not supported for this document")).toContain("ไม่ใช่ Google Sheets");
+    expect(frameSheetError("The caller does not have permission")).toContain("แชร์ชีต");
+    expect(frameSheetError("socket hang up")).toBeNull();
   });
 });

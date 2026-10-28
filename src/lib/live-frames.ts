@@ -1,20 +1,22 @@
 import "server-only";
 import { driveClient, driveError } from "@/lib/drive";
 import { todayKey } from "@/lib/format";
-import { frameFor, parseFrameSheet, type FrameWindow } from "@/lib/frames";
+import { frameFor, frameSheetError, parseFrameSheet, spreadsheetIdOf, type FrameWindow } from "@/lib/frames";
 import { sheetsApi } from "@/lib/sheet";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { BriefView, FrameFile, FrameView } from "@/lib/types";
 
 /**
  * เฟรมไลฟ์ + บรีฟการแต่งตัว — SQL 20261113000000_live_frames
- *   เฟรม: แท็บ "Frame live" ในชีตวางแผน (settings.frame_sheet_id ตั้งด้วย SQL) อ่านจำไว้ 10 นาที · โครงชีตอ่านที่ src/lib/frames.ts
+ *   เฟรม: แท็บ "Frame live" ในชีตวางแผน (settings.frame_sheet_id ตั้งด้วย SQL — ลิงก์ชีตเต็มหรือ id ก็ได้) อ่านจำไว้ 10 นาที
+ *     โครงชีตอ่านที่ src/lib/frames.ts
  *   บรีฟ: ตาราง live_briefs (ช่อง + ช่วงวันของเฟรม) ข้อความ + รูปชุดตัวอย่างใน bucket live-briefs
  *   ไฟล์ในไดรฟ์เปิดผ่านเว็บ (/api/frames/media) ได้เฉพาะไฟล์ที่อยู่ในชีตเฟรม
  */
 
 export const FRAMES_SQL = "ต้องรัน SQL 20261113000000_live_frames ใน Supabase ก่อน";
-const NO_SHEET = "ยังไม่ได้ตั้งชีตเฟรมไลฟ์ (settings.frame_sheet_id)";
+const NO_SHEET = "ยังไม่ได้ตั้งชีตเฟรมไลฟ์ (settings.frame_sheet_id — วางลิงก์ชีตทั้งบรรทัด หรือ id ก็ได้)";
+const BAD_SHEET = "ค่า settings.frame_sheet_id ไม่ใช่ลิงก์หรือ id ของ Google Sheets — วางลิงก์ชีตทั้งบรรทัดได้เลย";
 const BUCKET = "live-briefs";
 const TTL = 10 * 60_000;
 export const MAX_BRIEF_IMAGES = 12;
@@ -27,8 +29,10 @@ const metaCache = new Map<string, FrameFile>();
 export async function frameWindows(force = false): Promise<{ ready: boolean; message: string | null; windows: FrameWindow[] }> {
   const { data, error } = await createAdminClient().from("settings").select("frame_sheet_id").eq("id", 1).maybeSingle();
   if (error) return { ready: false, message: noSql(error.message) ? FRAMES_SQL : error.message, windows: [] };
-  const id = String(data?.frame_sheet_id ?? "").trim();
-  if (!id) return { ready: false, message: NO_SHEET, windows: [] };
+  const raw = String(data?.frame_sheet_id ?? "").trim();
+  if (!raw) return { ready: false, message: NO_SHEET, windows: [] };
+  const id = spreadsheetIdOf(raw);
+  if (!id) return { ready: false, message: BAD_SHEET, windows: [] };
   if (!force && cache && cache.sheet === id && Date.now() - cache.at < TTL) return { ready: true, message: null, windows: cache.windows };
   try {
     const api = sheetsApi();
@@ -42,7 +46,8 @@ export async function frameWindows(force = false): Promise<{ ready: boolean; mes
   } catch (err) {
     // อ่านไม่ได้ชั่วคราว = ใช้ชุดเดิมที่จำไว้
     if (cache?.sheet === id) return { ready: true, message: null, windows: cache.windows };
-    return { ready: true, message: `อ่านชีตเฟรมไม่สำเร็จ: ${driveError(err)}`, windows: [] };
+    const msg = String((err as Error)?.message ?? err);
+    return { ready: true, message: `อ่านชีตเฟรมไม่สำเร็จ: ${frameSheetError(msg) ?? driveError(err)}`, windows: [] };
   }
 }
 
