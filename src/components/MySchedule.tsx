@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
-import { bonusPaidMinutes, lateCut, monthRate, paidHours, slotPay, sumPay, tiersLabel } from "@/lib/pay";
+import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabel } from "@/lib/pay";
 import Link from "next/link";
 import {
   BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ShirtIcon, UserIcon, WalletIcon,
@@ -70,16 +70,22 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   // ค่าจ้าง = ชั่วโมงที่ได้เงิน (หักมาสายแล้ว) x ค่าจ้างต่อชั่วโมง (สูตรเดียวกับหน้าสรุปของเจ้าของ) ไม่นับคิวที่ยกเลิก
   const profile = data?.profile;
   // Commit แบบเทียร์: จองในเดือนนี้ถึงเทียร์ไหน -> ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
-  const commit = monthRate(profile?.rate ?? 0, profile?.commitTiers, hours);
+  //   ตั้งค่าจ้าง Shopee แยก = คิว Shopee คิดเรท Shopee คงที่ · Commit นับเฉพาะชั่วโมง TikTok (สูตรเดียวกับสรุปของเจ้าของ)
+  const shopeeHours = active.filter((i) => i.shopee).reduce((a, i) => a + i.hours, 0);
+  const commit = platformRates(profile?.rate ?? 0, profile?.commitTiers, profile?.shopeeRate, hours - shopeeHours, shopeeHours);
   const rate = commit.rate;
+  const rateOf = (i: MyItem) => (i.shopee ? commit.shopeeRate : rate);
+  const hasShopeeRate = commit.split && shopeeHours > 0;
   const hoursText = (h: number) => (Number.isInteger(h) ? String(h) : h.toFixed(1));
   // ชั่วโมงที่ได้เงิน = หลังหักมาสาย + ไลฟ์ชดเชย (ปัดขึ้นทีละ 15 นาที)
   // เงินปัดทีละคิวแล้วรวม (ตัวเลขเดียวกับสรุปของเจ้าของ / ไฟล์เบิก)
-  const total = sumPay(active, rate);
-  const earned = sumPay(active.filter((i) => i.endMs <= now), rate);
-  const lateCutMoney = Math.round(active.reduce((a, i) => a + i.hours - paidHours(i.hours, i.lateMinutes), 0) * rate);
+  const payOf = (list: MyItem[]) => list.reduce((a, i) => a + slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rateOf(i)), 0);
+  const total = payOf(active);
+  const earned = payOf(active.filter((i) => i.endMs <= now));
+  const lateCutMoney = Math.round(active.reduce((a, i) => a + (i.hours - paidHours(i.hours, i.lateMinutes)) * rateOf(i), 0));
   const bonusMin = active.reduce((a, i) => a + bonusPaidMinutes(i.bonusMinutes), 0);
-  const bonusMoney = Math.round((bonusMin / 60) * rate);
+  const bonusMoney = Math.round(active.reduce((a, i) => a + (bonusPaidMinutes(i.bonusMinutes) / 60) * rateOf(i), 0));
+  const commitHours = commit.commitHours;
   // โอนแล้ว (Owner บันทึกที่หน้าสรุป) · ค้างจ่าย = ยอดรวมทั้งเดือน − ที่โอนแล้ว
   const payments = data?.month === month ? data.payments ?? [] : [];
   const paid = payments.reduce((a, p) => a + p.amount, 0);
@@ -113,6 +119,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
           <span className="shrink-0 text-right text-xs leading-tight text-muted-foreground">
             ค่าจ้าง
             <span className="block text-sm font-semibold text-foreground">{profile ? (rate ? `${money(rate)} บาท/ชม.` : "ยังไม่ได้ตั้ง") : "–"}</span>
+            {hasShopeeRate ? <span className="block text-[11px]">Shopee {money(commit.shopeeRate)} บาท/ชม.</span> : null}
             {commit.hasCommit ? (
               <span className={cn("block text-[11px]", commit.tier && "text-success")}>
                 {commit.tier ? `Commit ${commit.tier.hours}+ ชม. ✓` : "มี Commit"}
@@ -125,7 +132,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
           ? [[String(active.length), "slot"], [Number.isInteger(hours) ? String(hours) : hours.toFixed(1), "ชั่วโมง"], [String(days), "วันที่มีคิว"]]
           : [["–", "slot"], ["–", "ชั่วโมง"], ["–", "วันที่มีคิว"]]} />
         {items && profile ? (
-          rate ? (
+          rate || hasShopeeRate ? (
             <div className="rounded-xl bg-secondary px-3 py-2.5">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm text-muted-foreground">ยอดรวมทั้งเดือน</span>
@@ -157,9 +164,10 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
               {commit.hasCommit ? (
                 <div className="mt-1 text-xs text-muted-foreground tabular-nums">
                   {commit.tier
-                    ? `จองเดือนนี้ ${hoursText(hours)} ชม. ถึงเทียร์ ${commit.tier.hours}+ ชม. ทุกชั่วโมงคิด ${money(commit.tier.rate)} บาท/ชม.`
-                    : `จองเดือนนี้ ${hoursText(hours)} ชม. ยังไม่ถึงเทียร์แรก คิดราคาปกติ ${money(profile.rate)} บาท/ชม.`}
-                  {commit.next ? ` · อีก ${hoursText(commit.next.hours - hours)} ชม. ถึงเทียร์ ${commit.next.hours}+ (${money(commit.next.rate)} บาท/ชม.)` : ""}
+                    ? `จอง${commit.split ? " TikTok " : ""}เดือนนี้ ${hoursText(commitHours)} ชม. ถึงเทียร์ ${commit.tier.hours}+ ชม. ทุกชั่วโมงคิด ${money(commit.tier.rate)} บาท/ชม.`
+                    : `จอง${commit.split ? " TikTok " : ""}เดือนนี้ ${hoursText(commitHours)} ชม. ยังไม่ถึงเทียร์แรก คิดราคาปกติ ${money(profile.rate)} บาท/ชม.`}
+                  {commit.next ? ` · อีก ${hoursText(commit.next.hours - commitHours)} ชม. ถึงเทียร์ ${commit.next.hours}+ (${money(commit.next.rate)} บาท/ชม.)` : ""}
+                  {commit.split ? " · คิว Shopee คิดเรท Shopee ไม่นับ Commit" : ""}
                   <span className="mt-0.5 block text-[11px]">Commit: {tiersLabel(profile.rate, commit.tiers)}</span>
                 </div>
               ) : null}
@@ -242,7 +250,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                                     ชดเชย +{i.bonusMinutes} นาที{i.bonusFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                                   </Badge>
                                 ) : null}
-                                {rate ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rate))} บาท</span> : null}
+                                {rateOf(i) ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rateOf(i)))} บาท</span> : null}
                               </>}
                           <ChevronRightIcon aria-hidden className="-mr-1 ml-0.5 inline size-4 align-[-3px]" />
                         </span>
@@ -285,7 +293,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
       <SlotDetail
         item={detail}
         role={role}
-        rate={rate}
+        rate={detail ? rateOf(detail) : rate}
         now={now}
         minH={minH}
         adminChatUrl={data?.adminChatUrl ?? ""}

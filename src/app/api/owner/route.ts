@@ -48,6 +48,7 @@ export async function GET(request: Request) {
     details: withPlatformLabels(s.details.filter((d) => (d.type === "Mc" ? mc : admin))),
     rates: {
       mc: mc && !hide.mc ? s.rates.mc : {}, admin: admin && !hide.admin ? s.rates.admin : {},
+      shopee: mc && !hide.mc ? s.rates.shopee ?? {} : {},
       defaultMc: hide.mc ? 0 : s.rates.defaultMc, defaultAdmin: hide.admin ? 0 : s.rates.defaultAdmin,
     },
   });

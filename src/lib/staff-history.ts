@@ -11,12 +11,13 @@ const LABEL: Record<string, string> = {
   can_view_mc: "ดู Mc", can_view_admin: "ดู Admin", can_view_proofs: "ดูหลักฐานไลฟ์", can_view_plan: "ดู Plan Slot Live",
   notify_cancel_mc: "รับเมลยกเลิก Mc", notify_cancel_admin: "รับเมลยกเลิก Admin", live_platform: "ทีมไลฟ์",
   can_view_pay_docs: "ดูเอกสารของ Mc", can_view_pay_docs_admin: "ดูเอกสารของ Admin", can_manage_quota: "กำหนดสิทธิ์จอง Mc",
-  team_name: "ทีม / แผนก", can_manage_briefs: "บรีฟการแต่งตัว",
+  team_name: "ทีม / แผนก", can_manage_briefs: "บรีฟการแต่งตัว", shopee_rate: "ค่าจ้าง Shopee",
 };
 
 function show(key: string, v: unknown) {
   if (key === "live_platform") return liveTeamLabel(v);
   if (key === "hourly_rate") return v === null || v === undefined || v === "" ? "ค่าเริ่มต้น" : `${Number(v).toLocaleString("th-TH")} บาท/ชม.`;
+  if (key === "shopee_rate") return !Number(v) ? "เท่ากับ TikTok" : `${Number(v).toLocaleString("th-TH")} บาท/ชม.`;
   if (key === "commit_tiers") return (Array.isArray(v) && v.length ? tiersLabel(0, v as CommitTier[]) : "") || "ไม่มี";
   if (typeof v === "boolean" || v === null || v === undefined) {
     if (key in LABEL && !["name", "email", "phone"].includes(key)) return v ? "เปิด" : "ปิด";

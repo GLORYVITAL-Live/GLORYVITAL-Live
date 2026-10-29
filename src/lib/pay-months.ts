@@ -23,20 +23,30 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 type StaffPay = { id: number; role: string; hourly_rate: number | string | null; commit_tiers: unknown; is_salaried: boolean | null };
 
+/** เรท Shopee ที่ตั้งไว้ตอนนี้ (Mc · ไม่ตั้ง / ยังไม่ได้รัน SQL 20261116000000_shopee_rate = null) */
+async function currentShopeeRate(s: StaffPay) {
+  if (s.role !== "mc") return null;
+  const { data, error } = await createAdminClient().from("staff").select("shopee_rate").eq("id", s.id).maybeSingle();
+  return !error && Number(data?.shopee_rate) > 0 ? Number(data!.shopee_rate) : null;
+}
+
 /** เรทของคนนี้ตอนนี้ (ไม่ได้ตั้งรายคน = ค่าเริ่มต้นของฝั่งนั้น) — ไม่ใช้ src/lib/data.ts (data.ts เรียกไฟล์นี้) */
 async function currentRate(s: StaffPay): Promise<MonthRate> {
   const { data: settings } = await createAdminClient().from("settings").select("default_mc_rate, default_admin_rate").eq("id", 1).maybeSingle();
   const def = Number(s.role === "mc" ? settings?.default_mc_rate : settings?.default_admin_rate) || 0;
-  return { rate: Number(s.hourly_rate) || def, tiers: cleanTiers(s.commit_tiers), salaried: !!s.is_salaried };
+  return { rate: Number(s.hourly_rate) || def, tiers: cleanTiers(s.commit_tiers), salaried: !!s.is_salaried, shopeeRate: await currentShopeeRate(s) };
 }
 
-/** ล็อกเรทของเดือนเหล่านี้ (เดือนที่ล็อกไว้แล้วไม่ทับ) */
+/** ล็อกเรทของเดือนเหล่านี้ (เดือนที่ล็อกไว้แล้วไม่ทับ · ยังไม่ได้รัน SQL shopee_rate = ล็อกแบบเดิม ไม่มีเรท Shopee) */
 async function lockMonths(staffId: number, months: string[], r: MonthRate) {
   if (!months.length) return;
-  const { error } = await createAdminClient().from("pay_month_rates").upsert(
-    months.map((month) => ({ staff_id: staffId, month, hourly_rate: r.rate, commit_tiers: r.tiers, is_salaried: r.salaried })),
-    { onConflict: "staff_id,month", ignoreDuplicates: true },
-  );
+  const rows = (withShopee: boolean) => months.map((month) => ({
+    staff_id: staffId, month, hourly_rate: r.rate, commit_tiers: r.tiers, is_salaried: r.salaried, ...(withShopee ? { shopee_rate: r.shopeeRate } : {}),
+  }));
+  const upsert = (withShopee: boolean) => createAdminClient().from("pay_month_rates")
+    .upsert(rows(withShopee), { onConflict: "staff_id,month", ignoreDuplicates: true });
+  let { error } = await upsert(true);
+  if (error && /shopee_rate/.test(error.message)) ({ error } = await upsert(false));
   if (error) throw new Error(noSql(error.message) ? PAY_SYNC_SQL : error.message);
 }
 

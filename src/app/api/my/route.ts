@@ -22,7 +22,7 @@ export async function GET(request: Request) {
   if (!person) return fail("บัญชีนี้ไม่มีสิทธิ์ดูตารางนี้", 403);
 
   const db = createAdminClient();
-  const [settings, items, staff, rooms, locked, paid] = await Promise.all([
+  const [settings, items, staff, rooms, locked, paid, shopeeRow] = await Promise.all([
     getSettings(),
     mySlots(role as "mc" | "admin", person.id, first, last),
     db.from("staff").select("name, email, phone, hourly_rate, commit_tiers, is_salaried").eq("id", person.id).single(),
@@ -31,6 +31,8 @@ export async function GET(request: Request) {
     // เรทที่ล็อกไว้ของเดือนนี้ (เปลี่ยนเรทภายหลัง / โอนแล้ว) + การโอน — ตัวเลขเดียวกับหน้าสรุปของเจ้าของ
     lockedRates(key, [person.id]),
     paymentsOf(key, [person.id]),
+    // ค่าจ้าง Shopee (Mc · ยังไม่ได้รัน SQL 20261116000000_shopee_rate = ไม่มี)
+    role === "mc" ? db.from("staff").select("shopee_rate").eq("id", person.id).maybeSingle() : Promise.resolve(null),
   ]);
   if (staff.error) return fail(staff.error.message, 500);
   const roomNames = [...new Set((rooms.data ?? []).map((x) => String(x.location)).filter(isLiveRoom))];
@@ -57,6 +59,8 @@ export async function GET(request: Request) {
       // Mc ประจำ / Admin ประจำ (เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง
       rate: salaried ? 0 : lock ? lock.rate : Number(staff.data.hourly_rate) || defaultRate,
       commitTiers: salaried ? [] : lock ? lock.tiers : cleanTiers(staff.data.commit_tiers),
+      // ค่าจ้างคิว Shopee ที่ตั้งแยก (null = เท่ากับ TikTok) — ตัวเลขเดียวกับหน้าสรุปของเจ้าของ (src/lib/pay.ts platformRates)
+      shopeeRate: salaried ? null : lock ? lock.shopeeRate : Number(shopeeRow?.data?.shopee_rate) || null,
     },
     payments: (paid.map.get(person.id) ?? []).map((p) => ({ amount: p.amount, paidOn: p.paidOn })),
   });

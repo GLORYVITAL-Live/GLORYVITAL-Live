@@ -59,6 +59,8 @@ type Person = {
   can_manage_briefs?: boolean;
   /** Mc / Admin: ทีมไลฟ์ (ไม่มี = ยังไม่ได้รัน SQL 20261031000000_live_platform ทุกคนเป็น TikTok) */
   live_platform?: LiveTeam;
+  /** Mc: ค่าจ้าง Shopee/ชม. (null = เท่ากับ TikTok · ไม่มี = ยังไม่ได้รัน SQL 20261116000000_shopee_rate / ดูได้อย่างเดียว) */
+  shopee_rate?: number | null;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
   payDocs?: "ok" | "drive" | "missing";
   /** Owner: ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ฝั่ง Mc / ฝั่ง Admin (ส่งมาเฉพาะตอนคนที่เปิดดูมีสิทธิ์ดูเอกสาร · ไม่มีฝั่ง Admin = ยังไม่ได้รัน SQL) */
@@ -438,6 +440,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {p.email ?? <span className="font-semibold text-destructive">ไม่มีอีเมล</span>}
                   {p.phone ? ` · ${p.phone}` : ""}
                   {p.hourly_rate ? ` · ${money(p.hourly_rate)} บาท/ชม.` : ""}
+                  {p.shopee_rate ? ` · Shopee ${money(p.shopee_rate)} บาท/ชม.` : ""}
                   {p.commit_tiers?.length ? ` · Commit ${tiersLabel(0, p.commit_tiers)}` : ""}
                 </span>
               </span>
@@ -641,6 +644,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   // ทีมอื่น: ชื่อทีม / แผนก
   const [team, setTeam] = useState(person?.team_name ?? "");
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
+  // ค่าจ้าง Shopee (Mc ทีม Shopee / TikTok + Shopee) ว่าง = เท่ากับ TikTok
+  const [shopeeRate, setShopeeRate] = useState(person?.shopee_rate ? String(person.shopee_rate) : "");
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
   const [salaried, setSalaried] = useState(person?.is_salaried ?? false);
   // Admin ประจำ: เข้าหน้าอุปกรณ์โปรดักชั่น (ส่งเมื่อรัน SQL แล้ว = มีค่ามากับรายชื่อ หรือเพิ่มคนใหม่)
@@ -682,10 +687,14 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   const thisMonth = monthKey();
   const [rateFrom, setRateFrom] = useState(thisMonth);
   const tierKey = (list: CommitTier[]) => JSON.stringify([...list].sort((a, b) => a.hours - b.hours).map((t) => [t.hours, Number(t.rate)]));
+  // ช่องค่าจ้าง Shopee: Mc ที่ติ๊กทีม Shopee · มีค่าเดิมอยู่แล้วก็แสดง (เอาออกได้)
+  const showShopeeRate = role === "mc" && (shopee || !!person?.shopee_rate);
+  const shopeeDirty = showShopeeRate && (Number(shopeeRate.replace(/[,\s]/g, "")) || null) !== (Number(person?.shopee_rate) || null);
   const rateDirty = !!person && isCrew(role) && (
     (Number(rate.replace(/[,\s]/g, "")) || null) !== (Number(person.hourly_rate) || null)
     || tierKey(filledTiers) !== tierKey(person.commit_tiers ?? [])
-    || salaried !== person.is_salaried);
+    || salaried !== person.is_salaried
+    || shopeeDirty);
   // เอาอีเมลออกทั้งที่ยังมีคิวข้างหน้า = เข้าเว็บไม่ได้แต่คิวยังอยู่ในชื่อ → เลือกปล่อยคิวพร้อมบันทึกได้
   const emailCleared = !!person?.email && !email.trim() && isCrew(role) && person.upcoming > 0;
   const [releaseOnSave, setReleaseOnSave] = useState(false);
@@ -702,8 +711,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   async function save() {
     // ค่าจ้าง/ชม. สูงผิดปกติ (พิมพ์ 0 เกิน / ใส่ค่าจ้างทั้งวันหรือทั้งเดือน) ถามก่อนบันทึก — เฉพาะค่าที่เพิ่งพิมพ์ใหม่
     if (isCrew(role) && !salaried) {
-      const saved = new Set([Number(person?.hourly_rate) || 0, ...(person?.commit_tiers ?? []).map((t) => Number(t.rate))]);
-      const high = [Number(rate.replace(/[,\s]/g, "")) || 0, ...filledTiers.map((t) => t.rate)].filter((n) => n > RATE_ALERT && !saved.has(n));
+      const saved = new Set([Number(person?.hourly_rate) || 0, Number(person?.shopee_rate) || 0, ...(person?.commit_tiers ?? []).map((t) => Number(t.rate))]);
+      const high = [Number(rate.replace(/[,\s]/g, "")) || 0, Number(shopeeRate.replace(/[,\s]/g, "")) || 0, ...filledTiers.map((t) => t.rate)]
+        .filter((n) => n > RATE_ALERT && !saved.has(n));
       if (high.length && !(await confirm({
         title: `ค่าจ้าง ${money(Math.max(...high))} บาท/ชม. สูงผิดปกติ`,
         description: `ปกติไม่เกิน ${money(RATE_ALERT)} บาท/ชม. — ตรวจว่าไม่ได้พิมพ์ 0 เกิน หรือใส่ค่าจ้างทั้งวัน / ทั้งเดือน (ยอดเงินในสรุปและไฟล์เบิกคิดจากค่านี้)`,
@@ -729,6 +739,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
         ...(role === "admin" && briefsReady && (person || briefs) ? { can_manage_briefs: briefs } : {}),
         // ทีมไลฟ์: ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(isCrew(role) && (teamReady || liveTeam !== "tiktok") ? { live_platform: liveTeam } : {}),
+        // ค่าจ้าง Shopee: ส่งเมื่อเปลี่ยน (ยังไม่รัน SQL = เซิร์ฟเวอร์แจ้งให้รันก่อน)
+        ...(shopeeDirty ? { shopee_rate: shopeeRate } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { ...manage, ...view } : {}),
         // Plan Slot Live: ให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
@@ -909,6 +921,14 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
             <Field label="ค่าจ้างต่อชั่วโมง (บาท)" hint={salaried ? `${role === "mc" ? "Mc" : "Admin"} ประจำ (เงินเดือน) ไม่ต้องใส่ ระบบไม่คิดค่าจ้างรายชั่วโมง` : null}>
               {(id) => <Input id={id} inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder={salaried ? "ไม่ต้องใส่" : "ว่าง = ใช้ค่าเริ่มต้น"} />}
             </Field>
+            {showShopeeRate ? (
+              <Field
+                label="ค่าจ้าง Shopee ต่อชั่วโมง (บาท)"
+                hint="ไลฟ์ Shopee (คิวแท็บ MC Shopee) คิดเรทนี้คงที่ · Commit นับเฉพาะชั่วโมง TikTok · ว่าง = เท่ากับค่าจ้างด้านบน (ทีม Shopee อย่างเดียวใส่ด้านบนช่องเดียวพอ)"
+              >
+                {(id) => <Input id={id} inputMode="decimal" value={shopeeRate} onChange={(e) => setShopeeRate(e.target.value)} placeholder="ว่าง = เท่ากับค่าจ้างด้านบน" />}
+              </Field>
+            ) : null}
             <div>
               <span className="mb-1.5 block font-semibold">Commit แบบขั้น (ไม่บังคับ)</span>
               <div className="space-y-2">

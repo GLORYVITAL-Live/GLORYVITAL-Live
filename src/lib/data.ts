@@ -3,8 +3,9 @@ import { canonicalCampaign } from "@/lib/campaign";
 import { gmvCoverage } from "@/lib/gmv";
 import { lockedRates } from "@/lib/pay-rates";
 import {
-  bonusPaidMinutes, checkInOf, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours,
+  bonusPaidMinutes, checkInOf, cleanTiers, lateCut, platformRates, proofMinutes, resolveLateBonus, slotPaidHours,
 } from "@/lib/pay";
+import { isShopeePlatform } from "@/lib/platform";
 import type { Board } from "@/lib/live-team";
 import { createAdminClient } from "@/lib/supabase/server";
 import { isTestAccount } from "@/lib/staff-check";
@@ -309,9 +310,9 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
   const db = createAdminClient();
   const table = role === "mc" ? "mc_slots" : "admin_slots";
   const personCol = role === "mc" ? "mc_id" : "admin_id";
-  type Row = SlotRow & { remark: string | null; campaign?: string | null };
+  type Row = SlotRow & { remark: string | null; campaign?: string | null; sheet_tab?: string | null };
   const rows = await fetchAll<Row>((from, to) =>
-    db.from(table).select(`${SLOT_COLS}, remark${role === "mc" ? ", campaign" : ""}`).eq(personCol, personId)
+    db.from(table).select(`${SLOT_COLS}, remark${role === "mc" ? ", campaign, sheet_tab" : ""}`).eq(personCol, personId)
       .gte("live_date", first).lte("live_date", last)
       .or("confirmed.is.null,confirmed.eq.true")
       .order("starts_at").range(from, to) as unknown as PromiseLike<{ data: Row[] | null; error: unknown }>,
@@ -339,6 +340,8 @@ export async function mySlots(role: "mc" | "admin", personId: number, first: str
       pairPhone: p?.phone ?? "",
       // Campaign อยู่ที่ slot ของ Mc (Admin ใช้ของ slot Mc ที่ไลฟ์ด้วยกัน)
       campaign: role === "mc" ? canonicalCampaign(r.campaign) : p?.campaign ?? "",
+      // คิว Shopee (แท็บ MC Shopee) คิดค่าจ้าง Shopee ถ้าตั้งแยกไว้
+      ...(r.sheet_tab === "shopee" ? { shopee: true } : {}),
     };
   });
 }
@@ -414,15 +417,18 @@ async function webCancels(db: Db, first: string, last: string) {
 export async function ownerSummary(key: string, first: string, last: string): Promise<Omit<OwnerSummary, "scope">> {
   const db = createAdminClient();
   // เรทที่ล็อกไว้ของเดือนนี้ (เปลี่ยนเรทภายหลัง / โอนแล้ว — src/lib/pay-months.ts) ไม่มี = เรทปัจจุบัน
-  const [settings, locked] = await Promise.all([getSettings(db), lockedRates(key)]);
+  // ค่าจ้าง Shopee รายคน (SQL 20261116000000_shopee_rate · ยังไม่ได้รัน = ไม่มี ไลฟ์ Shopee ใช้เรทเดียวกับ TikTok)
+  const shopeeRates = db.from("staff").select("id, shopee_rate").eq("role", "mc").not("shopee_rate", "is", null)
+    .then(({ data, error }) => new Map((error ? [] : data ?? []).map((s) => [Number(s.id), Number(s.shopee_rate) || null])));
+  const [settings, locked, shopeeRateOf] = await Promise.all([getSettings(db), lockedRates(key), shopeeRates]);
   type Person = { id: number; name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
-  type Row = SlotRow & { person: Person | null; campaign?: string | null; remark?: string | null };
+  type Row = SlotRow & { person: Person | null; campaign?: string | null; remark?: string | null; sheet_tab?: string | null };
 
   const load = (table: "mc_slots" | "admin_slots", personCol: string) =>
     fetchAll<Row>((from, to) =>
       db.from(table)
-        // Campaign อยู่ที่ slot ของ Mc (ฝั่ง Admin ใช้ของ slot Mc เดียวกัน)
-        .select(`${SLOT_COLS}, remark, ${table === "mc_slots" ? "campaign, " : ""}person:staff!${personCol}(id, name, hourly_rate, commit_tiers, is_salaried)`)
+        // Campaign อยู่ที่ slot ของ Mc (ฝั่ง Admin ใช้ของ slot Mc เดียวกัน) · แท็บของ slot Mc (MC Shopee = ไลฟ์ Shopee คิดเรท Shopee)
+        .select(`${SLOT_COLS}, remark, ${table === "mc_slots" ? "campaign, sheet_tab, " : ""}person:staff!${personCol}(id, name, hourly_rate, commit_tiers, is_salaried)`)
         .not(personCol, "is", null)
         .gte("live_date", first).lte("live_date", last)
         .or("confirmed.is.null,confirmed.eq.true")
@@ -463,7 +469,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   }
 
   const rates: OwnerSummary["rates"] = {
-    mc: {}, admin: {}, defaultMc: Number(settings.default_mc_rate) || 0, defaultAdmin: Number(settings.default_admin_rate) || 0,
+    mc: {}, admin: {}, shopee: {}, defaultMc: Number(settings.default_mc_rate) || 0, defaultAdmin: Number(settings.default_admin_rate) || 0,
   };
   const details: (OwnerDetail & { key: string })[] = [];
   const persons = new Map<string, Person>(); // "Mc|ชื่อ" -> ข้อมูลค่าจ้างของคนนั้น
@@ -483,12 +489,14 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
         hours: ci.hours, startMs: ms(r.starts_at), status: r.status, cancelled: r.is_cancelled, pair: "", key: slotKey(r),
         ...ci.lb, checkIn: ci.checkIn, checkInBad: ci.bad,
         proof: proofOf.get(slotKey(r)) ?? null,
-        noProof: salaried.has(slotKey(r)),
+        // ไม่ต้องแนบหลักฐาน: Mc ประจำ / คิว Shopee (ไม่มี Admin ของ slot ที่เป็นคนแนบ — เกณฑ์เดียวกับหน้าแรก)
+        noProof: salaried.has(slotKey(r)) || (type === "Mc" && r.sheet_tab === "shopee"),
         gmv: gmvOf.get(slotKey(r)) ?? null,
         gmvCoveredBy: coveredBy.get(slotKey(r)) ?? null,
         campaign: (type === "Mc" ? r.campaign?.trim() : campaignOf.get(slotKey(r))) || "",
         // หมายเหตุในชีต ("Admin เสริม" เป็นป้ายเปิดรับ Admin ไม่ใช่หมายเหตุ)
         remark: String(r.remark ?? "").replace(/^\s*Admin เสริม\s*/, "").trim(),
+        ...(type === "Mc" && r.sheet_tab === "shopee" ? { shopee: true } : {}),
       });
     }
   };
@@ -502,6 +510,7 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
       pair: "", key: `${c.platform}|${c.startMs}|${c.endMs}`,
       lateMinutes: null, bonusMinutes: null, lateFromProof: false, bonusFromProof: false,
       proof: null, noProof: false, gmv: null, gmvCoveredBy: null, campaign: campaignOf.get(`${c.platform}|${c.startMs}|${c.endMs}`) ?? "",
+      ...(c.type === "Mc" && isShopeePlatform(c.platform) ? { shopee: true } : {}),
     });
   }
 
@@ -512,14 +521,15 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   details.sort((a, b) => a.type.localeCompare(b.type) || a.startMs - b.startMs);
 
   const summarize = (type: "Mc" | "Admin"): OwnerPerson[] => {
-    const people = new Map<string, { slots: number; hours: number; paid: number; late: number; bonus: number; days: Set<string>; cancelled: number }>();
+    const people = new Map<string, { slots: number; hours: number; shopeeHours: number; paid: number; late: number; bonus: number; days: Set<string>; cancelled: number }>();
     for (const d of details) {
       if (d.type !== type) continue;
-      const p = people.get(d.name) ?? { slots: 0, hours: 0, paid: 0, late: 0, bonus: 0, days: new Set<string>(), cancelled: 0 };
+      const p = people.get(d.name) ?? { slots: 0, hours: 0, shopeeHours: 0, paid: 0, late: 0, bonus: 0, days: new Set<string>(), cancelled: 0 };
       people.set(d.name, p);
       if (d.cancelled) { p.cancelled++; continue; }
       p.slots++;
       p.hours += d.hours;
+      if (d.shopee) p.shopeeHours += d.hours;
       // ชั่วโมงที่ได้เงิน = หลังหักมาสาย + ไลฟ์ชดเชย (ปัดขึ้นทีละ 15 นาที)
       p.paid += slotPaidHours(d.hours, d.lateMinutes, d.bonusMinutes);
       p.bonus += bonusPaidMinutes(d.bonusMinutes);
@@ -532,16 +542,19 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
       .map(([name, p]) => {
         // ค่าจ้าง/ชม. ของเดือนนี้: รายคน (ไม่ตั้ง = ค่าเริ่มต้น) แล้วดูเทียร์ Commit จากชั่วโมงที่จองทั้งเดือน
         // Mc ประจำ / Admin ประจำ (เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง
+        // Mc ที่ตั้งค่าจ้าง Shopee แยก: ไลฟ์ Shopee คิดเรทนั้นคงที่ · Commit นับเฉพาะชั่วโมง TikTok (src/lib/pay.ts platformRates)
         const info = persons.get(`${type}|${name}`);
         const lock = info ? locked.get(Number(info.id)) : undefined;
         const salaried = lock ? lock.salaried : !!info?.is_salaried;
         const base = salaried ? 0 : lock ? lock.rate : Number(info?.hourly_rate) || defaultRate;
-        const m = monthRate(base, salaried ? [] : lock ? lock.tiers : cleanTiers(info?.commit_tiers), p.hours);
+        const shopeeRate = salaried || type !== "Mc" ? null : lock ? lock.shopeeRate : info ? shopeeRateOf.get(Number(info.id)) ?? null : null;
+        const m = platformRates(base, salaried ? [] : lock ? lock.tiers : cleanTiers(info?.commit_tiers), shopeeRate, p.hours - p.shopeeHours, p.shopeeHours);
         if (m.rate) (type === "Mc" ? rates.mc : rates.admin)[name] = m.rate;
+        if (type === "Mc" && p.shopeeHours > 0 && m.shopeeRate) rates.shopee![name] = m.shopeeRate;
         return {
           name, slots: p.slots, hours: r2(p.hours), paidHours: r2(p.paid), lateSlots: p.late, bonusMinutes: p.bonus,
           days: p.days.size, cancelled: p.cancelled, salaried,
-          commit: m.hasCommit ? { tiers: m.tiers, baseRate: base, tier: m.tier, next: m.next } : null,
+          commit: m.hasCommit ? { tiers: m.tiers, baseRate: base, tier: m.tier, next: m.next, ...(m.split ? { hours: r2(m.commitHours) } : {}) } : null,
           ...(info ? { staffId: Number(info.id) } : {}),
         };
       })

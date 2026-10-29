@@ -48,6 +48,17 @@ const nextMonth = (m: string) => {
  *   ยังไม่ถึงเทียร์แรก / ไม่มี Commit -> baseRate
  *   next = เทียร์ถัดไปที่ยังไม่ถึง (ใช้บอกว่าอีกกี่ชั่วโมง)
  */
+/**
+ * เรทของเดือนแยกแพลตฟอร์ม (Mc ที่ไลฟ์ทั้ง TikTok + Shopee ค่าตัวไม่เท่ากัน)
+ *   shopeeRate = ค่าจ้าง Shopee/ชม. ที่ตั้งรายคน · ไม่ตั้ง (null / 0) = ไลฟ์ Shopee ใช้เรทเดียวกับ TikTok และ Commit นับทุกชั่วโมงเหมือนเดิม
+ *   ตั้งไว้ = ไลฟ์ Shopee คิดเรทนี้คงที่ · Commit นับเฉพาะชั่วโมง TikTok
+ */
+export function platformRates(baseRate: number, tiers: CommitTier[] | null | undefined, shopeeRate: number | null | undefined, tiktokHours: number, shopeeHours: number) {
+  const split = !!shopeeRate && shopeeRate > 0;
+  const m = monthRate(baseRate, tiers, split ? tiktokHours : tiktokHours + shopeeHours);
+  return { ...m, split, commitHours: split ? tiktokHours : tiktokHours + shopeeHours, shopeeRate: split ? shopeeRate! : m.rate };
+}
+
 export function monthRate(baseRate: number, tiers: CommitTier[] | null | undefined, monthHours: number) {
   const list = cleanTiers(tiers);
   const reached = list.filter((t) => monthHours >= t.hours);

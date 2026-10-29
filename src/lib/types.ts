@@ -278,6 +278,8 @@ export type MyItem = {
   checkIn?: { time: string; slotHours: number } | null;
   /** แคมเปญของ slot (ว่าง = วันปกติ) */
   campaign?: string;
+  /** คิว Shopee (แท็บ MC Shopee) — คิดค่าจ้าง Shopee ถ้าตั้งแยกไว้ */
+  shopee?: boolean;
   /** ห้องไลฟ์ของช่องนี้ (ชื่อห้องจากหน้าอุปกรณ์ · ไม่เจอ = null) */
   room?: string | null;
   /** เฟรมไลฟ์ + บรีฟการแต่งตัวของช่อง + วันนี้ (ไม่มี = ไม่แสดง) */
@@ -397,8 +399,9 @@ export type MyResponse = {
   /**
    * โปรไฟล์ของตัวเอง rate = ค่าจ้างต่อชั่วโมงปกติ (0 = ยังไม่ได้ตั้ง)
    * commitTiers = เทียร์ Commit (ว่าง = ไม่มี) จองถึงเทียร์ไหน ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
+   * shopeeRate = ค่าจ้างคิว Shopee ที่ตั้งแยก (null = เท่ากับ TikTok) — src/lib/pay.ts platformRates
    */
-  profile: { name: string; email: string; phone: string; rate: number; commitTiers: CommitTier[] };
+  profile: { name: string; email: string; phone: string; rate: number; commitTiers: CommitTier[]; shopeeRate?: number | null };
   /** การโอนค่าจ้างของเดือนนี้ (ยังไม่มี / ยังไม่ได้รัน SQL = ว่าง) */
   payments?: { amount: number; paidOn: string }[];
 };
@@ -433,6 +436,8 @@ export type OwnerDetail = {
    */
   checkIn?: { time: string; slotHours: number } | null;
   checkInBad?: string | null;
+  /** คิว Shopee ของ Mc (แท็บ MC Shopee) — คิดค่าจ้างด้วย rates.shopee ของคนนั้น (ไม่มี = เรทเดียวกับ TikTok) */
+  shopee?: boolean;
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */
@@ -478,8 +483,11 @@ export type OwnerPerson = {
   name: string; slots: number; hours: number; paidHours: number; lateSlots: number; bonusMinutes: number; days: number; cancelled: number;
   /** Mc ประจำ / Admin ประจำ (ได้เงินเดือน) = ไม่คิดค่าจ้างรายชั่วโมง และไม่อยู่ในไฟล์เบิก */
   salaried?: boolean;
-  /** Commit แบบเทียร์ (null = ไม่มี) tier = เทียร์ที่เดือนนี้จองถึง (null = ยังไม่ถึงเทียร์แรก ใช้ baseRate) */
-  commit: { tiers: CommitTier[]; baseRate: number; tier: CommitTier | null; next: CommitTier | null } | null;
+  /**
+   * Commit แบบเทียร์ (null = ไม่มี) tier = เทียร์ที่เดือนนี้จองถึง (null = ยังไม่ถึงเทียร์แรก ใช้ baseRate)
+   *   hours = ชั่วโมงที่นับ Commit เมื่อตั้งค่าจ้าง Shopee แยก (นับเฉพาะ TikTok) ไม่มี = ชั่วโมงรวม
+   */
+  commit: { tiers: CommitTier[]; baseRate: number; tier: CommitTier | null; next: CommitTier | null; hours?: number } | null;
   /** id ในตาราง staff (ใช้บันทึกการโอน) */
   staffId?: number;
 };
@@ -495,7 +503,8 @@ export type OwnerSummary = {
   scope: OwnerScope; // ฝั่งที่ Owner คนนี้เห็นได้ (ฝั่งที่ไม่มีสิทธิ์ส่งมาเป็นรายการว่าง)
   /** ฝั่งที่ดูได้อย่างเดียว = ไม่ส่งค่าจ้างมา (ซ่อนคอลัมน์ยอดเงิน) */
   payHidden?: { mc: boolean; admin: boolean };
-  rates: { mc: Record<string, number>; admin: Record<string, number>; defaultMc: number; defaultAdmin: number };
+  /** shopee = ค่าจ้าง/ชม. ของคิว Shopee ของ Mc แต่ละคน (เฉพาะคนที่มีคิว Shopee · ไม่มี = ใช้ rates.mc) */
+  rates: { mc: Record<string, number>; admin: Record<string, number>; shopee?: Record<string, number>; defaultMc: number; defaultAdmin: number };
   mc: OwnerPerson[];
   admin: OwnerPerson[];
   details: OwnerDetail[];

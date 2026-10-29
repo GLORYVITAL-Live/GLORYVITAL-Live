@@ -3,7 +3,8 @@ import { num } from "@/lib/format";
 import type { OwnerDetail, OwnerPerson, OwnerSummary, PeriodChange } from "@/lib/types";
 
 export type Side = "mc" | "admin";
-export type PeriodSnapshot = { people: OwnerPerson[]; details: OwnerDetail[]; rates: Record<string, number>; defaultRate: number };
+/** shopeeRates = ค่าจ้าง Shopee ของ Mc (ฝั่ง Mc · งวดที่ปิดก่อนมีค่าจ้าง Shopee แยก = ไม่มี) */
+export type PeriodSnapshot = { people: OwnerPerson[]; details: OwnerDetail[]; rates: Record<string, number>; defaultRate: number; shopeeRates?: Record<string, number> };
 const TYPE: Record<Side, "Mc" | "Admin"> = { mc: "Mc", admin: "Admin" };
 
 /** ตัวเลขของฝั่งนี้จากสรุปรายเดือน (เก็บตอนปิด / ใช้เทียบส่วนต่าง) */
@@ -12,6 +13,7 @@ export const snapshotOf = (s: Pick<OwnerSummary, "mc" | "admin" | "details" | "r
   details: s.details.filter((d) => d.type === TYPE[side]),
   rates: s.rates[side],
   defaultRate: side === "mc" ? s.rates.defaultMc : s.rates.defaultAdmin,
+  ...(side === "mc" && s.rates.shopee && Object.keys(s.rates.shopee).length ? { shopeeRates: s.rates.shopee } : {}),
 });
 
 /** ส่วนต่างรายคน: ข้อมูลตอนนี้ (live) เทียบตัวเลขตอนปิด (closed) — ไม่ต่าง = ไม่อยู่ในรายการ */
@@ -35,6 +37,8 @@ export function periodChanges(closed: PeriodSnapshot, live: PeriodSnapshot): Per
     cmp("ยกเลิก", a.cancelled, b.cancelled, String);
     cmp("ไลฟ์ชดเชย (นาที)", a.bonusMinutes, b.bonusMinutes, String);
     cmp("ค่าจ้าง/ชม.", rate(closed, a), rate(live, b));
+    // ค่าจ้าง Shopee: เทียบเฉพาะงวดที่ปิดหลังมีค่าจ้าง Shopee แยก (งวดเก่าไม่มีข้อมูลนี้ = ไม่ขึ้นส่วนต่างปลอม)
+    if (closed.shopeeRates) cmp("ค่าจ้าง Shopee/ชม.", closed.shopeeRates[name] ?? 0, live.shopeeRates?.[name] ?? 0);
     if (!!a.salaried !== !!b.salaried) items.push({ label: "พนักงานประจำ", before: a.salaried ? "ใช่" : "ไม่ใช่", after: b.salaried ? "ใช่" : "ไม่ใช่" });
     if (items.length) out.push({ name, items });
   }

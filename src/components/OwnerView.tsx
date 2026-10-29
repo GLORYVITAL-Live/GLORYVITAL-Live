@@ -4,7 +4,8 @@ import { Fragment, useEffect, useState } from "react";
 import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey, todayKey } from "@/lib/format";
 import { fmtGmv } from "@/lib/gmv";
-import { bonusPaidMinutes, lateCut, slotPay, sumPay, tiersLabel } from "@/lib/pay";
+import { bonusPaidMinutes, lateCut, slotPaidHours, slotPay, tiersLabel } from "@/lib/pay";
+import { useLocal, writeLocal } from "@/lib/hooks";
 import { ChevronRightIcon, LockIcon, LockOpenIcon } from "lucide-react";
 import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
@@ -27,11 +28,33 @@ type Type = "Mc" | "Admin";
 const salariedOf = (data: OwnerSummary, type: Type, name: string) =>
   !!(type === "Mc" ? data.mc : data.admin).find((p) => p.name === name)?.salaried;
 
-/** อัตราค่าจ้างต่อชั่วโมง: รายคน ถ้าไม่มีใช้ค่าเริ่มต้น / พนักงานประจำ (เงินเดือน) = 0 */
+/** อัตราค่าจ้างต่อชั่วโมง (TikTok / เรทหลัก): รายคน ถ้าไม่มีใช้ค่าเริ่มต้น / พนักงานประจำ (เงินเดือน) = 0 */
 function rateOf(data: OwnerSummary, type: Type, name: string) {
   if (salariedOf(data, type, name)) return 0;
   const own = type === "Mc" ? data.rates.mc : data.rates.admin;
   return own[name] || (type === "Mc" ? data.rates.defaultMc : data.rates.defaultAdmin) || 0;
+}
+
+/** ค่าจ้างคิว Shopee ของคนนี้ ที่ต่างจากเรทหลัก (ตั้งค่าจ้าง Shopee แยก) · ไม่มี = 0 */
+const shopeeRateOf = (data: OwnerSummary, type: Type, name: string) =>
+  type === "Mc" && !salariedOf(data, type, name) ? data.rates.shopee?.[name] ?? 0 : 0;
+
+/** ค่าจ้าง/ชม. ของคิวนี้: คิว Shopee ของ Mc ที่ตั้งค่าจ้าง Shopee แยก = เรท Shopee · อื่นๆ = เรทหลักของคนนั้น */
+const itemRate = (data: OwnerSummary, type: Type, d: OwnerDetail) =>
+  (d.shopee && shopeeRateOf(data, type, d.name)) || rateOf(data, type, d.name);
+
+/** ยอดเงินของหลายคิว (ปัดทีละคิวแล้วรวม · คิดตามเรทของแต่ละคิว) — สูตรเดียวกับไฟล์เบิก / ตารางของฉัน */
+const payOfItems = (data: OwnerSummary, type: Type, items: OwnerDetail[]) =>
+  items.reduce((a, d) => a + slotPay(d.hours, d.lateMinutes, d.bonusMinutes, itemRate(data, type, d)), 0);
+
+/** คนนี้มีค่าจ้างรายชั่วโมงไหม (เรทหลัก หรือเรท Shopee) */
+const hasRateOf = (data: OwnerSummary, type: Type, name: string) => rateOf(data, type, name) > 0 || shopeeRateOf(data, type, name) > 0;
+
+/** "750" / "750 · Shopee 500" (มีคิว Shopee ที่คิดเรทต่างจากเรทหลัก) */
+function rateLabel(data: OwnerSummary, type: Type, name: string) {
+  const main = rateOf(data, type, name), shopee = shopeeRateOf(data, type, name);
+  if (!shopee || shopee === main) return main || "";
+  return main ? `${main} · Shopee ${shopee}` : `Shopee ${shopee}`;
 }
 
 /** ชั่วโมงรายวันของคนหนึ่ง (ไม่นับคิวที่ยกเลิก) */
@@ -58,11 +81,14 @@ const proofUrl = (p: ProofInfo) => `/api/proofs/image?id=${p.id}`;
 /** นาทีสายสำหรับไฟล์ที่ส่งออก เช่น "12" / "10 (จากหลักฐาน)" */
 const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${d.lateFromProof ? " (จากหลักฐาน)" : ""}` : "");
 
+/** ไม่ต้องแนบหลักฐาน เพราะอะไร (Mc ประจำ / คิว Shopee) */
+const noProofText = (d: OwnerDetail) => (d.shopee ? "ไม่ต้องแนบ (คิว Shopee)" : "ไม่ต้องแนบ (Mc ประจำ)");
+
 /** ลิงก์โฟลเดอร์ Drive ที่รวมหลักฐานทั้งเดือนของ Mc (จากคิวไหนก็ได้ที่อัปขึ้น Drive แล้ว) */
 const monthFolderOf = (items: OwnerDetail[]) => items.find((d) => d.proof?.driveFolderUrl)?.proof?.driveFolderUrl ?? null;
 const monthFolderText = (items: OwnerDetail[]) =>
   monthFolderOf(items)
-    ?? (items.length && items.every((d) => d.noProof) ? "ไม่ต้องแนบ (Mc ประจำ)"
+    ?? (items.length && items.every((d) => d.noProof) ? noProofText(items[0])
       : items.some((d) => d.proof?.driveUrl) ? "อยู่ใน Drive แล้ว (ดูลิงก์รายคิว)"
         : items.some((d) => d.proof) ? "ยังไม่ได้อัปขึ้น Drive" : "ยังไม่มีหลักฐาน");
 
@@ -117,7 +143,7 @@ function summaryBook(data: OwnerSummary) {
     "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน",
   ]];
   for (const [type, people] of groups(data)) for (const r of people) {
-    const rate = rateOf(data, type, r.name);
+    const paid = hasRateOf(data, type, r.name);
     const commit = r.commit
       ? `${tiersLabel(r.commit.baseRate, r.commit.tiers)} (${r.commit.tier ? `ถึง ${r.commit.tier.hours}+ ชม.` : "ยังไม่ถึงเทียร์แรก"})`
       : "";
@@ -129,7 +155,7 @@ function summaryBook(data: OwnerSummary) {
       need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "ไม่ต้องแนบ",
       gmv.count ? round2(gmv.total) : "", gmvPerHour(items),
       round2(items.filter((d) => d.campaign).reduce((a, d) => a + d.hours, 0)) || "",
-      r.paidHours, commit, rate || (r.salaried ? "เงินเดือน" : ""), rate ? sumPay(items, rate) : "",
+      r.paidHours, commit, paid ? rateLabel(data, type, r.name) : r.salaried ? "เงินเดือน" : "", paid ? payOfItems(data, type, items) : "",
     ]);
   }
   return book(`GLORY สรุป ${data.month}`, "สรุป", payHiddenAll(data) ? dropCols(rows, [13, 14, 15]) : rows);
@@ -141,7 +167,7 @@ function payrollBook(data: OwnerSummary) {
   for (const [type, people] of groups(data)) {
     let groupHours = 0, groupMoney = 0, groupGmv = 0, groupGmvCount = 0;
     for (const p of people) {
-      const rate = rateOf(data, type, p.name);
+      const paid = hasRateOf(data, type, p.name);
       const items = slotsOf(data, type, p.name);
       if (!items.length) continue;
       const gmv = gmvOf(items);
@@ -150,7 +176,8 @@ function payrollBook(data: OwnerSummary) {
         const hrs = round2(d.hours);
         const cut = lateCut(d.lateMinutes);
         const bonus = bonusPaidMinutes(d.bonusMinutes);
-        // ปัดเงินทีละคิวแล้วรวม (ตัวเลขเดียวกับไฟล์เบิก / หน้าจอ)
+        // ปัดเงินทีละคิวแล้วรวม (ตัวเลขเดียวกับไฟล์เบิก / หน้าจอ) · เรทของคิวนี้ (คิว Shopee = เรท Shopee ถ้าตั้งแยก)
+        const rate = itemRate(data, type, d);
         const pay = slotPay(d.hours, d.lateMinutes, d.bonusMinutes, rate);
         h += hrs;
         m += pay;
@@ -159,13 +186,13 @@ function payrollBook(data: OwnerSummary) {
           lateText(d), cut ? `${Math.round(cut * 100)}%` : "",
           bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? pay : "",
           d.gmv ?? (d.gmvCoveredBy ? `รวมในคิว ${d.gmvCoveredBy}` : ""),
-          d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "ยังไม่มีหลักฐาน",
+          d.proof ? proofTime(d.proof) : d.noProof ? noProofText(d) : "ยังไม่มีหลักฐาน",
           d.proof?.by ?? "",
           d.proof ? d.proof.driveUrl ?? "ยังไม่ได้อัปขึ้น Drive" : "",
         ]);
       }
       rows.push([
-        `รวม ${p.name}`, `${items.length} slot`, "", "", "", "", round2(h), "", "", "", "", rate ? m : "",
+        `รวม ${p.name}`, `${items.length} slot`, "", "", "", "", round2(h), "", "", "", "", paid ? m : "",
         gmv.count ? round2(gmv.total) : "", "", "",
         // คอลัมน์ O: โฟลเดอร์รวมหลักฐานทั้งเดือนของ Mc คนนี้ใน Google Drive
         type === "Mc" ? monthFolderText(items) : "",
@@ -221,33 +248,46 @@ const claimRemark = (d: OwnerDetail) => [
  * สรุปรายละเอียดชั่วโมงทำงาน (รายคน): หัวเรื่องแถบดำ / แถวละคิว ช่อง channel ใส่สีตามช่อง / แถวสุดท้ายของแต่ละคน = Total + GMV
  *   เฉพาะคนที่มีค่าจ้างรายชั่วโมง (Mc ประจำ / Admin ประจำ ที่ได้เงินเดือนไม่อยู่ในไฟล์เบิก)
  */
-function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
-  const [y, m] = data.month.split("-").map(Number);
-  const first = `${data.month}-01`, last = `${data.month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
-  const people = (type === "Mc" ? data.mc : data.admin)
-    .map((p) => ({ p, rate: rateOf(data, type, p.name), items: slotsOf(data, type, p.name) }))
-    .filter((x) => x.items.length && x.rate > 0)
-    .sort((a, b) => a.p.name.localeCompare(b.p.name, "th"));
-  const skipped = (type === "Mc" ? data.mc : data.admin).filter((p) => !rateOf(data, type, p.name) && slotsOf(data, type, p.name).length);
-  const salaried = skipped.filter((p) => p.salaried), noRate = skipped.filter((p) => !p.salaried);
-  if (!people.length) return null;
-  const channels = new Set(people.flatMap((x) => x.items.map((d) => d.platform)));
-  const where = channels.has("Shopee") && channels.size > 1 ? "Tiktok / Shopee" : channels.has("Shopee") ? "Shopee" : "Tiktok";
+/** วันแรก / วันสุดท้ายของเดือนที่เบิก */
+const monthSpan = (month: string) => {
+  const [y, m] = month.split("-").map(Number);
+  return { first: `${month}-01`, last: `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}` };
+};
 
-  const rows: Cell[][] = [
-    ["", `สรุปรายละเอียดชั่วโมงทำงาน ${type === "Mc" ? "MC" : "ADMIN"} LIVESTREAMING ${where} รอบ ${dmy(first)} - ${dmy(last)}`],
-    [madeOn(), "ชื่อ", "Name", "channel", "วันที่ live", "เวลาที่ live", "เวลาที่ ลง live", "รวมเป็น ชั่วโมง", "ราคาต่อชั่วโมง", "รวมเป็นเงิน", "Total", "จำนวน GMV ที่ได้", "remark"],
-  ];
-  const rowStyles: Record<number, RowStyle> = {
-    0: { bg: "000000", color: "FFFFFF", bold: true },
-    1: { bg: "F3F3F3", bold: true, border: true },
-  };
-  const cellStyles: Record<string, RowStyle> = {};
+/**
+ * คนที่อยู่ในไฟล์เบิกของคิวกลุ่มนี้ (keep = คิวที่นับ เช่น เฉพาะคิว Shopee) เรียงตามชื่อ
+ *   ข้าม = ไม่มีค่าจ้างรายชั่วโมงสำหรับคิวเหล่านี้ (Mc / Admin ประจำ = เงินเดือน · ยังไม่ได้ตั้งค่าจ้าง)
+ */
+function claimPeople(data: OwnerSummary, type: Type, keep: (d: OwnerDetail) => boolean) {
+  const all = (type === "Mc" ? data.mc : data.admin)
+    .map((p) => ({ p, items: slotsOf(data, type, p.name).filter(keep) }))
+    .filter((x) => x.items.length);
+  const people = all.filter((x) => x.items.some((d) => itemRate(data, type, d) > 0)).sort((a, b) => a.p.name.localeCompare(b.p.name, "th"));
+  const skipped = all.filter((x) => !people.includes(x)).map((x) => x.p);
+  return { people, salaried: skipped.filter((p) => p.salaried), noRate: skipped.filter((p) => !p.salaried) };
+}
+
+type SheetParts = { rows: Cell[][]; rowStyles: Record<number, RowStyle>; cellStyles: Record<string, RowStyle> };
+const CLAIM_HEAD = ["ชื่อ", "Name", "channel", "วันที่ live", "เวลาที่ live", "เวลาที่ ลง live", "รวมเป็น ชั่วโมง", "ราคาต่อชั่วโมง", "รวมเป็นเงิน", "Total", "จำนวน GMV ที่ได้", "remark"];
+
+/**
+ * ต่อแถวรายคน (แถวละคิว) ของคิวกลุ่มหนึ่งลงในแผ่นงาน: หัวเรื่อง (สี titleBg) / หัวตาราง / คิว / แถวรวม
+ *   ราคาต่อชั่วโมง = เรทของแต่ละคิว (คิว Shopee = เรท Shopee ถ้าตั้งแยก) · คืนยอดรวม (ไม่มีคนเลย = null)
+ */
+function claimRows(out: SheetParts, data: OwnerSummary, type: Type, keep: (d: OwnerDetail) => boolean, title: string, titleBg: string, totalLabel: string) {
+  const { people, salaried, noRate } = claimPeople(data, type, keep);
+  if (!people.length) return null;
+  const { rows, rowStyles, cellStyles } = out;
+  rowStyles[rows.length] = { bg: titleBg, color: titleBg === "000000" ? "FFFFFF" : "000000", bold: true };
+  rows.push(["", title]);
+  rowStyles[rows.length] = { bg: "F3F3F3", bold: true, border: true };
+  rows.push([madeOn(), ...CLAIM_HEAD]);
   let grand = 0, grandGmv = 0, grandHours = 0;
-  for (const { p, rate, items } of people) {
+  for (const { p, items } of people) {
     let total = 0;
     const gmv = gmvOf(items);
     items.forEach((d, i) => {
+      const rate = itemRate(data, type, d);
       const money_ = slotMoney(d, rate);
       total += money_;
       const lastRow = i === items.length - 1;
@@ -264,23 +304,33 @@ function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
     rows.push([]);
   }
   rowStyles[rows.length] = { bg: "F3F3F3", bold: true, border: true };
-  rows.push(["", `รวม ${type} ทั้งหมด`, `${people.length} คน`, "", "", "", "", round2(grandHours), "", "", { v: grand, f: "money" }, grandGmv ? { v: round2(grandGmv), f: "money" } : null, ""]);
-  if (skipped.length) rows.push([]);
+  rows.push(["", totalLabel, `${people.length} คน`, "", "", "", "", round2(grandHours), "", "", { v: grand, f: "money" }, grandGmv ? { v: round2(grandGmv), f: "money" } : null, ""]);
+  if (salaried.length || noRate.length) rows.push([]);
   if (salaried.length) rows.push(["", `ไม่อยู่ในไฟล์เบิก (${type} ประจำ ได้เงินเดือน): ${salaried.map((p) => p.name).join(", ")}`]);
   if (noRate.length) rows.push(["", `ไม่อยู่ในไฟล์เบิก (ยังไม่ได้ตั้งค่าจ้างรายชั่วโมง): ${noRate.map((p) => p.name).join(", ")}`]);
-  return {
-    name: `รายคน ${type}`, rows, header: 1, rowStyles, cellStyles,
-    colWidths: [12, 14, 14, 14, 10, 10, 12, 10, 12, 12, 13, 16, 26],
-  };
+  return { grand, people: people.length };
+}
+
+const CLAIM_WIDTHS = [12, 14, 14, 14, 10, 10, 12, 10, 12, 12, 13, 16, 26];
+
+function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
+  const { first, last } = monthSpan(data.month);
+  const items = data.details.filter((d) => d.type === type && !d.cancelled);
+  const shopee = items.some((d) => d.shopee), tiktok = items.some((d) => !d.shopee);
+  const where = shopee && tiktok ? "Tiktok / Shopee" : shopee ? "Shopee" : "Tiktok";
+  const out: SheetParts = { rows: [], rowStyles: {}, cellStyles: {} };
+  const title = `สรุปรายละเอียดชั่วโมงทำงาน ${type === "Mc" ? "MC" : "ADMIN"} LIVESTREAMING ${where} รอบ ${dmy(first)} - ${dmy(last)}`;
+  if (!claimRows(out, data, type, () => true, title, "000000", `รวม ${type} ทั้งหมด`)) return null;
+  return { name: `รายคน ${type}`, ...out, header: 1, colWidths: CLAIM_WIDTHS };
 }
 
 /** ตารางคุม Advance Payment ประจำเดือน: วันละแถว จ่าย = ค่าตัว Mc + Admin ของวันนั้น / WHT 3% / ก่อน VAT = จ่าย - WHT */
 function advanceSheet(data: OwnerSummary, requester: string): ExportSheet | null {
   const byDate = new Map<string, { mc: number; admin: number }>();
   for (const [type, people] of groups(data)) for (const p of people) {
-    const rate = rateOf(data, type, p.name);
-    if (!rate) continue;
     for (const d of slotsOf(data, type, p.name)) {
+      const rate = itemRate(data, type, d);
+      if (!rate) continue;
       const x = byDate.get(d.date) ?? { mc: 0, admin: 0 };
       x[type === "Mc" ? "mc" : "admin"] += slotMoney(d, rate);
       byDate.set(d.date, x);
@@ -336,6 +386,93 @@ function claimBook(data: OwnerSummary, requester: string): ExportBook {
   return { title: `GLORY ไฟล์เบิก ${monthLabel(data.month)}`, sheets };
 }
 
+// ---------- สรุปรายการเบิก: รูปแบบไฟล์ของฝ่ายบัญชี ("รอบเบิกจ่าย" + "Details รอบเบิกจ่าย") ----------
+
+/**
+ * กลุ่มในไฟล์ของฝ่ายบัญชี: Mc Shopee / Mc TikTok / Admin เสริม (Admin มีแต่ TikTok)
+ *   Mc ที่ไลฟ์ทั้งสองแพลตฟอร์มอยู่ทั้งกลุ่ม Shopee และ TikTok (แยกยอด + ค่าตัว/ชม. ของแต่ละแพลตฟอร์ม)
+ */
+const ACCOUNT_GROUPS: { type: Type; keep: (d: OwnerDetail) => boolean; fee: string; item: string; detail: string; bg: string }[] = [
+  { type: "Mc", keep: (d) => !!d.shopee, fee: "MC LIVESTREAM Shopee Fee", item: "MC LIVESTREAM Shopee-", detail: "MC LIVESTREAMING Shopee", bg: "F6B26B" },
+  { type: "Mc", keep: (d) => !d.shopee, fee: "MC LIVESTREAM Tiktok Fee", item: "MC LIVESTREAM Tiktok-", detail: "MC LIVESTREAMING Tiktok", bg: "000000" },
+  { type: "Admin", keep: () => true, fee: "ADMIN LIVESTREAM Tiktok Fee", item: "ADMIN LIVESTREAM Tiktok-", detail: "Adminเสริม Tiktok", bg: "000000" },
+];
+/** หัก ณ ที่จ่าย 3% เฉพาะยอดจ่ายครั้งละ 1,000 บาทขึ้นไป (ต่ำกว่านั้นไม่หัก — แบบเดียวกับไฟล์ของฝ่ายบัญชี) */
+const WHT_MIN = 1000;
+const whtOf = (net: number) => (net >= WHT_MIN ? Math.round(net * 0.03 * 100) / 100 : 0);
+
+/**
+ * ไฟล์สรุปรายการเบิก (หน้าตาเดียวกับไฟล์ "Accounting Team Live" ของฝ่ายบัญชี)
+ *   แผ่น "รอบเบิกจ่าย": รายคนต่อกลุ่ม — ยอดเต็ม / ยอดเงินเบิก (หลังหัก 3%) / หัก ณ ที่จ่าย 3% / ค่าตัว/ชม. + ยอดเบิกทั้งหมด
+ *     ธนาคาร / เลขที่บัญชี / ชื่อบัญชี / ใบเสนอราคา: เว็บไม่เก็บข้อมูลบัญชีธนาคาร เว้นว่างไว้ให้ฝ่ายบัญชีเติม
+ *   แผ่น "Details รอบเบิกจ่าย": คิวรายคนทีละกลุ่ม (Shopee หัวสีส้ม) + Grand Total / Duration / Total Cost
+ *   เฉพาะฝั่งที่มีสิทธิ์และเห็นค่าจ้าง
+ */
+function accountBook(data: OwnerSummary): ExportBook {
+  const round = madeOn();
+  const { first, last } = monthSpan(data.month);
+  const sides = groups(data).filter(([type]) => !payHiddenOf(data, type)).map(([type]) => type);
+  const list = ACCOUNT_GROUPS.filter((g) => sides.includes(g.type));
+
+  // แผ่นสรุปรายการเบิก
+  const sum: SheetParts = { rows: [], rowStyles: {}, cellStyles: {} };
+  const HEAD = ["ลำดับ", "รายการ", "ยอดเต็ม (Net.)", "ยอดเงินเบิก", "หัก ณ ที่จ่าย3%", "หัก Vat 7%", "ธนาคาร", "เลขที่บัญชี", "ชื่อบัญชี", "เอกสารแนบ", "ใบเสนอราคา", "ค่าตัว/ชม.", "เอกสารรับเงิน"];
+  let allNet = 0;
+  for (const g of list) {
+    const { people } = claimPeople(data, g.type, g.keep);
+    if (!people.length) continue;
+    if (sum.rows.length) sum.rows.push([], []);
+    sum.rowStyles[sum.rows.length] = { bg: "FFFFFF", bold: true };
+    sum.rows.push([`รายการเบิกสำหรับ ${g.fee}`]);
+    sum.rows.push([]);
+    sum.rowStyles[sum.rows.length] = { bg: "D9D9D9", bold: true, border: true, align: "center" };
+    sum.rows.push(HEAD);
+    let net = 0, paid = 0, wht = 0;
+    people.forEach(({ p, items }, i) => {
+      const total = payOfItems(data, g.type, items);
+      const tax = whtOf(total);
+      net += total; wht += tax; paid += total - tax;
+      // ค่าตัว/ชม. ของกลุ่มนี้ (คิวกลุ่มเดียวกันเรทเดียวกัน · Commit ถึงเทียร์ = เรทของเทียร์)
+      const rates = [...new Set(items.map((d) => itemRate(data, g.type, d)).filter(Boolean))];
+      sum.rowStyles[sum.rows.length] = BORDER;
+      sum.rows.push([
+        i + 1, `${g.item}${p.name}`, { v: total, f: "money" }, { v: total - tax, f: "money" }, tax ? { v: tax, f: "money" } : "", 0,
+        "", "", "", p.name, "", rates.join(" / "), "",
+      ]);
+    });
+    allNet += net;
+    sum.rowStyles[sum.rows.length] = { bg: "F3F3F3", bold: true, border: true };
+    sum.rows.push(["", "ยอดเบิกทั้งหมด", { v: net, f: "money" }, { v: paid, f: "money" }, { v: wht, f: "money" }, "", "", "", "", "", "", "", ""]);
+  }
+  if (!sum.rows.length) throw new Error("เดือนนี้ไม่มีคิวที่มีค่าจ้างให้เบิก");
+  sum.rows.push([], [], ["", `รวมทุกกลุ่ม ${money(allNet)} บาท · รอบ ${dmy(first)} - ${dmy(last)}`], [], []);
+  sum.rows.push(["", "...............................................", "", "", ".....................................................", "", "", "........................................................"]);
+  sum.rows.push(["", "(ผู้ทำจ่าย)", "", "", "(ผู้อนุมัติ)", "", "", "(ผู้อนุมัติ)"]);
+
+  // แผ่นรายละเอียด (คิวรายคนทีละกลุ่ม)
+  const det: SheetParts = { rows: [], rowStyles: {}, cellStyles: {} };
+  const dm = (d: string) => `${Number(d.slice(8))} ${MONTHS_EN[Number(d.slice(5, 7)) - 1]}`;
+  for (const g of list) {
+    const start = det.rows.length;
+    if (start) det.rows.push([], []);
+    const title = `สรุปรายละเอียดชั่วโมงทำงาน ${g.detail} รอบ ${dmy(first)} - ${dmy(last)}`;
+    const res = claimRows(det, data, g.type, g.keep, title, g.bg, "Grand Total");
+    if (!res) { det.rows.length = start; continue; }
+    det.rows.push(["", "", "", "", "", "", "", "", "", "", `Duration : ${dm(first)} - ${dm(last)}`]);
+    det.rowStyles[det.rows.length] = { bg: "F3F3F3", bold: true };
+    det.rows.push(["", "", "", "", "", "", "", "", "", "", "Total Cost", { v: res.grand, f: "money" }]);
+  }
+
+  return {
+    title: `GLORY สรุปรายการเบิก ${monthLabel(data.month)}`,
+    sheets: [
+      // ชื่อแผ่นงานยาวได้ไม่เกิน 31 ตัวอักษร (Excel)
+      { name: `รอบเบิกจ่าย ${round}`.slice(0, 31), ...sum, header: -1, colWidths: [7, 34, 14, 14, 14, 11, 12, 14, 18, 14, 16, 12, 14] },
+      { name: `Details รอบเบิกจ่าย ${round}`.slice(0, 31), ...det, header: -1, colWidths: CLAIM_WIDTHS },
+    ],
+  };
+}
+
 // ตาราง คน x วันที่: แต่ละช่อง = ชั่วโมงของวันนั้น, ท้ายแถว = รวมชั่วโมงและจำนวนวัน
 function dailyBook(data: OwnerSummary) {
   const [y, m] = data.month.split("-").map(Number);
@@ -362,7 +499,7 @@ function detailBook(data: OwnerSummary) {
       d.type, d.name, d.date, d.start, d.end, d.platform, d.campaign, d.hours,
       d.gmv ?? (d.gmvCoveredBy ? `รวมในคิว ${d.gmvCoveredBy}` : ""),
       d.pair, d.cancelled ? d.status || "ยกเลิก" : d.status || "",
-      lateText(d), d.bonusMinutes ? `+${d.bonusMinutes}${d.bonusFromProof ? " (จากหลักฐาน)" : ""}` : "", d.proof ? proofTime(d.proof) : d.noProof ? "ไม่ต้องแนบ (Mc ประจำ)" : "", d.proof?.by ?? "", d.proof?.driveUrl ?? "",
+      lateText(d), d.bonusMinutes ? `+${d.bonusMinutes}${d.bonusFromProof ? " (จากหลักฐาน)" : ""}` : "", d.proof ? proofTime(d.proof) : d.noProof ? noProofText(d) : "", d.proof?.by ?? "", d.proof?.driveUrl ?? "",
       d.cancelled ? cancelText(d) : "",
       d.checkIn ? checkInText(d) : d.checkInBad ? `ใช้ไม่ได้ (${d.checkInBad}) คิดเต็ม slot` : "",
     ]);
@@ -373,8 +510,47 @@ function detailBook(data: OwnerSummary) {
 // ---------- หน้าจอ ----------
 
 /** requester = ชื่อผู้เบิกเงินทดรองจ่ายในไฟล์เบิก (Owner ที่กดส่งออก) */
+// ---------- ดูเฉพาะแพลตฟอร์ม (ทั้งหมด / TikTok / Shopee) ----------
+
+type Platform = "all" | "tiktok" | "shopee";
+const PLATFORM_KEY = "glory_owner_platform";
+
+/** ตัวเลขรายคนจากคิวชุดนี้ (สูตรเดียวกับเซิร์ฟเวอร์ src/lib/data.ts ownerSummary) */
+function restat(r: OwnerPerson, items: OwnerDetail[]): OwnerPerson {
+  const live = items.filter((d) => !d.cancelled);
+  return {
+    ...r,
+    slots: live.length,
+    hours: round2(live.reduce((a, d) => a + d.hours, 0)),
+    paidHours: round2(live.reduce((a, d) => a + slotPaidHours(d.hours, d.lateMinutes, d.bonusMinutes), 0)),
+    lateSlots: live.filter((d) => lateCut(d.lateMinutes) > 0).length,
+    bonusMinutes: live.reduce((a, d) => a + bonusPaidMinutes(d.bonusMinutes), 0),
+    days: new Set(live.map((d) => d.date)).size,
+    cancelled: items.length - live.length,
+  };
+}
+
+/**
+ * สรุปเฉพาะแพลตฟอร์ม: TikTok = คิว Mc ที่ไม่ใช่ Shopee + Admin ทั้งหมด · Shopee = คิว Shopee ของ Mc (Admin ไม่มีคิว Shopee)
+ *   ค่าจ้าง/ชม. ใช้ของทั้งเดือนเดิม (Commit / เรท Shopee คิดจากข้อมูลทั้งเดือนแล้ว) · การโอน / ปิดงวดเป็นยอดรวม = ทำที่ "ทั้งหมด"
+ */
+function platformView(data: OwnerSummary, p: Exclude<Platform, "all">): OwnerSummary {
+  const keep = (d: OwnerDetail) => (d.type === "Admin" ? p === "tiktok" : p === "shopee" ? !!d.shopee : !d.shopee);
+  const details = data.details.filter(keep);
+  const people = (type: Type, list: OwnerPerson[]) => list
+    .map((r) => restat(r, details.filter((d) => d.type === type && d.name === r.name)))
+    // Shopee: Commit ไม่เกี่ยวกับคนที่ตั้งเรท Shopee แยก (Commit นับเฉพาะ TikTok)
+    .map((r) => (p === "shopee" && data.rates.shopee?.[r.name] && r.commit?.hours !== undefined ? { ...r, commit: null } : r))
+    .filter((r) => r.slots || r.cancelled);
+  return {
+    ...data, details, mc: people("Mc", data.mc), admin: people("Admin", data.admin),
+    payments: {}, paySides: { mc: false, admin: false }, periods: undefined, changes: undefined, periodLog: undefined, canClose: false,
+  };
+}
+
 export function OwnerView({ requester = "" }: { requester?: string }) {
   const [month, setMonth] = useState(() => monthKey());
+  const savedPlatform = useLocal(PLATFORM_KEY);
   const [cache, setCache] = useState<Record<string, OwnerSummary>>({});
   const [failed, setFailed] = useState<{ month: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -409,44 +585,74 @@ export function OwnerView({ requester = "" }: { requester?: string }) {
 
   const r0 = data.rates;
   const hideAll = payHiddenAll(data);
-  const noRates = !hideAll && !r0.defaultMc && !r0.defaultAdmin && !Object.keys(r0.mc).length && !Object.keys(r0.admin).length;
+  const noRates = !hideAll && !r0.defaultMc && !r0.defaultAdmin && !Object.keys(r0.mc).length && !Object.keys(r0.admin).length
+    && !Object.keys(r0.shopee ?? {}).length;
+  // เดือนที่มีคิว Shopee: สลับดูเฉพาะ TikTok / Shopee ได้ (ตาราง + ไฟล์ที่ส่งออกตามที่เลือก)
+  const hasShopee = data.details.some((d) => d.shopee);
+  const shown: Platform = hasShopee && (savedPlatform === "tiktok" || savedPlatform === "shopee") ? savedPlatform : "all";
+  const view = shown === "all" ? data : platformView(data, shown);
   const sum = (rows: OwnerPerson[], k: "hours" | "slots") => rows.reduce((a, r) => a + r[k], 0);
-  const onlyAdmin = data.scope?.mc === false;
-  const onlyMc = data.scope?.admin === false;
+  const onlyAdmin = view.scope?.mc === false;
+  // ดูเฉพาะ Shopee = มีแต่ Mc (Admin ไม่มีคิว Shopee)
+  const onlyMc = view.scope?.admin === false || shown === "shopee";
 
   return (
     <div className="pb-10">
       {nav}
+      {hasShopee ? (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div role="tablist" aria-label="ดูเฉพาะแพลตฟอร์ม" className="flex gap-1 rounded-full border bg-card p-1">
+            {([["all", "ทั้งหมด"], ["tiktok", "TikTok"], ["shopee", "Shopee"]] as const).map(([id, text]) => (
+              <button
+                key={id} type="button" role="tab" aria-selected={shown === id} onClick={() => writeLocal(PLATFORM_KEY, id)}
+                className={cn(
+                  "cursor-pointer rounded-full px-3 py-1 text-[13px] font-semibold transition-colors pointer-coarse:min-h-9",
+                  shown === id ? "bg-tint text-tint-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+          {shown !== "all" ? (
+            <span className="text-xs text-muted-foreground">
+              เฉพาะคิว {shown === "shopee" ? "Shopee" : "TikTok"} · บันทึกโอน / ปิดงวด ทำที่ &quot;ทั้งหมด&quot; (ยอดรวมต่อคน)
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <Stats items={onlyAdmin
-        ? [[num(sum(data.admin, "hours")), "ชม. Admin"], [String(sum(data.admin, "slots")), "slot Admin"], [String(data.admin.length), "คน"]]
+        ? [[num(sum(view.admin, "hours")), "ชม. Admin"], [String(sum(view.admin, "slots")), "slot Admin"], [String(view.admin.length), "คน"]]
         : onlyMc
-          ? [[num(sum(data.mc, "hours")), "ชม. Mc"], [String(sum(data.mc, "slots")), "slot Mc"], [String(data.mc.length), "คน"]]
-          : [[num(sum(data.mc, "hours")), "ชม. Mc"], [num(sum(data.admin, "hours")), "ชม. Admin"], [String(sum(data.mc, "slots")), "slot Mc"]]} />
+          ? [[num(sum(view.mc, "hours")), "ชม. Mc"], [String(sum(view.mc, "slots")), "slot Mc"], [String(view.mc.length), "คน"]]
+          : [[num(sum(view.mc, "hours")), "ชม. Mc"], [num(sum(view.admin, "hours")), "ชม. Admin"], [String(sum(view.mc, "slots")), "slot Mc"]]} />
       {noRates ? (
         <Notice>
           ยังไม่ได้ตั้งค่าจ้าง: ใส่ค่าจ้างต่อชั่วโมงเริ่มต้นในตาราง settings (default_mc_rate / default_admin_rate) หรือรายคนที่ staff.hourly_rate
         </Notice>
       ) : null}
       <div className="my-3 flex flex-wrap gap-2">
-        {!hideAll ? <ExportMenu variant="default" label="ไฟล์เบิก" build={() => claimBook(data, requester)} /> : null}
-        <ExportMenu label={hideAll ? "ใบสรุปรายคน" : "ใบสรุปค่าจ้าง (ละเอียด)"} build={() => payrollBook(data)} />
-        <ExportMenu label="รายคน-รายวัน" build={() => dailyBook(data)} />
-        <ExportMenu label="สรุป" build={() => summaryBook(data)} />
-        <ExportMenu label="รายละเอียด" build={() => detailBook(data)} />
+        {!hideAll ? <ExportMenu variant="default" label="ไฟล์เบิก" build={() => claimBook(view, requester)} /> : null}
+        {/* รูปแบบไฟล์ของฝ่ายบัญชี: แยกกลุ่ม Mc Shopee / Mc TikTok / Admin เสมอ (ไม่ขึ้นกับปุ่มเลือกแพลตฟอร์ม) */}
+        {!hideAll ? <ExportMenu label="สรุปรายการเบิก" build={() => accountBook(data)} /> : null}
+        <ExportMenu label={hideAll ? "ใบสรุปรายคน" : "ใบสรุปค่าจ้าง (ละเอียด)"} build={() => payrollBook(view)} />
+        <ExportMenu label="รายคน-รายวัน" build={() => dailyBook(view)} />
+        <ExportMenu label="สรุป" build={() => summaryBook(view)} />
+        <ExportMenu label="รายละเอียด" build={() => detailBook(view)} />
       </div>
       {/* เอกสารบัญชีรายเดือน (Owner ที่ติ๊กสิทธิ์ดูเอกสาร) — แต่ละแผงเลือกเดือนเองข้างใน */}
       {data.docs?.mc || data.docs?.admin ? <><TawiPanel /><ReceiptPanel /></> : null}
-      {groups(data).map(([type, rows]) => (
+      {groups(view).filter(([type]) => !(shown === "shopee" && type === "Admin")).map(([type, rows]) => (
         <section key={type} className="mt-5">
           <h2 className="mb-2 flex flex-wrap items-baseline gap-2 text-lg font-bold">
-            {type}
+            {type}{shown !== "all" ? <span className="text-sm font-semibold text-p1">{shown === "shopee" ? "Shopee" : "TikTok"}</span> : null}
             <span className="text-xs font-normal text-muted-foreground">
-              กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · {payHiddenOf(data, type) ? "ดูได้อย่างเดียว ไม่แสดงค่าจ้าง" : "ยอดเงินหักมาสาย + รวมไลฟ์ชดเชยแล้ว"}
+              กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · {payHiddenOf(view, type) ? "ดูได้อย่างเดียว ไม่แสดงค่าจ้าง" : "ยอดเงินหักมาสาย + รวมไลฟ์ชดเชยแล้ว"}
             </span>
           </h2>
-          <PeriodBar data={data} side={type === "Mc" ? "mc" : "admin"} onChanged={reloadMonth} />
-          <PayBar data={data} type={type} rows={rows} onChanged={reloadMonth} />
-          <SumTable data={data} type={type} rows={rows} onChanged={reloadMonth} />
+          <PeriodBar data={view} side={type === "Mc" ? "mc" : "admin"} onChanged={reloadMonth} />
+          <PayBar data={view} type={type} rows={rows} onChanged={reloadMonth} />
+          <SumTable data={view} type={type} rows={rows} onChanged={reloadMonth} />
         </section>
       ))}
     </div>
@@ -552,7 +758,7 @@ const paymentsOfPerson = (data: OwnerSummary, r: OwnerPerson) => (r.staffId ? da
 const paidOf = (data: OwnerSummary, r: OwnerPerson) => paymentsOfPerson(data, r).reduce((a, p) => a + p.amount, 0);
 /** บันทึกโอนฝั่งนี้ได้ (จัดการฝั่งนี้ได้ + รัน SQL แล้ว) */
 const canPayOf = (data: OwnerSummary, type: Type) => !!data.paySides?.[type === "Mc" ? "mc" : "admin"] && !data.paySql;
-const personPay = (data: OwnerSummary, type: Type, r: OwnerPerson) => sumPay(slotsOf(data, type, r.name), rateOf(data, type, r.name));
+const personPay = (data: OwnerSummary, type: Type, r: OwnerPerson) => payOfItems(data, type, slotsOf(data, type, r.name));
 
 /** สถานะโอนสั้นๆ ใต้ยอดเงิน: ยังไม่บันทึกโอน = ไม่แสดง */
 function PaidStatus({ total, paid, className }: { total: number; paid: number; className?: string }) {
@@ -573,7 +779,7 @@ function PayBar({ data, type, rows, onChanged }: { data: OwnerSummary; type: Typ
     return <p className="mb-2 text-xs text-muted-foreground">บันทึกการโอนค่าจ้าง: {data.paySql}</p>;
   }
   if (!canPayOf(data, type)) return null;
-  const payable = rows.filter((r) => !r.salaried && r.staffId && rateOf(data, type, r.name) > 0)
+  const payable = rows.filter((r) => !r.salaried && r.staffId && hasRateOf(data, type, r.name))
     .map((r) => ({ r, total: personPay(data, type, r), paid: paidOf(data, r) }))
     .filter((x) => x.total > 0);
   const ended = data.month < monthKey();
@@ -768,10 +974,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
         const g = gmvOf(items);
         return g.count ? g.total : null;
       }
-      case "pay": {
-        const rate = rateOf(data, type, r.name);
-        return rate ? sumPay(items, rate) : null;
-      }
+      case "pay": return hasRateOf(data, type, r.name) ? payOfItems(data, type, items) : null;
       default: return null;
     }
   };
@@ -783,8 +986,8 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
   };
   const ts = rows.reduce((a, r) => a + r.slots, 0);
   const th = rows.reduce((a, r) => a + r.hours, 0);
-  // ยอดเงิน = ปัดทีละคิวแล้วรวม (ตรงกับไฟล์เบิก / ใบสรุปรายคน)
-  const payOf = (r: OwnerPerson) => sumPay(slotsOf(data, type, r.name), rateOf(data, type, r.name));
+  // ยอดเงิน = ปัดทีละคิวแล้วรวม (ตรงกับไฟล์เบิก / ใบสรุปรายคน) · คิว Shopee คิดเรท Shopee ถ้าตั้งแยก
+  const payOf = (r: OwnerPerson) => personPay(data, type, r);
   const tm = rows.reduce((a, r) => a + payOf(r), 0);
   const tl = rows.reduce((a, r) => a + r.lateSlots, 0);
   const tb = rows.reduce((a, r) => a + r.bonusMinutes, 0);
@@ -800,7 +1003,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
         </TableHeader>
         <TableBody>
           {rows.map((r) => {
-            const rate = rateOf(data, type, r.name);
+            const rate = hasRateOf(data, type, r.name);
             const isOpen = open.has(r.name);
             const daily = isOpen ? dailyOf(data, type, r.name) : [];
             const items = slotsOf(data, type, r.name);
@@ -826,10 +1029,11 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                       {num(r.hours)} ชม.{showPay ? ` · ${r.salaried ? "เงินเดือน" : rate ? `${money(payOf(r))} บาท` : "ไม่มีค่าจ้าง"}` : ""}
                       {showPay && !r.salaried && rate ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="ml-1" /> : null}
                     </span>
-                    {/* ไลฟ์ Shopee (แท็บ MC Shopee) รวมอยู่ในชั่วโมง / ค่าจ้างแล้ว แสดงแยกให้เห็นว่าเป็น Shopee กี่ ชม. */}
-                    {items.some((d) => /shopee/i.test(d.platform)) ? (
+                    {/* ไลฟ์ Shopee (แท็บ MC Shopee) รวมอยู่ในชั่วโมง / ค่าจ้างแล้ว แสดงแยกให้เห็นว่าเป็น Shopee กี่ ชม. (+ เรท Shopee ถ้าตั้งแยก) */}
+                    {items.some((d) => d.shopee) && data.details.some((d) => d.type === type && !d.cancelled && !d.shopee && d.name === r.name) ? (
                       <Badge title="ชั่วโมงไลฟ์ Shopee (รวมอยู่ในชั่วโมง / ค่าจ้างของเดือนนี้แล้ว)" className="ml-1.5 bg-p1/15 text-[11px] text-p1">
-                        Shopee {num(items.filter((d) => /shopee/i.test(d.platform)).reduce((a, d) => a + d.hours, 0))} ชม.
+                        Shopee {num(items.filter((d) => d.shopee).reduce((a, d) => a + d.hours, 0))} ชม.
+                        {showPay && shopeeRateOf(data, type, r.name) ? ` · ${money(shopeeRateOf(data, type, r.name))}/ชม.` : ""}
                       </Badge>
                     ) : null}
                     {r.salaried ? (
@@ -845,7 +1049,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                       >
                         {r.commit.tier
                           ? `Commit ${num(r.commit.tier.hours)}+ ชม. ✓ ${money(r.commit.tier.rate)}/ชม.`
-                          : `Commit ยังไม่ถึง ${num(r.commit.tiers[0].hours)} ชม. (${num(r.hours)})`}
+                          : `Commit ยังไม่ถึง ${num(r.commit.tiers[0].hours)} ชม. (${num(r.commit.hours ?? r.hours)}${r.commit.hours !== undefined ? " ชม. TikTok" : ""})`}
                       </Badge>
                     ) : null}
                   </TableCell>
@@ -870,7 +1074,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                       {proved}/{need.length}
                     </TableCell>
                   ) : (
-                    <TableCell title="Mc ประจำ (เงินเดือน) ไม่ต้องแนบหลักฐาน" className={cn(num_, "text-xs text-muted-foreground")}>
+                    <TableCell title="Mc ประจำ (เงินเดือน) / คิว Shopee ไม่ต้องแนบหลักฐาน" className={cn(num_, "text-xs text-muted-foreground")}>
                       {items.length ? "ไม่ต้องแนบ" : "–"}
                     </TableCell>
                   )}
@@ -937,7 +1141,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                                 <a href={proofUrl(d.proof)} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline">
                                   หลักฐาน: ไลฟ์จริง {proofTime(d.proof)}
                                 </a>
-                              ) : d.noProof ? <span className="text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</span>
+                              ) : d.noProof ? <span className="text-muted-foreground">{d.shopee ? "คิว Shopee" : "Mc ประจำ"} ไม่ต้องแนบหลักฐาน</span>
                                 : <span className="font-semibold text-destructive">ยังไม่มีหลักฐาน</span>}
                               {d.gmv !== null ? <span className="font-semibold tabular-nums">GMV {fmtGmv(d.gmv)}</span>
                                 : d.gmvCoveredBy ? <span className="text-success">GMV รวมในคิว {d.gmvCoveredBy}</span>

@@ -56,8 +56,10 @@ export async function applyPeriods(s: Summary, month: string, sides: Side[]) {
     s[side] = snap.people;
     s.details = [...s.details.filter((d) => d.type !== TYPE[side]), ...snap.details];
     s.rates[side] = snap.rates;
-    if (side === "mc") s.rates.defaultMc = snap.defaultRate;
-    else s.rates.defaultAdmin = snap.defaultRate;
+    if (side === "mc") {
+      s.rates.defaultMc = snap.defaultRate;
+      s.rates.shopee = snap.shopeeRates ?? {};
+    } else s.rates.defaultAdmin = snap.defaultRate;
   }
   const periodLog = rows.map((r) => ({ side: r.side, closedAt: r.closed_at, closedBy: r.closed_by, reopenedAt: r.reopened_at, reopenedBy: r.reopened_by }));
   return { periods, changes, periodLog };

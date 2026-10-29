@@ -84,6 +84,13 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     if (rate !== null && (!Number.isFinite(rate) || rate < 0)) return { error: "ค่าจ้างต้องเป็นตัวเลข" };
     out.hourly_rate = rate;
   }
+  // ค่าจ้าง Shopee/ชม. (Mc · SQL 20261116000000_shopee_rate) ว่าง = ใช้เรทเดียวกับ TikTok · บันทึกเฉพาะตอนส่งมา
+  if (role === "mc" && "shopee_rate" in body) {
+    const raw = String(body.shopee_rate ?? "").replace(/[,\s฿]/g, "");
+    const rate = raw === "" ? null : Number(raw);
+    if (rate !== null && (!Number.isFinite(rate) || rate < 0)) return { error: "ค่าจ้าง Shopee ต้องเป็นตัวเลข" };
+    out.shopee_rate = rate || null;
+  }
   // Commit แบบเทียร์: [{ hours, rate }] จองถึงเทียร์ไหน ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น (แถวที่ว่างทั้งคู่ถูกข้าม)
   if (role !== "owner" && (!partial || "commit_tiers" in body)) {
     const raw: unknown[] = Array.isArray(body.commit_tiers) ? body.commit_tiers : [];
@@ -225,6 +232,11 @@ export async function GET() {
   // ทีมไลฟ์ของ Mc / Admin (ยังไม่ได้รัน SQL 20261031000000_live_platform = ไม่มีช่องนี้ ทุกคนเป็น TikTok)
   const { data: teamRows, error: teamErr } = await db.from("staff").select("id, live_platform").in("role", ["mc", "admin"]);
   const team = new Map((teamErr ? [] : teamRows ?? []).map((x) => [x.id as number, liveTeamOf(x.live_platform)]));
+  // ค่าจ้าง Shopee ของ Mc (ยังไม่ได้รัน SQL 20261116000000_shopee_rate = ไม่มีช่องนี้ · ฝั่ง Mc ดูได้อย่างเดียว = ไม่ส่ง)
+  const { data: shopeeRows, error: shopeeErr } = edit.mc
+    ? await db.from("staff").select("id, shopee_rate").eq("role", "mc")
+    : { data: null, error: { message: "hidden" } };
+  const shopeeRate = new Map((shopeeErr ? [] : shopeeRows ?? []).map((x) => [x.id as number, x.shopee_rate === null ? null : Number(x.shopee_rate)]));
   const payDocs = payDocsViewer ? await payDocsStatus(db) : new Map<number, "ok" | "missing">();
   // Owner คนไหนดูเอกสารฝั่งไหนได้ (บอกเฉพาะคนที่ให้สิทธิ์นี้ได้ = ดูได้ทั้งสองฝั่ง) · ยังไม่ได้รัน SQL ฝั่ง Admin = ไม่มีค่าฝั่ง Admin
   const docRows = !canGrantDocs(docsScope) ? [] : await (async () => {
@@ -256,6 +268,7 @@ export async function GET() {
       ...(equip.has(s.id) ? { can_manage_equipment: equip.get(s.id) } : {}),
       ...(briefs.has(s.id) ? { can_manage_briefs: briefs.get(s.id) } : {}),
       ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
+      ...(shopeeRate.has(s.id) ? { shopee_rate: shopeeRate.get(s.id) } : {}),
       ...(quotaMgr.has(s.id) ? { can_manage_quota: quotaMgr.get(s.id) } : {}),
       ...(teamName.has(s.id) ? { team_name: teamName.get(s.id) } : {}),
       ...(docViewers.get(s.id) ?? {}),
@@ -398,12 +411,21 @@ export async function PATCH(request: Request) {
     teamBefore = tErr ? "tiktok" : liveTeamOf(t?.live_platform);
     if (changes.live_platform === teamBefore) delete changes.live_platform;
   }
-  // เปลี่ยนเรท / Commit / พนักงานประจำ: เดือนก่อน "มีผลตั้งแต่" ล็อกเรทเดิมไว้ (สรุป / ไฟล์เบิก / ตารางของฉันของเดือนเก่าไม่เปลี่ยนตาม)
+  // ค่าจ้าง Shopee เดิม (ไว้ตรวจว่าเปลี่ยน + บันทึกประวัติ · ไม่อยู่ใน cur เพราะคอลัมน์อาจยังไม่มี · ไม่เปลี่ยน = ไม่ส่ง)
+  let shopeeBefore: number | null | undefined;
+  if ("shopee_rate" in changes) {
+    const { data: s, error: sErr } = await db.from("staff").select("shopee_rate").eq("id", id).maybeSingle();
+    if (sErr) return fail(/shopee_rate/.test(sErr.message) ? "ต้องรัน SQL 20261116000000_shopee_rate ใน Supabase ก่อน ถึงจะตั้งค่าจ้าง Shopee ได้" : sErr.message);
+    shopeeBefore = Number(s?.shopee_rate) || null;
+    if ((Number(changes.shopee_rate) || null) === shopeeBefore) delete changes.shopee_rate;
+  }
+  // เปลี่ยนเรท / Commit / พนักงานประจำ / เรท Shopee: เดือนก่อน "มีผลตั้งแต่" ล็อกเรทเดิมไว้ (สรุป / ไฟล์เบิก / ตารางของฉันของเดือนเก่าไม่เปลี่ยนตาม)
   if (isCrew(role)) {
     const old = cur as unknown as { id: number; role: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
     const rateChanged = ("hourly_rate" in changes && (Number(changes.hourly_rate) || null) !== (Number(old.hourly_rate) || null))
       || ("commit_tiers" in changes && JSON.stringify(changes.commit_tiers ?? []) !== JSON.stringify(old.commit_tiers ?? []))
-      || ("is_salaried" in changes && !!changes.is_salaried !== !!old.is_salaried);
+      || ("is_salaried" in changes && !!changes.is_salaried !== !!old.is_salaried)
+      || "shopee_rate" in changes;
     if (rateChanged) await lockBeforeRateChange(old, rateFrom(body?.rate_from));
   }
   const { error } = await db.from("staff").update(changes).eq("id", id);
@@ -434,7 +456,7 @@ export async function PATCH(request: Request) {
     if (renamed || contactChanged) after(() => processSyncJobs().then(() => undefined));
   }
   // ประวัติ: เปลี่ยนอะไร จากเท่าไรเป็นเท่าไร (ไม่มีอะไรเปลี่ยนจริง = ไม่บันทึก)
-  const diff = staffChangeText({ ...cur, can_manage_equipment: equipBefore, can_manage_briefs: briefsBefore, live_platform: teamBefore }, changes);
+  const diff = staffChangeText({ ...cur, can_manage_equipment: equipBefore, can_manage_briefs: briefsBefore, live_platform: teamBefore, shopee_rate: shopeeBefore }, changes);
   if (diff) after(() => log(r.me, `แก้พนักงาน ${role} "${cur.name}": ${diff}`, id));
   return ok({ message: "บันทึกแล้ว" });
 }

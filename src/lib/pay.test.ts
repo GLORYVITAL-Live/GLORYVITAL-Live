@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   bonusPaidMinutes, cleanTiers, lateCut, monthRate, paidHours, parseBonusMinutes, parseLateMinutes, parseTierHours,
-  checkInOf, monthsToLock, resolveLateBonus, slotPaidHours, slotPay, sumPay,
+  checkInOf, monthsToLock, platformRates, resolveLateBonus, slotPaidHours, slotPay, sumPay,
 } from "@/lib/pay";
 
 describe("หักเงินมาสาย", () => {
@@ -38,6 +38,18 @@ describe("ค่าจ้างแบบ Commit เป็นขั้น", () =>
     expect(monthRate(1000, tiers, 15).next).toEqual({ hours: 21, rate: 900 });
     expect(monthRate(1000, tiers, 50).next).toBeNull();
     expect(monthRate(1000, [], 50)).toMatchObject({ rate: 1000, hasCommit: false });
+  });
+});
+
+describe("เรท Shopee แยกรายคน", () => {
+  const tiers = [{ hours: 10, rate: 700 }];
+  test("ไม่ตั้งเรท Shopee = ใช้เรทเดียวกับ TikTok และ Commit นับทุกชั่วโมง (เหมือนเดิม)", () => {
+    expect(platformRates(750, tiers, null, 6, 6)).toMatchObject({ split: false, rate: 700, shopeeRate: 700, commitHours: 12 });
+    expect(platformRates(500, [], 0, 0, 20)).toMatchObject({ split: false, rate: 500, shopeeRate: 500 });
+  });
+  test("ตั้งเรท Shopee = ไลฟ์ Shopee คิดเรทคงที่ · Commit นับเฉพาะชั่วโมง TikTok", () => {
+    expect(platformRates(750, tiers, 500, 6, 6)).toMatchObject({ split: true, rate: 750, shopeeRate: 500, commitHours: 6 });
+    expect(platformRates(750, tiers, 500, 12, 30)).toMatchObject({ rate: 700, shopeeRate: 500 });
   });
 });
 
