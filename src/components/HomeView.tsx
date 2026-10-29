@@ -99,7 +99,7 @@ export function HomeView({ go }: { go: Go }) {
           <span className="min-w-0 flex-1 leading-snug">
             {windows.map((w) => (
               <span key={w.role} className="block">
-                <b>ช่วงเปิดจอง {w.role === "mc" ? "Mc" : "Admin เสริม"}</b>{" "}
+                <b>ช่วงเปิดจอง {w.role === "mc" ? "Mc" : w.role === "shopee" ? "Mc Shopee" : "Admin เสริม"}</b>{" "}
                 {w.ended ? `หมดแล้ว (วันสุดท้าย ${fmtDay(w.to)}) — จองคิวใหม่ผ่านเว็บไม่ได้`
                   : w.daysLeft === 0 ? `หมดวันนี้ (${fmtDay(w.to)})` : `จะหมดในอีก ${w.daysLeft} วัน (วันสุดท้าย ${fmtDay(w.to)})`}
               </span>

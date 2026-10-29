@@ -7,7 +7,7 @@ export type Role = "mc" | "admin" | "owner";
 
 export type Me = {
   email: string;
-  /** platform = ทีมไลฟ์ (shopee = ไม่เห็น / จองคิวไลฟ์ TikTok ไม่ได้ ใช้ได้แค่ "ตารางของฉัน") — src/lib/live-team.ts */
+  /** platform = ทีมไลฟ์ (tiktok / shopee / both = หน้าจองคิว TikTok / Shopee ที่ใช้ได้) — src/lib/live-team.ts */
   mc: { id: number; name: string; platform: LiveTeam } | null;
   admin: { id: number; name: string; isExtra: boolean; platform: LiveTeam } | null;
   /** mc / admin = สิทธิ์จัดการฝั่งนั้น (ติ๊กทั้งคู่ = จัดการได้ทั้งหมด รวมถึงรายชื่อ Owner) */
@@ -123,7 +123,7 @@ export type HomeData = {
   /** คนดูสำรองข้อมูลได้ (Owner ที่ตั้ง can_close_periods) = แสดงส่วน "สำรองข้อมูล" ท้ายหน้า */
   canBackup?: boolean;
   /** ช่วงเปิดจอง (ทั่วไป) ของฝั่งที่มีสิทธิ์ ที่หมดภายใน 2 วัน / หมดแล้ว — to = วันสุดท้าย, daysLeft 0 = วันนี้ */
-  windows?: { role: "mc" | "admin"; ended: boolean; to: string; daysLeft: number }[];
+  windows?: { role: "mc" | "admin" | "shopee"; ended: boolean; to: string; daysLeft: number }[];
   /** เอกสารรับเงินที่ยังส่งไม่ครบ (เฉพาะ Owner ที่ดูเอกสารทำเบิกได้ · ยังไม่บังคับ = ไม่มี) */
   receipts?: HomeReceipts | null;
   /** ใบ 50 ทวิที่ต้องจัดการ (เฉพาะ Owner ที่ดูเอกสารทำเบิกได้ · ยังไม่ได้ตั้งโฟลเดอร์ = ไม่มี) */
@@ -151,24 +151,31 @@ export type TrainingGroup = { ref: string | null; name: string; folderName: stri
 /**
  * หน้าเทรนนิ่ง: ready = รัน SQL แล้ว · slides = id Google Slides · message = อ่านไดรฟ์ไม่สำเร็จ
  *   manage = Owner ที่จัดการได้ (null = ดูอย่างเดียว ไม่เห็นที่ซ่อน) · manage.ready = รัน SQL training_items แล้ว
- *   gate = คลิปบังคับก่อนจองคิว: on = เปิดใช้ · applies = คนดูอยู่ต้องดู (Mc / Admin เสริม) · passed = Owner ให้ผ่านแล้ว
- *     · done = ref ที่คนดูอยู่ดูจบแล้ว
+ *   gate = บังคับก่อนจองคิว: on = เปิดใช้ · applies = คนดูอยู่ต้องดูคลิปบังคับ (Mc ใหม่) · slides = ต้องอ่านสไลด์ครบทุกหน้า (Admin เสริมใหม่)
+ *     · passed = Owner ให้ผ่านแล้ว · done = ref ที่คนดูอยู่ดูจบแล้ว (สไลด์อ่านครบ = 'slides:<id>')
+ *   deck = สไลด์อ่านทีละหน้าในเว็บ (pages = จำนวนหน้า · rev = รุ่นของสไลด์) null = อ่านไม่ได้ ใช้กรอบของ Google แทน
  */
 export type Training = {
   ready: boolean; message: string | null; slides: string | null; groups: TrainingGroup[];
   manage: { ready: boolean; message: string | null } | null;
-  gate?: { on: boolean; applies: boolean; passed: boolean; done: string[] } | null;
+  gate?: { on: boolean; applies: boolean; slides?: boolean; passed: boolean; done: string[] } | null;
+  deck?: { pages: number; rev: string } | null;
   /** เห็นแท็บเฟรมไลฟ์ + จัดการบรีฟการแต่งตัวได้ (me.briefs) */
   frames?: boolean;
 };
 
-/** คลิปบังคับที่ยังไม่ได้ดู (หน้าจองคิว) — ไม่ส่ง = ไม่บังคับ / ดูครบแล้ว */
-export type TrainingBlock = { total: number; done: number; missing: string[] };
+/**
+ * ยังไม่ผ่านเทรนนิ่งที่บังคับก่อนจอง (หน้าจองคิว) — ไม่ส่ง = ไม่บังคับ / ผ่านแล้ว
+ *   kind = clips: คลิปบังคับ (Mc ใหม่ · total / done = จำนวนคลิป) · slides: สไลด์บรีฟยังอ่านไม่ครบทุกหน้า (Admin เสริมใหม่)
+ */
+export type TrainingBlock = { kind?: "clips" | "slides"; total: number; done: number; missing: string[] };
 
-/** ความคืบหน้าคลิปบังคับรายคน (Owner) */
+/**
+ * ความคืบหน้ารายคน (Owner): Mc ใหม่ = คลิปบังคับ (done = ดูจบกี่คลิป) · Admin เสริมใหม่ = สไลด์ (need slides · done 1 = อ่านครบแล้ว)
+ */
 export type TrainingProgress = {
   on: boolean; total: number;
-  people: { id: number; who: string; role: "mc" | "admin"; done: number; passed: boolean }[];
+  people: { id: number; who: string; role: "mc" | "admin"; need?: "clips" | "slides"; done: number; passed: boolean }[];
 };
 
 /**
@@ -235,7 +242,8 @@ export type SlotsResponse = {
   scheduleNotice: string;
   slots: OpenSlot[];
   /** คิวที่จองไว้แล้วตั้งแต่วันนี้ (เซิร์ฟเวอร์เก่าไม่ส่ง = ไม่รู้) ใช้เช็กโควต้าก่อนกดจอง */
-  mine?: { date: string; startMs: number; endMs: number }[];
+  /** คิวที่จองไว้แล้ว · other = คิวของอีกหน้า (TikTok / Shopee) ใช้ตรวจเวลาทับเท่านั้น ไม่นับโควต้าต่อวันของหน้านี้ */
+  mine?: { date: string; startMs: number; endMs: number; other?: boolean }[];
   limits?: BookingLimits;
   /** ยกเลิกผ่านเว็บได้ก่อนไลฟ์อย่างน้อยกี่ชั่วโมง (ค่าเดียวกับที่ /api/cancel ใช้) */
   cancelMinHours?: number;

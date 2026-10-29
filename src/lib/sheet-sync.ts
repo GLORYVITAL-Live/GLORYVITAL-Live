@@ -8,12 +8,12 @@ import type { SlotChange } from "@/lib/notifications";
 import { addDays } from "@/lib/window";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
-  COLS, SHEET_ID, TABLE_OF, TAB_OF, TABS, colLetter, dateSerial, hoursOf, normalizeMcName, parseRow, readTab, sheetIdOf,
-  sheetsApi, str, timeSerial, type Cell, type Row, type SheetSlot, type TabKey,
+  COLS, LAST_WRITE_COL, SHEET_ID, TABLE_OF, TAB_OF, TABS, colLetter, dateSerial, hoursOf, isMcTab, normalizeMcName, parseRow,
+  readTab, sheetIdOf, sheetTabOf, sheetsApi, str, tabOfSheetTab, timeSerial, type Cell, type Row, type SheetSlot, type TabKey,
 } from "@/lib/sheet";
 
 /**
- * ซิงค์สองทางกับ Google Sheet
+ * ซิงค์สองทางกับ Google Sheet (แท็บ Deal Mc / Admin เสริม / MC Shopee)
  *
  * เว็บ -> ชีต (processSheetJobs): งานใน sheet_jobs (DB trigger จดให้ทุกครั้งที่ slot เปลี่ยน)
  *   หาแถวจากรหัสในคอลัมน์ V แล้วเขียนเฉพาะช่องที่ต่าง ถ้ายังไม่มีแถว = slot ใหม่
@@ -22,7 +22,11 @@ import {
  * ชีต -> เว็บ (applySheetEdits): อ่านแถวที่ถูกแก้ แล้วอัปเดต DB เฉพาะฟิลด์ในคอลัมน์ที่ถูกแก้
  *   แถวที่ยังไม่มีรหัสและกรอกวัน/เวลาครบ = slot ใหม่ สร้างใน DB แล้วเขียนรหัสลงคอลัมน์ V
  *
+ * แท็บ Deal Mc กับ MC Shopee อยู่ในตาราง mc_slots เดียวกัน แยกด้วย sheet_tab ('mc' / 'shopee')
+ *   ทุกคำสั่งที่อ่านทั้งตารางต้องกรองตามแท็บ ไม่งั้น slot ของอีกแท็บจะถูกนับว่า "ไม่มีแถวในชีต" แล้วถูกลบ
+ *
  * แถวคู่: พิมพ์แถวใหม่/แก้เวลาในแท็บหนึ่ง = สร้าง/ย้ายแถวคู่ในอีกแท็บ (ดูหัวข้อ "slot คู่" ด้านล่าง)
+ *   เฉพาะ Deal Mc <-> Admin เสริม · MC Shopee ไม่มีแถวคู่
  *
  * ลบแถวในชีต (removeSlotsDeletedInSheet): slot ตั้งแต่วันนี้ที่รหัสไม่อยู่ในชีตแล้ว = ถูกลบในชีต
  *   ลบออกจาก DB (+ ลบ event ในปฏิทิน) เว็บจะไม่แสดงให้จองอีก และไม่เขียนแถวกลับลงชีต
@@ -49,8 +53,10 @@ const withSheetLock = <T>(fn: () => Promise<T>, waitMs = 25_000) => withSyncLock
 
 // ---------- อ่าน slot จาก DB ----------
 
-async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSlot>> {
+/** slot ของแท็บนี้ (ids = เฉพาะรหัสเหล่านี้ / ไม่ใส่ = ทั้งแท็บ) — รหัสของอีกแท็บใน mc_slots ไม่อยู่ใน map */
+async function loadSlots(tab: TabKey, ids?: number[]): Promise<Map<number, DbSlot>> {
   const db = createAdminClient();
+  const table = TABLE_OF[tab], sheetTab = sheetTabOf(tab);
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
   const cols = `id, platform, live_date, start_time, end_time, ${table === "mc_slots" ? "campaign, " : ""}confirmed, status, remark, late_minutes, bonus_minutes, is_cancelled, ${personCol}, person:staff!${personCol}(name)`;
   type Raw = Omit<DbSlot, "personId" | "personName" | "late" | "bonus" | "cancelled"> & Record<string, unknown> & { person: { name: string } | null };
@@ -69,13 +75,17 @@ async function loadSlots(table: Table, ids?: number[]): Promise<Map<number, DbSl
   };
   if (ids) {
     for (let i = 0; i < ids.length; i += 200) {
-      const { data, error } = await db.from(table).select(cols).in("id", ids.slice(i, i + 200));
+      let q = db.from(table).select(cols).in("id", ids.slice(i, i + 200));
+      if (sheetTab) q = q.eq("sheet_tab", sheetTab);
+      const { data, error } = await q;
       if (error) throw error;
       add((data ?? []) as unknown as Raw[]);
     }
   } else {
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await db.from(table).select(cols).order("id").range(from, from + 999);
+      let q = db.from(table).select(cols);
+      if (sheetTab) q = q.eq("sheet_tab", sheetTab);
+      const { data, error } = await q.order("id").range(from, from + 999);
       if (error) throw error;
       add((data ?? []) as unknown as Raw[]);
       if (!data || data.length < 1000) break;
@@ -121,7 +131,7 @@ function desiredCells(tab: TabKey, s: DbSlot): Map<number, Cell> {
     [c.date, dateSerial(s.live_date)],
     [c.start, timeSerial(s.start_time)],
     [c.end, timeSerial(s.end_time)],
-    [c.person, s.personName ? (tab === "mc" ? `Mc ${s.personName}` : s.personName) : ""],
+    [c.person, s.personName ? (isMcTab(tab) ? `Mc ${s.personName}` : s.personName) : ""],
     [c.confirm, s.confirmed === null ? "" : s.confirmed],
     [c.status, s.status],
     [c.remark, s.remark],
@@ -142,7 +152,7 @@ function sameCell(tab: TabKey, col: number, have: Cell, want: Cell) {
     const norm = (v: Cell) => (v === true || v === "TRUE" ? true : v === false || v === "FALSE" ? false : "");
     return norm(have) === norm(want);
   }
-  if (col === c.person && tab === "mc") return normalizeMcName(have) === normalizeMcName(want);
+  if (col === c.person && isMcTab(tab)) return normalizeMcName(have) === normalizeMcName(want);
   if (tab === "mc" && col === COLS.mc.campaign) {
     // ช่องที่ชีตเก็บเป็นตัวเลข (10.1) ต้องเขียนใหม่เป็นข้อความ / ข้อความ "10.10" = ตรงกับ '10.10
     if (typeof have === "number" && typeof want === "string" && want.startsWith("'")) return false;
@@ -197,7 +207,7 @@ export function insertIndex(tab: TabKey, items: Item[], s: Pick<DbSlot, "platfor
 async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
   const table = TABLE_OF[tab];
   const c = COLS[tab];
-  const slots = await loadSlots(table, ids);
+  const slots = await loadSlots(tab, ids);
   if (!slots.size) return { updated: 0, inserted: 0, removed: 0 };
 
   const items: Item[] = (await readTab(tab)).map((vals) => ({ vals }));
@@ -285,7 +295,7 @@ async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
   // 2) เขียนค่า
   const title = TABS[tab];
   const data: sheets_v4.Schema$ValueRange[] = [];
-  const lastCol = tab === "mc" ? COLS.mc.remark : COLS.admin.status; // แท็บ Admin: คอลัมน์ L เป็นของทีม ไม่แตะ
+  const lastCol = LAST_WRITE_COL[tab];
   for (const { item } of newItems) {
     const r = rowOf.get(item)!;
     const row: Cell[] = [];
@@ -304,7 +314,7 @@ async function writeSlotsToSheet(tab: TabKey, ids: number[]) {
       requestBody: { valueInputOption: "USER_ENTERED", data },
     });
   }
-  const removed = gone.length ? await deleteGoneSlots(table, gone) : 0;
+  const removed = gone.length ? await deleteGoneSlots(tab, gone) : 0;
   return { updated: cellWrites.length, inserted: newItems.length, removed };
 }
 
@@ -399,8 +409,17 @@ export async function processSheetJobs() {
       if (error) throw error;
       const jobs = ((data ?? []) as Job[]).filter((j) => !skip.has(j.id));
       if (!jobs.length) break;
-      for (const tab of ["mc", "admin"] as const) {
-        const mine = jobs.filter((j) => j.slot_table === TABLE_OF[tab]);
+      // งานของ mc_slots: แยกตามแท็บของ slot (Deal Mc / MC Shopee) · slot ที่ถูกลบไปแล้ว = แท็บ Deal Mc (ไม่มีอะไรให้เขียน งานปิดเอง)
+      const mcIds = [...new Set(jobs.filter((j) => j.slot_table === "mc_slots").map((j) => j.slot_id))];
+      const shopeeIds = new Set<number>();
+      for (let i = 0; i < mcIds.length; i += 200) {
+        const { data: rows, error: tabErr } = await db.from("mc_slots").select("id, sheet_tab").in("id", mcIds.slice(i, i + 200));
+        if (tabErr) throw tabErr;
+        for (const s of rows ?? []) if (tabOfSheetTab(s.sheet_tab) === "shopee") shopeeIds.add(Number(s.id));
+      }
+      const tabOfJob = (j: Job): TabKey => (j.slot_table === "admin_slots" ? "admin" : shopeeIds.has(j.slot_id) ? "shopee" : "mc");
+      for (const tab of ["mc", "admin", "shopee"] as const) {
+        const mine = jobs.filter((j) => tabOfJob(j) === tab);
         if (!mine.length) continue;
         try {
           await write(tab, mine);
@@ -421,16 +440,21 @@ export async function processSheetJobs() {
 }
 
 /**
- * ลบแถวในชีตของ slot ที่ถูกลบในเว็บ (ส่งค่าของ slot ก่อนลบมาด้วย)
+ * ลบแถวในชีตของ slot ที่ถูกลบในเว็บ (ส่งค่าของ slot ก่อนลบมาด้วย · mc_slots ส่ง sheet_tab มาด้วย ไม่ส่ง = แท็บ Deal Mc)
  * ถ้ารหัสอยู่หลายแถว ลบเฉพาะแถวที่แพลตฟอร์ม/วัน/เวลาตรงกับ slot ไม่ลบแถวคัดลอกทิ้งไปด้วย
  */
-export async function deleteSheetRows(table: Table, deleted: (SlotKey & { id: number })[]) {
-  await withSheetLock(() => deleteRowsLocked(table, deleted));
+export async function deleteSheetRows(table: Table, deleted: (SlotKey & { id: number; sheet_tab?: unknown })[]) {
+  const tabs: TabKey[] = table === "admin_slots" ? ["admin"] : ["mc", "shopee"];
+  await withSheetLock(async () => {
+    for (const tab of tabs) {
+      const mine = table === "admin_slots" ? deleted : deleted.filter((s) => tabOfSheetTab(s.sheet_tab) === tab);
+      if (mine.length) await deleteRowsLocked(tab, mine);
+    }
+  });
 }
 
 /** ตัวทำงานของ deleteSheetRows (เรียกเมื่อถือล็อกชีตอยู่แล้วเท่านั้น) */
-async function deleteRowsLocked(table: Table, deleted: (SlotKey & { id: number })[]) {
-  const tab = table === "mc_slots" ? "mc" : "admin";
+async function deleteRowsLocked(tab: TabKey, deleted: (SlotKey & { id: number })[]) {
   const want = new Map(deleted.map((s) => [s.id, { ...s, start_time: hm(s.start_time), end_time: hm(s.end_time) }]));
   const rows = await readTab(tab);
   const found = new Map<number, { i: number; p: SheetSlot }[]>();
@@ -463,13 +487,15 @@ const EXTRA_ADMIN = "Admin เสริม";
 const otherTable = (t: Table): Table => (t === "mc_slots" ? "admin_slots" : "mc_slots");
 const personColOf = (t: Table) => (t === "mc_slots" ? "mc_id" : "admin_id");
 
-/** slot ในอีกตารางที่แพลตฟอร์ม/วัน/เวลาตรงกัน */
+/** slot ในอีกตารางที่แพลตฟอร์ม/วัน/เวลาตรงกัน (ฝั่ง Mc = เฉพาะแท็บ Deal Mc) */
 async function findPartners(table: Table, k: SlotKey) {
   const other = otherTable(table);
   const col = personColOf(other);
-  const { data, error } = await createAdminClient().from(other).select(`id, ${col}`)
+  let q = createAdminClient().from(other).select(`id, ${col}`)
     .eq("platform", k.platform).eq("live_date", k.live_date)
     .eq("start_time", hm(k.start_time)).eq("end_time", hm(k.end_time));
+  if (other === "mc_slots") q = q.eq("sheet_tab", "mc");
+  const { data, error } = await q;
   if (error) throw error;
   return ((data ?? []) as unknown as Record<string, number | null>[])
     .map((x) => ({ id: x.id as number, personId: x[col] ?? null }));
@@ -487,11 +513,13 @@ async function mirrorNewSlot(table: Table, k: SlotKey) {
   return 1;
 }
 
-/** slot ที่ยังใช้อยู่ (ไม่ยกเลิก) ในตารางนี้ ที่แพลตฟอร์ม/วัน/เวลาตรงกัน */
+/** slot ที่ยังใช้อยู่ (ไม่ยกเลิก) ในตารางนี้ ที่แพลตฟอร์ม/วัน/เวลาตรงกัน (ฝั่ง Mc = เฉพาะแท็บ Deal Mc) */
 async function liveAt(table: Table, k: SlotKey) {
-  const { data, error } = await createAdminClient().from(table).select("id")
+  let q = createAdminClient().from(table).select("id")
     .eq("platform", k.platform).eq("live_date", k.live_date)
     .eq("start_time", hm(k.start_time)).eq("end_time", hm(k.end_time)).eq("is_cancelled", false);
+  if (table === "mc_slots") q = q.eq("sheet_tab", "mc");
+  const { data, error } = await q;
   if (error) throw error;
   return (data ?? []).map((x) => x.id as number);
 }
@@ -537,16 +565,18 @@ async function removeFreePartners(table: Table, gone: (SlotKey & { starts_at: st
   type Partner = SlotKey & { id: number };
   const partners: Partner[] = [];
   for (const s of gone) {
-    const { data, error } = await db.from(other).select("id, platform, live_date, start_time, end_time")
+    let q = db.from(other).select("id, platform, live_date, start_time, end_time")
       .eq("platform", s.platform).eq("starts_at", s.starts_at).eq("ends_at", s.ends_at)
       .is(personColOf(other), null).gte("live_date", bkkToday());
+    if (other === "mc_slots") q = q.eq("sheet_tab", "mc");
+    const { data, error } = await q;
     if (error) throw error;
     partners.push(...((data ?? []) as Partner[]));
   }
   if (!partners.length) return 0;
   const { error } = await db.from(other).delete().in("id", partners.map((p) => p.id));
   if (error) throw error;
-  await deleteRowsLocked(other, partners);
+  await deleteRowsLocked(TAB_OF[other], partners);
   await db.from("booking_logs").insert(partners.map((p) => ({
     role: "Sheet", name: TABS[TAB_OF[table]], action: `ลบ slot คู่ (ลบแถวในแท็บ ${TABS[TAB_OF[table]]})`,
     slot_table: other, slot_id: p.id, platform: p.platform, live_date: p.live_date,
@@ -597,10 +627,11 @@ async function everInSheet(table: Table, ids: number[]) {
 
 /**
  * ลบ slot ที่ถูกลบแถวในชีตออกจาก DB (เฉพาะตั้งแต่วันนี้ ของเก่าเก็บไว้ให้สรุปรายเดือน)
- * ลบ event ในปฏิทินก่อน แล้วให้ slot คู่ของอีกฝั่งอัปเดตหมายเหตุใน event
+ * ลบ event ในปฏิทินก่อน แล้วให้ slot คู่ของอีกฝั่งอัปเดตหมายเหตุใน event (แท็บ MC Shopee ไม่มี slot คู่)
  */
-async function deleteGoneSlots(table: Table, ids: number[]) {
+async function deleteGoneSlots(tab: TabKey, ids: number[]) {
   const db = createAdminClient();
+  const table = TABLE_OF[tab];
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
   type Gone = SlotKey & {
     id: number; starts_at: string; ends_at: string; calendar_email: string | null; calendar_event_id: string | null;
@@ -629,41 +660,46 @@ async function deleteGoneSlots(table: Table, ids: number[]) {
     const { error } = await db.from(table).delete().in("id", rows.slice(i, i + 200).map((s) => s.id));
     if (error) throw error;
   }
-  await removeFreePartners(table, rows);
+  if (tab !== "shopee") {
+    await removeFreePartners(table, rows);
 
-  // slot คู่ของอีกฝั่ง: หมายเหตุใน event มีชื่อคนของ slot ที่ถูกลบ
-  const other: Table = table === "mc_slots" ? "admin_slots" : "mc_slots";
-  const otherCol = other === "mc_slots" ? "mc_id" : "admin_id";
-  const partnerJobs: { slot_table: Table; slot_id: number }[] = [];
-  for (const s of rows.filter((x) => x[personCol])) {
-    const { data } = await db.from(other).select("id")
-      .eq("platform", s.platform).eq("starts_at", s.starts_at).eq("ends_at", s.ends_at).not(otherCol, "is", null);
-    for (const p of data ?? []) partnerJobs.push({ slot_table: other, slot_id: p.id });
+    // slot คู่ของอีกฝั่ง: หมายเหตุใน event มีชื่อคนของ slot ที่ถูกลบ
+    const other: Table = table === "mc_slots" ? "admin_slots" : "mc_slots";
+    const otherCol = other === "mc_slots" ? "mc_id" : "admin_id";
+    const partnerJobs: { slot_table: Table; slot_id: number }[] = [];
+    for (const s of rows.filter((x) => x[personCol])) {
+      let q = db.from(other).select("id")
+        .eq("platform", s.platform).eq("starts_at", s.starts_at).eq("ends_at", s.ends_at).not(otherCol, "is", null);
+      if (other === "mc_slots") q = q.eq("sheet_tab", "mc");
+      const { data } = await q;
+      for (const p of data ?? []) partnerJobs.push({ slot_table: other, slot_id: p.id });
+    }
+    if (partnerJobs.length) await db.from("calendar_jobs").insert(partnerJobs);
   }
-  if (partnerJobs.length) await db.from("calendar_jobs").insert(partnerJobs);
 
   await db.from("booking_logs").insert(rows.map((s) => ({
-    role: "Sheet", name: TABS[table === "mc_slots" ? "mc" : "admin"], action: "ลบ slot (ลบแถวในชีต)",
+    role: "Sheet", name: TABS[tab], action: "ลบ slot (ลบแถวในชีต)",
     slot_table: table, slot_id: s.id, platform: s.platform, live_date: s.live_date,
     time_range: `${hm(s.start_time)}-${hm(s.end_time)}`,
     result: calendarFailed.has(s.id) ? "ลบแล้ว แต่ลบ event ในปฏิทินไม่สำเร็จ" : "สำเร็จ",
   })));
-  console.log(`ลบ slot ที่ถูกลบแถวในชีต (${table}): ${rows.map((s) => s.id).join(", ")}`);
+  console.log(`ลบ slot ที่ถูกลบแถวในชีต (${TABS[tab]}): ${rows.map((s) => s.id).join(", ")}`);
   return rows.length;
 }
 
 /**
  * หา slot ตั้งแต่วันนี้ที่เคยอยู่ในชีตแต่ตอนนี้ไม่มีแถวแล้ว แล้วลบออกจาก DB (เรียกภายใต้ล็อกชีต)
- * ข้าม slot ที่เว็บเพิ่งสร้าง/แก้แต่ยังไม่ได้เขียนลงชีต
+ * ข้าม slot ที่เว็บเพิ่งสร้าง/แก้แต่ยังไม่ได้เขียนลงชีต · เทียบเฉพาะ slot ของแท็บนี้ (mc_slots มีสองแท็บ)
  */
 async function removeMissing(tab: TabKey, rows: Row[]) {
   const db = createAdminClient();
-  const table = TABLE_OF[tab];
+  const table = TABLE_OF[tab], sheetTab = sheetTabOf(tab);
   type Future = SlotKey & { id: number };
   const future: Future[] = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await db.from(table).select("id, platform, live_date, start_time, end_time")
-      .gte("live_date", bkkToday()).order("id").range(from, from + 999);
+    let q = db.from(table).select("id, platform, live_date, start_time, end_time").gte("live_date", bkkToday());
+    if (sheetTab) q = q.eq("sheet_tab", sheetTab);
+    const { data, error } = await q.order("id").range(from, from + 999);
     if (error) throw error;
     future.push(...((data ?? []) as Future[]));
     if (!data || data.length < 1000) break;
@@ -691,7 +727,7 @@ async function removeMissing(tab: TabKey, rows: Row[]) {
       "ระบบจึงไม่ลบให้อัตโนมัติ (ตรวจว่าคอลัมน์ V ไม่ถูกลบ) ถ้าตั้งใจลบจริง ให้ลบใน \"จัดการ slot\" ของเว็บ",
     );
   }
-  return deleteGoneSlots(table, gone);
+  return deleteGoneSlots(tab, gone);
 }
 
 /**
@@ -702,15 +738,17 @@ async function removeMissing(tab: TabKey, rows: Row[]) {
  */
 async function cancelPastMissing(tab: TabKey, rows: Row[]) {
   const db = createAdminClient();
-  const table = TABLE_OF[tab];
+  const table = TABLE_OF[tab], sheetTab = sheetTabOf(tab);
   const today = bkkToday();
   const dates = new Set(rows.map((r) => parseRow(tab, r)?.live_date).filter((d): d is string => !!d && d < today));
   if (!dates.size) return 0;
   type Past = SlotKey & { id: number };
   const past: Past[] = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await db.from(table).select("id, platform, live_date, start_time, end_time")
-      .gte("live_date", addDays(today, -120)).lt("live_date", today).eq("is_cancelled", false).order("id").range(from, from + 999);
+    let q = db.from(table).select("id, platform, live_date, start_time, end_time")
+      .gte("live_date", addDays(today, -120)).lt("live_date", today).eq("is_cancelled", false);
+    if (sheetTab) q = q.eq("sheet_tab", sheetTab);
+    const { data, error } = await q.order("id").range(from, from + 999);
     if (error) throw error;
     past.push(...((data ?? []) as Past[]));
     if (!data || data.length < 1000) break;
@@ -788,7 +826,8 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     const fields = FIELDS.filter((f) => colOf[f] >= 0 && (!cols || (colOf[f] + 1 >= cols[0] && colOf[f] + 1 <= cols[1])));
 
     const ids = targets.map((x) => x.p.id).filter((x): x is number => !!x);
-    const slots = rowNumbers ? await loadSlots(table, ids) : await loadSlots(table);
+    const slots = rowNumbers ? await loadSlots(tab, ids) : await loadSlots(tab);
+    const sheetTab = sheetTabOf(tab);
 
     // ซิงค์ทั้งหมด: ข้าม slot ที่เว็บเพิ่งเปลี่ยนแต่ยังไม่ได้เขียนลงชีต (ไม่งั้นค่าในเว็บจะถูกทับ)
     const pending = new Set<number>();
@@ -797,19 +836,20 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
       for (const j of data ?? []) pending.add(j.slot_id);
     }
 
-    // รายชื่อคน (ชื่อ -> id) สร้างให้ถ้ายังไม่มี (เหมือนตอนนำเข้า)
-    const role = tab === "mc" ? "mc" : "admin";
+    // รายชื่อคน (ชื่อ -> id) สร้างให้ถ้ายังไม่มี (เหมือนตอนนำเข้า · ชื่อใหม่จากแท็บ MC Shopee = ทีม Shopee)
+    const role = isMcTab(tab) ? "mc" : "admin";
     const { data: staffRows, error: staffErr } = await db.from("staff").select("id, name").eq("role", role);
     if (staffErr) throw staffErr;
     const staffId = new Map((staffRows ?? []).map((s) => [s.name, s.id as number]));
     const missing = [...new Set(targets.map((x) => x.p.person).filter((n) => n && !staffId.has(n)))];
     if (missing.length) {
-      const { data, error } = await db.from("staff").insert(missing.map((name) => ({ role, name }))).select("id, name");
+      const { data, error } = await db.from("staff")
+        .insert(missing.map((name) => ({ role, name, ...(tab === "shopee" ? { live_platform: "shopee" } : {}) }))).select("id, name");
       if (error) throw error;
       for (const s of data ?? []) staffId.set(s.name, s.id);
     }
 
-    const personCol = tab === "mc" ? "mc_id" : "admin_id";
+    const personCol = isMcTab(tab) ? "mc_id" : "admin_id";
     const toRow = (p: SheetSlot, only: Field[]) => {
       const row: Record<string, unknown> = {};
       if (only.includes("platform")) row.platform = p.platform;
@@ -870,12 +910,14 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         if (rowNumbers && (personCol in row || "status" in row)) {
           changes.push({ id: p.id, oldPerson: s.personId, newPerson: personCol in row ? (row[personCol] as number | null) : s.personId, oldCancelled: s.cancelled });
         }
-        if (rowNumbers) await mirrorKeyChange(table, p.id, s, row);
+        if (rowNumbers && tab !== "shopee") await mirrorKeyChange(table, p.id, s, row);
       } else {
         // มี slot นี้อยู่แล้วแต่ยังไม่มีแถวในชีต (เช่น ระบบเพิ่งสร้างเป็นแถวคู่ให้ แต่ยังเขียนลงชีตไม่ทัน)
-        // = ผูกแถวนี้กับ slot เดิม ไม่สร้างซ้ำ
-        const { data: same, error: sameErr } = await db.from(table).select("id")
+        // = ผูกแถวนี้กับ slot เดิม ไม่สร้างซ้ำ (เฉพาะ slot ของแท็บนี้)
+        let sameQ = db.from(table).select("id")
           .eq("platform", p.platform).eq("live_date", p.live_date).eq("start_time", p.start_time).eq("end_time", p.end_time);
+        if (sheetTab) sameQ = sameQ.eq("sheet_tab", sheetTab);
+        const { data: same, error: sameErr } = await sameQ;
         if (sameErr) throw sameErr;
         const unplaced = (same ?? []).find((x) => !present.ids.has(x.id));
         let id: number;
@@ -885,14 +927,15 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
           if (error) throw error;
           updated++;
         } else {
-          const { data, error } = await db.from(table).insert(toRow(p, FIELDS)).select("id").single();
+          const { data, error } = await db.from(table)
+            .insert({ ...toRow(p, FIELDS), ...(tab === "shopee" ? { sheet_tab: "shopee" } : {}) }).select("id").single();
           if (error) throw error;
           id = data.id;
           created++;
           const person = p.person ? staffId.get(p.person) ?? null : null;
           if (rowNumbers && person) changes.push({ id, oldPerson: null, newPerson: person, oldCancelled: false });
           else if (rowNumbers) newOpen.push(id);
-          if (rowNumbers) paired += await mirrorNewSlot(table, p);
+          if (rowNumbers && tab !== "shopee") paired += await mirrorNewSlot(table, p);
         }
         present.ids.add(id);
         touched.push(id);

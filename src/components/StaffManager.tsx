@@ -20,7 +20,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { fmtMonthShort, money, monthKey } from "@/lib/format";
 import { parseTierHours, tiersLabel } from "@/lib/pay";
-import type { LiveTeam } from "@/lib/live-team";
+import { liveTeamLabel, type LiveTeam } from "@/lib/live-team";
 import { isTestAccount } from "@/lib/staff-check";
 import type { CommitTier, OwnerScope } from "@/lib/types";
 
@@ -382,8 +382,13 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {p.can_manage_equipment ? <Badge className="bg-p2/15 text-[11px] text-p2">อุปกรณ์</Badge> : null}
                   {p.can_manage_briefs ? <Badge className="bg-p2/15 text-[11px] text-p2">บรีฟแต่งตัว</Badge> : null}
                   {p.role === "borrower" && p.team_name ? <Badge variant="outline" className="text-[11px] text-muted-foreground">{p.team_name}</Badge> : null}
-                  {p.live_platform === "shopee" ? (
-                    <Badge className="bg-p1/15 text-[11px] text-p1" title="ทีม Shopee — ยังไม่เห็นและจองคิวไลฟ์ TikTok ไม่ได้ ใช้ได้แค่ตารางของฉัน">Shopee</Badge>
+                  {p.live_platform === "shopee" || p.live_platform === "both" ? (
+                    <Badge
+                      className="bg-p1/15 text-[11px] text-p1"
+                      title={p.live_platform === "both" ? "ทีม TikTok + Shopee — จองได้ทั้งคิว TikTok และคิว Shopee" : "ทีม Shopee — เห็น / จองเฉพาะคิว Shopee"}
+                    >
+                      {liveTeamLabel(p.live_platform)}
+                    </Badge>
                   ) : null}
                   {p.role === "owner" ? permBadges(p).map((b) => (
                     <Badge key={b} className={cn("text-[11px]", b.startsWith("ดู") ? "bg-muted text-muted-foreground" : "bg-p2/15 text-p2")}>{b}</Badge>
@@ -644,8 +649,10 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   // Admin (ประจำ / เสริม): จัดการบรีฟการแต่งตัว (เทรนนิ่ง > เฟรมไลฟ์) — ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
   const [briefs, setBriefs] = useState(person?.can_manage_briefs ?? false);
   const briefsReady = person ? person.can_manage_briefs !== undefined : true;
-  // ทีม Shopee: ไม่เห็น / จองคิวไลฟ์ TikTok ไม่ได้ (ยังใช้ตารางของฉันได้)
-  const [shopee, setShopee] = useState(person?.live_platform === "shopee");
+  // ทีมไลฟ์: ติ๊ก TikTok / Shopee (ติ๊กทั้งคู่ = จองได้ทั้งสองหน้า · ต้องติ๊กอย่างน้อยหนึ่งอย่าง)
+  const [tiktok, setTiktok] = useState(person?.live_platform !== "shopee");
+  const [shopee, setShopee] = useState(person?.live_platform === "shopee" || person?.live_platform === "both");
+  const liveTeam: LiveTeam = tiktok && shopee ? "both" : shopee ? "shopee" : "tiktok";
   // เทียร์ Commit (กรอกเป็นข้อความ ชั่วโมงพิมพ์เป็นช่วงได้ เช่น "10-20" ระบบใช้เลขตัวแรก)
   // ตอนเปิดแก้ แสดงเป็นช่วงให้อ่านง่าย: 10-20 / 21-40 / 41
   const [tiers, setTiers] = useState<{ hours: string; rate: string }[]>(() => {
@@ -721,7 +728,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
         ...(role === "admin" && equipReady && (person || equipment) ? { can_manage_equipment: salaried && equipment } : {}),
         ...(role === "admin" && briefsReady && (person || briefs) ? { can_manage_briefs: briefs } : {}),
         // ทีมไลฟ์: ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
-        ...(isCrew(role) && (teamReady || shopee) ? { live_platform: shopee ? "shopee" : "tiktok" } : {}),
+        ...(isCrew(role) && (teamReady || liveTeam !== "tiktok") ? { live_platform: liveTeam } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { ...manage, ...view } : {}),
         // Plan Slot Live: ให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
@@ -1012,19 +1019,29 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
           </div>
         ) : null}
 
-        {/* ทีมไลฟ์: คิวในระบบตอนนี้เป็นบัญชี TikTok ทั้งหมด (หน้าจองคิว Shopee ยังไม่เปิด) */}
+        {/* ทีมไลฟ์: หน้าจองคิว TikTok (แท็บ Deal Mc) / คิว Shopee (แท็บ MC Shopee — มีแต่ Mc) ติ๊กทั้งคู่ = ได้ทั้งสองหน้า */}
         {isCrew(role) ? (
-          <Label className="items-start leading-snug font-normal">
-            <Checkbox checked={shopee} disabled={!teamReady} onCheckedChange={(v) => setShopee(v === true)} className="mt-0.5" />
-            <span>
-              ทีม Shopee (ยังไม่เห็นคิวไลฟ์ TikTok)
-              <span className="block text-xs text-muted-foreground">
-                {teamReady
-                  ? "หน้าจองไม่แสดง slot TikTok จองไม่ได้ และไม่ได้รับแจ้งเตือน slot ว่าง · ยังเปิด \"ตารางของฉัน\" (ใบ 50 ทวิ / เอกสารทำเบิก) ได้ตามปกติ · คิวที่มีอยู่แล้วไม่หาย"
-                  : "ต้องรัน SQL 20261031000000_live_platform ใน Supabase ก่อน"}
-              </span>
+          <fieldset className="rounded-lg border px-3 py-2">
+            <legend className="px-1 font-semibold">ทีมไลฟ์</legend>
+            <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+              {([["tiktok", "TikTok", tiktok, setTiktok, shopee], ["shopee", "Shopee", shopee, setShopee, tiktok]] as const).map(([id, text, on, set, other]) => (
+                <Label key={id} className="font-normal">
+                  {/* ต้องติ๊กอย่างน้อยหนึ่งทีม: ติ๊กออกอันสุดท้ายไม่ได้ */}
+                  <Checkbox checked={on} disabled={!teamReady || (on && !other)} onCheckedChange={(v) => set(v === true)} />
+                  {text}
+                </Label>
+              ))}
+            </div>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {!teamReady ? "ต้องรัน SQL 20261031000000_live_platform ใน Supabase ก่อน"
+                : liveTeam === "both" ? "เห็น / จองได้ทั้งคิว TikTok และคิว Shopee (สลับหน้าที่หน้าจอง) · ได้รับแจ้งเตือน slot ว่างของทั้งสองคิว"
+                  : liveTeam === "shopee" ? (role === "mc"
+                    ? "เห็น / จองเฉพาะคิว Shopee · ไม่เห็นคิว TikTok · ยังเปิด \"ตารางของฉัน\" (ใบ 50 ทวิ / เอกสารทำเบิก) ได้ตามปกติ"
+                    : "Admin: คิว Shopee ไม่มีแถว Admin จึงไม่มีหน้ารับคิว · ใช้ได้แค่ \"ตารางของฉัน\" (ใบ 50 ทวิ / เอกสารทำเบิก)")
+                    : "เห็น / จองเฉพาะคิว TikTok"}
+              {teamReady ? " · คิวที่มีอยู่แล้วไม่หาย" : ""}
             </span>
-          </Label>
+          </fieldset>
         ) : null}
 
         {role === "owner" ? (

@@ -6,7 +6,7 @@ import { processSyncJobs } from "@/lib/sync";
 
 export const maxDuration = 60;
 
-// Apps Script ในชีตเรียกที่นี่ทุกครั้งที่มีการแก้แถวในแท็บ Deal Mc / Admin เสริม
+// Apps Script ในชีตเรียกที่นี่ทุกครั้งที่มีการแก้แถวในแท็บ Deal Mc / Admin เสริม / MC Shopee
 // body: { tab: ชื่อแท็บ, rows: [เลขแถว], firstCol, lastCol }   header: Authorization: Bearer <SHEET_SYNC_SECRET>
 // ลบแถว: { tab: ชื่อแท็บ, removedRows: true } (onChange ไม่บอกว่าแถวไหน จึงตรวจทั้งแท็บ)
 export async function POST(request: Request) {
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
       // แถวใหม่: มักพิมพ์วัน/เวลาก่อนแล้วค่อยใส่ชื่อ → รอ 30 วิ แล้วแจ้งเฉพาะที่ยังว่างอยู่ (notifyNewSlots ตรวจซ้ำตอนส่ง)
       if (newOpen.length) {
         await new Promise((ok) => setTimeout(ok, 30_000));
-        await notifyNewSlots(tab, newOpen);
+        await notifyNewSlots(tab === "admin" ? "admin" : "mc", newOpen);
       }
     });
     return NextResponse.json({ ok: true, ...res });

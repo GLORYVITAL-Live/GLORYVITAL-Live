@@ -6,7 +6,7 @@ import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
   GraduationCapIcon, PackageIcon, PackageOpenIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
 } from "lucide-react";
-import { isShopeeRole } from "@/lib/live-team";
+import { boardsOf, type Board } from "@/lib/live-team";
 import type { Me, OwnerScope, Role } from "@/lib/types";
 import dynamic from "next/dynamic";
 import type { Go } from "@/components/HomeView";
@@ -192,18 +192,22 @@ function Shell({ me }: { me: Me | null }) {
   const wide = page === "plan" || (page === "owner" && ownerTab === "slots" && slotView === "plan");
   const role: Role | null = page === "mc" || page === "admin" || page === "owner" ? page : null;
   const preview = isPreview(me, role);
-  // ทีม Shopee: คิวในระบบเป็นบัญชี TikTok ทั้งหมด ไม่แสดงหน้าจอง ใช้ได้แค่ตารางของฉัน (Owner ที่เปิดดูแบบ preview ไม่เกี่ยว)
-  const shopee = isShopeeRole(me, role);
+  // หน้าจองตามทีมไลฟ์: Mc ทีม TikTok / Shopee / TikTok + Shopee (สลับได้ จำหน้าล่าสุดไว้ในเครื่อง) · Owner ที่เปิดดูเห็นทั้งสองหน้า
+  //   ไม่มีหน้าจองเลย (Admin ทีม Shopee อย่างเดียว — คิว Shopee ไม่มีแถว Admin) = ใช้ได้แค่ตารางของฉัน
+  const boards = boardsOf(me, role);
+  const savedBoard = useLocal(BOARD_KEY);
+  const board: Board | null = boards.find((b) => b === savedBoard) ?? boards[0] ?? null;
+  const noBoard = (role === "mc" || role === "admin") && !board;
   const [myOpen, setMyOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
   const [rulesManual, setRulesManual] = useState(false);
   const dark = useIsDark();
 
-  // กฎการทำงาน: เด้งวันละครั้งต่อบทบาท (ทีม Shopee ไม่เด้ง — เป็นกฎของคิวไลฟ์ TikTok · ยังเปิดเองได้จากตารางของฉัน)
+  // กฎการทำงาน: เด้งวันละครั้งต่อบทบาท (ไม่มีหน้าจอง TikTok = ไม่เด้ง — เป็นกฎของคิวไลฟ์ TikTok · ยังเปิดเองได้จากตารางของฉัน)
   const rulesKey = me && role ? `glory_rules_seen_${me.email}_${role}` : "";
   const rulesSeen = useLocal(rulesKey);
   const hydrated = useIsHydrated();
-  const rulesAuto = hydrated && !!rulesKey && role !== "owner" && !preview && !shopee && rulesSeen !== todayKey();
+  const rulesAuto = hydrated && !!rulesKey && role !== "owner" && !preview && boards.includes("tiktok") && rulesSeen !== todayKey();
   const rulesOpen = rulesManual || rulesAuto;
   function closeRules() {
     setRulesManual(false);
@@ -376,9 +380,9 @@ function Shell({ me }: { me: Me | null }) {
       <section className="pt-4 pb-3">
         <h1 className="text-2xl font-bold sm:text-[28px]">{mode?.title ?? "ตารางไลฟ์ GLORY VITAL"}</h1>
         {/* หน้าจอง (Mc / Admin) บนมือถือ: ซ่อนคำอธิบายวิธีใช้ ให้ slot ขึ้นมาในจอแรก (กฎดูได้ที่ "กฎการทำงาน") */}
-        <p className={cn("mt-1 text-sm text-muted-foreground", (role === "mc" || role === "admin") && !shopee && "max-sm:hidden")}>
-          {shopee
-            ? "ทีม Shopee — คิวไลฟ์ในหน้านี้ตอนนี้เป็นของช่อง TikTok"
+        <p className={cn("mt-1 text-sm text-muted-foreground", (role === "mc" || role === "admin") && !noBoard && "max-sm:hidden")}>
+          {noBoard
+            ? "ทีม Shopee — คิว Shopee มีแต่ Mc จึงไม่มี slot ให้รับคิวในหน้านี้"
             : page === "training" && me?.briefs ? `${MODES.training.hint} · แท็บเฟรมไลฟ์: เฟรมของแต่ละช่อง / ช่วงวัน + บรีฟการแต่งตัวให้ Mc`
               : mode?.hint ?? "เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ ระบบจะพาไปหน้าของ Mc หรือ Admin ให้อัตโนมัติ"}
         </p>
@@ -405,8 +409,13 @@ function Shell({ me }: { me: Me | null }) {
       {me?.owner && role === "owner" ? <OwnerTabs me={me} /> : null}
       {/* เอกสารทำเบิก: ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้ (เปิดจาก "ตารางของฉัน" ได้ด้วย) */}
       {me && (role === "mc" || role === "admin") && !preview ? <PayDocs open={docsOpen} onOpenChange={setDocsOpen} /> : null}
-      {me && (role === "mc" || role === "admin") && shopee ? <ShopeeSoon onOpenMine={() => setMyOpen(true)} /> : null}
-      {me && (role === "mc" || role === "admin") && !shopee ? <SlotBoard key={role} me={me} role={role} preview={preview} /> : null}
+      {me && noBoard ? <NoBoard onOpenMine={() => setMyOpen(true)} /> : null}
+      {me && (role === "mc" || role === "admin") && board ? (
+        <>
+          {boards.length > 1 ? <BoardSwitch value={board} onChange={(b) => writeLocal(BOARD_KEY, b)} /> : null}
+          <SlotBoard key={`${role}-${board}`} me={me} role={role} board={board} preview={preview} />
+        </>
+      ) : null}
       {me && registered && page === "home" ? <HomeView go={goTo} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
       {me && registered && page === "stats" ? <LiveStats readOnly={!me.owner?.analytics} /> : null}
@@ -428,7 +437,7 @@ function Shell({ me }: { me: Me | null }) {
             who={displayName(me, role)}
             onOpenRules={() => setRulesManual(true)}
             onOpenPayDocs={() => { setMyOpen(false); setDocsOpen(true); }}
-            canBook={!shopee}
+            canBook={!noBoard}
           />
           <RulesDialog open={rulesOpen} onClose={closeRules} role={role} who={displayName(me, role)} />
         </>
@@ -499,16 +508,38 @@ function OwnerTabs({ me }: { me: Me }) {
   );
 }
 
-/** ทีม Shopee: ยังไม่มีหน้าจองคิว Shopee (คิวในระบบเป็นบัญชี TikTok) ใช้ได้แค่ตารางของฉัน */
-function ShopeeSoon({ onOpenMine }: { onOpenMine: () => void }) {
+/** หน้าจองที่เลือกไว้ (Mc ทีม TikTok + Shopee / Owner ที่เปิดดู) จำไว้ในเครื่อง */
+const BOARD_KEY = "glory_board";
+
+/** สลับหน้าจองคิว TikTok / Shopee (เฉพาะคนที่ใช้ได้ทั้งสองหน้า) */
+function BoardSwitch({ value, onChange }: { value: Board; onChange: (b: Board) => void }) {
+  return (
+    <div role="tablist" aria-label="เลือกหน้าจองคิว" className="mb-2 flex w-full gap-1 rounded-full border bg-card p-1 shadow-card sm:w-max">
+      {([["tiktok", "คิว TikTok"], ["shopee", "คิว Shopee"]] as const).map(([id, text]) => (
+        <button
+          key={id} type="button" role="tab" aria-selected={value === id} onClick={() => onChange(id)}
+          className={cn(
+            "flex-1 cursor-pointer rounded-full px-4 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors pointer-coarse:min-h-10",
+            value === id ? "bg-tint text-tint-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Admin ทีม Shopee อย่างเดียว: คิว Shopee มีแต่ Mc จึงไม่มีหน้ารับคิว ใช้ได้แค่ตารางของฉัน */
+function NoBoard({ onOpenMine }: { onOpenMine: () => void }) {
   return (
     <Card className="my-3 shadow-card">
       <CardContent className="flex flex-col items-center gap-3 py-2 text-center">
         <span aria-hidden className="grid size-12 place-items-center rounded-full bg-p1/15 text-p1 [&_svg]:size-6"><ShoppingBagIcon /></span>
         <div>
-          <strong className="block text-base">หน้าจองคิว Shopee จะเปิดเร็วๆ นี้</strong>
+          <strong className="block text-base">ไม่มีคิวให้รับในหน้านี้</strong>
           <span className="mt-1 block text-sm text-muted-foreground">
-            ตอนนี้ดูคิวของคุณ ดาวน์โหลดใบ 50 ทวิ และส่งเอกสารทำเบิกได้ที่ &quot;ตารางของฉัน&quot;
+            คิว Shopee มีแต่ฝั่ง Mc · ดูคิวของคุณ ดาวน์โหลดใบ 50 ทวิ และส่งเอกสารทำเบิกได้ที่ &quot;ตารางของฉัน&quot;
           </span>
         </div>
         <Button size="lg" className="rounded-full px-5 pointer-coarse:min-h-11" onClick={onOpenMine}>

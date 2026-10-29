@@ -10,19 +10,20 @@
  *   2. เลือกฟังก์ชัน setupWebSync ด้านบน แล้วกด Run (อนุญาตสิทธิ์ตามที่ Google ถาม)
  *      (อัปเดตไฟล์นี้แล้วต้องกด Run setupWebSync อีกครั้ง เพื่อติดตั้ง trigger ใหม่)
  *
- * หลังจากนั้นทุกครั้งที่แก้แท็บ "ลงตาราง Deal Mc" หรือ "ลงตาราง Admin เสริม"
+ * หลังจากนั้นทุกครั้งที่แก้แท็บ "ลงตาราง Deal Mc" / "ลงตาราง Admin เสริม" / "ลงตาราง MC Shopee"
  * สคริปต์จะส่งเลขแถวที่แก้ไปให้เว็บอ่านและอัปเดตเอง (การเขียนชีตจากเว็บไม่ทำให้สคริปต์นี้ทำงานซ้ำ)
  * ลบแถว (คลิกขวา > ลบแถว) = ลบ slot นั้นในเว็บด้วย (เฉพาะ slot ตั้งแต่วันนี้)
  * คอลัมน์ V (Slot ID) ระบบเขียนเอง ห้ามแก้
- * เวลามาสาย (ใช้หักเงิน): Deal Mc คอลัมน์ L / Admin เสริม คอลัมน์ M เช่น "15" หรือ "สาย 15 นาที"
+ * เวลามาสาย (ใช้หักเงิน): Deal Mc คอลัมน์ L / Admin เสริม คอลัมน์ M / MC Shopee คอลัมน์ N เช่น "15" หรือ "สาย 15 นาที"
  */
 
 const WEB_SYNC_URL = 'https://glory-vital-live.vercel.app/api/sync/sheet';
 const WEB_SYNC_SHEET_ID = '1r17--dnbXyVk416Zc3mGwUb-aDw3OCxelOC25NJW7Xo'; // ชีต LIVE GLORY 2026 (ใช้ได้แม้สคริปต์ไม่ได้ผูกกับชีต)
-const WEB_SYNC_TABS = ['ลงตาราง Deal Mc', 'ลงตาราง Admin เสริม'];
+const WEB_SYNC_TABS = ['ลงตาราง Deal Mc', 'ลงตาราง Admin เสริม', 'ลงตาราง MC Shopee'];
 // คอลัมน์สุดท้ายที่เป็นข้อมูล slot ของแต่ละแท็บ
 //   Deal Mc: A-L (L = Remark / เวลามาสายของ Mc)   Admin เสริม: A-M (M = เวลามาสายของ Admin)
-const WEB_SYNC_LAST_COL = { 'ลงตาราง Deal Mc': 12, 'ลงตาราง Admin เสริม': 13 };
+//   MC Shopee: A-N (K = ชื่อ Mc, L = ติ๊กยืนยัน, M = Status, N = remark / เวลามาสาย)
+const WEB_SYNC_LAST_COL = { 'ลงตาราง Deal Mc': 12, 'ลงตาราง Admin เสริม': 13, 'ลงตาราง MC Shopee': 14 };
 
 function onEditToWeb(e) {
   if (!e || !e.range) return;
@@ -42,7 +43,7 @@ function onEditToWeb(e) {
 function onChangeToWeb(e) {
   if (!e || e.changeType !== 'REMOVE_ROW') return;
   const ss = e.source || SpreadsheetApp.openById(WEB_SYNC_SHEET_ID);
-  // onChange ไม่บอกว่าลบในแท็บไหน จึงให้เว็บตรวจทั้งสองแท็บ
+  // onChange ไม่บอกว่าลบในแท็บไหน จึงให้เว็บตรวจทุกแท็บ
   WEB_SYNC_TABS.forEach(function (tab) { postToWeb_(ss, { tab: tab, removedRows: true }); });
 }
 

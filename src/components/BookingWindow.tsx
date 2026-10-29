@@ -8,6 +8,7 @@ import { PersonPicker } from "@/components/SlotManager";
 import { IconButton, Notice, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PAGE_KEY, writeLocal } from "@/lib/hooks";
@@ -18,6 +19,8 @@ import {
 } from "@/lib/window";
 
 type Person = { id: number; name: string };
+/** ฝั่งที่มีช่วงเปิดจองของตัวเอง: Mc (คิว TikTok) / Admin เสริม / Mc Shopee (คิว Shopee) */
+type Side = "mc" | "admin" | "shopee";
 type Data = {
   today: string;
   cutoffMonth: string;
@@ -25,14 +28,19 @@ type Data = {
   canCutoff: boolean;
   mc?: BookWindow | null;
   admin?: BookWindow | null;
-  people: { mc: Person[]; admin: Person[] };
+  shopee?: BookWindow | null;
+  /** โควต้าต่อวันของคิว Shopee (ไม่มี = ไม่เห็นฝั่ง Mc · ready = รัน SQL แล้ว) */
+  shopeeLimits?: { slots: number; hours: number; ready: boolean };
+  people: { mc: Person[]; admin: Person[]; shopee?: Person[] };
   /** ข้อจำกัดการจองอื่นที่เปิดอยู่ · quota null = ไม่เห็นฝั่ง Mc */
   gates?: { quota: boolean | null; training: boolean };
 };
 /** ค่าที่กำลังแก้ในฟอร์ม (วันที่ว่าง = "") */
 type Draft = { mode: Mode; from: string; to: string };
 
-const LABEL = { mc: "Mc", admin: "Admin เสริม" } as const;
+const LABEL = { mc: "Mc", admin: "Admin เสริม", shopee: "Mc Shopee" } as const;
+/** สิทธิ์ฝั่งที่ใช้กับช่วงเปิดจองนี้ (คิว Shopee = ฝั่ง Mc) */
+const scopeOf = (s: Side) => (s === "admin" ? "admin" : "mc");
 
 const monthLabel = (m: string) => {
   const [y, mon] = m.split("-").map(Number);
@@ -83,8 +91,8 @@ export function BookingWindowEditor({ scope, edit }: { scope: OwnerScope; edit: 
       ? <Notice variant="warning" className="my-3">โหลดช่วงเปิดจองไม่สำเร็จ: {error}</Notice>
       : <Skeleton className="my-3 h-11 rounded-xl" />;
   }
-  const roles = (["mc", "admin"] as const).filter((r) => scope[r]);
-  const editable = roles.filter((r) => edit[r]);
+  const roles = (["mc", "shopee", "admin"] as const).filter((r) => scope[scopeOf(r)]);
+  const editable = roles.filter((r) => edit[scopeOf(r)]);
   const reload = () => setTick((n) => n + 1);
 
   const gates = <BookingGates gates={data.gates} onChanged={reload} />;
@@ -113,7 +121,7 @@ export function BookingWindowEditor({ scope, edit }: { scope: OwnerScope; edit: 
         </CollapsibleTrigger>
         <CollapsibleContent className="space-y-4 border-t p-3">
           {editable.map((r) => <RoleWindow key={`${r}${JSON.stringify(data[r] ?? null)}`} role={r} data={data} onSaved={reload} />)}
-          {roles.filter((r) => !edit[r]).map((r) => (
+          {roles.filter((r) => !edit[scopeOf(r)]).map((r) => (
             <p key={r} className="text-sm text-muted-foreground">{LABEL[r]}: {summaryText(data[r] ?? null, data)} (ดูได้อย่างเดียว)</p>
           ))}
           <CutoffMonth key={data.cutoffMonth} data={data} onSaved={reload} />
@@ -155,10 +163,10 @@ function BookingGates({ gates, onChanged }: { gates: Data["gates"]; onChanged: (
   );
 }
 
-function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data; onSaved: () => void }) {
+function RoleWindow({ role, data, onSaved }: { role: Side; data: Data; onSaved: () => void }) {
   const toast = useToast();
   const saved = data[role] ?? null;
-  const people = data.people[role];
+  const people = data.people[role] ?? [];
   const [general, setGeneral] = useState<Draft>(toDraft(saved));
   const [early, setEarly] = useState<Draft>(toDraft(saved?.early));
   // รายชื่อจองก่อน: หนึ่งแถว = หนึ่งคน (null = แถวที่กด + แล้วยังไม่ได้เลือกชื่อ)
@@ -169,7 +177,7 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
   const w = cleanWindow({ ...general, only, early });
   const invalid = invalidOf(general) || (only.length ? invalidOf(early) : "");
   const changed = JSON.stringify(w) !== JSON.stringify(saved);
-  const label = (p: Person) => (role === "mc" ? `Mc ${p.name}` : p.name);
+  const label = (p: Person) => (role === "admin" ? p.name : `Mc ${p.name}`);
   const nameOf = (id: number) => {
     const p = people.find((x) => x.id === id);
     return p ? label(p) : "(ถูกลบแล้ว)";
@@ -201,7 +209,12 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
   const generalEmpty = bookRange(generalP, data.today, data.cutoffDate).empty;
   return (
     <section className="rounded-xl border p-3">
-      <h3 className="mb-2 font-bold">{LABEL[role]}</h3>
+      <h3 className="font-bold">{LABEL[role]}</h3>
+      <p className="mb-2 text-xs text-muted-foreground">
+        {role === "shopee" ? "หน้าจองคิว Shopee (แท็บ ลงตาราง MC Shopee) — Mc ทีม Shopee / TikTok + Shopee"
+          : role === "mc" ? "หน้าจองคิว TikTok (แท็บ ลงตาราง Deal Mc)" : "รับคิว Admin เสริม (แท็บ ลงตาราง Admin เสริม)"}
+      </p>
+      {role === "shopee" && data.shopeeLimits ? <ShopeeLimits key={JSON.stringify(data.shopeeLimits)} limits={data.shopeeLimits} onSaved={onSaved} /> : null}
 
       <div className="text-sm font-semibold">ช่วงของ {LABEL[role]} ทั่วไป</div>
       <PeriodPicker
@@ -298,6 +311,55 @@ function RoleWindow({ role, data, onSaved }: { role: "mc" | "admin"; data: Data;
         </Button>
       </div>
     </section>
+  );
+}
+
+/** โควต้าต่อวันของคิว Shopee (นับเฉพาะคิว Shopee ของคนนั้น แยกจากคิว TikTok · ฐานข้อมูลตรวจซ้ำตอนจอง) */
+function ShopeeLimits({ limits, onSaved }: { limits: NonNullable<Data["shopeeLimits"]>; onSaved: () => void }) {
+  const toast = useToast();
+  const [slots, setSlots] = useState(String(limits.slots));
+  const [hours, setHours] = useState(String(limits.hours));
+  const [saving, setSaving] = useState(false);
+  const changed = Number(slots) !== limits.slots || Number(hours) !== limits.hours;
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await api<{ message: string }>("/api/owner/booking-window", { shopeeLimits: { slots: Number(slots), hours: Number(hours) } }, "PUT");
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onSaved();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mb-3 rounded-lg bg-muted p-2.5">
+      <div className="text-sm font-semibold">จองได้ต่อวัน (นับเฉพาะคิว Shopee)</div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm">
+        <Input
+          type="number" inputMode="numeric" min={1} max={10} value={slots} disabled={saving || !limits.ready}
+          onChange={(e) => setSlots(e.target.value)} className="w-20 bg-card" aria-label="จำนวน slot ต่อวัน (คิว Shopee)"
+        />
+        <span>slot ·</span>
+        <Input
+          type="number" inputMode="decimal" min={0.5} max={24} step={0.5} value={hours} disabled={saving || !limits.ready}
+          onChange={(e) => setHours(e.target.value)} className="w-20 bg-card" aria-label="ชั่วโมงต่อวัน (คิว Shopee)"
+        />
+        <span>ชม. ต่อวัน</span>
+        <Button size="lg" className="ml-auto" disabled={saving || !changed || !limits.ready} onClick={save}>
+          {saving ? "กำลังบันทึก..." : "บันทึก"}
+        </Button>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {limits.ready
+          ? "slot Shopee ยาวไม่เท่ากัน (22:00–02:00 = 4 ชม.) ตั้งชั่วโมงให้พอกับช่วงที่ยาวที่สุด · เวลาทับกับคิว TikTok ยังจองไม่ได้"
+          : "ต้องรัน SQL 20261114000000_shopee_slots ใน Supabase ก่อน"}
+      </p>
+    </div>
   );
 }
 
@@ -409,7 +471,7 @@ function CutoffMonth({ data, onSaved }: { data: Data; onSaved: () => void }) {
 
   return (
     <section className="border-t pt-3">
-      <h3 className="text-sm font-bold">เดือนสุดท้ายที่เปิดจอง (ใช้ทั้ง Mc และ Admin)</h3>
+      <h3 className="text-sm font-bold">เดือนสุดท้ายที่เปิดจอง (ใช้ทุกฝั่ง: Mc / Mc Shopee / Admin)</h3>
       <p className="mb-2 text-xs text-muted-foreground">
         จองได้ถึงสิ้นเดือนนี้ สำหรับช่วงที่เป็น &quot;ไม่จำกัด&quot; / &quot;สัปดาห์นี้&quot; / ไม่ได้ใส่วันสุดท้าย
         (ช่วงที่ใส่วันสุดท้ายเองใช้วันที่ตั้งไว้ได้เลย) · ตอนนี้: <strong>{data.cutoffMonth ? `ถึงสิ้นเดือน ${monthLabel(data.cutoffMonth)}` : "ไม่จำกัด"}</strong>

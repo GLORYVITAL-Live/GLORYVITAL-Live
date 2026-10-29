@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  CheckIcon, ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, ListChecksIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
+  CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, ListChecksIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
   RefreshCwIcon, RotateCcwIcon, RotateCwIcon, Settings2Icon, ShirtIcon, Trash2Icon, UsersIcon, VideoIcon, Volume2Icon, VolumeXIcon, XIcon,
 } from "lucide-react";
 import { LiveFrames } from "@/components/LiveFrames";
@@ -153,11 +153,23 @@ export function TrainingPage() {
 
       {tab === "frames" && data.frames ? <LiveFrames /> : tab === "views" && canManage ? <><RequiredProgress /><ViewsPanel /></> : tab === "slides" ? (
         data.slides ? (
-          <SlidesView id={data.slides} />
+          // อ่านทีละหน้าในเว็บ (นับหน้าได้) · อ่านสไลด์ผ่าน API ไม่ได้ = กรอบของ Google แบบเดิม
+          data.deck ? (
+            <SlideReader
+              id={data.slides} deck={data.deck}
+              required={!!(gate?.on && gate.slides && !gate.passed)} doneBefore={!!gate?.done.includes(`slides:${data.slides}`)}
+            />
+          ) : <SlidesView id={data.slides} />
         ) : <Notice>ยังไม่ได้ตั้งสไลด์บรีฟโปรดักต์ (settings.training_slides)</Notice>
       ) : (
         <>
           {data.message ? <Notice variant="warning" icon title="อ่านรายชื่อวิดีโอไม่สำเร็จ">{data.message}</Notice> : null}
+          {/* Admin เสริมใหม่: อ่านสไลด์ครบก่อนรับคิว (อยู่แท็บสไลด์) */}
+          {!editing && gate?.on && gate.slides && !gate.passed && data.slides && !gate.done.includes(`slides:${data.slides}`) ? (
+            <Notice variant="warning" icon className="mb-3" title="อ่านสไลด์บรีฟโปรดักต์ให้ครบทุกหน้าก่อนรับคิว">
+              <Button size="sm" className="mt-1 pointer-coarse:h-9" onClick={() => { track("slides"); setTab("slides"); }}>ไปอ่านสไลด์</Button>
+            </Notice>
+          ) : null}
           {/* Mc ใหม่ (ยังไม่เคยไลฟ์): คลิปบังคับก่อนจองคิว */}
           {!editing && gate?.on && gate.applies && requiredClips.length ? (
             gate.passed || requiredDone >= requiredClips.length ? (
@@ -315,8 +327,8 @@ export function TrainingPage() {
   );
 }
 
-/** บันทึกการเข้าชม (เงียบ — พลาดไม่เป็นไร ไม่แจ้งผู้ใช้) · done = ดูคลิปจบ (นับคลิปบังคับก่อนจอง) */
-function track(kind: "page" | "video" | "slides" | "done", v?: TrainingVideo) {
+/** บันทึกการเข้าชม (เงียบ — พลาดไม่เป็นไร ไม่แจ้งผู้ใช้) · done = ดูคลิปจบ / อ่านสไลด์ครบ (นับเทรนนิ่งก่อนจอง) */
+function track(kind: "page" | "video" | "slides" | "done", v?: Pick<TrainingVideo, "ref" | "title">) {
   fetch("/api/training", {
     method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
     body: JSON.stringify({ action: "view", kind, ref: v?.ref, title: v?.title }),
@@ -381,7 +393,7 @@ function RequiredProgress() {
   }, [tick]);
 
   if (error) return <Notice variant="warning" icon className="mb-4" title="โหลดความคืบหน้าคลิปบังคับไม่สำเร็จ">{error}</Notice>;
-  if (!data || !data.total) return null;
+  if (!data || (!data.total && !data.people.some((p) => p.need === "slides"))) return null;
   async function pass(id: number, passed: boolean) {
     setBusy(id);
     try {
@@ -395,22 +407,30 @@ function RequiredProgress() {
       setBusy(null);
     }
   }
-  const ok = (p: TrainingProgress["people"][number]) => p.passed || p.done >= data.total;
+  // Mc ใหม่ = คลิปบังคับ (ไม่มีคลิปบังคับ = ไม่ต้องดู) · Admin เสริมใหม่ = อ่านสไลด์ครบ (done 1)
+  const goal = (p: TrainingProgress["people"][number]) => (p.need === "slides" ? 1 : data.total);
+  const finished = (p: TrainingProgress["people"][number]) => p.done >= goal(p);
+  const ok = (p: TrainingProgress["people"][number]) => p.passed || finished(p);
   const people = [...data.people].sort((a, b) => Number(ok(a)) - Number(ok(b)) || a.who.localeCompare(b.who, "th"));
   return (
     <section className="mb-5">
       <h3 className="text-sm font-semibold">
-        คลิปบังคับก่อนจองคิว ({data.total} คลิป) · Mc ใหม่ครบแล้ว {data.people.filter(ok).length}/{data.people.length} คน
-        <span className="font-normal text-muted-foreground"> · {data.on ? "เปิดใช้อยู่" : "ยังไม่เปิดใช้ (เปิดที่ จัดการคลิป)"} · Mc ที่เคยไลฟ์แล้วไม่ต้องดู ไม่อยู่ในรายชื่อ</span>
+        เทรนนิ่งก่อนจองคิว (คนใหม่) · ผ่านแล้ว {data.people.filter(ok).length}/{data.people.length} คน
+        <span className="font-normal text-muted-foreground">
+          {" "}· {data.on ? "เปิดใช้อยู่" : "ยังไม่เปิดใช้ (เปิดที่ จัดการคลิป)"} · Mc ใหม่ = คลิปบังคับ {data.total} คลิป · Admin เสริมใหม่ = อ่านสไลด์ครบทุกหน้า
+          · คนที่เคยไลฟ์แล้วไม่ต้อง ไม่อยู่ในรายชื่อ
+        </span>
       </h3>
       <ul className="scroll-thin mt-1.5 max-h-80 divide-y overflow-y-auto rounded-xl border bg-card">
         {people.map((p) => (
           <li key={p.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-sm">
             <span className="min-w-0 flex-1 truncate">{p.who}</span>
             <span className={cn("text-xs font-semibold tabular-nums", ok(p) ? "text-success" : "text-destructive")}>
-              {p.passed ? "ให้ผ่านแล้ว" : `${p.done}/${data.total}${p.done >= data.total ? " ✓" : ""}`}
+              {p.passed ? "ให้ผ่านแล้ว"
+                : p.need === "slides" ? (finished(p) ? "อ่านสไลด์ครบ ✓" : "สไลด์ยังไม่ครบ")
+                  : `คลิป ${p.done}/${data.total}${finished(p) ? " ✓" : ""}`}
             </span>
-            {p.done < data.total ? (
+            {!finished(p) ? (
               <Button size="xs" variant="outline" disabled={busy === p.id} onClick={() => pass(p.id, !p.passed)} className="pointer-coarse:h-9 pointer-coarse:px-3">
                 {p.passed ? "ยกเลิกให้ผ่าน" : "ให้ผ่าน"}
               </Button>
@@ -419,7 +439,8 @@ function RequiredProgress() {
         ))}
       </ul>
       <p className="mt-1 text-[11px] text-muted-foreground">
-        ดูจบ = เล่นในเว็บจริงเกิน 85% ของคลิป (เลื่อนข้ามไม่นับ) · คลิป YouTube = กด &quot;ดูจบแล้ว&quot; เอง · ให้ผ่าน = จองได้โดยไม่ต้องดู (เช่น เทรนนอกเว็บแล้ว)
+        ดูจบ = เล่นในเว็บจริงเกิน 85% ของคลิป (เลื่อนข้ามไม่นับ) · คลิป YouTube = กด &quot;ดูจบแล้ว&quot; เอง
+        · อ่านสไลด์ครบ = เปิดในเว็บครบทุกหน้า (หน้าละอย่างน้อย 3 วินาที) · ให้ผ่าน = จองได้โดยไม่ต้องดู (เช่น เทรนนอกเว็บแล้ว)
       </p>
     </section>
   );
@@ -606,6 +627,151 @@ function AddDialog({ open, busy, groups, onClose, onAdd }: {
         <Button disabled={busy || !url.trim() || !group.trim()} onClick={() => onAdd({ url, title, group })}>{busy ? "กำลังเพิ่ม..." : "เพิ่มคลิป"}</Button>
       </DialogActions>
     </AppDialog>
+  );
+}
+
+/** รูปสไลด์หน้า i (เริ่ม 0) ของรุ่นนี้ — เซิร์ฟเวอร์ดึงจาก Google ครั้งแรกแล้วเก็บไว้ */
+const slideUrl = (i: number, rev: string) => `/api/training/slide?i=${i}&r=${encodeURIComponent(rev)}`;
+/** อ่านหน้านี้นานเท่านี้ขึ้นไป = นับว่าอ่านแล้ว */
+const SLIDE_READ_MS = 3000;
+const SLIDE_POS_KEY = (id: string) => `glory_slides_pos_${id}`;
+const SLIDE_SEEN_KEY = (id: string, rev: string) => `glory_slides_seen_${id}_${rev}`;
+
+/**
+ * สไลด์บรีฟอ่านทีละหน้าในเว็บ (นับหน้าที่อ่านแล้วได้ — Admin เสริมใหม่ต้องอ่านครบทุกหน้าก่อนรับคิว)
+ *   อ่านแล้ว = หน้านั้นขึ้นจอครบ 3 วินาที · จำหน้าที่อ่านแล้ว / หน้าล่าสุดไว้ในเครื่อง (แก้สไลด์ = รุ่นใหม่ นับใหม่)
+ *   ครบทุกหน้า = บันทึก "อ่านครบ" (done 'slides:<id>') ครั้งเดียว · ลูกศร / ปัดซ้ายขวา / คีย์ ← → = เปลี่ยนหน้า
+ *   required = คนดูอยู่ต้องอ่านครบก่อนรับคิว · doneBefore = เคยอ่านครบแล้ว (บันทึกในระบบ)
+ */
+function SlideReader({ id, deck, required, doneBefore }: { id: string; deck: { pages: number; rev: string }; required: boolean; doneBefore: boolean }) {
+  const toast = useToast();
+  const total = deck.pages;
+  const read = <T,>(key: string, fallback: T, parse: (s: string) => T) => {
+    try { const s = localStorage.getItem(key); return s === null ? fallback : parse(s); } catch { return fallback; }
+  };
+  const [index, setIndex] = useState(() => Math.min(total - 1, Math.max(0, read(SLIDE_POS_KEY(id), 0, Number) || 0)));
+  const [seen, setSeen] = useState<Set<number>>(() => new Set(read<number[]>(SLIDE_SEEN_KEY(id, deck.rev), [], (s) => JSON.parse(s) as number[])));
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const touchX = useRef<number | null>(null);
+
+  const go = (i: number) => {
+    const next = Math.max(0, Math.min(total - 1, i));
+    if (next === index) return;
+    setIndex(next);
+    setLoaded(false);
+    setFailed(false);
+    try { localStorage.setItem(SLIDE_POS_KEY(id), String(next)); } catch { /* ไม่มีที่เก็บ = ไม่จำ */ }
+  };
+
+  // หน้านี้ขึ้นจอครบ 3 วินาที = อ่านแล้ว
+  useEffect(() => {
+    if (!loaded || seen.has(index)) return;
+    const t = window.setTimeout(() => {
+      setSeen((prev) => {
+        const next = new Set(prev).add(index);
+        try { localStorage.setItem(SLIDE_SEEN_KEY(id, deck.rev), JSON.stringify([...next])); } catch { /* นับเฉพาะรอบนี้ */ }
+        return next;
+      });
+    }, SLIDE_READ_MS);
+    return () => window.clearTimeout(t);
+  }, [loaded, index, seen, id, deck.rev]);
+
+  // ครบทุกหน้า = บันทึกครั้งเดียว (เคยครบในเครื่องนี้แต่บันทึกไม่ทัน = ส่งใหม่ตอนเปิด)
+  const all = seen.size >= total;
+  const done = doneBefore || all;
+  const sent = useRef(doneBefore);
+  useEffect(() => {
+    if (!all || sent.current) return;
+    sent.current = true;
+    track("done", { ref: `slides:${id}`, title: "สไลด์บรีฟโปรดักต์" });
+    if (required) toast("อ่านสไลด์ครบทุกหน้าแล้ว รับคิวได้เลย");
+  }, [all, id, required, toast]);
+
+  // โหลดหน้าถัดไปรอไว้ (เปลี่ยนหน้าแล้วขึ้นทันที)
+  useEffect(() => {
+    if (!loaded || index + 1 >= total) return;
+    const img = new Image();
+    img.src = slideUrl(index + 1, deck.rev);
+  }, [loaded, index, total, deck.rev]);
+
+  const firstUnseen = Array.from({ length: total }, (_, i) => i).find((i) => !seen.has(i));
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") { e.preventDefault(); go(index - 1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); go(index + 1); }
+  };
+  function fullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
+    else box.current?.requestFullscreen().catch(() => undefined);
+  }
+  const navBtn = "absolute top-1/2 grid size-11 -translate-y-1/2 cursor-pointer place-items-center rounded-full bg-black/45 text-white transition-opacity hover:bg-black/65 disabled:pointer-events-none disabled:opacity-0 [&_svg]:size-6";
+
+  return (
+    <div>
+      {required && !done ? (
+        <Notice variant="warning" icon className="mb-3" title={`อ่านสไลด์ให้ครบทุกหน้าก่อนรับคิว — อ่านแล้ว ${seen.size}/${total} หน้า`}>
+          เปิดทีละหน้าจนครบ (หน้าละอย่างน้อย 3 วินาที) ระบบนับให้อัตโนมัติ · อ่านค้างไว้ได้ กลับมาอ่านต่อในเครื่องเดิม
+        </Notice>
+      ) : required ? (
+        <Notice className="mb-3" title="อ่านสไลด์ครบทุกหน้าแล้ว ✓">รับคิวได้ตามปกติ</Notice>
+      ) : null}
+      <div className="mx-auto w-full max-w-[calc((100svh-160px)*16/9)]">
+        <div
+          ref={box} tabIndex={0} onKeyDown={onKeyDown}
+          onTouchStart={(e) => { touchX.current = e.touches[0].clientX; }}
+          onTouchEnd={(e) => {
+            const dx = touchX.current === null ? 0 : e.changedTouches[0].clientX - touchX.current;
+            touchX.current = null;
+            if (Math.abs(dx) > 50) go(index + (dx < 0 ? 1 : -1));
+          }}
+          className="relative grid aspect-video w-full place-items-center overflow-hidden rounded-xl border bg-black shadow-card outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          {failed ? (
+            <div className="p-4 text-center text-sm text-white">
+              โหลดหน้านี้ไม่สำเร็จ
+              <Button size="sm" variant="secondary" className="mt-2 block mx-auto" onClick={() => { setFailed(false); setLoaded(false); setIndex((i) => i); }}>ลองใหม่</Button>
+            </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element -- รูปจาก API ของเว็บเอง (ต้องส่ง cookie) ไม่ผ่าน next/image
+            <img
+              key={`${index}-${failed}`} src={slideUrl(index, deck.rev)} alt={`สไลด์บรีฟโปรดักต์ หน้า ${index + 1}`}
+              className={cn("size-full object-contain transition-opacity", loaded ? "opacity-100" : "opacity-0")}
+              onLoad={() => setLoaded(true)} onError={() => setFailed(true)} draggable={false}
+            />
+          )}
+          {!loaded && !failed ? <span className="absolute text-sm text-white/80">กำลังโหลดหน้า {index + 1}...</span> : null}
+          <button type="button" aria-label="หน้าก่อน" className={cn(navBtn, "left-2")} disabled={index === 0} onClick={() => go(index - 1)}><ChevronLeftIcon /></button>
+          <button type="button" aria-label="หน้าถัดไป" className={cn(navBtn, "right-2")} disabled={index >= total - 1} onClick={() => go(index + 1)}><ChevronRightIcon /></button>
+          {seen.has(index) ? (
+            <span className="absolute top-2 right-2 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-white"><CheckIcon className="mr-0.5 inline size-3" />อ่านแล้ว</span>
+          ) : null}
+        </div>
+        {/* แถบความคืบหน้า: หน้าที่อ่านแล้ว */}
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
+          <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${(seen.size / total) * 100}%` }} />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+          <Button variant="outline" size="icon" aria-label="หน้าก่อน" disabled={index === 0} onClick={() => go(index - 1)} className="pointer-coarse:size-10"><ChevronLeftIcon /></Button>
+          <span className="font-semibold tabular-nums">หน้า {index + 1}/{total}</span>
+          <Button variant="outline" size="icon" aria-label="หน้าถัดไป" disabled={index >= total - 1} onClick={() => go(index + 1)} className="pointer-coarse:size-10"><ChevronRightIcon /></Button>
+          <span className={cn("text-xs tabular-nums", all ? "font-semibold text-success" : "text-muted-foreground")}>
+            อ่านแล้ว {seen.size}/{total}{all ? " ✓" : ""}
+          </span>
+          <span className="ml-auto flex items-center gap-1">
+            {firstUnseen !== undefined && firstUnseen !== index ? (
+              <Button size="sm" variant="outline" onClick={() => go(firstUnseen)} className="pointer-coarse:h-9">ไปหน้าที่ยังไม่ได้อ่าน ({firstUnseen + 1})</Button>
+            ) : null}
+            <Button variant="ghost" size="icon" aria-label="เต็มจอ" onClick={fullscreen} className="pointer-coarse:size-10"><MaximizeIcon /></Button>
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          ปัดซ้าย / ขวา หรือกดลูกศรเพื่อเปลี่ยนหน้า ·{" "}
+          <a href={`https://docs.google.com/presentation/d/${id}/view`} target="_blank" rel="noreferrer" className="underline underline-offset-2">เปิดใน Google Slides</a>
+          {required ? " (อ่านใน Google Slides ไม่นับหน้า)" : ""}
+        </p>
+      </div>
+    </div>
   );
 }
 

@@ -1,11 +1,11 @@
 import "server-only";
 import webpush from "web-push";
 import { missingCalendarCounts } from "@/lib/calendar";
-import { bookingRange, getSettings, proofsBySlot, windowAlerts, type Settings } from "@/lib/data";
+import { bookingRange, getSettings, proofsBySlot, windowAlerts, type BookSide, type Settings } from "@/lib/data";
 import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { fmtDayShort, parseKey } from "@/lib/format";
-import { tiktokOnly, withLiveTeam } from "@/lib/live-team";
+import { shopeeCrew, tiktokOnly, withLiveTeam } from "@/lib/live-team";
 import { platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
@@ -20,7 +20,8 @@ import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
  *   booked     มีคนจองคิว / รับคิว                → Owner ที่จัดการฝั่งนั้น
  *   cancelled  Mc / Admin เสริมกดยกเลิกคิว         → Owner ฝั่งนั้น + คู่ไลฟ์ของ slot นั้น
  *   slot_open  slot ว่างเพราะมีคนยกเลิก / เจ้าของสร้าง slot ใหม่ / เปิดช่วงจอง
- *                                                  → Mc (ที่จองวันนั้นได้) / Admin เสริม (ไม่รวมทีม Shopee)
+ *                                                  → Mc (ที่จองวันนั้นได้) / Admin เสริม ตามทีมไลฟ์
+ *                                                    (คิว TikTok = ไม่รวมทีม Shopee อย่างเดียว · คิว Shopee = ทีม Shopee + TikTok + Shopee)
  *   changed    Owner เปลี่ยนคน / แคนคิว (เว็บ / ชีต) → คนที่ได้ / เสียคิว
  *   reminder   คืนก่อนวันไลฟ์ (20:00) + ก่อนเริ่ม ~1 ชม. → เจ้าของคิว (cron ทุก 15 นาที)
  *   open_soon  slot ยังว่างใน 48 ชม. (เช้า)           → Owner ฝั่งนั้น
@@ -61,8 +62,10 @@ const hm = (t: string) => String(t).slice(0, 5);
 const bkkDay = (t: number) => new Date(t + 7 * 3600_000).toISOString().slice(0, 10);
 const cleanEmails = (emails: (string | null | undefined)[]) =>
   [...new Set(emails.filter((e): e is string => !!e?.trim()).map((e) => e.trim().toLowerCase()))];
-/** ป้ายฝั่งในหัวข้อแจ้งเตือน (แยกให้เห็นบนหน้าจอล็อกว่าเป็น slot ของ Mc หรือ Admin) */
-const roleLabel = (side: Side) => (side === "mc" ? "Mc" : "Admin");
+/** ป้ายฝั่งในหัวข้อแจ้งเตือน (แยกให้เห็นบนหน้าจอล็อกว่าเป็น slot ของ Mc / Mc Shopee / Admin) */
+const roleLabel = (side: BookSide) => (side === "mc" ? "Mc" : side === "shopee" ? "Mc Shopee" : "Admin");
+/** ฝั่งของกฎการจองของ slot นี้ (slot Mc ของแท็บ MC Shopee = shopee) */
+const bookSideOf = (side: Side, s: { sheet_tab?: string | null }): BookSide => (side === "admin" ? "admin" : s.sheet_tab === "shopee" ? "shopee" : "mc");
 const who = (side: Side, name: string) => (side === "mc" ? `Mc ${name.replace(/^mc\s*/i, "")}` : name);
 
 // ---------- ส่ง ----------
@@ -158,11 +161,16 @@ async function emailsOf(ids: (number | null | undefined)[]) {
 type Slot = {
   id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
   is_cancelled: boolean; confirmed: boolean | null; person: number | null;
+  /** เฉพาะ slot Mc: แท็บ (mc = Deal Mc / shopee = MC Shopee) */
+  sheet_tab?: string | null;
 };
+/** คอลัมน์ของ slot ฝั่งนั้น (ฝั่ง Mc มีแท็บของ slot ด้วย) */
+const slotCols = (side: Side) =>
+  `id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, person:${personCol(side)}${side === "mc" ? ", sheet_tab" : ""}`;
 async function slotsOf(side: Side, ids: number[]) {
   if (!ids.length) return [] as Slot[];
   const { data } = await createAdminClient().from(tableOf(side))
-    .select(`id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, person:${personCol(side)}`)
+    .select(slotCols(side))
     .in("id", ids).order("starts_at").overrideTypes<Slot[], { merge: false }>();
   return data ?? [];
 }
@@ -224,11 +232,12 @@ export async function notifyCancelled(side: Side, name: string, actorEmail: stri
       .not(personCol(other), "is", null).overrideTypes<{ person: number; is_cancelled: boolean }[], { merge: false }>();
     const pairIds = (pairs ?? []).filter((p) => !p.is_cancelled).map((p) => p.person);
 
-    // คนอื่นที่จองแทนได้: Mc ที่ช่วงเปิดจองครอบวันนั้น / Admin เสริม (ไม่รวมทีม Shopee)
+    // คนอื่นที่จองแทนได้: Mc ที่ช่วงเปิดจองครอบวันนั้น / Admin เสริม (เฉพาะทีมไลฟ์ที่จองหน้านั้นได้)
+    const bs = bookSideOf(side, s);
     let bookable: { id: number; email: string }[] = [];
     if (before > 0) {
-      const [staff, settings] = await Promise.all([bookers(side), getSettings()]);
-      bookable = staff.filter((p) => p.id !== actorId && inRange(bookingRange(settings, side, p.id), s.live_date));
+      const [staff, settings] = await Promise.all([bookers(bs), getSettings()]);
+      bookable = staff.filter((p) => p.id !== actorId && inRange(bookingRange(settings, bs, p.id), s.live_date));
     }
 
     const pairEmails = await emailsOf(pairIds);
@@ -239,7 +248,7 @@ export async function notifyCancelled(side: Side, name: string, actorEmail: stri
     const already = new Set(items.map((x) => x.email));
     for (const p of bookable) {
       if (p.email !== actor && !already.has(p.email)) {
-        items.push({ email: p.email, kind: "slot_open", page: side, title: `${urgent}มี slot ${roleLabel(side)} ว่าง: ${text}`, body: `มีคนยกเลิกคิวนี้ ${side === "mc" ? "จองได้" : "รับคิวได้"}ทางเว็บ ใครกดก่อนได้ก่อน` });
+        items.push({ email: p.email, kind: "slot_open", page: side, title: `${urgent}มี slot ${roleLabel(bs)} ว่าง: ${text}`, body: `มีคนยกเลิกคิวนี้ ${side === "mc" ? "จองได้" : "รับคิวได้"}ทางเว็บ ใครกดก่อนได้ก่อน` });
       }
     }
     return notifyMany(items);
@@ -305,47 +314,56 @@ export async function notifySlotChanges(table: Table, changes: SlotChange[], act
 
 const inRange = (r: BookRange, day: string) => !r.empty && day >= r.from && (r.to === null || day <= r.to);
 
-/** slot ว่างที่ยังไม่เริ่ม (Admin = เฉพาะที่เปิดรับ Admin เสริม) · ids = เฉพาะ slot เหล่านี้ / ไม่ใส่ = ทั้งหมดตั้งแต่วันนี้ */
-async function openFutureSlots(side: Side, ids?: number[]) {
+/**
+ * slot ว่างที่ยังไม่เริ่มของฝั่งนั้น (Admin = เฉพาะที่เปิดรับ Admin เสริม · Mc TikTok / Mc Shopee = ตามแท็บของ slot)
+ *   ids = เฉพาะ slot เหล่านี้ / ไม่ใส่ = ทั้งหมดตั้งแต่วันนี้
+ */
+async function openFutureSlots(bs: BookSide, ids?: number[]) {
   const now = Date.now();
-  const cols = `id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, person:${personCol(side)}${side === "admin" ? ", needs_extra_admin" : ""}`;
+  const side: Side = bs === "admin" ? "admin" : "mc";
+  const cols = `${slotCols(side)}${side === "admin" ? ", needs_extra_admin" : ""}`;
   let q = createAdminClient().from(tableOf(side)).select(cols)
     .is(personCol(side), null).eq("is_cancelled", false).gte("live_date", bkkDay(now));
   if (ids) q = q.in("id", ids.slice(0, 1000));
   const { data, error } = await q.order("starts_at").limit(3000).overrideTypes<(Slot & { needs_extra_admin?: boolean })[], { merge: false }>();
   if (error) throw error;
-  return (data ?? []).filter((s) => Date.parse(s.starts_at) > now && (side === "mc" || s.needs_extra_admin === true));
+  return (data ?? []).filter((s) => Date.parse(s.starts_at) > now && bookSideOf(side, s) === bs && (side === "mc" || s.needs_extra_admin === true));
 }
 
-/** คนที่จองผ่านเว็บได้ของฝั่งนั้น (มีอีเมล · Admin = เฉพาะ Admin เสริม · ไม่รวมทีม Shopee ที่ยังจองคิว TikTok ไม่ได้) */
-async function bookers(side: Side) {
+/** คนที่จองผ่านเว็บได้ของฝั่งนั้น (มีอีเมล · Admin = เฉพาะ Admin เสริม · ตามทีมไลฟ์: คิว TikTok / คิว Shopee) */
+async function bookers(bs: BookSide) {
   type Row = { id: number; email: string; live_platform?: string | null };
+  const role = bs === "admin" ? "admin" : "mc";
   const { data } = await withLiveTeam((extra) => {
-    let q = createAdminClient().from("staff").select(`id, email${extra}`).eq("role", side).not("email", "is", null);
-    if (side === "admin") q = q.eq("is_extra_admin", true);
+    let q = createAdminClient().from("staff").select(`id, email${extra}`).eq("role", role).not("email", "is", null);
+    if (role === "admin") q = q.eq("is_extra_admin", true);
     return q.overrideTypes<Row[], { merge: false }>();
   });
-  return tiktokOnly(data ?? []).map((p) => ({ id: p.id as number, email: String(p.email).trim().toLowerCase() }));
+  return (bs === "shopee" ? shopeeCrew(data ?? []) : tiktokOnly(data ?? [])).map((p) => ({ id: p.id as number, email: String(p.email).trim().toLowerCase() }));
 }
 
 /**
  * เจ้าของสร้าง slot ว่างใหม่ (ปุ่มสร้าง slot / Plan Slot Live / พิมพ์แถวใหม่ในชีต / เปิดรับ Admin เสริม)
  *   → Mc ที่ช่วงเปิดจองครอบวันนั้น / Admin เสริม · คนละ 1 ข้อความ (สร้างทีละเยอะ = รวมเป็นข้อความเดียว)
+ *   slot Mc แยกตามแท็บ: คิว TikTok → ทีม TikTok / คิว Shopee → ทีม Shopee (ทีม TikTok + Shopee ได้ทั้งสองเรื่อง)
  *   slot นอกช่วงเปิดจองของคนนั้น = ไม่แจ้ง (จะได้แจ้งตอนเปิดช่วงจอง ดู notifyWindowOpened)
  */
 export async function notifyNewSlots(side: Side, slotIds: number[], actorEmail = "") {
   try {
     if (!slotIds.length) return 0;
-    const slots = await openFutureSlots(side, slotIds);
-    if (!slots.length) return 0;
-    const [people, settings] = await Promise.all([bookers(side), getSettings()]);
+    const sides: BookSide[] = side === "admin" ? ["admin"] : ["mc", "shopee"];
+    const settings = await getSettings();
     const verb = side === "mc" ? "จอง" : "รับคิว";
     const items: (Note & { email: string })[] = [];
-    for (const p of people) {
-      if (p.email === actorEmail.toLowerCase()) continue;
-      const range = bookingRange(settings, side, p.id);
-      const mine = slots.filter((s) => inRange(range, s.live_date));
-      if (mine.length) items.push({ email: p.email, kind: "slot_open", page: side, title: `มี slot ${roleLabel(side)} ใหม่เปิดให้${verb} ${mine.length} slot`, body: listText(mine) });
+    for (const bs of sides) {
+      const slots = await openFutureSlots(bs, slotIds);
+      if (!slots.length) continue;
+      for (const p of await bookers(bs)) {
+        if (p.email === actorEmail.toLowerCase()) continue;
+        const range = bookingRange(settings, bs, p.id);
+        const mine = slots.filter((s) => inRange(range, s.live_date));
+        if (mine.length) items.push({ email: p.email, kind: "slot_open", page: side, title: `มี slot ${roleLabel(bs)} ใหม่เปิดให้${verb} ${mine.length} slot`, body: listText(mine) });
+      }
     }
     return notifyMany(items);
   } catch (err) {
@@ -358,20 +376,21 @@ export async function notifyNewSlots(side: Side, slotIds: number[], actorEmail =
  * เจ้าของเปลี่ยนช่วงเปิดจอง / เดือนสุดท้ายที่เปิดจอง → คนที่ได้จองวันเพิ่ม และวันที่เพิ่มมามี slot ว่าง
  *   before / after = ค่าตั้งก่อน-หลังแก้ (เทียบช่วงของแต่ละคน รวมรายชื่อ "จองก่อน")
  */
-export async function notifyWindowOpened(side: Side, before: Settings, after: Settings, actorEmail = "") {
+export async function notifyWindowOpened(bs: BookSide, before: Settings, after: Settings, actorEmail = "") {
   try {
-    const [people, slots] = await Promise.all([bookers(side), openFutureSlots(side)]);
+    const [people, slots] = await Promise.all([bookers(bs), openFutureSlots(bs)]);
     if (!slots.length) return 0;
-    const verb = side === "mc" ? "จอง" : "รับคิว";
+    const page: Side = bs === "admin" ? "admin" : "mc";
+    const verb = page === "mc" ? "จอง" : "รับคิว";
     const items: (Note & { email: string })[] = [];
     for (const p of people) {
       if (p.email === actorEmail.toLowerCase()) continue;
-      const was = bookingRange(before, side, p.id), now = bookingRange(after, side, p.id);
+      const was = bookingRange(before, bs, p.id), now = bookingRange(after, bs, p.id);
       const mine = slots.filter((s) => inRange(now, s.live_date) && !inRange(was, s.live_date));
       if (!mine.length) continue;
       items.push({
-        email: p.email, kind: "slot_open", page: side,
-        title: `เปิดให้${verb}แล้ว: slot ${roleLabel(side)} ว่าง ${mine.length} slot`,
+        email: p.email, kind: "slot_open", page,
+        title: `เปิดให้${verb}แล้ว: slot ${roleLabel(bs)} ว่าง ${mine.length} slot`,
         body: `ช่วงที่${verb}ได้: ${rangeText(now)}\n${listText(mine)}`,
       });
     }
@@ -473,7 +492,8 @@ async function overdueWork(now: number) {
   const [mcRes, adminRes, proofs] = await Promise.all([
     db.from("mc_slots")
       .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, gmv, person:mc_id, mc:staff!mc_id(name, is_salaried)")
-      .eq("is_cancelled", false).not("mc_id", "is", null).gte("live_date", from).lte("live_date", today)
+      // คิว Shopee ยังไม่ต้องแนบหลักฐาน / GMV (ไม่มี Admin ของ slot ที่เป็นคนแนบ — เกณฑ์เดียวกับหน้าแรก)
+      .eq("is_cancelled", false).not("mc_id", "is", null).eq("sheet_tab", "mc").gte("live_date", from).lte("live_date", today)
       .order("starts_at").limit(3000).overrideTypes<McRow[], { merge: false }>(),
     db.from("admin_slots").select("platform, starts_at, ends_at, admin_id, is_cancelled")
       .eq("is_cancelled", false).not("admin_id", "is", null).gte("live_date", from).lte("live_date", today).limit(3000),
@@ -642,9 +662,9 @@ export async function sendOwnerAlerts(now = Date.now(), dryRun = false) {
 
   // ---- ช่วงเปิดจองใกล้หมด / หมดแล้ว (วันละครั้ง ตั้งแต่ 10:00 ไม่ปลุกกลางคืน) ----
   if (new Date(now + 7 * 3600_000).getUTCHours() >= DAILY_HOUR) {
-    for (const w of windowAlerts(await getSettings(db), ["mc", "admin"])) {
+    for (const w of windowAlerts(await getSettings(db), ["mc", "admin", "shopee"])) {
       const when = w.ended ? `หมดแล้ว (วันสุดท้าย ${fmtDay(w.to)})` : w.daysLeft === 0 ? `หมดวันนี้ (${fmtDay(w.to)})` : `จะหมดในอีก ${w.daysLeft} วัน (วันสุดท้าย ${fmtDay(w.to)})`;
-      for (const email of owners[w.role]) {
+      for (const email of owners[w.role === "admin" ? "admin" : "mc"]) {
         items.push({
           email, kind: "window", page: "home", dedupe: `window:${w.role}:${today}`,
           title: `ช่วงเปิดจอง ${roleLabel(w.role)} ${when}`,

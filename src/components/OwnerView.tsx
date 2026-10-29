@@ -826,6 +826,12 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                       {num(r.hours)} ชม.{showPay ? ` · ${r.salaried ? "เงินเดือน" : rate ? `${money(payOf(r))} บาท` : "ไม่มีค่าจ้าง"}` : ""}
                       {showPay && !r.salaried && rate ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="ml-1" /> : null}
                     </span>
+                    {/* ไลฟ์ Shopee (แท็บ MC Shopee) รวมอยู่ในชั่วโมง / ค่าจ้างแล้ว แสดงแยกให้เห็นว่าเป็น Shopee กี่ ชม. */}
+                    {items.some((d) => /shopee/i.test(d.platform)) ? (
+                      <Badge title="ชั่วโมงไลฟ์ Shopee (รวมอยู่ในชั่วโมง / ค่าจ้างของเดือนนี้แล้ว)" className="ml-1.5 bg-p1/15 text-[11px] text-p1">
+                        Shopee {num(items.filter((d) => /shopee/i.test(d.platform)).reduce((a, d) => a + d.hours, 0))} ชม.
+                      </Badge>
+                    ) : null}
                     {r.salaried ? (
                       <Badge title={`${type} ประจำ (ได้เงินเดือน) ไม่คิดค่าจ้างรายชั่วโมง และไม่อยู่ในไฟล์เบิก`} className="ml-1.5 bg-p2/15 text-[11px] text-p2">
                         ประจำ

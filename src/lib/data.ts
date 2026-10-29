@@ -5,6 +5,7 @@ import { lockedRates } from "@/lib/pay-rates";
 import {
   bonusPaidMinutes, checkInOf, cleanTiers, lateCut, monthRate, proofMinutes, resolveLateBonus, slotPaidHours,
 } from "@/lib/pay";
+import type { Board } from "@/lib/live-team";
 import { createAdminClient } from "@/lib/supabase/server";
 import { isTestAccount } from "@/lib/staff-check";
 import { addDays, bookRange, cleanWindow, periodFor, windowEnding, windowNotice } from "@/lib/window";
@@ -31,6 +32,10 @@ export type Settings = {
   rules_admin?: string | null;
   book_window_mc?: unknown; // ช่วงเปิดจอง (src/lib/window.ts) null = ไม่จำกัดเพิ่ม
   book_window_admin?: unknown;
+  // หน้าจองคิว Shopee (SQL 20261114000000_shopee_slots): ช่วงเปิดจอง + โควต้าต่อวันแยกจาก TikTok (นับเฉพาะคิว Shopee)
+  book_window_shopee?: unknown;
+  shopee_max_slots_per_day?: number;
+  shopee_max_hours_per_day?: number;
   mc_quota_on?: boolean; // จำกัดสิทธิ์จองของ Mc ต่อเดือนตามแร็งค์ (SQL 20261107000000_mc_quota · src/lib/mc-quota-db.ts)
   work_location_url?: string; // ลิงก์โลเคชั่นที่ทำงาน เห็นเฉพาะคนที่มีบัญชี (SQL 20261109000000_work_location) ว่าง = ไม่แสดง
   training_required?: boolean; // ต้องดูคลิปเทรนนิ่งที่บังคับให้ครบก่อนจอง (SQL 20261111000000_pay_sync · src/lib/training.ts)
@@ -168,19 +173,29 @@ export function cutoffDate(s: Settings) {
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 }
 
-export const bookWindow = (s: Settings, role: "mc" | "admin") =>
-  cleanWindow(role === "mc" ? s.book_window_mc : s.book_window_admin);
+/**
+ * ฝั่งที่มีกฎการจองของตัวเอง (ช่วงเปิดจอง / โควต้าต่อวัน)
+ *   mc = Mc คิว TikTok (แท็บ Deal Mc) · admin = Admin เสริม · shopee = Mc คิว Shopee (แท็บ MC Shopee)
+ */
+export type BookSide = "mc" | "admin" | "shopee";
+/** ฝั่งของหน้าจอง Mc */
+export const sideOfBoard = (board: Board): BookSide => (board === "shopee" ? "shopee" : "mc");
+/** ค่า mc_slots.sheet_tab ของหน้าจอง Mc */
+export const sheetTabOfBoard = (board: Board) => (board === "shopee" ? "shopee" : "mc");
+
+export const bookWindow = (s: Settings, side: BookSide) =>
+  cleanWindow(side === "mc" ? s.book_window_mc : side === "admin" ? s.book_window_admin : s.book_window_shopee);
 
 /** ช่วงเปิดจองที่ใช้กับคนนี้ (คนในรายชื่อจองก่อนได้ช่วงของตัวเอง / ไม่ระบุคน = ช่วงทั่วไป) */
-export const personPeriod = (s: Settings, role: "mc" | "admin", personId?: number | null) =>
-  periodFor(bookWindow(s, role), personId);
+export const personPeriod = (s: Settings, side: BookSide, personId?: number | null) =>
+  periodFor(bookWindow(s, side), personId);
 
 /** ช่วงวันที่คนนี้จองได้ตอนนี้ (ช่วงเปิดจอง + วันนี้ + เดือนสุดท้ายที่เปิดจอง) */
-export const bookingRange = (s: Settings, role: "mc" | "admin", personId?: number | null) =>
-  bookRange(personPeriod(s, role, personId), bkkToday(), cutoffDate(s));
+export const bookingRange = (s: Settings, side: BookSide, personId?: number | null) =>
+  bookRange(personPeriod(s, side, personId), bkkToday(), cutoffDate(s));
 
 /** ช่วงเปิดจอง (ทั่วไป) ของแต่ละฝั่งที่หมดภายใน 2 วัน / หมดแล้ว — หน้าแรก + กระดิ่งของ Owner */
-export function windowAlerts(s: Settings, roles: ("mc" | "admin")[]) {
+export function windowAlerts(s: Settings, roles: BookSide[]) {
   const today = bkkToday();
   return roles.flatMap((role) => {
     const w = windowEnding(personPeriod(s, role), bookingRange(s, role), today, cutoffDate(s));
@@ -189,7 +204,7 @@ export function windowAlerts(s: Settings, roles: ("mc" | "admin")[]) {
 }
 
 /** ข้อความแจ้งบนหน้าจอง: ตั้งช่วงเปิดจองไว้ = บอกช่วงนั้น / ไม่ได้ตั้ง = "เปิดจองถึงสิ้นเดือน ..." */
-export function scheduleNotice(s: Settings, role: "mc" | "admin", personId?: number | null) {
+export function scheduleNotice(s: Settings, role: BookSide, personId?: number | null) {
   const p = personPeriod(s, role, personId);
   if (p.mode !== "off") return windowNotice(p, bookingRange(s, role, personId));
   if (!s.schedule_cutoff_month) return "";
@@ -207,36 +222,45 @@ function toOpenSlot(r: SlotRow): OpenSlot {
   };
 }
 
-/** slot ของ Mc ที่ยังว่าง เฉพาะในช่วงที่คนนี้จองได้ */
-export async function openMcSlots(settings: Settings, personId?: number | null) {
+/** slot ของ Mc ที่ยังว่าง ของหน้าจองนี้ (TikTok / Shopee) เฉพาะในช่วงที่คนนี้จองได้ */
+export async function openMcSlots(settings: Settings, personId?: number | null, board: Board = "tiktok") {
   const db = createAdminClient();
-  const r = bookingRange(settings, "mc", personId);
+  const r = bookingRange(settings, sideOfBoard(board), personId);
   if (r.empty) return [];
   const rows = await fetchAll<SlotRow>((from, to) => {
     // slot ที่ "แคน" ในชีต (is_cancelled) ไม่เปิดให้จอง · slot ที่เริ่มไปแล้วแต่ยังไม่จบยังจองได้ (มาช่วยกลางไลฟ์)
-    let q = db.from("mc_slots").select(SLOT_COLS).is("mc_id", null).eq("is_cancelled", false).gte("live_date", r.from);
+    let q = db.from("mc_slots").select(SLOT_COLS).is("mc_id", null).eq("is_cancelled", false)
+      .eq("sheet_tab", sheetTabOfBoard(board)).gte("live_date", r.from);
     if (r.to) q = q.lte("live_date", r.to);
     return q.order("starts_at").range(from, to);
   });
   return rows.map(toOpenSlot);
 }
 
-/** โควต้าการจองต่อวันของบทบาทนี้ (ตัวเลขเดียวกับที่ฐานข้อมูลใช้ตรวจ) */
-export const bookingLimits = (s: Settings, role: "mc" | "admin"): BookingLimits => role === "mc"
+/** โควต้าการจองต่อวันของฝั่งนี้ (ตัวเลขเดียวกับที่ฐานข้อมูลใช้ตรวจ) */
+export const bookingLimits = (s: Settings, side: BookSide): BookingLimits => side === "mc"
   ? { slotsPerDay: Number(s.mc_max_slots_per_day) || 2, hoursPerDay: Number(s.mc_max_hours_per_day) || 4, blocksPerDay: null, perRequest: Number(s.max_per_request) || 10 }
-  : {
-    slotsPerDay: Number(s.admin_max_slots_per_day) || 4, hoursPerDay: Number(s.admin_max_hours_per_day) || 8,
-    blocksPerDay: Number(s.admin_max_blocks_per_day) || 2, perRequest: Number(s.max_per_request) || 10,
-  };
+  : side === "shopee"
+    ? { slotsPerDay: Number(s.shopee_max_slots_per_day) || 2, hoursPerDay: Number(s.shopee_max_hours_per_day) || 6, blocksPerDay: null, perRequest: Number(s.max_per_request) || 10 }
+    : {
+      slotsPerDay: Number(s.admin_max_slots_per_day) || 4, hoursPerDay: Number(s.admin_max_hours_per_day) || 8,
+      blocksPerDay: Number(s.admin_max_blocks_per_day) || 2, perRequest: Number(s.max_per_request) || 10,
+    };
 
-/** คิวที่คนนี้มีอยู่แล้วตั้งแต่วันนี้ (ไม่นับที่ยกเลิก) ใช้เช็กโควต้า / เวลาทับ ก่อนกดจอง */
-export async function upcomingQueues(role: "mc" | "admin", personId: number): Promise<{ date: string; startMs: number; endMs: number }[]> {
+/**
+ * คิวที่คนนี้มีอยู่แล้วตั้งแต่วันนี้ (ไม่นับที่ยกเลิก) ใช้เช็กโควต้า / เวลาทับ ก่อนกดจอง
+ *   board (Mc) = หน้าจองที่เปิดอยู่: คิวของอีกหน้าติด other (ตรวจเวลาทับ แต่ไม่นับโควต้าต่อวัน เหมือนฐานข้อมูล)
+ */
+export async function upcomingQueues(role: "mc" | "admin", personId: number, board: Board = "tiktok") {
   const table = role === "mc" ? "mc_slots" : "admin_slots";
   const col = role === "mc" ? "mc_id" : "admin_id";
-  const rows = await fetchAll<SlotRow>((from, to) =>
-    createAdminClient().from(table).select(SLOT_COLS).eq(col, personId).gte("live_date", addDays(bkkToday(), -1))
-      .or("confirmed.is.null,confirmed.eq.true").order("starts_at").range(from, to));
-  return rows.filter((r) => !r.is_cancelled).map((r) => ({ date: r.live_date, startMs: ms(r.starts_at), endMs: ms(r.ends_at) }));
+  const rows = await fetchAll<SlotRow & { sheet_tab?: string }>((from, to) =>
+    createAdminClient().from(table).select(`${SLOT_COLS}${role === "mc" ? ", sheet_tab" : ""}`).eq(col, personId).gte("live_date", addDays(bkkToday(), -1))
+      .or("confirmed.is.null,confirmed.eq.true").order("starts_at").range(from, to) as unknown as PromiseLike<{ data: (SlotRow & { sheet_tab?: string })[] | null; error: unknown }>);
+  return rows.filter((r) => !r.is_cancelled).map((r) => ({
+    date: r.live_date, startMs: ms(r.starts_at), endMs: ms(r.ends_at),
+    ...(role === "mc" && (r.sheet_tab ?? "mc") !== sheetTabOfBoard(board) ? { other: true } : {}),
+  }));
 }
 
 /** slot ที่รอ Admin เสริม (เฉพาะในช่วงที่เปิดจอง) + ชื่อ Mc ที่ไลฟ์ใน slot นั้น */

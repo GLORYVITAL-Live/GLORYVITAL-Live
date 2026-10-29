@@ -15,6 +15,9 @@ export const platformLabel = (p: string) => LABELS[String(p ?? "").trim().toLowe
 /** ชื่อที่พิมพ์ในเว็บ -> ชื่อที่เก็บในชีต เช่น "GLORY VITAL" -> "GLORY MALL" (ชื่ออื่นคงเดิม) */
 export const platformRaw = (p: string) => RAWS[String(p ?? "").trim().toLowerCase()] ?? p;
 
+/** ช่อง Shopee (slot ที่สร้างในเว็บด้วยช่องนี้ = คิวของหน้าจอง Shopee ลงแท็บ "ลงตาราง MC Shopee") */
+export const isShopeePlatform = (p: string) => String(p ?? "").trim().toLowerCase() === "shopee";
+
 /**
  * แปลงชื่อช่องในข้อมูลที่ส่งให้หน้าเว็บ: ข้อความที่เป็นชื่อช่องทั้งข้อความเท่านั้น (ไม่แตะรหัสที่มีชื่อช่องปนอยู่ เช่น "GLORY MALL|2026-10-01|...")
  *   ใช้กับข้อมูลอ่านอย่างเดียว (หน้าเว็บไม่ส่งชื่อช่องกลับมาบันทึก)

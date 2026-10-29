@@ -120,11 +120,11 @@ async function monthRows(db: Db, month: string): Promise<DbRow[]> {
   return rows;
 }
 
-/** จำนวนคิวของ Mc ในเดือนนี้ (ไม่นับที่ยกเลิก / ปฏิเสธ — นับเหมือนฐานข้อมูลตอนจอง) Map<staff_id, จำนวน> */
+/** จำนวนคิว TikTok ของ Mc ในเดือนนี้ (ไม่นับที่ยกเลิก / ปฏิเสธ / คิว Shopee — นับเหมือนฐานข้อมูลตอนจอง) Map<staff_id, จำนวน> */
 async function monthUsage(db: Db, month: string, mcId?: number) {
   type Row = { mc_id: number };
   const rows = await fetchAll<Row>((from, to) => {
-    let q = db.from("mc_slots").select("mc_id").not("mc_id", "is", null).eq("is_cancelled", false)
+    let q = db.from("mc_slots").select("mc_id").not("mc_id", "is", null).eq("is_cancelled", false).eq("sheet_tab", "mc")
       .or("confirmed.is.null,confirmed.eq.true").gte("live_date", `${month}-01`).lte("live_date", lastDayOf(month));
     if (mcId) q = q.eq("mc_id", mcId);
     return q.order("id").range(from, to);

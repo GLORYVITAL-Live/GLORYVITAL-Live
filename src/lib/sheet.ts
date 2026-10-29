@@ -12,20 +12,38 @@ import { parseBonusMinutes, parseLateMinutes } from "@/lib/pay";
 
 export const SHEET_ID = process.env.SHEET_ID || "1r17--dnbXyVk416Zc3mGwUb-aDw3OCxelOC25NJW7Xo";
 
-export const TABS = { mc: "ลงตาราง Deal Mc", admin: "ลงตาราง Admin เสริม" } as const;
+export const TABS = { mc: "ลงตาราง Deal Mc", admin: "ลงตาราง Admin เสริม", shopee: "ลงตาราง MC Shopee" } as const;
 export type TabKey = keyof typeof TABS;
-export const TABLE_OF: Record<TabKey, "mc_slots" | "admin_slots"> = { mc: "mc_slots", admin: "admin_slots" };
+/** แท็บ Deal Mc และ MC Shopee เก็บในตาราง mc_slots เดียวกัน แยกด้วยคอลัมน์ sheet_tab */
+export const TABLE_OF: Record<TabKey, "mc_slots" | "admin_slots"> = { mc: "mc_slots", admin: "admin_slots", shopee: "mc_slots" };
+/** แท็บหลักของแต่ละตาราง (แถวคู่ Mc <-> Admin มีเฉพาะแท็บ Deal Mc กับ Admin เสริม) */
 export const TAB_OF = { mc_slots: "mc", admin_slots: "admin" } as const;
+/** ค่า mc_slots.sheet_tab ของแท็บ (Admin เสริม = ไม่มีคอลัมน์นี้) */
+export const sheetTabOf = (tab: TabKey) => (tab === "admin" ? null : tab);
+/** แท็บของ slot ใน mc_slots จากค่า sheet_tab (ว่าง / ยังไม่ได้รัน SQL = Deal Mc) */
+export const tabOfSheetTab = (v: unknown): TabKey => (v === "shopee" ? "shopee" : "mc");
+/** แท็บที่ลงชื่อ Mc (ชื่อมี "Mc" นำหน้า) */
+export const isMcTab = (tab: TabKey) => tab !== "admin";
+
+/**
+ * แท็บ MC Shopee: อ่านเฉพาะแถวตั้งแต่วันที่นี้ (แถวเก่ากว่านี้ทีมคิดเงินในชีตไปแล้ว ไม่ดึงเข้าเว็บ
+ * สรุปรายเดือน / ค่าจ้างย้อนหลังจึงไม่เปลี่ยน) — ระบบถือว่าแถวก่อนวันที่นี้ไม่ใช่แถว slot
+ */
+export const SHOPEE_FROM = "2026-11-01";
 
 /**
  * คอลัมน์ (เริ่ม 0 = A) — V เก็บรหัส slot ในระบบใหม่ (ระบบเขียนเอง ห้ามแก้)
- * late = ช่องที่ทีมบันทึกเวลามาสาย (Mc ใช้ช่อง Remark (L) / Admin ใช้คอลัมน์ M) ระบบอ่านอย่างเดียว
+ * late = ช่องที่ทีมบันทึกเวลามาสาย (Mc ใช้ช่อง Remark (L) / Admin ใช้คอลัมน์ M / Shopee ใช้ช่อง remark (N)) ระบบอ่านอย่างเดียว
  * ช่องเดียวกันใช้บันทึกไลฟ์ชดเชยด้วย ถ้ามี + นำหน้า เช่น "+10" (ดู parseBonusMinutes)
+ * แท็บ MC Shopee: H-J เป็นคอลัมน์เก่าที่ซ่อนไว้ (ระบบไม่แตะ) K = ชื่อ Mc, L = ติ๊กยืนยัน, M = Status, N = remark
  */
 export const COLS = {
   mc: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, campaign: 7, person: 8, confirm: 9, status: 10, remark: 11, late: 11, id: 21 },
   admin: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, person: 7, confirm: 8, remark: 9, status: 10, late: 12, id: 21 },
+  shopee: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, person: 10, confirm: 11, status: 12, remark: 13, late: 13, id: 21 },
 } as const;
+/** คอลัมน์สุดท้ายที่ระบบเขียนตอนแทรกแถวใหม่ (แท็บ Admin: คอลัมน์ L เป็นของทีม ไม่แตะ) */
+export const LAST_WRITE_COL: Record<TabKey, number> = { mc: COLS.mc.remark, admin: COLS.admin.status, shopee: COLS.shopee.remark };
 export const LAST_COL = "V";
 
 export type Cell = string | number | boolean | null | undefined;
@@ -76,13 +94,14 @@ export function parseRow(tab: TabKey, r: Row): SheetSlot | null {
   const start_time = serialTime(r[c.start]);
   const end_time = serialTime(r[c.end]);
   if (!live_date || !start_time || !end_time || start_time === end_time) return null;
+  if (tab === "shopee" && live_date < SHOPEE_FROM) return null;
   const idNum = Number(str(r[c.id]));
   return {
     platform: str(r[c.platform]),
     live_date, start_time, end_time,
-    // ชีตเก็บ "10.10" เป็นตัวเลข 10.1 ได้ -> แปลงชื่อเป็นมาตรฐานก่อนเข้า DB
+    // ชีตเก็บ "10.10" เป็นตัวเลข 10.1 ได้ -> แปลงชื่อเป็นมาตรฐานก่อนเข้า DB (แท็บ MC Shopee ไม่มีช่อง Campaign)
     campaign: tab === "mc" ? canonicalCampaign(r[COLS.mc.campaign]) : "",
-    person: tab === "mc" ? normalizeMcName(r[c.person]) : str(r[c.person]),
+    person: isMcTab(tab) ? normalizeMcName(r[c.person]) : str(r[c.person]),
     confirmed: confirmedOf(r[c.confirm]),
     status: str(r[c.status]),
     remark: str(r[c.remark]),

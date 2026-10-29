@@ -26,6 +26,8 @@ type Role = "mc" | "admin";
 type Row = {
   id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
   status: string | null; confirmed: boolean | null; is_cancelled: boolean; pid: number | null; remark: string | null;
+  /** เฉพาะ mc_slots: 'shopee' = แท็บ MC Shopee (ไม่มีแถวคู่ฝั่ง Admin) */
+  sheet_tab?: string | null;
 };
 type Person = { id: number; role: string; name: string; phone: string | null; hourly_rate: number | string | null; is_salaried: boolean | null };
 
@@ -42,7 +44,7 @@ export async function dataHealth(scope: { mc: boolean; admin: boolean }): Promis
   const month = today.slice(0, 7), monthStart = `${month}-01`, to = addDays(today, 60);
   const cols = "id, platform, live_date, start_time, end_time, starts_at, ends_at, status, confirmed, is_cancelled, remark";
   const load = (table: "mc_slots" | "admin_slots", col: string) => fetchAll<Row>((a, b) => db.from(table)
-    .select(`${cols}, pid:${col}`).gte("live_date", monthStart).lte("live_date", to).order("id").range(a, b) as never);
+    .select(`${cols}, pid:${col}${table === "mc_slots" ? ", sheet_tab" : ""}`).gte("live_date", monthStart).lte("live_date", to).order("id").range(a, b) as never);
   const [mcRows, adminRows, staff, settings, noCal] = await Promise.all([
     load("mc_slots", "mc_id"),
     load("admin_slots", "admin_id"),
@@ -135,11 +137,12 @@ export async function dataHealth(scope: { mc: boolean; admin: boolean }): Promis
     }
   }
 
-  // แถวฝั่งเดียว (ข้างหน้า): ต้องเห็นทั้งสองฝั่งถึงจะรู้
+  // แถวฝั่งเดียว (ข้างหน้า): ต้องเห็นทั้งสองฝั่งถึงจะรู้ · คิว Shopee (แท็บ MC Shopee) ไม่มีแถว Admin อยู่แล้ว ไม่นับ
   if (scope.mc && scope.admin) {
     const live = (rs: Row[]) => rs.filter((r) => !r.is_cancelled && r.live_date >= today && ms(r.ends_at) > now);
-    const mk = new Set(mcRows.filter((r) => !r.is_cancelled).map(keyOf)), ak = new Set(adminRows.filter((r) => !r.is_cancelled).map(keyOf));
-    for (const r of live(mcRows)) if (!ak.has(keyOf(r))) out.noPair.push({ missing: "admin", date: r.live_date, platform: platformLabel(r.platform), time: timeOf(r) });
+    const dealMc = mcRows.filter((r) => r.sheet_tab !== "shopee");
+    const mk = new Set(dealMc.filter((r) => !r.is_cancelled).map(keyOf)), ak = new Set(adminRows.filter((r) => !r.is_cancelled).map(keyOf));
+    for (const r of live(dealMc)) if (!ak.has(keyOf(r))) out.noPair.push({ missing: "admin", date: r.live_date, platform: platformLabel(r.platform), time: timeOf(r) });
     for (const r of live(adminRows)) if (!mk.has(keyOf(r))) out.noPair.push({ missing: "mc", date: r.live_date, platform: platformLabel(r.platform), time: timeOf(r) });
   }
 

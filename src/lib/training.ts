@@ -1,5 +1,7 @@
 import "server-only";
+import { google } from "googleapis";
 import { driveClient, driveError } from "@/lib/drive";
+import { googleAuth } from "@/lib/google";
 import { driveMediaResponse } from "@/lib/drive-media";
 import { notifyMany } from "@/lib/notifications";
 import { isTestAccount } from "@/lib/staff-check";
@@ -264,7 +266,9 @@ function viewerOf(me: Me) {
  */
 export async function logTrainingView(me: Me, kind: unknown, ref: unknown, title: unknown) {
   if (kind !== "page" && kind !== "video" && kind !== "slides" && kind !== "done") return;
-  const clip = (kind === "video" || kind === "done") && okRef(ref) && !ref.startsWith("folder:") ? ref : null;
+  // done = ดูคลิปจบ หรืออ่านสไลด์ครบทุกหน้า ('slides:<id>')
+  const clip = (kind === "video" || kind === "done") && okRef(ref) && !ref.startsWith("folder:") ? ref
+    : kind === "done" && typeof ref === "string" && /^slides:[\w-]{10,}$/.test(ref) ? ref : null;
   if ((kind === "video" || kind === "done") && !clip) return;
   const db = createAdminClient();
   const email = me.email.trim().toLowerCase();
@@ -324,10 +328,88 @@ export async function trainingViews(days: number): Promise<TrainingViews> {
   };
 }
 
-// ---------- คลิปบังคับก่อนจองคิว (SQL 20261111000000_pay_sync) ----------
-//   Owner ติ๊ก "บังคับดู" ที่คลิป / ทั้งกลุ่ม + เปิดใช้ (settings.training_required) → Mc ใหม่ต้องดูจบครบก่อนจองผ่านเว็บ
-//   Mc ใหม่ = ยังไม่เคยไลฟ์ (ไม่มีคิวที่ผ่านมาแล้วเลย) · Mc ที่เคยไลฟ์แล้ว / Admin = ไม่ต้องดูคลิป
-//   ดูจบ = ตัวเล่นของเว็บ (คลิปในไดรฟ์) เล่นจริงเกือบทั้งคลิป · YouTube = กด "ดูจบแล้ว" เอง · staff.training_passed = Owner ให้ผ่าน
+// ---------- สไลด์บรีฟอ่านทีละหน้า (Google Slides API + bucket training-slides — SQL 20261115000000_training_slides) ----------
+//   รูปแต่ละหน้า = thumbnail ของ Google (กว้าง 1600px) ดึงครั้งแรกที่มีคนเปิดหน้านั้นแล้วเก็บใน bucket
+//   (Google จำกัดจำนวนครั้งที่ขอรูปต่อนาที — ไม่ดึงซ้ำทุกคน) · แก้สไลด์ = รุ่นใหม่ ดึงใหม่ + ลบรูปรุ่นเก่า
+
+const SLIDES_BUCKET = "training-slides";
+/** ref ของ "อ่านสไลด์ครบทุกหน้าแล้ว" ใน training_views (kind 'done') */
+export const slidesRef = (id: string) => `slides:${id}`;
+const safeRev = (rev: string) => rev.replace(/[^\w-]/g, "").slice(0, 80) || "0";
+let deckCache: { id: string; at: number; rev: string; pages: string[] } | null = null;
+let cleanedRev = "";
+
+const slidesApi = () => {
+  const auth = googleAuth();
+  if (!auth) throw new Error("ยังไม่ได้เชื่อมบัญชี Google");
+  return google.slides({ version: "v1", auth });
+};
+
+/** id สไลด์ที่ตั้งไว้ (settings.training_slides) ไม่ตั้ง = null */
+async function slidesId() {
+  const { data } = await createAdminClient().from("settings").select("training_slides").eq("id", 1).maybeSingle();
+  return googleId(data?.training_slides as string | null);
+}
+
+/** สไลด์ที่ตั้งไว้: id + รุ่น + id ของแต่ละหน้า (จำไว้ 5 นาที) · ไม่ได้ตั้ง = null · อ่านไม่ได้ = throw */
+export async function slideDeck() {
+  const id = await slidesId();
+  if (!id) return null;
+  if (deckCache?.id === id && Date.now() - deckCache.at < 5 * 60_000) return deckCache;
+  const res = await slidesApi().presentations.get({ presentationId: id, fields: "revisionId,slides.objectId" });
+  const pages = (res.data.slides ?? []).map((s) => s.objectId ?? "").filter(Boolean);
+  if (!pages.length) return null;
+  deckCache = { id, at: Date.now(), rev: safeRev(res.data.revisionId ?? ""), pages };
+  return deckCache;
+}
+
+/** ลบรูปของรุ่นเก่า (ครั้งเดียวต่อรุ่น · พลาด = ไม่เป็นไร) */
+async function cleanOldRevisions(rev: string) {
+  if (cleanedRev === rev) return;
+  cleanedRev = rev;
+  const bucket = createAdminClient().storage.from(SLIDES_BUCKET);
+  const { data: folders } = await bucket.list("", { limit: 100 });
+  for (const f of folders ?? []) {
+    if (f.name === rev) continue;
+    const { data: files } = await bucket.list(f.name, { limit: 1000 });
+    if (files?.length) await bucket.remove(files.map((x) => `${f.name}/${x.name}`));
+  }
+}
+
+/**
+ * รูปหน้าที่ index (เริ่ม 0) ของสไลด์รุ่นปัจจุบัน · rev = รุ่นที่หน้าเว็บโหลดมา (ตรงกัน = แคชในเครื่องได้นาน)
+ *   มีใน bucket = ส่งเลย · ยังไม่มี = ขอ thumbnail จาก Google แล้วเก็บไว้ (ยังไม่ได้รัน SQL = ส่งได้ แต่ไม่ได้เก็บ)
+ */
+export async function slideImageResponse(index: number, rev: string): Promise<Response> {
+  const deck = await slideDeck();
+  if (!deck || !Number.isInteger(index) || index < 0 || index >= deck.pages.length) return new Response("not found", { status: 404 });
+  const page = deck.pages[index];
+  const path = `${deck.rev}/${page}.png`;
+  const headers = {
+    "Content-Type": "image/png",
+    "Cache-Control": rev === deck.rev ? "private, max-age=604800, immutable" : "private, no-cache",
+  };
+  const bucket = createAdminClient().storage.from(SLIDES_BUCKET);
+  const stored = await bucket.download(path);
+  if (stored.data) return new Response(stored.data, { headers });
+  const thumb = await slidesApi().presentations.pages.getThumbnail({
+    presentationId: deck.id, pageObjectId: page, "thumbnailProperties.thumbnailSize": "LARGE",
+  });
+  const img = thumb.data.contentUrl ? await fetch(thumb.data.contentUrl) : null;
+  if (!img?.ok) return new Response("อ่านรูปสไลด์ไม่สำเร็จ", { status: 502 });
+  const buf = await img.arrayBuffer();
+  const { error } = await bucket.upload(path, buf, { contentType: "image/png", upsert: true });
+  if (error) console.warn("เก็บรูปสไลด์ไม่สำเร็จ (รัน SQL 20261115000000_training_slides แล้วหรือยัง?):", error.message);
+  else await cleanOldRevisions(deck.rev).catch(() => undefined);
+  return new Response(buf, { headers });
+}
+
+// ---------- บังคับก่อนจองคิว (SQL 20261111000000_pay_sync) ----------
+//   เปิดใช้ (settings.training_required) → คนใหม่ (ยังไม่เคยไลฟ์ = ไม่มีคิวที่ผ่านมาแล้วเลย) ต้องผ่านก่อนจองผ่านเว็บ
+//     Mc ใหม่ = ดูคลิปที่ Owner ติ๊ก "บังคับดู" (ที่คลิป / ทั้งกลุ่ม) ให้จบครบ
+//     Admin เสริมใหม่ = อ่านสไลด์บรีฟโปรดักต์ให้ครบทุกหน้า (ตัวอ่านทีละหน้าของเว็บ)
+//   Mc / Admin ที่เคยไลฟ์แล้ว = ไม่ต้อง · staff.training_passed = Owner ให้ผ่าน
+//   ดูจบ = ตัวเล่นของเว็บ (คลิปในไดรฟ์) เล่นจริงเกือบทั้งคลิป · YouTube = กด "ดูจบแล้ว" เอง
 
 export const TRAINING_GATE_SQL = "ต้องรัน SQL 20261111000000_pay_sync ใน Supabase ก่อน (คลิปบังคับก่อนจอง)";
 const gateSqlMissing = (msg: string) => /required|training_passed|schema cache|does not exist/i.test(msg);
@@ -358,77 +440,97 @@ async function passed(staffId: number) {
 
 const bkkToday = () => new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
 
-/** Mc ที่เคยไลฟ์แล้ว (มีคิวก่อนวันนี้อย่างน้อย 1 คิว ไม่นับที่ยกเลิก / ปฏิเสธ) — ids = เฉพาะคนเหล่านี้ */
-async function livedMcs(ids: number[]) {
+/** คนที่เคยไลฟ์แล้ว (มีคิวก่อนวันนี้อย่างน้อย 1 คิว ไม่นับที่ยกเลิก / ปฏิเสธ) — ids = เฉพาะคนเหล่านี้ (Mc / Admin) */
+async function livedStaff(role: "mc" | "admin", ids: number[]) {
+  const table = role === "mc" ? "mc_slots" : "admin_slots", col = role === "mc" ? "mc_id" : "admin_id";
   const out = new Set<number>();
   for (let i = 0; i < ids.length; i += 200) {
     const part = ids.slice(i, i + 200);
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await createAdminClient().from("mc_slots").select("mc_id")
-        .in("mc_id", part).lt("live_date", bkkToday()).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true")
+      const { data, error } = await createAdminClient().from(table).select(col)
+        .in(col, part).lt("live_date", bkkToday()).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true")
         .order("id").range(from, from + 999);
       if (error) throw error;
-      for (const r of data ?? []) out.add(Number(r.mc_id));
+      for (const r of (data ?? []) as unknown as Record<string, number>[]) out.add(Number(r[col]));
       if (!data || data.length < 1000) break;
     }
   }
   return out;
 }
 
-/** คนนี้ต้องดูคลิปบังคับไหม: Mc ที่ยังไม่เคยไลฟ์เท่านั้น (Admin / Mc เก่า = ไม่ต้อง · อ่านไม่ได้ = ไม่บล็อก) */
-async function mustWatch(staffId: number) {
-  const { data } = await createAdminClient().from("staff").select("role").eq("id", staffId).maybeSingle();
-  if (data?.role !== "mc") return false;
-  return !(await livedMcs([staffId]).catch(() => new Set([staffId]))).has(staffId);
+/**
+ * คนนี้ต้องผ่านอะไรก่อนจอง: Mc ใหม่ = clips · Admin เสริมใหม่ = slides · คนที่เคยไลฟ์แล้ว / Admin ประจำ = null
+ *   อ่านไม่ได้ = ไม่บล็อก
+ */
+async function requirementOf(staffId: number): Promise<"clips" | "slides" | null> {
+  const { data } = await createAdminClient().from("staff").select("role, is_extra_admin").eq("id", staffId).maybeSingle();
+  const role = data?.role === "mc" ? "mc" : data?.role === "admin" && data.is_extra_admin ? "admin" : null;
+  if (!role) return null;
+  const lived = await livedStaff(role, [staffId]).catch(() => new Set([staffId]));
+  return lived.has(staffId) ? null : role === "mc" ? "clips" : "slides";
 }
 
 /**
- * หน้าจอง / ตอนจอง: ยังดูคลิปบังคับไม่ครบ = { total, done, missing } · null = จองได้
- *   (ปิดอยู่ / ไม่ใช่ Mc ใหม่ / ไม่มีคลิปบังคับ / ให้ผ่านแล้ว / ดูครบ)
+ * หน้าจอง / ตอนจอง: ยังไม่ผ่าน = { kind, total, done, missing } · null = จองได้
+ *   (ปิดอยู่ / เคยไลฟ์แล้ว / ไม่มีคลิปบังคับหรือสไลด์ / ให้ผ่านแล้ว / ดูครบ)
  *   on = ค่าตั้งที่โหลดมาแล้ว (ไม่ส่ง = อ่านเอง)
  */
 export async function trainingBlock(email: string, staffId: number, on?: boolean): Promise<TrainingBlock | null> {
-  if (!(on ?? (await gateOn())) || !(await mustWatch(staffId)) || (await passed(staffId))) return null;
+  if (!(on ?? (await gateOn()))) return null;
+  const need = await requirementOf(staffId);
+  if (!need || (await passed(staffId))) return null;
+  if (need === "slides") {
+    const id = await slidesId();
+    if (!id || (await doneRefs(email)).has(slidesRef(id))) return null;
+    return { kind: "slides", total: 1, done: 0, missing: ["สไลด์บรีฟโปรดักต์"] };
+  }
   const clips = await requiredClips();
   if (!clips.length) return null;
   const done = await doneRefs(email);
   const missing = clips.filter((c) => !done.has(c.ref));
-  return missing.length ? { total: clips.length, done: clips.length - missing.length, missing: missing.map((c) => c.title) } : null;
+  return missing.length ? { kind: "clips", total: clips.length, done: clips.length - missing.length, missing: missing.map((c) => c.title) } : null;
 }
 
-/** หน้าเทรนนิ่งของคนนี้: เปิดใช้ไหม / ต้องดูไหม (Mc ใหม่) / ให้ผ่านแล้วไหม / ดูจบคลิปไหนแล้ว */
+/** หน้าเทรนนิ่งของคนนี้: เปิดใช้ไหม / ต้องดูคลิป (Mc ใหม่) หรืออ่านสไลด์ (Admin เสริมใหม่) / ให้ผ่านแล้วไหม / ดูจบอะไรแล้ว */
 export async function myTrainingGate(me: Me): Promise<Training["gate"]> {
-  const person = me.mc;
-  const [on, done, ok, must] = await Promise.all([
-    gateOn(), doneRefs(me.email), person ? passed(person.id) : Promise.resolve(false), person ? mustWatch(person.id) : Promise.resolve(false),
+  const person = me.mc ?? (me.admin?.isExtra ? me.admin : null);
+  const [on, done, ok, need] = await Promise.all([
+    gateOn(), doneRefs(me.email), person ? passed(person.id) : Promise.resolve(false), person ? requirementOf(person.id) : Promise.resolve(null),
   ]);
-  return { on, applies: must, passed: ok, done: [...done] };
+  return { on, applies: need === "clips", slides: need === "slides", passed: ok, done: [...done] };
 }
 
-/** ความคืบหน้ารายคน (Owner): Mc ใหม่ (ยังไม่เคยไลฟ์) ที่มีอีเมล (ไม่รวมบัญชีทดสอบ) — คนที่ต้องดูคลิปบังคับ */
+/**
+ * ความคืบหน้ารายคน (Owner) — คนใหม่ (ยังไม่เคยไลฟ์) ที่มีอีเมล (ไม่รวมบัญชีทดสอบ)
+ *   Mc ใหม่ = คลิปบังคับ (done = ดูจบกี่คลิป) · Admin เสริมใหม่ = สไลด์ (done 1 = อ่านครบทุกหน้าแล้ว)
+ */
 export async function trainingProgress(): Promise<TrainingProgress> {
   const db = createAdminClient();
-  const [on, clips, staff, views] = await Promise.all([
+  const [on, clips, staff, views, deckId] = await Promise.all([
     gateOn(),
     requiredClips(),
     db.from("staff").select("id, role, name, email, is_extra_admin, training_passed").in("role", ["mc", "admin"]).not("email", "is", null).order("name"),
     db.from("training_views").select("email, ref").eq("kind", "done"),
+    slidesId(),
   ]);
   if (staff.error) throw new Error(gateSqlMissing(staff.error.message) ? TRAINING_GATE_SQL : staff.error.message);
-  const refs = new Set(clips.map((c) => c.ref));
   const doneOf = new Map<string, Set<string>>();
-  for (const v of views.data ?? []) {
-    const e = String(v.email);
-    if (refs.has(String(v.ref))) doneOf.set(e, (doneOf.get(e) ?? new Set()).add(String(v.ref)));
-  }
-  const mcs = (staff.data ?? []).filter((s) => s.role === "mc" && !isTestAccount(s.name));
-  const lived = await livedMcs(mcs.map((s) => Number(s.id)));
-  const people = mcs
-    .filter((s) => !lived.has(Number(s.id)))
-    .map((s) => ({
-      id: Number(s.id), who: s.role === "mc" ? `Mc ${s.name}` : String(s.name), role: s.role as "mc" | "admin",
-      done: doneOf.get(String(s.email).trim().toLowerCase())?.size ?? 0, passed: s.training_passed === true,
-    }));
+  for (const v of views.data ?? []) doneOf.set(String(v.email), (doneOf.get(String(v.email)) ?? new Set()).add(String(v.ref)));
+  const mine = (email: unknown) => doneOf.get(String(email).trim().toLowerCase()) ?? new Set<string>();
+  const crew = (staff.data ?? []).filter((s) => (s.role === "mc" || s.is_extra_admin) && !isTestAccount(s.name));
+  const mcs = crew.filter((s) => s.role === "mc"), admins = crew.filter((s) => s.role === "admin");
+  const [livedMc, livedAdmin] = await Promise.all([livedStaff("mc", mcs.map((s) => Number(s.id))), livedStaff("admin", admins.map((s) => Number(s.id)))]);
+  const people = [
+    ...mcs.filter((s) => !livedMc.has(Number(s.id))).map((s) => ({
+      id: Number(s.id), who: `Mc ${s.name}`, role: "mc" as const, need: "clips" as const,
+      done: clips.filter((c) => mine(s.email).has(c.ref)).length, passed: s.training_passed === true,
+    })),
+    // ยังไม่ได้ตั้งสไลด์ = Admin ไม่ต้องอ่าน
+    ...(deckId ? admins.filter((s) => !livedAdmin.has(Number(s.id))).map((s) => ({
+      id: Number(s.id), who: String(s.name), role: "admin" as const, need: "slides" as const,
+      done: mine(s.email).has(slidesRef(deckId)) ? 1 : 0, passed: s.training_passed === true,
+    })) : []),
+  ];
   return { on, total: clips.length, people };
 }
 
@@ -452,16 +554,18 @@ export async function setTrainingGate(on: boolean) {
   if (error) throw new Error(gateSqlMissing(error.message) ? TRAINING_GATE_SQL : error.message);
   if (!on) return 0;
   const p = await trainingProgress();
-  if (!p.total) return 0;
-  const ids = p.people.filter((x) => !x.passed && x.done < p.total).map((x) => x.id);
-  if (!ids.length) return 0;
-  const { data } = await db.from("staff").select("id, role, email").in("id", ids);
+  // ยังไม่ผ่าน: Mc ใหม่ที่ดูคลิปบังคับไม่ครบ (มีคลิปบังคับ) / Admin เสริมใหม่ที่ยังอ่านสไลด์ไม่ครบ
+  const todo = p.people.filter((x) => !x.passed && (x.need === "slides" ? x.done < 1 : p.total > 0 && x.done < p.total));
+  if (!todo.length) return 0;
+  const needOf = new Map(todo.map((x) => [x.id, x.need]));
+  const { data } = await db.from("staff").select("id, role, email").in("id", todo.map((x) => x.id));
   const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
   return notifyMany((data ?? []).filter((s) => s.email).map((s) => ({
     email: String(s.email).trim().toLowerCase(), kind: "training" as const, page: s.role === "mc" ? "mc" as const : "admin" as const,
     dedupe: `training_gate:${today}`,
-    title: "ต้องดูคลิปเทรนนิ่งที่บังคับให้ครบก่อนจองคิว",
-    body: `มีคลิปบังคับ ${p.total} คลิป — เปิดเมนู "เทรนนิ่ง" แล้วดูให้จบ ระบบนับให้อัตโนมัติ ครบแล้วจองคิวได้ตามปกติ`,
+    ...(needOf.get(Number(s.id)) === "slides"
+      ? { title: "อ่านสไลด์บรีฟโปรดักต์ให้ครบทุกหน้าก่อนรับคิว", body: "เปิดเมนู \"เทรนนิ่ง\" > สไลด์บรีฟ แล้วเปิดอ่านทีละหน้าจนครบ ระบบนับให้อัตโนมัติ ครบแล้วรับคิวได้ตามปกติ" }
+      : { title: "ต้องดูคลิปเทรนนิ่งที่บังคับให้ครบก่อนจองคิว", body: `มีคลิปบังคับ ${p.total} คลิป — เปิดเมนู "เทรนนิ่ง" แล้วดูให้จบ ระบบนับให้อัตโนมัติ ครบแล้วจองคิวได้ตามปกติ` }),
   })));
 }
 

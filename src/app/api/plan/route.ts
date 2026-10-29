@@ -18,6 +18,7 @@ import type { Me } from "@/lib/types";
 //          + แพลนของ Agency (ตาราง agency_slots ไว้ดูภาพรวม / สรุปชั่วโมง ไม่เขียนลงชีต)
 //   DELETE { slots: [{ mcId?, adminId? }] }  ลบ slot ที่ยังว่าง (ไม่มีคน + ไม่มี event ในปฏิทิน)
 // สิทธิ์: Owner ที่ติ๊ก "Plan Slot Live" เท่านั้น (เขียนได้ทั้งสองแท็บ)
+// slot ของแท็บ "ลงตาราง MC Shopee" (mc_slots.sheet_tab = 'shopee') ไม่อยู่ในหน้านี้ — แพลน Shopee ยังเป็นแพลนในเว็บ (agency_slots)
 
 export const maxDuration = 60;
 
@@ -80,11 +81,11 @@ export async function GET(request: Request) {
   try {
     const [mc, admin, recent, regulars] = await Promise.all([
       all<SlotRow & { mc_id: number | null; campaign: string }>((a, b) => db.from("mc_slots")
-        .select(`${cols}, mc_id, campaign, person:staff!mc_id(name)`).gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
+        .select(`${cols}, mc_id, campaign, person:staff!mc_id(name)`).eq("sheet_tab", "mc").gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<SlotRow & { admin_id: number | null; needs_extra_admin: boolean }>((a, b) => db.from("admin_slots")
         .select(`${cols}, admin_id, needs_extra_admin, person:staff!admin_id(name)`).gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<{ platform: string; campaign: string }>((a, b) => db.from("mc_slots")
-        .select("platform, campaign").gte("live_date", since).order("id").range(a, b)),
+        .select("platform, campaign").eq("sheet_tab", "mc").gte("live_date", since).order("id").range(a, b)),
       // Mc ประจำ (เงินเดือน) ให้เลือกลงชื่อตอนติ๊กแพลนได้เลย
       all<{ id: number; name: string }>((a, b) => db.from("staff")
         .select("id, name").eq("role", "mc").eq("is_salaried", true).order("name").range(a, b)),
@@ -213,7 +214,7 @@ export async function POST(request: Request) {
       type Row = { id?: number; agency?: string; platform: string; live_date: string; start_time: string; end_time: string };
       const [ours, theirs] = await Promise.all([
         all<Row>((a, b) => db.from("mc_slots").select("platform, live_date, start_time, end_time")
-          .in("platform", platforms).in("live_date", dates).eq("is_cancelled", false).order("id").range(a, b)),
+          .in("platform", platforms).in("live_date", dates).eq("is_cancelled", false).eq("sheet_tab", "mc").order("id").range(a, b)),
         all<Row>((a, b) => db.from("agency_slots").select("id, agency, platform, live_date, start_time, end_time")
           .in("platform", platforms).in("live_date", dates).order("id").range(a, b)).catch((err: Error) => {
           if (noAgencyTable(err.message)) return [] as Row[];
@@ -248,8 +249,10 @@ export async function POST(request: Request) {
     const platforms = [...new Set(create.map((x) => x.platform))];
     const existing = async (table: Table) => {
       if (!create.length) return new Set<string>();
-      const rows = await all<{ platform: string; live_date: string; start_time: string; end_time: string }>((a, b) => db.from(table)
-        .select("platform, live_date, start_time, end_time").in("platform", platforms).in("live_date", dates).order("id").range(a, b));
+      const rows = await all<{ platform: string; live_date: string; start_time: string; end_time: string }>((a, b) => {
+        const q = db.from(table).select("platform, live_date, start_time, end_time").in("platform", platforms).in("live_date", dates);
+        return (table === "mc_slots" ? q.eq("sheet_tab", "mc") : q).order("id").range(a, b);
+      });
       return new Set(rows.map(keyOf));
     };
     const [haveMc, haveAdmin] = await Promise.all([existing("mc_slots"), existing("admin_slots")]);

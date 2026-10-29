@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   }
   const errorOf = (err: unknown) => ({ error: String((err as Error)?.message ?? err) });
   const removed: Record<string, unknown> = {};
-  for (const tab of ["mc", "admin"] as const) {
+  for (const tab of ["mc", "admin", "shopee"] as const) {
     removed[tab] = await removeSlotsDeletedInSheet(tab).catch(errorOf);
   }
   const digest = await sendMorningDigest().catch(errorOf);

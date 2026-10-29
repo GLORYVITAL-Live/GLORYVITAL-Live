@@ -16,8 +16,9 @@ export async function POST() {
     // ซิงค์ทั้งหมดไม่แจ้งเตือนรายคน (changes ว่างเสมอ กันแจ้งรัว)
     const mc = await applySheetEdits("mc");
     const admin = await applySheetEdits("admin");
+    const shopee = await applySheetEdits("shopee");
     after(() => processSyncJobs().then(() => undefined));
-    return ok({ mc, admin });
+    return ok({ mc, admin, shopee });
   } catch (err) {
     return fail("ซิงค์ไม่สำเร็จ: " + String((err as Error)?.message ?? err), 500);
   }

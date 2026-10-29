@@ -20,7 +20,11 @@ type Row = {
   id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
   confirmed: boolean | null;
 };
-type McRow = Row & { campaign: string | null; gmv: number | string | null; mc_id: number | null; person: { name: string; is_salaried: boolean | null } | null };
+type McRow = Row & {
+  campaign: string | null; gmv: number | string | null; mc_id: number | null; person: { name: string; is_salaried: boolean | null } | null;
+  /** 'shopee' = คิว Shopee (แท็บ MC Shopee) ยังไม่ต้องแนบหลักฐาน / GMV (ไม่มี Admin ของ slot ที่เป็นคนแนบ) */
+  sheet_tab: string | null;
+};
 type AdminRow = Row & { admin_id: number | null; person: { name: string } | null };
 
 const hm = (t: string) => t.slice(0, 5);
@@ -40,12 +44,12 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   });
   // ช่วงเปิดจองที่ใกล้หมด / หมดแล้ว (การ์ดเตือนบนหน้าแรก) พลาด = ไม่แสดง
   const windows = getSettings(db)
-    .then((s) => windowAlerts(s, [...(scope.mc ? ["mc" as const] : []), ...(scope.admin ? ["admin" as const] : [])]))
+    .then((s) => windowAlerts(s, [...(scope.mc ? ["mc" as const, "shopee" as const] : []), ...(scope.admin ? ["admin" as const] : [])]))
     .catch(() => []);
 
   const [mcRows, adminRows, proofs, staff] = await Promise.all([
     fetchAll<McRow>((a, b) => db.from("mc_slots")
-      .select(`${base}, campaign, gmv, mc_id, person:staff!mc_id(name, is_salaried)`)
+      .select(`${base}, campaign, gmv, mc_id, sheet_tab, person:staff!mc_id(name, is_salaried)`)
       .eq("is_cancelled", false).gte("live_date", from).lte("live_date", to).order("starts_at").range(a, b) as never),
     fetchAll<AdminRow>((a, b) => db.from("admin_slots")
       .select(`${base}, admin_id, person:staff!admin_id(name)`)
@@ -66,6 +70,7 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
 
   // GMV ของ slot ก่อนหน้าที่รวมอยู่ใน slot ถัดไปของ Mc คนเดียวกัน = ถือว่ากรอกแล้ว
   const assigned = mcRows.filter((r) => r.mc_id && r.confirmed !== false);
+  const shopee = (r: McRow) => r.sheet_tab === "shopee";
   const covered = gmvCoverage(assigned.map((r) => ({
     id: Number(r.id), platform: r.platform, startMs: ms(r.starts_at), endMs: ms(r.ends_at), gmv: r.gmv === null ? null : Number(r.gmv), who: r.mc_id,
   })));
@@ -86,12 +91,12 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
       out.live.push({
         ...slot(r, mcName(r), adminName(r)),
         status: s1 <= now ? "done" : s0 <= now ? "live" : "next",
-        proof: proofs.has(Number(r.id)), noProof: !!r.person?.is_salaried, gmv: hasGmv(r),
+        proof: proofs.has(Number(r.id)), noProof: !!r.person?.is_salaried || shopee(r), gmv: hasGmv(r) || shopee(r),
       });
     }
-    // หลักฐานค้าง: slot ที่จบแล้วใน 7 วันล่าสุด มี Mc (ไม่ใช่ Mc ประจำ) แต่ยังไม่แนบรูป
+    // หลักฐานค้าง: slot ที่จบแล้วใน 7 วันล่าสุด มี Mc (ไม่ใช่ Mc ประจำ / ไม่ใช่คิว Shopee) แต่ยังไม่แนบรูป
     for (const r of assigned) {
-      if (r.live_date < weekAgo || ms(r.ends_at) > now || r.person?.is_salaried || proofs.has(Number(r.id))) continue;
+      if (r.live_date < weekAgo || ms(r.ends_at) > now || r.person?.is_salaried || shopee(r) || proofs.has(Number(r.id))) continue;
       out.missingProof.push(slot(r, mcName(r), adminName(r)));
     }
   }
@@ -101,7 +106,7 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
       if (!r.mc_id && r.live_date >= today && r.live_date <= week && ms(r.ends_at) > now) out.noMc.push(slot(r, null, adminName(r)));
     }
     for (const r of assigned) {
-      if (r.live_date < weekAgo || ms(r.ends_at) > now || hasGmv(r)) continue;
+      if (r.live_date < weekAgo || ms(r.ends_at) > now || hasGmv(r) || shopee(r)) continue;
       out.missingGmv.push(slot(r, mcName(r), adminName(r)));
     }
     // แคมเปญ: กำลังดำเนินอยู่ + เริ่มภายใน 30 วัน

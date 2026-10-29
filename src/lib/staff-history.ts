@@ -1,5 +1,5 @@
 // ประวัติการแก้พนักงาน: ข้อความ "อะไรเปลี่ยน จากเท่าไรเป็นเท่าไร" (ค่าจ้าง / Commit / สิทธิ์ / ข้อมูลติดต่อ) — ไม่แตะ DB (เทสได้)
-import { liveTeamOf } from "@/lib/live-team";
+import { liveTeamLabel, liveTeamOf } from "@/lib/live-team";
 import { tiersLabel } from "@/lib/pay";
 import type { CommitTier } from "@/lib/types";
 
@@ -15,7 +15,7 @@ const LABEL: Record<string, string> = {
 };
 
 function show(key: string, v: unknown) {
-  if (key === "live_platform") return liveTeamOf(v) === "shopee" ? "Shopee" : "TikTok";
+  if (key === "live_platform") return liveTeamLabel(v);
   if (key === "hourly_rate") return v === null || v === undefined || v === "" ? "ค่าเริ่มต้น" : `${Number(v).toLocaleString("th-TH")} บาท/ชม.`;
   if (key === "commit_tiers") return (Array.isArray(v) && v.length ? tiersLabel(0, v as CommitTier[]) : "") || "ไม่มี";
   if (typeof v === "boolean" || v === null || v === undefined) {

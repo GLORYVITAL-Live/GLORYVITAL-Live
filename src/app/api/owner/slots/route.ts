@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { canTable, fail, ok, requireOwner as requireOwnerScope, type Access } from "@/lib/api";
 import { bookingLimits, getSettings } from "@/lib/data";
-import { platformLabel, platformRaw } from "@/lib/platform";
+import { isShopeePlatform, platformLabel, platformRaw } from "@/lib/platform";
 import { assignWarnings } from "@/lib/staff-check";
 import { addDays } from "@/lib/window";
 import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
@@ -10,9 +10,9 @@ import { processSyncJobs } from "@/lib/sync";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me } from "@/lib/types";
 
-// จัดการ slot สำหรับเจ้าของ (แทนการพิมพ์ในแท็บ "ลงตาราง Deal Mc" / "ลงตาราง Admin เสริม")
+// จัดการ slot สำหรับเจ้าของ (แทนการพิมพ์ในแท็บ "ลงตาราง Deal Mc" / "ลงตาราง Admin เสริม" / "ลงตาราง MC Shopee")
 //   GET    ?date=YYYY-MM-DD  slot ทั้งหมดของวันนั้น (จับคู่ Mc + Admin) + รายชื่อคน + แพลตฟอร์มที่เคยใช้
-//   POST   สร้าง slot หลายวัน x หลายช่วงเวลา (ข้ามที่มีอยู่แล้ว)
+//   POST   สร้าง slot หลายวัน x หลายช่วงเวลา (ข้ามที่มีอยู่แล้ว · ช่อง Shopee = แท็บ MC Shopee มีแต่ฝั่ง Mc)
 //   PATCH  แก้ slot เดียว: คน / สถานะ / เปิดรับ Admin เสริม
 //   DELETE ลบ slot ที่ยังไม่มีคน
 // ทุกคำสั่งทำได้เฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (Mc / Admin)
@@ -146,11 +146,14 @@ export async function POST(request: Request) {
     return new Set((data ?? []).map((x) => k(x.live_date, x.start_time, x.end_time)));
   };
   const [haveMc, haveAdmin] = await Promise.all([existing("mc_slots"), existing("admin_slots")]);
+  // ช่อง Shopee = คิวของหน้าจอง Shopee (ลงแท็บ "ลงตาราง MC Shopee") มีแต่ฝั่ง Mc ไม่สร้างแถว Admin
+  const shopee = isShopeePlatform(platform);
 
   // สร้างเฉพาะฝั่งที่มีสิทธิ์ (Owner ที่มีสิทธิ์ทั้งคู่ได้ทั้ง Mc + Admin เหมือนเดิม)
   const wanted = dates.flatMap((d) => times.map((t) => ({ live_date: d, start_time: t.start, end_time: t.end })));
-  const newMc = !r.scope.mc ? [] : wanted.filter((w) => !haveMc.has(k(w.live_date, w.start_time, w.end_time))).map((w) => ({ ...w, platform }));
-  const newAdmin = !r.scope.admin ? [] : wanted.filter((w) => !haveAdmin.has(k(w.live_date, w.start_time, w.end_time)))
+  const newMc = !r.scope.mc ? [] : wanted.filter((w) => !haveMc.has(k(w.live_date, w.start_time, w.end_time)))
+    .map((w) => ({ ...w, platform, ...(shopee ? { sheet_tab: "shopee" } : {}) }));
+  const newAdmin = !r.scope.admin || shopee ? [] : wanted.filter((w) => !haveAdmin.has(k(w.live_date, w.start_time, w.end_time)))
     .map((w) => ({ ...w, platform, remark: extraAdmin ? EXTRA : "" }));
 
   const insMc = newMc.length ? await db.from("mc_slots").insert(newMc).select("id") : { data: [], error: null };
@@ -178,8 +181,11 @@ async function assignCheck(table: Table, id: number, pid: number) {
   const db = createAdminClient();
   const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
   const role = table === "mc_slots" ? "mc" : "admin";
-  type Row = { id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string; is_cancelled: boolean; confirmed: boolean | null };
-  const cols = "id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed";
+  type Row = {
+    id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
+    is_cancelled: boolean; confirmed: boolean | null; sheet_tab?: string;
+  };
+  const cols = `id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed${role === "mc" ? ", sheet_tab" : ""}`;
   const { data: s } = await db.from(table).select(cols).eq("id", id).maybeSingle<Row>();
   if (!s) return [];
   const [{ data: others }, { data: person }, settings] = await Promise.all([
@@ -192,9 +198,14 @@ async function assignCheck(table: Table, id: number, pid: number) {
     date: r.live_date, startMs: Date.parse(r.starts_at), endMs: Date.parse(r.ends_at),
     label: `${platformLabel(r.platform)} ${hm(r.start_time)}–${hm(r.end_time)}`,
   });
-  const live = (others ?? []).filter((r) => !r.is_cancelled && r.confirmed !== false).map(span);
-  const quota = role === "mc" || person?.is_extra_admin ? bookingLimits(settings, role) : null;
-  return assignWarnings(span(s), live, quota);
+  const active = (others ?? []).filter((r) => !r.is_cancelled && r.confirmed !== false);
+  // เวลาทับ = ทุกคิว · โควต้าต่อวัน = เฉพาะคิวของหน้าเดียวกัน (TikTok / Shopee นับแยกกัน เหมือนตอนจอง)
+  const tab = s.sheet_tab ?? "mc";
+  const side = role === "admin" ? "admin" : tab === "shopee" ? "shopee" : "mc";
+  const quota = role === "mc" || person?.is_extra_admin ? bookingLimits(settings, side) : null;
+  const clash = assignWarnings(span(s), active.map(span), null);
+  const daily = quota ? assignWarnings(span(s), active.filter((r) => (r.sheet_tab ?? "mc") === tab).map(span), quota).filter((w) => !w.startsWith("เวลาทับ")) : [];
+  return [...clash, ...daily];
 }
 
 // ---------- PATCH: แก้ slot ----------
@@ -271,7 +282,7 @@ export async function DELETE(request: Request) {
   const r = await requireOwner();
   if ("res" in r) return r.res;
   const body = await request.json().catch(() => null);
-  type SlotRow = { id: number; platform: string; live_date: string; start_time: string; end_time: string };
+  type SlotRow = { id: number; platform: string; live_date: string; start_time: string; end_time: string; sheet_tab?: string };
   const targets: { table: Table; id: number; row?: SlotRow }[] = [];
   if (Number.isInteger(body?.mcId)) targets.push({ table: "mc_slots", id: body.mcId });
   if (Number.isInteger(body?.adminId)) targets.push({ table: "admin_slots", id: body.adminId });
@@ -281,11 +292,11 @@ export async function DELETE(request: Request) {
 
   const db = createAdminClient();
   // ลบได้เฉพาะ slot ที่ไม่มีคนและไม่มี event ในปฏิทินค้าง (ไม่งั้น event จะค้างในปฏิทิน)
-  // เก็บแพลตฟอร์ม/วัน/เวลาไว้ใช้หาแถวในชีตหลังลบ (กันลบแถวคัดลอกที่รหัสซ้ำ)
+  // เก็บแพลตฟอร์ม/วัน/เวลา (+ แท็บของ slot Mc) ไว้ใช้หาแถวในชีตหลังลบ (กันลบแถวคัดลอกที่รหัสซ้ำ)
   for (const t of targets) {
     const personCol = t.table === "mc_slots" ? "mc_id" : "admin_id";
     const { data, error } = await db.from(t.table)
-      .select(`id, platform, live_date, start_time, end_time, ${personCol}, calendar_event_id`).eq("id", t.id).maybeSingle();
+      .select(`id, platform, live_date, start_time, end_time, ${personCol}, calendar_event_id${t.table === "mc_slots" ? ", sheet_tab" : ""}`).eq("id", t.id).maybeSingle();
     if (error) return fail(error.message, 500);
     const row = data as Record<string, unknown> | null;
     if (row && (row[personCol] || row.calendar_event_id)) {

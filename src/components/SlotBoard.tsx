@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, LayoutGridIcon, Rows3Icon } from "lucide-react";
+import type { Board } from "@/lib/live-team";
 import type { ActionResult, BookingLimits, Me, OpenSlot, SlotsResponse } from "@/lib/types";
 import {
   fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, monthLabel, parseKey, platformOf, relLabel,
@@ -57,8 +58,11 @@ const TEXT = {
 
 type DialogState = "closed" | "confirm" | "busy" | "done";
 
-/** preview = Owner เปิดดูหน้านี้ (ไม่ได้เป็น Mc / Admin เอง) เห็นเหมือนกันแต่เลือก/จองไม่ได้ */
-export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | "admin"; preview?: boolean }) {
+/**
+ * preview = Owner เปิดดูหน้านี้ (ไม่ได้เป็น Mc / Admin เอง) เห็นเหมือนกันแต่เลือก/จองไม่ได้
+ * board (Mc) = หน้าจองคิว TikTok (แท็บ Deal Mc) / คิว Shopee (แท็บ MC Shopee) — ช่วงเปิดจอง / โควต้าต่อวันแยกกัน
+ */
+export function SlotBoard({ me, role, board = "tiktok", preview = false }: { me: Me; role: "mc" | "admin"; board?: Board; preview?: boolean }) {
   const toast = useToast();
   const t = TEXT[role];
   const [data, setData] = useState<SlotsResponse | null>(null);
@@ -105,7 +109,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
     let alive = true;
     const check = firstLoad.current && !preview ? "&check=1" : "";
     firstLoad.current = false;
-    api<SlotsResponse>(`/api/slots?role=${role}${check}`)
+    api<SlotsResponse>(`/api/slots?role=${role}${board === "shopee" ? "&board=shopee" : ""}${check}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.message);
         if (!alive) return;
@@ -125,7 +129,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       .catch((err) => { if (alive) setLoadError((err as Error).message); })
       .finally(() => { if (alive) setRefreshing(false); });
     return () => { alive = false; };
-  }, [role, tick, toast, t.verb, preview]);
+  }, [role, board, tick, toast, t.verb, preview]);
 
   // อัปเดตอัตโนมัติ: ทุก POLL_MS ระหว่างเปิดหน้าอยู่ + ทันทีที่กลับมาที่แท็บนี้ (ไม่รีเฟรชระหว่างเปิดหน้าต่างยืนยัน)
   useEffect(() => {
@@ -158,10 +162,10 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   const limits = data?.limits ?? DEFAULT_LIMITS[role];
   // สิทธิ์จองต่อเดือนตามแร็งค์ (Mc · ไม่ส่งมา = ไม่จำกัด)
   const quotaByMonth = useMemo(() => new Map((data?.quota ?? []).map((q) => [q.month, q])), [data]);
-  // คิวที่จองไว้แล้ว (นับรวมโควต้าต่อวัน + เวลาทับ) แยกตามวัน
+  // คิวที่จองไว้แล้วของหน้านี้ (นับโควต้าต่อวัน) แยกตามวัน · คิวของอีกหน้า (TikTok / Shopee) ใช้ตรวจเวลาทับอย่างเดียว
   const mineByDay = useMemo(() => {
     const m = new Map<string, Span[]>();
-    for (const x of data?.mine ?? []) m.set(x.date, [...(m.get(x.date) ?? []), x]);
+    for (const x of data?.mine ?? []) if (!x.other) m.set(x.date, [...(m.get(x.date) ?? []), x]);
     return m;
   }, [data]);
 
@@ -229,7 +233,9 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   function blockReason(s: OpenSlot): { full: string; short: string } {
     const same = (x: string) => ({ full: x, short: x });
     if (isLocked) return same(t.lockMsg);
-    if (data?.training) return same(`ดูคลิปเทรนนิ่งที่บังคับให้ครบก่อน (${data.training.done}/${data.training.total})`);
+    if (data?.training) {
+      return same(data.training.kind === "slides" ? "อ่านสไลด์บรีฟให้ครบทุกหน้าก่อน" : `ดูคลิปเทรนนิ่งที่บังคับให้ครบก่อน (${data.training.done}/${data.training.total})`);
+    }
     const chosen = [...selected.values()];
     const booked = mineByDay.get(s.date) ?? [];
     const hit = (x: Span) => s.startMs < x.endMs && s.endMs > x.startMs;
@@ -305,7 +311,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
   async function submit() {
     setDialog("busy");
     try {
-      const res = await api<{ results: ActionResult[] }>("/api/book", { role, ids: sorted.map((s) => s.id) });
+      const res = await api<{ results: ActionResult[] }>("/api/book", { role, board, ids: sorted.map((s) => s.id) });
       if (!res.ok) {
         toast(res.message ?? "ไม่ทราบสาเหตุ", "error");
         if (res.authError) { setDialog("closed"); location.reload(); } else setDialog("confirm");
@@ -395,7 +401,14 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
         </NoticeStrip>
       ) : null}
       <CalendarGuideDialog open={guideOpen} onClose={() => setGuideOpen(false)} onCheck={checkCalendar} checking={checking} />
-      {!preview && data?.training ? (
+      {!preview && data?.training?.kind === "slides" ? (
+        <NoticeStrip
+          variant="warning" title={`อ่านสไลด์บรีฟโปรดักต์ให้ครบทุกหน้าก่อน${t.verb}`}
+          action={<Button size="xs" onClick={() => writeLocal(PAGE_KEY, "training")} className="pointer-coarse:h-8 pointer-coarse:px-3">ไปอ่านสไลด์</Button>}
+        >
+          เมนู &quot;เทรนนิ่ง&quot; &gt; สไลด์บรีฟ แล้วเปิดอ่านทีละหน้าจนครบ ระบบนับให้อัตโนมัติ ครบแล้วกลับมา{t.verb}ได้เลย
+        </NoticeStrip>
+      ) : !preview && data?.training ? (
         <NoticeStrip
           variant="warning" title={`ดูคลิปเทรนนิ่งที่บังคับให้ครบก่อน${t.verb} (ดูแล้ว ${data.training.done}/${data.training.total})`}
           action={<Button size="xs" onClick={() => writeLocal(PAGE_KEY, "training")} className="pointer-coarse:h-8 pointer-coarse:px-3">ไปดูคลิป</Button>}

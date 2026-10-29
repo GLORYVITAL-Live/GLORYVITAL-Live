@@ -160,7 +160,8 @@ async function withPlanCol<T>(run: (extra: string) => PromiseLike<{ data: T; err
   return res.error && /can_plan_slots/.test(res.error.message) ? run("") : res;
 }
 const needViewSql = (msg: string) =>
-  LIVE_PLATFORM_RE.test(msg) ? "ต้องรัน SQL 20261031000000_live_platform ใน Supabase ก่อน ถึงจะตั้งทีม Shopee ได้"
+  /staff_live_platform_check/.test(msg) ? "ต้องรัน SQL 20261114000000_shopee_slots ใน Supabase ก่อน ถึงจะตั้งทีม TikTok + Shopee ได้"
+    : LIVE_PLATFORM_RE.test(msg) ? "ต้องรัน SQL 20261031000000_live_platform ใน Supabase ก่อน ถึงจะตั้งทีม Shopee ได้"
     : /notify_cancel/.test(msg) ? "ต้องรัน SQL 20261020000000_notify_cancel ใน Supabase ก่อน ถึงจะตั้งรับอีเมลแจ้งยกเลิกได้"
     : VIEW_COL_RE.test(msg) ? "ต้องรัน SQL 20261018000000_view_only ใน Supabase ก่อน ถึงจะตั้งสิทธิ์แบบดูได้อย่างเดียวได้" : msg;
 const noPlanGrant = () => fail("ติ๊ก / เอาสิทธิ์ Plan Slot Live ออกได้เฉพาะคนที่มีสิทธิ์นี้", 403);

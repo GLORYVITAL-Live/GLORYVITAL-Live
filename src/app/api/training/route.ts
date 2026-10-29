@@ -2,7 +2,7 @@ import { fail, ok, requireMe } from "@/lib/api";
 import { isStaff } from "@/lib/auth";
 import {
   TRAINING_GATE_SQL, TRAINING_ITEMS_SQL, addTrainingClip, loadTraining, logTrainingView, myTrainingGate, removeTrainingClip, renameTraining,
-  setTrainingGate, setTrainingHidden, setTrainingPassed, setTrainingRequired, trainingProgress, trainingViews,
+  setTrainingGate, setTrainingHidden, setTrainingPassed, setTrainingRequired, slideDeck, trainingProgress, trainingViews,
 } from "@/lib/training";
 import type { Me, Training, TrainingProgress, TrainingViews } from "@/lib/types";
 
@@ -10,7 +10,7 @@ import type { Me, Training, TrainingProgress, TrainingViews } from "@/lib/types"
 //   GET                                          รายชื่อวิดีโอ + สไลด์ (Owner ที่จัดการได้ เห็นที่ซ่อนด้วย)
 //   GET ?views=<วัน>                             ประวัติการเข้าชม (Owner ที่จัดการได้ · 0 = ทั้งหมด)
 //   GET ?progress=1                              คลิปบังคับ: ดูครบกี่คน (Owner ที่จัดการได้)
-//   POST { action: "view", kind, ref?, title? }  บันทึกการเข้าชม (ทุกคน · kind = page / video / slides / done = ดูคลิปจบ)
+//   POST { action: "view", kind, ref?, title? }  บันทึกการเข้าชม (ทุกคน · kind = page / video / slides / done = ดูคลิปจบ หรืออ่านสไลด์ครบ ref 'slides:<id>')
 //   POST อื่นๆ (Owner ที่จัดการ Mc หรือ Admin ได้) ตอบรายชื่อใหม่ทุกครั้ง
 //     { action: "hide", ref, hidden }            ซ่อน / แสดง คลิป ('drive:' / 'youtube:') หรือทั้งกลุ่ม ('folder:')
 //     { action: "rename", ref, title }           แก้ชื่อที่แสดง (ว่าง = ใช้ชื่อไฟล์ / ชื่อโฟลเดอร์)
@@ -23,6 +23,11 @@ import type { Me, Training, TrainingProgress, TrainingViews } from "@/lib/types"
 export const maxDuration = 60;
 
 const canManage = (me: Me) => !!me.owner && (me.owner.mc || me.owner.admin);
+
+/** สไลด์อ่านทีละหน้า: จำนวนหน้า + รุ่น (อ่านไม่ได้ เช่น ยังไม่ได้เปิด Slides API = null หน้าเว็บใช้กรอบของ Google แทน) */
+const deckInfo = () => slideDeck()
+  .then((d) => (d ? { pages: d.pages.length, rev: d.rev } : null))
+  .catch((err) => { console.warn("อ่านสไลด์เทรนนิ่งไม่สำเร็จ:", (err as Error).message); return null; });
 
 const noTeam = () => fail("หน้าเทรนนิ่งสำหรับทีมไลฟ์เท่านั้น", 403);
 
@@ -42,8 +47,8 @@ export async function GET(request: Request) {
       if (!canManage(r.me)) return fail("บัญชีนี้ดูความคืบหน้าไม่ได้", 403);
       return ok<TrainingProgress>(await trainingProgress());
     }
-    const [training, gate] = await Promise.all([loadTraining(canManage(r.me)), myTrainingGate(r.me).catch(() => null)]);
-    return ok<Training>({ ...training, gate, frames: !!r.me.briefs });
+    const [training, gate, deck] = await Promise.all([loadTraining(canManage(r.me)), myTrainingGate(r.me).catch(() => null), deckInfo()]);
+    return ok<Training>({ ...training, gate, deck, frames: !!r.me.briefs });
   } catch (err) {
     return fail((err as Error).message, 500);
   }
@@ -107,9 +112,9 @@ export async function POST(request: Request) {
       default:
         return fail("ไม่รู้จักคำสั่งนี้");
     }
-    const [training, gate] = await Promise.all([loadTraining(true, body?.action === "refresh"), myTrainingGate(r.me).catch(() => null)]);
+    const [training, gate, deck] = await Promise.all([loadTraining(true, body?.action === "refresh"), myTrainingGate(r.me).catch(() => null), deckInfo()]);
     if (body?.action === "refresh") message = `อ่านรายชื่อในไดรฟ์ใหม่แล้ว (${training.groups.reduce((n, g) => n + g.videos.length, 0)} คลิป)`;
-    return ok<Training & { notice: string }>({ ...training, gate, frames: !!r.me.briefs, notice: message });
+    return ok<Training & { notice: string }>({ ...training, gate, deck, frames: !!r.me.briefs, notice: message });
   } catch (err) {
     const msg = (err as Error).message;
     return fail(msg, msg === TRAINING_ITEMS_SQL || msg === TRAINING_GATE_SQL ? 409 : 400);
