@@ -18,6 +18,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PAGE_KEY, useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { CalendarGuideDialog } from "@/components/CalendarGuide";
+import { SlotCalendar } from "@/components/SlotCalendar";
 
 // ค่าสำรองเมื่อเซิร์ฟเวอร์ไม่ได้ส่งโควต้ามา (ปกติใช้ค่าจาก settings ใน DB และฝั่ง server เช็คซ้ำอีกชั้นเสมอ)
 // ช่วง (blocks) = slot ที่ต่อกัน เช่น 09:30–11:30 + 11:30–13:30 นับเป็น 1 ช่วง
@@ -437,10 +438,12 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
 
       {slots.length ? (
         <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 pt-2 pb-2 backdrop-blur">
+          {/* แถบเลื่อนวัน (เฉพาะวันที่มี slot) + ปุ่มปฏิทินดูทั้งเดือน (อยู่กับที่ ไม่เลื่อนตามแถบ) */}
+          <div className="flex gap-2">
           <nav
             ref={stripRef}
             aria-label="เลือกวันที่"
-            className="no-scrollbar flex gap-2 overflow-x-auto pb-1"
+            className="no-scrollbar flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1"
             onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
           >
             {groups.map(([k, list]) => {
@@ -466,6 +469,14 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
               );
             })}
           </nav>
+          <SlotCalendar
+            counts={new Map(groups.map(([k, list]) => [k, list.length]))}
+            full={new Set(fullDays.keys())}
+            picked={selectedDates}
+            active={activeDate}
+            onPick={(k) => { document.getElementById(`day-${k}`)?.scrollIntoView({ behavior: "smooth", block: "start" }); setActiveDate(k); }}
+          />
+          </div>
           <div className="mt-2 flex items-center justify-between gap-2">
             {platforms.length > 1 ? (
               <div role="group" aria-label="กรองตามแพลตฟอร์ม" className="no-scrollbar flex gap-1.5 overflow-x-auto">
