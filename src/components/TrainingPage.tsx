@@ -158,7 +158,7 @@ export function TrainingPage() {
       ) : (
         <>
           {data.message ? <Notice variant="warning" icon title="อ่านรายชื่อวิดีโอไม่สำเร็จ">{data.message}</Notice> : null}
-          {/* Mc / Admin เสริม: คลิปบังคับก่อนจองคิว */}
+          {/* Mc ใหม่ (ยังไม่เคยไลฟ์): คลิปบังคับก่อนจองคิว */}
           {!editing && gate?.on && gate.applies && requiredClips.length ? (
             gate.passed || requiredDone >= requiredClips.length ? (
               <Notice className="mb-3" title={gate.passed ? "ผ่านเทรนนิ่งแล้ว (ทีมงานให้ผ่าน)" : `ดูคลิปบังคับครบแล้ว ${requiredDone}/${requiredClips.length} ✓`}>จองคิวได้ตามปกติ</Notice>
@@ -174,7 +174,7 @@ export function TrainingPage() {
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   ซ่อน = ทีมไม่เห็นในหน้าเทรนนิ่ง (ไฟล์ในไดรฟ์ไม่ถูกลบ กดแสดงกลับได้) · แก้ชื่อ = เปลี่ยนเฉพาะชื่อที่แสดงในเว็บ
                   · คลิปใหม่ในโฟลเดอร์ไดรฟ์ขึ้นเองภายใน 10 นาที (กดรีเฟรชให้ขึ้นทันที)
-                  · บังคับ = Mc / Admin เสริมต้องดูจบก่อนจองคิว (ติ๊กที่คลิป หรือทั้งกลุ่ม)
+                  · บังคับ = Mc ใหม่ (ยังไม่เคยไลฟ์) ต้องดูจบก่อนจองคิว (ติ๊กที่คลิป หรือทั้งกลุ่ม)
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button size="sm" disabled={!!busy} onClick={() => setAdding(true)}><PlusIcon />เพิ่มคลิปจากลิงก์</Button>
@@ -331,7 +331,7 @@ function GateToggle({ on, count, onChanged }: { on: boolean; count: number; onCh
   async function set(next: boolean) {
     if (next && !(await confirm({
       title: "เปิดบังคับดูคลิปก่อนจองคิว?",
-      description: `Mc / Admin เสริมที่ยังดูคลิปบังคับ (${count} คลิป) ไม่ครบ จะจองคิวผ่านเว็บไม่ได้จนกว่าจะดูครบ — ระบบแจ้งเตือนคนที่ยังไม่ครบให้ · ให้ผ่านรายคนได้ที่แท็บ "ผู้เข้าชม"`,
+      description: `Mc ใหม่ (ยังไม่เคยไลฟ์) ที่ยังดูคลิปบังคับ (${count} คลิป) ไม่ครบ จะจองคิวผ่านเว็บไม่ได้จนกว่าจะดูครบ · Mc ที่เคยไลฟ์แล้วจองได้ตามปกติ — ระบบแจ้งเตือนคนที่ยังไม่ครบให้ · ให้ผ่านรายคนได้ที่แท็บ "ผู้เข้าชม"`,
       confirmText: "เปิดใช้",
     }))) return;
     setBusy(true);
@@ -352,7 +352,7 @@ function GateToggle({ on, count, onChanged }: { on: boolean; count: number; onCh
         <b>บังคับดูก่อนจองคิว: {on ? "เปิดอยู่" : "ปิดอยู่"}</b>
         <span className="block text-xs text-muted-foreground">
           {count ? `คลิปบังคับ ${count} คลิป` : "ยังไม่มีคลิปบังคับ — กด \"บังคับ\" ใต้คลิป หรือ \"บังคับทั้งกลุ่ม\" ที่หัวกลุ่ม"}
-          {on ? " · Mc / Admin เสริมที่ยังดูไม่ครบจองคิวไม่ได้" : ""}
+          {on ? " · Mc ใหม่ (ยังไม่เคยไลฟ์) ที่ยังดูไม่ครบจองคิวไม่ได้ · Mc ที่เคยไลฟ์แล้วไม่ต้องดู" : ""}
         </span>
       </span>
       <Button size="sm" variant={on ? "outline" : "default"} className={cn("pointer-coarse:h-10", on && "bg-card")} disabled={busy || (!on && !count)} onClick={() => set(!on)}>
@@ -400,8 +400,8 @@ function RequiredProgress() {
   return (
     <section className="mb-5">
       <h3 className="text-sm font-semibold">
-        คลิปบังคับก่อนจองคิว ({data.total} คลิป) · ครบแล้ว {data.people.filter(ok).length}/{data.people.length} คน
-        <span className="font-normal text-muted-foreground"> · {data.on ? "เปิดใช้อยู่" : "ยังไม่เปิดใช้ (เปิดที่ จัดการคลิป)"}</span>
+        คลิปบังคับก่อนจองคิว ({data.total} คลิป) · Mc ใหม่ครบแล้ว {data.people.filter(ok).length}/{data.people.length} คน
+        <span className="font-normal text-muted-foreground"> · {data.on ? "เปิดใช้อยู่" : "ยังไม่เปิดใช้ (เปิดที่ จัดการคลิป)"} · Mc ที่เคยไลฟ์แล้วไม่ต้องดู ไม่อยู่ในรายชื่อ</span>
       </h3>
       <ul className="scroll-thin mt-1.5 max-h-80 divide-y overflow-y-auto rounded-xl border bg-card">
         {people.map((p) => (

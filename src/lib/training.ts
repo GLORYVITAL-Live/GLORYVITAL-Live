@@ -325,7 +325,8 @@ export async function trainingViews(days: number): Promise<TrainingViews> {
 }
 
 // ---------- คลิปบังคับก่อนจองคิว (SQL 20261111000000_pay_sync) ----------
-//   Owner ติ๊ก "บังคับดู" ที่คลิป / ทั้งกลุ่ม + เปิดใช้ (settings.training_required) → Mc / Admin เสริมต้องดูจบครบก่อนจองผ่านเว็บ
+//   Owner ติ๊ก "บังคับดู" ที่คลิป / ทั้งกลุ่ม + เปิดใช้ (settings.training_required) → Mc ใหม่ต้องดูจบครบก่อนจองผ่านเว็บ
+//   Mc ใหม่ = ยังไม่เคยไลฟ์ (ไม่มีคิวที่ผ่านมาแล้วเลย) · Mc ที่เคยไลฟ์แล้ว / Admin = ไม่ต้องดูคลิป
 //   ดูจบ = ตัวเล่นของเว็บ (คลิปในไดรฟ์) เล่นจริงเกือบทั้งคลิป · YouTube = กด "ดูจบแล้ว" เอง · staff.training_passed = Owner ให้ผ่าน
 
 export const TRAINING_GATE_SQL = "ต้องรัน SQL 20261111000000_pay_sync ใน Supabase ก่อน (คลิปบังคับก่อนจอง)";
@@ -355,12 +356,39 @@ async function passed(staffId: number) {
   return !error && data?.training_passed === true;
 }
 
+const bkkToday = () => new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+
+/** Mc ที่เคยไลฟ์แล้ว (มีคิวก่อนวันนี้อย่างน้อย 1 คิว ไม่นับที่ยกเลิก / ปฏิเสธ) — ids = เฉพาะคนเหล่านี้ */
+async function livedMcs(ids: number[]) {
+  const out = new Set<number>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const part = ids.slice(i, i + 200);
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await createAdminClient().from("mc_slots").select("mc_id")
+        .in("mc_id", part).lt("live_date", bkkToday()).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true")
+        .order("id").range(from, from + 999);
+      if (error) throw error;
+      for (const r of data ?? []) out.add(Number(r.mc_id));
+      if (!data || data.length < 1000) break;
+    }
+  }
+  return out;
+}
+
+/** คนนี้ต้องดูคลิปบังคับไหม: Mc ที่ยังไม่เคยไลฟ์เท่านั้น (Admin / Mc เก่า = ไม่ต้อง · อ่านไม่ได้ = ไม่บล็อก) */
+async function mustWatch(staffId: number) {
+  const { data } = await createAdminClient().from("staff").select("role").eq("id", staffId).maybeSingle();
+  if (data?.role !== "mc") return false;
+  return !(await livedMcs([staffId]).catch(() => new Set([staffId]))).has(staffId);
+}
+
 /**
- * หน้าจอง / ตอนจอง: ยังดูคลิปบังคับไม่ครบ = { total, done, missing } · null = จองได้ (ปิดอยู่ / ไม่มีคลิปบังคับ / ให้ผ่านแล้ว / ดูครบ)
+ * หน้าจอง / ตอนจอง: ยังดูคลิปบังคับไม่ครบ = { total, done, missing } · null = จองได้
+ *   (ปิดอยู่ / ไม่ใช่ Mc ใหม่ / ไม่มีคลิปบังคับ / ให้ผ่านแล้ว / ดูครบ)
  *   on = ค่าตั้งที่โหลดมาแล้ว (ไม่ส่ง = อ่านเอง)
  */
 export async function trainingBlock(email: string, staffId: number, on?: boolean): Promise<TrainingBlock | null> {
-  if (!(on ?? (await gateOn())) || (await passed(staffId))) return null;
+  if (!(on ?? (await gateOn())) || !(await mustWatch(staffId)) || (await passed(staffId))) return null;
   const clips = await requiredClips();
   if (!clips.length) return null;
   const done = await doneRefs(email);
@@ -368,14 +396,16 @@ export async function trainingBlock(email: string, staffId: number, on?: boolean
   return missing.length ? { total: clips.length, done: clips.length - missing.length, missing: missing.map((c) => c.title) } : null;
 }
 
-/** หน้าเทรนนิ่งของคนนี้: เปิดใช้ไหม / ต้องดูไหม (Mc / Admin เสริม) / ให้ผ่านแล้วไหม / ดูจบคลิปไหนแล้ว */
+/** หน้าเทรนนิ่งของคนนี้: เปิดใช้ไหม / ต้องดูไหม (Mc ใหม่) / ให้ผ่านแล้วไหม / ดูจบคลิปไหนแล้ว */
 export async function myTrainingGate(me: Me): Promise<Training["gate"]> {
-  const person = me.mc ?? (me.admin?.isExtra ? me.admin : null);
-  const [on, done, ok] = await Promise.all([gateOn(), doneRefs(me.email), person ? passed(person.id) : Promise.resolve(false)]);
-  return { on, applies: !!person, passed: ok, done: [...done] };
+  const person = me.mc;
+  const [on, done, ok, must] = await Promise.all([
+    gateOn(), doneRefs(me.email), person ? passed(person.id) : Promise.resolve(false), person ? mustWatch(person.id) : Promise.resolve(false),
+  ]);
+  return { on, applies: must, passed: ok, done: [...done] };
 }
 
-/** ความคืบหน้ารายคน (Owner): Mc ทุกคน + Admin เสริม ที่มีอีเมล (ไม่รวมบัญชีทดสอบ) */
+/** ความคืบหน้ารายคน (Owner): Mc ใหม่ (ยังไม่เคยไลฟ์) ที่มีอีเมล (ไม่รวมบัญชีทดสอบ) — คนที่ต้องดูคลิปบังคับ */
 export async function trainingProgress(): Promise<TrainingProgress> {
   const db = createAdminClient();
   const [on, clips, staff, views] = await Promise.all([
@@ -391,8 +421,10 @@ export async function trainingProgress(): Promise<TrainingProgress> {
     const e = String(v.email);
     if (refs.has(String(v.ref))) doneOf.set(e, (doneOf.get(e) ?? new Set()).add(String(v.ref)));
   }
-  const people = (staff.data ?? [])
-    .filter((s) => (s.role === "mc" || s.is_extra_admin) && !isTestAccount(s.name))
+  const mcs = (staff.data ?? []).filter((s) => s.role === "mc" && !isTestAccount(s.name));
+  const lived = await livedMcs(mcs.map((s) => Number(s.id)));
+  const people = mcs
+    .filter((s) => !lived.has(Number(s.id)))
     .map((s) => ({
       id: Number(s.id), who: s.role === "mc" ? `Mc ${s.name}` : String(s.name), role: s.role as "mc" | "admin",
       done: doneOf.get(String(s.email).trim().toLowerCase())?.size ?? 0, passed: s.training_passed === true,
