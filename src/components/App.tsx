@@ -172,7 +172,7 @@ function Shell({ me }: { me: Me | null }) {
     ...(me?.equipment ? ["equipment" as const] : []),
     // ขอยืมอุปกรณ์: บัญชีทีมอื่นในบริษัท + Marketing (ทีมเราจัดการคำขอที่หน้าอุปกรณ์ > คำขอยืม)
     ...(me?.borrower ? ["borrow" as const] : []),
-    // เทรนนิ่ง (วิดีโอ product training + สไลด์บรีฟ): ทุกคนในทีมไลฟ์ (ไม่รวมบัญชีทีมอื่น)
+    // เทรนนิ่ง (วิดีโอ product training + สไลด์บรีฟ + เฟรมไลฟ์สำหรับคนที่จัดการบรีฟการแต่งตัว): ทุกคนในทีมไลฟ์ (ไม่รวมบัญชีทีมอื่น)
     ...(me && (me.mc || me.admin || me.owner || me.marketing) ? ["training" as const] : []),
   ].sort((a, b) => PAGE_ORDER.indexOf(a) - PAGE_ORDER.indexOf(b));
   // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
@@ -377,7 +377,8 @@ function Shell({ me }: { me: Me | null }) {
         <p className="mt-1 text-sm text-muted-foreground">
           {shopee
             ? "ทีม Shopee — คิวไลฟ์ในหน้านี้ตอนนี้เป็นของช่อง TikTok"
-            : mode?.hint ?? "เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ ระบบจะพาไปหน้าของ Mc หรือ Admin ให้อัตโนมัติ"}
+            : page === "training" && me?.briefs ? `${MODES.training.hint} · แท็บเฟรมไลฟ์: เฟรมของแต่ละช่อง / ช่วงวัน + บรีฟการแต่งตัวให้ Mc`
+              : mode?.hint ?? "เข้าสู่ระบบด้วยอีเมลที่ลงทะเบียนไว้ ระบบจะพาไปหน้าของ Mc หรือ Admin ให้อัตโนมัติ"}
         </p>
       </section>
 

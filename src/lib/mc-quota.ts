@@ -54,7 +54,7 @@ export type QuotaRow = {
   updatedBy: string | null; updatedAt: string | null;
 };
 
-/** หน้าเจ้าของ > ผลงาน Mc > สิทธิ์จอง */
+/** หน้าเจ้าของ > ตาราง slot > รายวัน > สิทธิ์จอง Mc ต่อเดือน */
 export type QuotaReport = {
   month: string; source: string;
   /** แร็งค์ล็อกแล้ว (เดือนก่อนจบ + 3 วัน) false = ยังอัปเดตตามผลงานเดือนก่อนอยู่ */

@@ -191,7 +191,7 @@ export function HomeView({ go }: { go: Go }) {
       {tawi ? (
         <Section
           id="home-tawi" title="ใบ 50 ทวิ" icon={<FileTextIcon />} count={tawiCount}
-          action={<GoButton onClick={() => go("owner", "staff")}>แผงใบ 50 ทวิ</GoButton>}
+          action={<GoButton onClick={() => go("owner", "summary")}>แผงใบ 50 ทวิ</GoButton>}
         >
           {tawiCount ? (
             <div className="space-y-3 text-sm">
@@ -223,7 +223,7 @@ export function HomeView({ go }: { go: Go }) {
       {receipts ? (
         <Section
           id="home-receipts" title="เอกสารรับเงินยังไม่ครบ" icon={<ReceiptTextIcon />} count={receipts.people.length}
-          action={<GoButton onClick={() => go("owner", "staff")}>แผงเอกสารรับเงิน</GoButton>}
+          action={<GoButton onClick={() => go("owner", "summary")}>แผงเอกสารรับเงิน</GoButton>}
         >
           {receipts.people.length ? (
             <>

@@ -14,8 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 /**
- * หน้าเจ้าของ > ผลงาน Mc > สิทธิ์จอง: สิทธิ์จองคิวของ Mc ต่อเดือนตามแร็งค์ผลงานเดือนก่อน (src/lib/mc-quota.ts)
+ * หน้าเจ้าของ > ตาราง slot > รายวัน (ใต้ช่วงเปิดจอง): สิทธิ์จองคิวของ Mc ต่อเดือนตามแร็งค์ผลงานเดือนก่อน (src/lib/mc-quota.ts)
  *   Owner ที่จัดการได้ทั้ง Mc + Admin หรือติ๊ก "กำหนดสิทธิ์จอง Mc" = เปิดปิด / ตั้งสิทธิ์เพิ่มพิเศษ / คำนวณใหม่ได้
+ *   onChanged = เปิด / ปิดแล้ว (บรรทัดสรุปด้านบนโหลดใหม่)
  */
 
 const TIER_CLASS: Record<Tier, string> = {
@@ -29,7 +30,7 @@ const stampText = (iso: string) => new Intl.DateTimeFormat("th-TH", {
   day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok",
 }).format(new Date(iso));
 
-export function McQuotaPanel() {
+export function McQuotaPanel({ onChanged }: { onChanged?: () => void }) {
   const toast = useToast();
   const confirm = useConfirm();
   // ครึ่งหลังของเดือน = ส่วนใหญ่กำลังจองเดือนหน้า
@@ -72,6 +73,7 @@ export function McQuotaPanel() {
       if (!res.ok) throw new Error(res.message);
       toast(res.message);
       reload();
+      onChanged?.();
     } catch (err) {
       toast((err as Error).message, "error");
     } finally {
@@ -99,14 +101,10 @@ export function McQuotaPanel() {
 
   return (
     <section className="mt-3">
-      <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-        <h2 className="flex flex-wrap items-baseline gap-2 text-lg font-bold">
-          สิทธิ์จองคิว Mc ต่อเดือน
-          <span className="text-xs font-normal text-muted-foreground">
-            ตามแร็งค์ผลงานเดือนก่อน (หน้าอันดับ Mc) · A {QUOTA_A[0]}–{QUOTA_A[1]} slot (110%→{Math.round(SCORE_TOP * 100)}%) · B {QUOTA_B[0]}–{QUOTA_B[1]} slot (95%→110%) · C / ยังไม่มีอันดับ {QUOTA_C} slot · + สิทธิ์เพิ่มพิเศษ
-          </span>
-        </h2>
-      </div>
+      {/* หัวข้ออยู่ที่ปุ่มเปิดแผง (ตาราง slot) แล้ว — ที่นี่เหลือแค่เกณฑ์ */}
+      <p className="mb-2 text-xs text-muted-foreground">
+        ตามแร็งค์ผลงานเดือนก่อน (หน้าผลงาน Mc &gt; อันดับ Mc) · A {QUOTA_A[0]}–{QUOTA_A[1]} slot (110%→{Math.round(SCORE_TOP * 100)}%) · B {QUOTA_B[0]}–{QUOTA_B[1]} slot (95%→110%) · C / ยังไม่มีอันดับ {QUOTA_C} slot · + สิทธิ์เพิ่มพิเศษ
+      </p>
       <MonthNav label={monthLabel(month)} onPrev={() => setMonth(monthKey(-1, month))} onNext={() => setMonth(monthKey(1, month))} />
 
       {!report ? (

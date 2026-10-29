@@ -2,12 +2,14 @@ import { after } from "next/server";
 import { fail, ok, requireOwner } from "@/lib/api";
 import { notifyWindowOpened } from "@/lib/notifications";
 import { bkkToday, bookWindow, cutoffDate, getSettings } from "@/lib/data";
+import { quotaOn } from "@/lib/mc-quota-db";
 import { tiktokOnly, withLiveTeam } from "@/lib/live-team";
 import { createAdminClient } from "@/lib/supabase/server";
 import { cleanWindow, isDate, rangeText, type Period } from "@/lib/window";
 
 // ช่วงเปิดจอง (หน้าเจ้าของ > จัดการ slot)
 //   GET  ช่วงเปิดจองของฝั่งที่มีสิทธิ์ + รายชื่อคนที่เลือกให้จองก่อนได้ + เดือนสุดท้ายที่เปิดจอง
+//        + gates = ข้อจำกัดการจองอื่นที่เปิดอยู่ (สิทธิ์จอง Mc ต่อเดือน · บังคับดูคลิปเทรนนิ่ง) แสดงใต้ช่วงเปิดจอง
 //   PUT  { role, window }  ตั้งช่วง / รายชื่อจองก่อน ของฝั่งนั้น (Owner ที่มีสิทธิ์ฝั่งนั้น) window = null คือไม่จำกัด
 //        { cutoffMonth }   เดือนสุดท้ายที่เปิดจอง "YYYY-MM" / "" = ไม่จำกัด (ใช้ทั้งสองฝั่ง ต้องมีสิทธิ์ทั้ง Mc และ Admin)
 
@@ -43,6 +45,8 @@ export async function GET() {
     mc: r.scope.mc ? bookWindow(s, "mc") : undefined,
     admin: r.scope.admin ? bookWindow(s, "admin") : undefined,
     people: { mc: mcPeople, admin: adminPeople },
+    // quota null = ไม่เห็นฝั่ง Mc (สิทธิ์จองมีแค่ Mc)
+    gates: { quota: r.scope.mc ? quotaOn(s) : null, training: s.training_required === true },
   });
 }
 

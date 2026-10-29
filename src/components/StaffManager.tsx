@@ -5,8 +5,6 @@ import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { BellRingIcon, CalendarXIcon, CopyIcon, IdCardIcon, MailIcon, PlusIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { copyText } from "@/components/CalendarGuide";
 import { PayDocsPanel } from "@/components/PayDocs";
-import { ReceiptPanel } from "@/components/ReceiptPanel";
-import { TawiPanel } from "@/components/TawiPanel";
 import { CALENDAR_SHARE_TO, calendarShareMessage } from "@/lib/calendar-share";
 import {
   AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, StateBox, api, useConfirm, useToast,
@@ -361,10 +359,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           </Button>
         </div>
       ) : null}
-      {/* ใบ 50 ทวิ: ตรวจไฟล์ใน Drive + จับคู่กับรายชื่อ (สิทธิ์เดียวกับเอกสารทำเบิก) */}
-      {docsSide ? <TawiPanel /> : null}
-      {/* เอกสารยืนยันการรับเงินรายเดือน (ต้องส่งก่อนดาวน์โหลดใบ 50 ทวิ) */}
-      {docsSide ? <ReceiptPanel /> : null}
+      {/* ใบ 50 ทวิ / เอกสารรับเงินรายเดือน ย้ายไปอยู่หน้าเจ้าของ > สรุปรายเดือน (คู่กับค่าจ้าง / บันทึกโอน) */}
 
       {!list.length ? (
         <StateBox title="ไม่พบรายชื่อ">{search ? "ลองค้นหาด้วยคำอื่น" : canEditRole(role) ? "กด \"เพิ่มคน\" เพื่อเพิ่มรายชื่อ" : null}</StateBox>
@@ -670,7 +665,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   // ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) แยกฝั่ง: ตั้งได้เฉพาะคนที่ดูเอกสารได้ทั้งสองฝั่ง (คนที่ได้ฝั่งเดียวไม่เห็นช่องนี้) · ของตัวเองแก้ไม่ได้
   const [docs, setDocs] = useState({ mc: person?.can_view_pay_docs ?? false, admin: person?.can_view_pay_docs_admin ?? false });
   const payDocsViewer = docsScope.mc && docsScope.admin;
-  // กำหนดสิทธิ์จอง Mc ต่อเดือน (หน้าผลงาน Mc > สิทธิ์จอง) — Owner ที่จัดการได้ทั้ง Mc + Admin ได้อยู่แล้ว
+  // กำหนดสิทธิ์จอง Mc ต่อเดือน (ตาราง slot > รายวัน ใต้ช่วงเปิดจอง) — Owner ที่จัดการได้ทั้ง Mc + Admin ได้อยู่แล้ว
   const [quota, setQuota] = useState(person?.can_manage_quota ?? false);
   const fullPerm = perm.mc === "edit" && perm.admin === "edit";
   // ฝั่ง Mc ครอบหลักฐานไลฟ์อยู่แล้ว (จัดการ Mc = จัดการหลักฐานได้ / ดู Mc = ดูหลักฐานได้)
@@ -1122,7 +1117,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
                 <span className="block text-xs text-muted-foreground">
                   {fullPerm
                     ? "จัดการได้ทั้ง Mc + Admin = ทำได้อยู่แล้ว"
-                    : "หน้าผลงาน Mc > สิทธิ์จอง: ตั้งสิทธิ์จองเพิ่มพิเศษรายคน / เปิดปิดการจำกัด / คำนวณแร็งค์ใหม่ (ต้องมีสิทธิ์ฝั่ง Mc ด้วย)"}
+                    : "ตาราง slot > รายวัน > สิทธิ์จอง Mc ต่อเดือน: ตั้งสิทธิ์จองเพิ่มพิเศษรายคน / เปิดปิดการจำกัด / คำนวณแร็งค์ใหม่ (ต้องมีสิทธิ์ฝั่ง Mc ด้วย)"}
                   {!isMe && quota && !quotaReady ? <span className="block text-destructive">ต้องรัน SQL 20261107000000_mc_quota ใน Supabase ก่อน</span> : null}
                   {!isMe && quota && perm.mc === "none" ? <span className="block text-destructive">ต้องมีสิทธิ์ฝั่ง Mc ด้วย ถึงจะเห็นหน้าผลงาน Mc</span> : null}
                 </span>

@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDownIcon, PlusIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, GraduationCapIcon, PlusIcon, XIcon } from "lucide-react";
 import { DatePicker, MonthPicker } from "@/components/date-picker";
+import { McQuotaPanel } from "@/components/McQuotaPanel";
 import { PersonPicker } from "@/components/SlotManager";
 import { IconButton, Notice, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { PAGE_KEY, writeLocal } from "@/lib/hooks";
 import type { OwnerScope } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -24,6 +26,8 @@ type Data = {
   mc?: BookWindow | null;
   admin?: BookWindow | null;
   people: { mc: Person[]; admin: Person[] };
+  /** ข้อจำกัดการจองอื่นที่เปิดอยู่ · quota null = ไม่เห็นฝั่ง Mc */
+  gates?: { quota: boolean | null; training: boolean };
 };
 /** ค่าที่กำลังแก้ในฟอร์ม (วันที่ว่าง = "") */
 type Draft = { mode: Mode; from: string; to: string };
@@ -54,7 +58,10 @@ function summaryText(w: BookWindow | null, d: Data) {
   return w?.only.length ? `${general} · จองก่อน ${w.only.length} คน: ${effectText(w.early, d)}` : general;
 }
 
-/** หน้าเจ้าของ > ตาราง slot: ตั้งช่วงที่ Mc / Admin เสริม จองได้ (เฉพาะฝั่งที่มีสิทธิ์ · ฝั่งที่ดูได้อย่างเดียว = เห็นแค่สรุป) */
+/**
+ * หน้าเจ้าของ > ตาราง slot: ตั้งช่วงที่ Mc / Admin เสริม จองได้ (เฉพาะฝั่งที่มีสิทธิ์ · ฝั่งที่ดูได้อย่างเดียว = เห็นแค่สรุป)
+ *   + ข้อจำกัดการจองอื่นไว้ที่เดียวกัน: สิทธิ์จอง Mc ต่อเดือน (กดเปิดแผงตั้งค่า) · บังคับดูคลิปเทรนนิ่ง (ตั้งที่หน้าเทรนนิ่ง)
+ */
 export function BookingWindowEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerScope }) {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState("");
@@ -80,33 +87,71 @@ export function BookingWindowEditor({ scope, edit }: { scope: OwnerScope; edit: 
   const editable = roles.filter((r) => edit[r]);
   const reload = () => setTick((n) => n + 1);
 
+  const gates = <BookingGates gates={data.gates} onChanged={reload} />;
   // ดูได้อย่างเดียวทุกฝั่ง: แสดงสรุปบรรทัดเดียว ไม่มีที่ตั้งค่า
   if (!editable.length) {
     return (
-      <div className="my-3 rounded-xl border bg-card px-3 py-2.5 text-sm">
-        <strong>ช่วงเปิดจอง</strong>
-        <span className="text-muted-foreground"> — {roles.map((r) => `${LABEL[r]}: ${summaryText(data[r] ?? null, data)}`).join(" | ")}</span>
-      </div>
+      <>
+        <div className="my-3 rounded-xl border bg-card px-3 py-2.5 text-sm">
+          <strong>ช่วงเปิดจอง</strong>
+          <span className="text-muted-foreground"> — {roles.map((r) => `${LABEL[r]}: ${summaryText(data[r] ?? null, data)}`).join(" | ")}</span>
+        </div>
+        {gates}
+      </>
     );
   }
 
   return (
-    <Collapsible className="group/window my-3 rounded-xl border bg-card">
-      <CollapsibleTrigger className="flex w-full cursor-pointer items-start gap-2 rounded-xl px-3 py-2.5 text-left text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-        <ChevronDownIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/window:rotate-180" />
-        <span>
-          <strong>ช่วงเปิดจอง</strong>
-          <span className="text-muted-foreground"> — {roles.map((r) => `${LABEL[r]}: ${summaryText(data[r] ?? null, data)}`).join(" | ")}</span>
+    <>
+      <Collapsible className="group/window my-3 rounded-xl border bg-card">
+        <CollapsibleTrigger className="flex w-full cursor-pointer items-start gap-2 rounded-xl px-3 py-2.5 text-left text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+          <ChevronDownIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/window:rotate-180" />
+          <span>
+            <strong>ช่วงเปิดจอง</strong>
+            <span className="text-muted-foreground"> — {roles.map((r) => `${LABEL[r]}: ${summaryText(data[r] ?? null, data)}`).join(" | ")}</span>
+          </span>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="space-y-4 border-t p-3">
+          {editable.map((r) => <RoleWindow key={`${r}${JSON.stringify(data[r] ?? null)}`} role={r} data={data} onSaved={reload} />)}
+          {roles.filter((r) => !edit[r]).map((r) => (
+            <p key={r} className="text-sm text-muted-foreground">{LABEL[r]}: {summaryText(data[r] ?? null, data)} (ดูได้อย่างเดียว)</p>
+          ))}
+          <CutoffMonth key={data.cutoffMonth} data={data} onSaved={reload} />
+        </CollapsibleContent>
+      </Collapsible>
+      {gates}
+    </>
+  );
+}
+
+/** ข้อจำกัดการจองอื่น (ใต้ช่วงเปิดจอง): สิทธิ์จอง Mc ต่อเดือนตามแร็งค์ (แผงตั้งค่าโหลดเมื่อกดเปิด) + บังคับดูคลิปเทรนนิ่ง */
+function BookingGates({ gates, onChanged }: { gates: Data["gates"]; onChanged: () => void }) {
+  if (!gates) return null;
+  return (
+    <>
+      {gates.quota !== null ? (
+        <Collapsible className="group/quota my-2 rounded-xl border bg-card">
+          <CollapsibleTrigger className="flex w-full cursor-pointer items-start gap-2 rounded-xl px-3 py-2.5 text-left text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+            <ChevronDownIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/quota:rotate-180" />
+            <span>
+              <strong>สิทธิ์จอง Mc ต่อเดือน</strong>
+              <span className="text-muted-foreground"> — {gates.quota ? "เปิดใช้อยู่ (จำกัดตามแร็งค์ผลงานเดือนก่อน)" : "ปิดอยู่ (จองได้ไม่จำกัดต่อเดือน)"}</span>
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="border-t px-3 pb-3"><McQuotaPanel onChanged={onChanged} /></CollapsibleContent>
+        </Collapsible>
+      ) : null}
+      <div className="my-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border bg-card px-3 py-2 text-sm">
+        <GraduationCapIcon className="size-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-48 flex-1">
+          <strong>บังคับดูคลิปเทรนนิ่งก่อนจอง</strong>
+          <span className="text-muted-foreground"> — {gates.training ? "เปิดใช้อยู่" : "ปิดอยู่"} · เลือกคลิป / เปิดปิดที่หน้าเทรนนิ่ง</span>
         </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="space-y-4 border-t p-3">
-        {editable.map((r) => <RoleWindow key={`${r}${JSON.stringify(data[r] ?? null)}`} role={r} data={data} onSaved={reload} />)}
-        {roles.filter((r) => !edit[r]).map((r) => (
-          <p key={r} className="text-sm text-muted-foreground">{LABEL[r]}: {summaryText(data[r] ?? null, data)} (ดูได้อย่างเดียว)</p>
-        ))}
-        <CutoffMonth key={data.cutoffMonth} data={data} onSaved={reload} />
-      </CollapsibleContent>
-    </Collapsible>
+        <Button size="sm" variant="outline" className="pointer-coarse:min-h-9" onClick={() => { writeLocal(PAGE_KEY, "training"); window.scrollTo({ top: 0 }); }}>
+          ไปหน้าเทรนนิ่ง
+        </Button>
+      </div>
+    </>
   );
 }
 

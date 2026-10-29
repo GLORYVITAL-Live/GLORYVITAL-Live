@@ -481,7 +481,7 @@ export async function notifyVerifyFail(email: string, who: string, fails: number
   await notify((data ?? []).map((r) => r.email as string), {
     kind: "tawi", page: "owner", dedupe: `tawi-verify:${email.trim().toLowerCase()}:${day}`,
     title: `${who} กรอกชื่อไม่ตรงกับใบ 50 ทวิที่จับคู่ไว้ — ตรวจการจับคู่`,
-    body: `กรอกไม่ตรง ${fails} ครั้งวันนี้ · ดูที่หน้าพนักงาน > ใบ 50 ทวิ (แท็บ "จับคู่แล้ว")`,
+    body: `กรอกไม่ตรง ${fails} ครั้งวันนี้ · ดูที่หน้าเจ้าของ > สรุปรายเดือน > ใบ 50 ทวิ (แท็บ "จับคู่แล้ว")`,
   });
 }
 

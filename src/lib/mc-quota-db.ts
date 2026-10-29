@@ -142,7 +142,7 @@ export async function canEditQuota(me: Me) {
   return !error && data?.can_manage_quota === true;
 }
 
-/** หน้าเจ้าของ > ผลงาน Mc > สิทธิ์จอง */
+/** หน้าเจ้าของ > ตาราง slot > รายวัน > สิทธิ์จอง Mc ต่อเดือน */
 export async function quotaReport(month: string, settings: Settings, canEdit: boolean): Promise<QuotaReport> {
   const db = createAdminClient();
   const [rows, staff, used] = await Promise.all([monthRows(db, month), mcStaff(db), monthUsage(db, month)]);

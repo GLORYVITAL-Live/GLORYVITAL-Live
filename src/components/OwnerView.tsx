@@ -10,6 +10,8 @@ import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
 import { DatePicker } from "@/components/date-picker";
+import { ReceiptPanel } from "@/components/ReceiptPanel";
+import { TawiPanel } from "@/components/TawiPanel";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, MonthNav, Notice, Stats, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -432,6 +434,8 @@ export function OwnerView({ requester = "" }: { requester?: string }) {
         <ExportMenu label="สรุป" build={() => summaryBook(data)} />
         <ExportMenu label="รายละเอียด" build={() => detailBook(data)} />
       </div>
+      {/* เอกสารบัญชีรายเดือน (Owner ที่ติ๊กสิทธิ์ดูเอกสาร) — แต่ละแผงเลือกเดือนเองข้างใน */}
+      {data.docs?.mc || data.docs?.admin ? <><TawiPanel /><ReceiptPanel /></> : null}
       {groups(data).map(([type, rows]) => (
         <section key={type} className="mt-5">
           <h2 className="mb-2 flex flex-wrap items-baseline gap-2 text-lg font-bold">

@@ -499,6 +499,8 @@ export type OwnerSummary = {
   periodLog?: { side: "mc" | "admin"; closedAt: string; closedBy: string; reopenedAt: string | null; reopenedBy: string | null }[];
   /** คนที่ดูอยู่ปิด / เปิดงวดได้ (Owner ที่ตั้ง can_close_periods) */
   canClose?: boolean;
+  /** ฝั่งที่ดูใบ 50 ทวิ / เอกสารรับเงินได้ (แผงท้ายหน้าสรุปรายเดือน) */
+  docs?: { mc: boolean; admin: boolean };
   /**
    * การโอนค่าจ้างของเดือนนี้ รายคน (key = staffId) — เฉพาะฝั่งที่จัดการได้ (เห็นค่าจ้าง)
    *   paySides = ฝั่งที่บันทึกโอนได้ · paySql = ยังไม่ได้รัน SQL pay_sync (ข้อความ)
