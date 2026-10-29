@@ -5,6 +5,7 @@ import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { BellRingIcon, CalendarXIcon, CopyIcon, IdCardIcon, MailIcon, PlusIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { copyText } from "@/components/CalendarGuide";
 import { PayDocsPanel } from "@/components/PayDocs";
+import { PersonPicker } from "@/components/SlotManager";
 import { CALENDAR_SHARE_TO, calendarShareMessage } from "@/lib/calendar-share";
 import {
   AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, StateBox, api, useConfirm, useToast,
@@ -61,6 +62,8 @@ type Person = {
   live_platform?: LiveTeam;
   /** Mc: ค่าจ้าง Shopee/ชม. (null = เท่ากับ TikTok · ไม่มี = ยังไม่ได้รัน SQL 20261116000000_shopee_rate / ดูได้อย่างเดียว) */
   shopee_rate?: number | null;
+  /** Mc: จ่ายค่าตัวผ่าน Mc คนนี้ (Mc ในเครือ · null = จ่ายให้ตัวเอง · ไม่มี = ยังไม่ได้รัน SQL 20261117000000_pay_to) */
+  pay_to_id?: number | null;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
   payDocs?: "ok" | "drive" | "missing";
   /** Owner: ดูเอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ฝั่ง Mc / ฝั่ง Admin (ส่งมาเฉพาะตอนคนที่เปิดดูมีสิทธิ์ดูเอกสาร · ไม่มีฝั่ง Admin = ยังไม่ได้รัน SQL) */
@@ -392,6 +395,11 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                       {liveTeamLabel(p.live_platform)}
                     </Badge>
                   ) : null}
+                  {p.pay_to_id ? (
+                    <Badge variant="outline" className="text-[11px] text-muted-foreground" title="ค่าตัวรวมอยู่กับคนรับเงิน (สรุปรายเดือน / ไฟล์เบิก / บันทึกโอน)">
+                      จ่ายผ่าน Mc {data.staff.find((x) => x.id === p.pay_to_id)?.name ?? "–"}
+                    </Badge>
+                  ) : null}
                   {p.role === "owner" ? permBadges(p).map((b) => (
                     <Badge key={b} className={cn("text-[11px]", b.startsWith("ดู") ? "bg-muted text-muted-foreground" : "bg-p2/15 text-p2")}>{b}</Badge>
                   )) : null}
@@ -646,6 +654,12 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   // ค่าจ้าง Shopee (Mc ทีม Shopee / TikTok + Shopee) ว่าง = เท่ากับ TikTok
   const [shopeeRate, setShopeeRate] = useState(person?.shopee_rate ? String(person.shopee_rate) : "");
+  // จ่ายค่าตัวผ่าน Mc อีกคน (Mc ในเครือ) — แก้ได้เฉพาะ Mc ที่มีอยู่แล้ว + รัน SQL แล้ว
+  const [payTo, setPayTo] = useState<number | null>(person?.pay_to_id ?? null);
+  const payToReady = role === "mc" && !!person && person.pay_to_id !== undefined;
+  // คนรับเงินได้: Mc คนอื่นที่รับเงินเอง · คนที่มีคนอื่นจ่ายผ่านอยู่ = ตั้งให้จ่ายผ่านคนอื่นไม่ได้ (ไม่ซ้อนหลายชั้น)
+  const payees = others.filter((o) => o.role === "mc" && !o.pay_to_id);
+  const isPayee = !!person && others.some((o) => o.pay_to_id === person.id);
   const [extra, setExtra] = useState(person?.is_extra_admin ?? false);
   const [salaried, setSalaried] = useState(person?.is_salaried ?? false);
   // Admin ประจำ: เข้าหน้าอุปกรณ์โปรดักชั่น (ส่งเมื่อรัน SQL แล้ว = มีค่ามากับรายชื่อ หรือเพิ่มคนใหม่)
@@ -741,6 +755,7 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
         ...(isCrew(role) && (teamReady || liveTeam !== "tiktok") ? { live_platform: liveTeam } : {}),
         // ค่าจ้าง Shopee: ส่งเมื่อเปลี่ยน (ยังไม่รัน SQL = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(shopeeDirty ? { shopee_rate: shopeeRate } : {}),
+        ...(payToReady && payTo !== (person?.pay_to_id ?? null) ? { pay_to_id: payTo } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { ...manage, ...view } : {}),
         // Plan Slot Live: ให้คนอื่นได้เฉพาะคนที่มีสิทธิ์นี้
@@ -928,6 +943,28 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
               >
                 {(id) => <Input id={id} inputMode="decimal" value={shopeeRate} onChange={(e) => setShopeeRate(e.target.value)} placeholder="ว่าง = เท่ากับค่าจ้างด้านบน" />}
               </Field>
+            ) : null}
+            {payToReady ? (
+              <div>
+                <span className="mb-1.5 block font-semibold">จ่ายค่าตัวผ่าน (Mc ในเครือ)</span>
+                {isPayee ? (
+                  <p className="text-xs text-muted-foreground">
+                    มี Mc จ่ายค่าตัวผ่านคนนี้อยู่ ({others.filter((o) => o.pay_to_id === person!.id).map((o) => `Mc ${o.name}`).join(", ")}) — คนนี้รับเงินเองเท่านั้น
+                  </p>
+                ) : (
+                  <>
+                    <PersonPicker
+                      label="จ่ายค่าตัวผ่าน" value={payTo} disabled={saving} emptyText="— รับเงินเอง —"
+                      options={payees.map((o) => ({ id: o.id, text: `Mc ${o.name}` }))}
+                      onChange={setPayTo}
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      คิว / ชั่วโมง / ค่าตัวต่อชั่วโมงยังเป็นของคนนี้ แต่ยอดเงินรวมอยู่กับคนที่เลือก: สรุปรายเดือนแสดงซ้อนใต้คนนั้น · ไฟล์เบิกเป็นบรรทัดเดียวของคนนั้น
+                      · บันทึกโอนที่คนนั้น · &quot;ตารางของฉัน&quot; ของคนนั้นเห็นยอดนี้ด้วย
+                    </span>
+                  </>
+                )}
+              </div>
             ) : null}
             <div>
               <span className="mb-1.5 block font-semibold">Commit แบบขั้น (ไม่บังคับ)</span>

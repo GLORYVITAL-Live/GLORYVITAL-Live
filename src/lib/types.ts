@@ -404,6 +404,8 @@ export type MyResponse = {
   profile: { name: string; email: string; phone: string; rate: number; commitTiers: CommitTier[]; shopeeRate?: number | null };
   /** การโอนค่าจ้างของเดือนนี้ (ยังไม่มี / ยังไม่ได้รัน SQL = ว่าง) */
   payments?: { amount: number; paidOn: string }[];
+  /** Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้: ยอดของเดือนนี้ (รวมอยู่ในยอดที่ต้องได้ / การโอน) */
+  subs?: { name: string; slots: number; hours: number; pay: number }[];
 };
 
 export type OwnerDetail = {
@@ -490,6 +492,8 @@ export type OwnerPerson = {
   commit: { tiers: CommitTier[]; baseRate: number; tier: CommitTier | null; next: CommitTier | null; hours?: number } | null;
   /** id ในตาราง staff (ใช้บันทึกการโอน) */
   staffId?: number;
+  /** จ่ายค่าตัวผ่าน Mc คนนี้ (ชื่อ "Mc แนน") — ยอดเงินรวมอยู่กับคนนั้น (แสดงซ้อน / ไฟล์เบิก / บันทึกโอนที่คนนั้น) */
+  payTo?: string;
 };
 
 export type CommitTier = { hours: number; rate: number };

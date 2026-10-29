@@ -86,9 +86,13 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const bonusMin = active.reduce((a, i) => a + bonusPaidMinutes(i.bonusMinutes), 0);
   const bonusMoney = Math.round(active.reduce((a, i) => a + (bonusPaidMinutes(i.bonusMinutes) / 60) * rateOf(i), 0));
   const commitHours = commit.commitHours;
-  // โอนแล้ว (Owner บันทึกที่หน้าสรุป) · ค้างจ่าย = ยอดรวมทั้งเดือน − ที่โอนแล้ว
+  // Mc ในเครือที่จ่ายค่าตัวผ่านคุณ: ยอดรวมอยู่ในยอดที่ต้องได้ (ทีมงานโอนรวมมาที่คุณ)
+  const subs = data?.month === month ? data.subs ?? [] : [];
+  const subTotal = subs.reduce((a, s) => a + s.pay, 0);
+  // โอนแล้ว (Owner บันทึกที่หน้าสรุป) · ค้างจ่าย = ยอดรวมทั้งเดือน (+ Mc ในเครือ) − ที่โอนแล้ว
   const payments = data?.month === month ? data.payments ?? [] : [];
   const paid = payments.reduce((a, p) => a + p.amount, 0);
+  const due = total + subTotal;
 
   const minH = data?.cancelMinHours ?? 6;
   const cancelOf = (i: MyItem) => {
@@ -132,22 +136,31 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
           ? [[String(active.length), "slot"], [Number.isInteger(hours) ? String(hours) : hours.toFixed(1), "ชั่วโมง"], [String(days), "วันที่มีคิว"]]
           : [["–", "slot"], ["–", "ชั่วโมง"], ["–", "วันที่มีคิว"]]} />
         {items && profile ? (
-          rate || hasShopeeRate ? (
+          rate || hasShopeeRate || subTotal ? (
             <div className="rounded-xl bg-secondary px-3 py-2.5">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm text-muted-foreground">ยอดรวมทั้งเดือน</span>
-                <span className="text-xl font-bold text-primary tabular-nums">{money(total)} บาท</span>
+                <span className="text-xl font-bold text-primary tabular-nums">{money(due)} บาท</span>
               </div>
               <div className="mt-0.5 flex justify-between gap-2 text-xs text-muted-foreground tabular-nums">
                 <span>ไลฟ์แล้ว {money(earned)} บาท</span>
                 <span>รอไลฟ์ {money(total - earned)} บาท</span>
               </div>
+              {subs.length ? (
+                <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                  {subs.map((s) => (
+                    <span key={s.name} className="block">
+                      รวมค่าตัว {s.name} (จ่ายผ่านคุณ) {s.slots} คิว · {hoursText(s.hours)} ชม. · <b className="text-foreground">{money(s.pay)} บาท</b>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {paid > 0 ? (
                 <div className="mt-1.5 border-t pt-1.5 text-xs tabular-nums">
                   <div className="flex justify-between gap-2 font-semibold">
                     <span className="text-success">จ่ายแล้ว {money(paid)} บาท</span>
-                    <span className={total - paid > 0 ? "text-foreground" : "text-muted-foreground"}>
-                      {total - paid > 0 ? `ค้างจ่าย ${money(total - paid)} บาท` : total - paid < 0 ? `รับเกิน ${money(paid - total)} บาท` : "ครบแล้ว ✓"}
+                    <span className={due - paid > 0 ? "text-foreground" : "text-muted-foreground"}>
+                      {due - paid > 0 ? `ค้างจ่าย ${money(due - paid)} บาท` : due - paid < 0 ? `รับเกิน ${money(paid - due)} บาท` : "ครบแล้ว ✓"}
                     </span>
                   </div>
                   <span className="mt-0.5 block text-[11px] text-muted-foreground">

@@ -151,7 +151,7 @@ function summaryBook(data: OwnerSummary) {
     const need = items.filter((d) => !d.noProof); // ไม่นับคิวของ Mc ประจำ (ไม่ต้องแนบ)
     const gmv = gmvOf(items);
     rows.push([
-      type, r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.bonusMinutes || "",
+      type, r.payTo ? `${r.name} (จ่ายผ่าน ${r.payTo})` : r.name, r.slots, r.hours, r.days, r.cancelled, r.lateSlots, r.bonusMinutes || "",
       need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "ไม่ต้องแนบ",
       gmv.count ? round2(gmv.total) : "", gmvPerHour(items),
       round2(items.filter((d) => d.campaign).reduce((a, d) => a + d.hours, 0)) || "",
@@ -259,9 +259,22 @@ const monthSpan = (month: string) => {
  *   ข้าม = ไม่มีค่าจ้างรายชั่วโมงสำหรับคิวเหล่านี้ (Mc / Admin ประจำ = เงินเดือน · ยังไม่ได้ตั้งค่าจ้าง)
  */
 function claimPeople(data: OwnerSummary, type: Type, keep: (d: OwnerDetail) => boolean) {
-  const all = (type === "Mc" ? data.mc : data.admin)
-    .map((p) => ({ p, items: slotsOf(data, type, p.name).filter(keep) }))
-    .filter((x) => x.items.length);
+  const list = type === "Mc" ? data.mc : data.admin;
+  const byName = new Map(list.map((p) => [p.name, p]));
+  // Mc ในเครือ (จ่ายค่าตัวผ่านคนอื่น) รวมอยู่ในบล็อกของคนรับเงิน · คิวของคนรับเงินก่อน แล้วตามด้วยคิวของ Mc ในเครือ
+  const blocks = new Map<string, { p: OwnerPerson; items: OwnerDetail[] }>();
+  for (const p of list) {
+    const items = slotsOf(data, type, p.name).filter(keep);
+    if (!items.length) continue;
+    const head = (p.payTo && byName.get(p.payTo)) || p;
+    const b = blocks.get(head.name) ?? { p: head, items: [] };
+    b.items.push(...items);
+    blocks.set(head.name, b);
+  }
+  for (const b of blocks.values()) {
+    b.items.sort((x, y) => Number(x.name !== b.p.name) - Number(y.name !== b.p.name) || x.name.localeCompare(y.name, "th") || x.startMs - y.startMs);
+  }
+  const all = [...blocks.values()];
   const people = all.filter((x) => x.items.some((d) => itemRate(data, type, d) > 0)).sort((a, b) => a.p.name.localeCompare(b.p.name, "th"));
   const skipped = all.filter((x) => !people.includes(x)).map((x) => x.p);
   return { people, salaried: skipped.filter((p) => p.salaried), noRate: skipped.filter((p) => !p.salaried) };
@@ -292,10 +305,12 @@ function claimRows(out: SheetParts, data: OwnerSummary, type: Type, keep: (d: Ow
       total += money_;
       const lastRow = i === items.length - 1;
       cellStyles[`${rows.length}:3`] = channelStyle(d.platform);
+      // Name = คนที่ไลฟ์คิวนั้น (Mc ในเครือที่จ่ายผ่านคนนี้ใช้ชื่อตัวเอง + เรทของตัวเอง)
       rows.push([
-        "", i === 0 ? p.name : "", p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end),
+        "", i === 0 ? p.name : "", d.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end),
         round2(d.hours), { v: rate, f: "int" }, { v: money_, f: "int" },
-        lastRow ? { v: total, f: "money" } : null, lastRow && gmv.count ? { v: round2(gmv.total), f: "money" } : null, claimRemark(d),
+        lastRow ? { v: total, f: "money" } : null, lastRow && gmv.count ? { v: round2(gmv.total), f: "money" } : null,
+        [d.name !== p.name ? `จ่ายผ่าน ${p.name}` : "", claimRemark(d)].filter(Boolean).join(" · "),
       ]);
     });
     grand += total;
@@ -432,12 +447,16 @@ function accountBook(data: OwnerSummary): ExportBook {
       const total = payOfItems(data, g.type, items);
       const tax = whtOf(total);
       net += total; wht += tax; paid += total - tax;
-      // ค่าตัว/ชม. ของกลุ่มนี้ (คิวกลุ่มเดียวกันเรทเดียวกัน · Commit ถึงเทียร์ = เรทของเทียร์)
-      const rates = [...new Set(items.map((d) => itemRate(data, g.type, d)).filter(Boolean))];
+      // ค่าตัว/ชม. ของกลุ่มนี้ (คิวกลุ่มเดียวกันเรทเดียวกัน · Commit ถึงเทียร์ = เรทของเทียร์) · Mc ในเครือ = "ชื่อ เรท"
+      const rateText = (list: OwnerDetail[]) => [...new Set(list.map((d) => itemRate(data, g.type, d)).filter(Boolean))].join(" / ");
+      const rates = [
+        rateText(items.filter((d) => d.name === p.name)),
+        ...[...new Set(items.filter((d) => d.name !== p.name).map((d) => d.name))].map((n) => `${n} ${rateText(items.filter((d) => d.name === n))}`),
+      ].filter(Boolean);
       sum.rowStyles[sum.rows.length] = BORDER;
       sum.rows.push([
         i + 1, `${g.item}${p.name}`, { v: total, f: "money" }, { v: total - tax, f: "money" }, tax ? { v: tax, f: "money" } : "", 0,
-        "", "", "", p.name, "", rates.join(" / "), "",
+        "", "", "", p.name, "", rates.join(" · "), "",
       ]);
     });
     allNet += net;
@@ -758,7 +777,13 @@ const paymentsOfPerson = (data: OwnerSummary, r: OwnerPerson) => (r.staffId ? da
 const paidOf = (data: OwnerSummary, r: OwnerPerson) => paymentsOfPerson(data, r).reduce((a, p) => a + p.amount, 0);
 /** บันทึกโอนฝั่งนี้ได้ (จัดการฝั่งนี้ได้ + รัน SQL แล้ว) */
 const canPayOf = (data: OwnerSummary, type: Type) => !!data.paySides?.[type === "Mc" ? "mc" : "admin"] && !data.paySql;
-const personPay = (data: OwnerSummary, type: Type, r: OwnerPerson) => payOfItems(data, type, slotsOf(data, type, r.name));
+/** Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้ (staff.pay_to_id) */
+const subsOf = (data: OwnerSummary, type: Type, name: string) => (type === "Mc" ? data.mc.filter((p) => p.payTo === name) : []);
+/** ยอดเงินจากคิวของคนนี้เอง */
+const ownPay = (data: OwnerSummary, type: Type, r: OwnerPerson) => payOfItems(data, type, slotsOf(data, type, r.name));
+/** ยอดที่ต้องโอนให้คนนี้ = ของตัวเอง + Mc ในเครือที่จ่ายผ่าน (คนที่จ่ายผ่านคนอื่น = ใช้ ownPay แสดงอย่างเดียว) */
+const personPay = (data: OwnerSummary, type: Type, r: OwnerPerson) =>
+  ownPay(data, type, r) + subsOf(data, type, r.name).reduce((a, s) => a + ownPay(data, type, s), 0);
 
 /** สถานะโอนสั้นๆ ใต้ยอดเงิน: ยังไม่บันทึกโอน = ไม่แสดง */
 function PaidStatus({ total, paid, className }: { total: number; paid: number; className?: string }) {
@@ -779,7 +804,8 @@ function PayBar({ data, type, rows, onChanged }: { data: OwnerSummary; type: Typ
     return <p className="mb-2 text-xs text-muted-foreground">บันทึกการโอนค่าจ้าง: {data.paySql}</p>;
   }
   if (!canPayOf(data, type)) return null;
-  const payable = rows.filter((r) => !r.salaried && r.staffId && hasRateOf(data, type, r.name))
+  // คนที่จ่ายผ่านคนอื่น = โอนที่คนรับเงิน (ยอดรวมอยู่ที่นั่นแล้ว)
+  const payable = rows.filter((r) => r.staffId && !r.payTo)
     .map((r) => ({ r, total: personPay(data, type, r), paid: paidOf(data, r) }))
     .filter((x) => x.total > 0);
   const ended = data.month < monthKey();
@@ -974,11 +1000,14 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
         const g = gmvOf(items);
         return g.count ? g.total : null;
       }
-      case "pay": return hasRateOf(data, type, r.name) ? payOfItems(data, type, items) : null;
+      case "pay": return hasRateOf(data, type, r.name) || subsOf(data, type, r.name).length ? personPay(data, type, r) : null;
       default: return null;
     }
   };
-  const rows = sortRows(base, sort, valueOf);
+  // Mc ในเครือ (จ่ายค่าตัวผ่านคนอื่น) อยู่ต่อท้ายคนรับเงินเสมอ · คนรับเงินไม่อยู่ในตาราง (เช่น ดูเฉพาะแพลตฟอร์ม) = แถวปกติ
+  const sorted = sortRows(base, sort, valueOf);
+  const nested = (r: OwnerPerson) => !!r.payTo && sorted.some((x) => x.name === r.payTo);
+  const rows = sorted.filter((r) => !nested(r)).flatMap((r) => [r, ...sorted.filter((x) => x.payTo === r.name)]);
   const toggle = (name: string) => {
     const next = new Set(open);
     if (next.has(name)) next.delete(name); else next.add(name);
@@ -987,8 +1016,9 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
   const ts = rows.reduce((a, r) => a + r.slots, 0);
   const th = rows.reduce((a, r) => a + r.hours, 0);
   // ยอดเงิน = ปัดทีละคิวแล้วรวม (ตรงกับไฟล์เบิก / ใบสรุปรายคน) · คิว Shopee คิดเรท Shopee ถ้าตั้งแยก
-  const payOf = (r: OwnerPerson) => personPay(data, type, r);
-  const tm = rows.reduce((a, r) => a + payOf(r), 0);
+  //   คนรับเงิน = ของตัวเอง + Mc ในเครือ · Mc ในเครือ = ของตัวเอง (รวมอยู่ในยอดของคนรับเงินแล้ว)
+  const payOf = (r: OwnerPerson) => (nested(r) ? ownPay(data, type, r) : personPay(data, type, r));
+  const tm = rows.reduce((a, r) => a + ownPay(data, type, r), 0);
   const tl = rows.reduce((a, r) => a + r.lateSlots, 0);
   const tb = rows.reduce((a, r) => a + r.bonusMinutes, 0);
   const num_ = "text-right tabular-nums";
@@ -1003,7 +1033,12 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
         </TableHeader>
         <TableBody>
           {rows.map((r) => {
-            const rate = hasRateOf(data, type, r.name);
+            // Mc ในเครือ (ซ้อนใต้คนรับเงิน) / คนรับเงินที่มี Mc ในเครือจ่ายผ่าน
+            const sub = nested(r);
+            const subs = sub ? [] : rows.filter((x) => x.payTo === r.name);
+            const rate = hasRateOf(data, type, r.name) || subs.length > 0;
+            // ยอดเงิน / สถานะโอน: คนที่รับเงินเอง (ไม่ใช่ Mc ประจำ หรือมี Mc ในเครือที่ได้ค่าตัวรายชั่วโมง)
+            const paysSelf = !sub && (!r.salaried || subs.length > 0) && rate;
             const isOpen = open.has(r.name);
             const daily = isOpen ? dailyOf(data, type, r.name) : [];
             const items = slotsOf(data, type, r.name);
@@ -1021,13 +1056,18 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.name); } }}
                   className="cursor-pointer data-[state=selected]:bg-secondary"
                 >
-                  <TableCell className={cn("px-3 max-sm:max-w-44 max-sm:whitespace-normal", STICKY_CELL)}>
+                  <TableCell className={cn("px-3 max-sm:max-w-44 max-sm:whitespace-normal", STICKY_CELL, sub && "pl-8")}>
                     <ChevronRightIcon className={cn("mr-0.5 inline size-4 text-muted-foreground transition-transform", isOpen && "rotate-90 text-primary")} />
                     {r.name}
+                    {r.payTo ? (
+                      <Badge variant="outline" className="ml-1.5 text-[11px] text-muted-foreground" title="Mc ในเครือ: ค่าตัวรวมอยู่ในยอดของคนรับเงิน (ไฟล์เบิก / บันทึกโอนที่คนนั้น)">
+                        จ่ายผ่าน {r.payTo}
+                      </Badge>
+                    ) : null}
                     {/* มือถือ: ยอดเงิน + ชั่วโมงอยู่ใต้ชื่อ (คอลัมน์ชื่อค้างไว้) ไม่ต้องเลื่อนขวาไปคอลัมน์สุดท้าย */}
                     <span className="mt-0.5 block text-xs font-semibold text-primary tabular-nums sm:hidden">
-                      {num(r.hours)} ชม.{showPay ? ` · ${r.salaried ? "เงินเดือน" : rate ? `${money(payOf(r))} บาท` : "ไม่มีค่าจ้าง"}` : ""}
-                      {showPay && !r.salaried && rate ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="ml-1" /> : null}
+                      {num(r.hours)} ชม.{showPay ? ` · ${r.salaried && !subs.length ? "เงินเดือน" : rate ? `${money(payOf(r))} บาท${sub ? " (รวมในยอดคนรับเงิน)" : ""}` : "ไม่มีค่าจ้าง"}` : ""}
+                      {showPay && paysSelf ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="ml-1" /> : null}
                     </span>
                     {/* ไลฟ์ Shopee (แท็บ MC Shopee) รวมอยู่ในชั่วโมง / ค่าจ้างแล้ว แสดงแยกให้เห็นว่าเป็น Shopee กี่ ชม. (+ เรท Shopee ถ้าตั้งแยก) */}
                     {items.some((d) => d.shopee) && data.details.some((d) => d.type === type && !d.cancelled && !d.shopee && d.name === r.name) ? (
@@ -1085,9 +1125,15 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                     {gmv.count ? fmtGmv(gmv.total) : "–"}
                   </TableCell>
                   {showPay ? (
-                    <TableCell className={cn(num_, "px-3", r.salaried && "text-xs text-muted-foreground")}>
-                      {r.salaried ? "เงินเดือน" : rate ? money(payOf(r)) : "–"}
-                      {!r.salaried && rate ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="block" /> : null}
+                    <TableCell className={cn(num_, "px-3", ((r.salaried && !subs.length) || sub) && "text-xs text-muted-foreground")}>
+                      {r.salaried && !subs.length ? "เงินเดือน" : rate ? money(payOf(r)) : "–"}
+                      {sub && rate ? <span className="block text-[11px]">รวมใน {r.payTo}</span> : null}
+                      {subs.length && rate ? (
+                        <span className="block text-[11px] font-normal text-muted-foreground">
+                          รวม {subs.map((s) => `${s.name} ${money(ownPay(data, type, s))}`).join(" · ")}
+                        </span>
+                      ) : null}
+                      {paysSelf ? <PaidStatus total={payOf(r)} paid={paidOf(data, r)} className="block" /> : null}
                     </TableCell>
                   ) : null}
                 </TableRow>
@@ -1150,7 +1196,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                           ))}
                         </ul>
                       ) : null}
-                      {showPay && rate && !r.salaried && r.staffId ? (
+                      {showPay && paysSelf && r.staffId ? (
                         <PaymentsPanel data={data} type={type} person={r} total={payOf(r)} onChanged={onChanged} />
                       ) : null}
                       {cancels.length ? (

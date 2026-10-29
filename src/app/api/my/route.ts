@@ -3,14 +3,43 @@ import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, mySlots } from "@/lib/data";
 import { framesForSlots } from "@/lib/live-frames";
 import { isLiveRoom, roomForPlatform } from "@/lib/loans";
-import { cleanTiers } from "@/lib/pay";
+import { cleanTiers, platformRates, slotPay } from "@/lib/pay";
 import { paymentsOf } from "@/lib/pay-months";
 import { lockedRates } from "@/lib/pay-rates";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { BriefView, FrameFile } from "@/lib/types";
 
+/**
+ * Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้ (staff.pay_to_id — SQL 20261117000000_pay_to): ยอดของเดือนนี้ (สูตรเดียวกับสรุปของเจ้าของ)
+ *   ยังไม่ได้รัน SQL / ไม่มี = []
+ */
+async function subsPay(payeeId: number, key: string, first: string, last: string, defaultRate: number) {
+  const db = createAdminClient();
+  const { data, error } = await db.from("staff").select("id, name, hourly_rate, commit_tiers, is_salaried").eq("pay_to_id", payeeId);
+  if (error || !data?.length) return [];
+  const [locked, shopee] = await Promise.all([
+    lockedRates(key, data.map((s) => Number(s.id))),
+    db.from("staff").select("id, shopee_rate").in("id", data.map((s) => s.id)),
+  ]);
+  const shopeeOf = new Map((shopee.error ? [] : shopee.data ?? []).map((s) => [Number(s.id), Number(s.shopee_rate) || null]));
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return Promise.all(data.map(async (s) => {
+    const items = (await mySlots("mc", Number(s.id), first, last)).filter((i) => !i.cancelled);
+    const hours = items.reduce((a, i) => a + i.hours, 0), shopeeHours = items.filter((i) => i.shopee).reduce((a, i) => a + i.hours, 0);
+    const lock = locked.get(Number(s.id));
+    const salaried = lock ? lock.salaried : !!s.is_salaried;
+    const m = platformRates(
+      salaried ? 0 : lock ? lock.rate : Number(s.hourly_rate) || defaultRate, salaried ? [] : lock ? lock.tiers : cleanTiers(s.commit_tiers),
+      salaried ? null : lock ? lock.shopeeRate : shopeeOf.get(Number(s.id)) ?? null, hours - shopeeHours, shopeeHours,
+    );
+    const pay = items.reduce((a, i) => a + slotPay(i.hours, i.lateMinutes, i.bonusMinutes, i.shopee ? m.shopeeRate : m.rate), 0);
+    return { name: `Mc ${s.name}`, slots: items.length, hours: r2(hours), pay };
+  }));
+}
+
 // "ตารางของฉัน" รายเดือน (?role=mc|admin&month=YYYY-MM) — แทน action "mySlots" / "adminMySlots"
 // + โปรไฟล์ของตัวเอง และค่าจ้างต่อชั่วโมง (ของคนนี้ ไม่ตั้ง = ค่าเริ่มต้นใน settings เหมือนหน้าสรุปของเจ้าของ)
+// + Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้ (subs) — ยอดรวมอยู่ในยอดที่ต้องได้ / การโอน
 export async function GET(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
@@ -42,6 +71,7 @@ export async function GET(request: Request) {
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
   const lock = locked.get(person.id);
   const salaried = lock ? lock.salaried : !!staff.data.is_salaried;
+  const subs = role === "mc" ? await subsPay(person.id, key, first, last, defaultRate).catch(() => []) : [];
 
   return ok({
     month: key,
@@ -63,5 +93,6 @@ export async function GET(request: Request) {
       shopeeRate: salaried ? null : lock ? lock.shopeeRate : Number(shopeeRow?.data?.shopee_rate) || null,
     },
     payments: (paid.map.get(person.id) ?? []).map((p) => ({ amount: p.amount, paidOn: p.paidOn })),
+    ...(subs.length ? { subs } : {}),
   });
 }

@@ -420,7 +420,18 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   // ค่าจ้าง Shopee รายคน (SQL 20261116000000_shopee_rate · ยังไม่ได้รัน = ไม่มี ไลฟ์ Shopee ใช้เรทเดียวกับ TikTok)
   const shopeeRates = db.from("staff").select("id, shopee_rate").eq("role", "mc").not("shopee_rate", "is", null)
     .then(({ data, error }) => new Map((error ? [] : data ?? []).map((s) => [Number(s.id), Number(s.shopee_rate) || null])));
-  const [settings, locked, shopeeRateOf] = await Promise.all([getSettings(db), lockedRates(key), shopeeRates]);
+  // จ่ายค่าตัวผ่าน Mc อีกคน (SQL 20261117000000_pay_to · ยังไม่ได้รัน = ทุกคนรับเงินเอง) Map<staff_id, คนรับเงิน>
+  const payTos = db.from("staff").select("id, pay_to_id").eq("role", "mc").not("pay_to_id", "is", null)
+    .then(async ({ data, error }) => {
+      const rows = error ? [] : data ?? [];
+      const ids = [...new Set(rows.map((r) => Number(r.pay_to_id)))];
+      const { data: payees } = ids.length
+        ? await db.from("staff").select("id, name, is_salaried").in("id", ids)
+        : { data: [] as { id: number; name: string; is_salaried: boolean | null }[] };
+      const byId = new Map((payees ?? []).map((p) => [Number(p.id), p]));
+      return new Map(rows.flatMap((r) => (byId.has(Number(r.pay_to_id)) ? [[Number(r.id), byId.get(Number(r.pay_to_id))!] as const] : [])));
+    });
+  const [settings, locked, shopeeRateOf, payToOf] = await Promise.all([getSettings(db), lockedRates(key), shopeeRates, payTos]);
   type Person = { id: number; name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
   type Row = SlotRow & { person: Person | null; campaign?: string | null; remark?: string | null; sheet_tab?: string | null };
 
@@ -556,13 +567,24 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
           days: p.days.size, cancelled: p.cancelled, salaried,
           commit: m.hasCommit ? { tiers: m.tiers, baseRate: base, tier: m.tier, next: m.next, ...(m.split ? { hours: r2(m.commitHours) } : {}) } : null,
           ...(info ? { staffId: Number(info.id) } : {}),
-        };
+          // จ่ายค่าตัวผ่าน Mc อีกคน (Mc ในเครือ): ยอดเงินรวมอยู่กับคนนั้น
+          ...(type === "Mc" && info && payToOf.has(Number(info.id)) ? { payTo: `Mc ${payToOf.get(Number(info.id))!.name}` } : {}),
+        } as OwnerPerson;
       })
       .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name, "th"));
   };
 
+  // คนรับเงินแทนที่เดือนนี้ไม่มีคิวของตัวเอง: ใส่แถวว่างไว้ (ไว้รวมยอด + บันทึกโอน)
+  const mc = summarize("Mc");
+  for (const payee of new Map([...payToOf.values()].map((p) => [Number(p.id), p])).values()) {
+    const name = `Mc ${payee.name}`;
+    if (mc.some((p) => p.payTo === name) && !mc.some((p) => p.name === name)) {
+      mc.push({ name, slots: 0, hours: 0, paidHours: 0, lateSlots: 0, bonusMinutes: 0, days: 0, cancelled: 0, salaried: !!payee.is_salaried, commit: null, staffId: Number(payee.id) });
+    }
+  }
+
   return {
-    ok: true, month: key, rates, mc: summarize("Mc"), admin: summarize("Admin"),
+    ok: true, month: key, rates, mc, admin: summarize("Admin"),
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     details: details.map(({ key, ...d }) => d),
   };
