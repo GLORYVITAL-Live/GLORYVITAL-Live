@@ -282,7 +282,7 @@ function ChipRow({ label, value, onChange, options, total, dot }: {
         key={key} type="button" aria-pressed={on} onClick={() => onChange(on && key !== ALL ? ALL : key)}
         className={cn(
           "flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors pointer-coarse:min-h-9 pointer-coarse:px-3",
-          on ? "border-primary bg-primary text-primary-foreground" : cn("bg-background hover:border-primary/50", n === 0 && "opacity-50"),
+          on ? "border-tint-border bg-tint text-tint-foreground" : cn("bg-background hover:border-primary/50", n === 0 && "opacity-50"),
         )}
       >
         {!on && dot?.[key] ? <span className={cn("size-2 rounded-full", dot[key])} /> : null}

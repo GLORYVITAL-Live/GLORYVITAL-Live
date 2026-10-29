@@ -343,7 +343,8 @@ function Shell({ me }: { me: Me | null }) {
                   className={cn(
                     // มือถือ: ช่องไฟแคบลง (Mc + Admin + หลักฐานไลฟ์ + เทรนนิ่ง พอดีจอ 375px ไม่ต้องเลื่อน)
                     "flex cursor-pointer items-center gap-1 rounded-full px-2 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors sm:gap-1.5 sm:px-3 [&_svg]:size-4",
-                    on ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                    // หน้าที่เปิดอยู่: พื้นชมพูอ่อน + ตัวหนังสือชมพูเข้ม (ชมพูเต็มเก็บไว้ให้ปุ่มหลัก)
+                    on ? "bg-tint text-tint-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                   )}
                 >
                   <Icon />{navLabel(p)}

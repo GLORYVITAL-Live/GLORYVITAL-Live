@@ -1454,7 +1454,7 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
               {platforms.length > 1 ? (
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {platforms.slice(0, 6).map((p) => (
-                    <Button key={p} size="xs" variant={p === platform ? "default" : "outline"} onClick={() => setPlatform(p)}>{platformLabel(p)}</Button>
+                    <Button key={p} size="xs" variant={p === platform ? "selected" : "outline"} onClick={() => setPlatform(p)}>{platformLabel(p)}</Button>
                   ))}
                 </div>
               ) : null}
@@ -1503,7 +1503,7 @@ function PatternPanel({ month, platforms, campaigns, onAdd, onCopyPrev }: {
               {campaigns.length ? (
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {campaigns.slice(0, 6).map((c) => (
-                    <Button key={c} size="xs" variant={c === campaign ? "default" : "outline"} onClick={() => setCampaign(c === campaign ? "" : c)}>{c}</Button>
+                    <Button key={c} size="xs" variant={c === campaign ? "selected" : "outline"} onClick={() => setCampaign(c === campaign ? "" : c)}>{c}</Button>
                   ))}
                 </div>
               ) : null}
@@ -1609,11 +1609,11 @@ function RangeSummary({ month, items, tagIndex }: { month: string; items: Item[]
         </div>
         <div className="flex flex-wrap gap-1.5">
           {blocks.map((b) => (
-            <Button key={b.from} size="xs" variant={sameRange(b) ? "default" : "outline"} className="rounded-full" onClick={() => setRange(b)}>
+            <Button key={b.from} size="xs" variant={sameRange(b) ? "selected" : "outline"} className="rounded-full" onClick={() => setRange(b)}>
               {Number(b.from.slice(8))}–{Number(b.to.slice(8))}
             </Button>
           ))}
-          <Button size="xs" variant={sameRange(whole) ? "default" : "outline"} className="rounded-full" onClick={() => setRange(whole)}>ทั้งเดือน</Button>
+          <Button size="xs" variant={sameRange(whole) ? "selected" : "outline"} className="rounded-full" onClick={() => setRange(whole)}>ทั้งเดือน</Button>
         </div>
 
         <div className="grid grid-cols-3 gap-2 text-center">
@@ -1737,7 +1737,7 @@ function CampaignPanel({ month, items, platforms, ranges, choices, onApply, onRe
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-muted-foreground">เลือกชื่อ:</span>
           {choices.slice(0, 8).map((c) => (
-            <Button key={c} size="xs" variant={c === canonicalCampaign(campaign) ? "default" : "outline"} onClick={() => setCampaign(c === canonicalCampaign(campaign) ? "" : c)}>{c}</Button>
+            <Button key={c} size="xs" variant={c === canonicalCampaign(campaign) ? "selected" : "outline"} onClick={() => setCampaign(c === canonicalCampaign(campaign) ? "" : c)}>{c}</Button>
           ))}
         </div>
         {ranges.length ? (

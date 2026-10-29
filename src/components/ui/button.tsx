@@ -20,6 +20,9 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
         danger:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:border-destructive/40 focus-visible:ring-destructive/30 dark:text-black",
+        // ตัวเลือกที่กดอยู่ (ชิปเลือกแพลตฟอร์ม / แคมเปญ / ช่วงวัน): ชมพูอ่อน ไม่ถมชมพูเต็มเหมือนปุ่มหลัก
+        selected:
+          "border-tint-border bg-tint text-tint-foreground hover:bg-tint hover:text-tint-foreground",
       },
       // pointer-coarse = จอสัมผัส (มือถือ / แท็บเล็ต): ปุ่มสูงขึ้นให้กดด้วยนิ้วได้ง่าย จอคอมคงขนาดเดิม
       //   ใช้ "อย่างน้อย" (min-h / min-w) ไม่ใช่ความสูงคงที่ — ปุ่มหลายบรรทัด (h-auto เช่น กล่องเลือกวันในหน้าจอง)

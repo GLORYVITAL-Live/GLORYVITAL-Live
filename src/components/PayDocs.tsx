@@ -415,7 +415,7 @@ function FolderPicker({ folders, name, pick, onPick, busy, onLink, linking }: {
             onClick={() => onPick(f.id)}
             className={cn(
               "flex w-full items-center gap-2 border-b px-2.5 py-1.5 text-left last:border-b-0 pointer-coarse:py-2.5",
-              pick === f.id ? "bg-primary text-primary-foreground" : "hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
+              pick === f.id ? "bg-tint text-tint-foreground" : "hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
             )}
           >
             <FolderOpenIcon className="size-3.5 shrink-0" />

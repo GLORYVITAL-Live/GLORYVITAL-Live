@@ -240,7 +240,7 @@ export function NotificationBell({ onGo }: { onGo: (page: string) => void }) {
                 onClick={() => { if (n.page) onGo(n.page); onOpenChange(false); }}
                 className={cn("flex w-full cursor-pointer gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted", !n.read && "bg-primary/8")}
               >
-                <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground [&_svg]:size-3.5", !n.read && "bg-primary text-primary-foreground", /^\[(ด่วน|ค้าง)\]/.test(n.title) && "bg-destructive text-white")}>
+                <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground [&_svg]:size-3.5", !n.read && "bg-tint text-tint-foreground", /^\[(ด่วน|ค้าง)\]/.test(n.title) && "bg-destructive text-white")}>
                   <Icon />
                 </span>
                 <span className="min-w-0 flex-1">

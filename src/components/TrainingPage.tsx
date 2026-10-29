@@ -145,7 +145,7 @@ export function TrainingPage() {
           {canManage ? <ToggleGroupItem value="views" aria-label="ผู้เข้าชม" className="flex-1 font-semibold sm:flex-none"><UsersIcon /><span className="sm:hidden">คนดู</span><span className="max-sm:hidden">ผู้เข้าชม</span></ToggleGroupItem> : null}
         </ToggleGroup>
         {canManage && tab === "video" ? (
-          <Button variant={manage ? "default" : "outline"} className="rounded-full sm:ml-auto" onClick={() => setManage(!manage)} aria-pressed={manage}>
+          <Button variant={manage ? "selected" : "outline"} className="rounded-full sm:ml-auto" onClick={() => setManage(!manage)} aria-pressed={manage}>
             <Settings2Icon />{manage ? "เสร็จสิ้น" : "จัดการคลิป"}
           </Button>
         ) : null}
@@ -592,7 +592,7 @@ function AddDialog({ open, busy, groups, onClose, onAdd }: {
               {names.map((n) => (
                 <button
                   key={n} type="button" onClick={() => setGroup(n)}
-                  className={cn("cursor-pointer rounded-full border px-2 py-0.5 text-[11px]", group === n ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:border-primary")}
+                  className={cn("cursor-pointer rounded-full border px-2 py-0.5 text-[11px]", group === n ? "border-tint-border bg-tint text-tint-foreground" : "bg-card hover:border-primary")}
                 >
                   {n}
                 </button>
