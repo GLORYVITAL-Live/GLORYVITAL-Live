@@ -884,6 +884,10 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
     // แถวคัดลอกที่ติดรหัสของแถวอื่นมา = slot ใหม่ (สร้างใหม่แล้วเขียนรหัสใหม่ทับ) ไม่ใช่การแก้ slot เดิม
     const owner = duplicateOwners(tab, all, slots);
     const present = sheetContents(tab, all);
+    // ซิงค์ทั้งหมด: slot ทั้งแท็บตามแพลตฟอร์ม + วัน + เวลา (ใช้ผูกแถวที่ยังไม่มีรหัส) + แถวที่ต้องสร้าง slot ใหม่
+    const byKeyAll = new Map<string, DbSlot[]>();
+    if (!rowNumbers) for (const s of slots.values()) byKeyAll.set(keyOf(s), [...(byKeyAll.get(keyOf(s)) ?? []), s]);
+    const toCreate: { r: number; p: SheetSlot }[] = [];
 
     for (const { r, p } of targets) {
       if (p.id && owner.has(p.id) && owner.get(p.id) !== r) {
@@ -912,20 +916,35 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         }
         if (rowNumbers && tab !== "shopee") await mirrorKeyChange(table, p.id, s, row);
       } else {
-        // มี slot นี้อยู่แล้วแต่ยังไม่มีแถวในชีต (เช่น ระบบเพิ่งสร้างเป็นแถวคู่ให้ แต่ยังเขียนลงชีตไม่ทัน)
+        // มี slot นี้อยู่แล้วแต่ยังไม่มีแถวในชีต (เช่น ระบบเพิ่งสร้างเป็นแถวคู่ให้ แต่ยังเขียนลงชีตไม่ทัน / ซิงค์รอบก่อนหมดเวลาก่อนเขียนรหัส)
         // = ผูกแถวนี้กับ slot เดิม ไม่สร้างซ้ำ (เฉพาะ slot ของแท็บนี้)
-        let sameQ = db.from(table).select("id")
-          .eq("platform", p.platform).eq("live_date", p.live_date).eq("start_time", p.start_time).eq("end_time", p.end_time);
-        if (sheetTab) sameQ = sameQ.eq("sheet_tab", sheetTab);
-        const { data: same, error: sameErr } = await sameQ;
-        if (sameErr) throw sameErr;
-        const unplaced = (same ?? []).find((x) => !present.ids.has(x.id));
+        //   ซิงค์ทั้งหมด: หาจาก slot ทั้งแท็บที่โหลดไว้แล้ว (ไม่ยิงฐานข้อมูลทีละแถว — แถวเยอะจะเกินเวลา 60 วินาที)
+        let unplaced: { id: number; slot?: DbSlot } | undefined;
+        if (rowNumbers) {
+          let sameQ = db.from(table).select("id")
+            .eq("platform", p.platform).eq("live_date", p.live_date).eq("start_time", p.start_time).eq("end_time", p.end_time);
+          if (sheetTab) sameQ = sameQ.eq("sheet_tab", sheetTab);
+          const { data: same, error: sameErr } = await sameQ;
+          if (sameErr) throw sameErr;
+          unplaced = (same ?? []).find((x) => !present.ids.has(x.id));
+        } else {
+          const s = (byKeyAll.get(keyOf(p)) ?? []).find((x) => !present.ids.has(x.id));
+          unplaced = s ? { id: s.id, slot: s } : undefined;
+        }
         let id: number;
         if (unplaced) {
           id = unplaced.id;
-          const { error } = await db.from(table).update(toRow(p, FIELDS)).eq("id", id);
-          if (error) throw error;
+          const row = toRow(p, FIELDS);
+          // ค่าตรงกับในชีตอยู่แล้ว = แค่ผูกรหัส ไม่ต้องอัปเดต
+          if (!unplaced.slot || differs(unplaced.slot, row)) {
+            const { error } = await db.from(table).update(row).eq("id", id);
+            if (error) throw error;
+          }
           updated++;
+        } else if (!rowNumbers) {
+          // ซิงค์ทั้งหมด: slot ใหม่สร้างทีละชุดหลังจบรอบ (ด้านล่าง)
+          toCreate.push({ r, p });
+          continue;
         } else {
           const { data, error } = await db.from(table)
             .insert({ ...toRow(p, FIELDS), ...(tab === "shopee" ? { sheet_tab: "shopee" } : {}) }).select("id").single();
@@ -942,6 +961,26 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         idWrites.push({ range: `'${TABS[tab]}'!${colLetter(c.id)}${r}`, values: [[id]] });
         // slot เดิมอาจมีคนอยู่แล้ว (มี event ในปฏิทิน) -> sync ปฏิทินเสมอ
         if (p.person || unplaced) calendar.push({ slot_table: table, slot_id: id });
+      }
+    }
+
+    // ซิงค์ทั้งหมด: สร้าง slot ใหม่ทีละชุด (จับคู่รหัสที่ได้กลับกับแถวด้วยแพลตฟอร์ม + วัน + เวลา)
+    for (let i = 0; i < toCreate.length; i += 200) {
+      const part = toCreate.slice(i, i + 200);
+      const { data, error } = await db.from(table)
+        .insert(part.map(({ p }) => ({ ...toRow(p, FIELDS), ...(tab === "shopee" ? { sheet_tab: "shopee" } : {}) })))
+        .select("id, platform, live_date, start_time, end_time");
+      if (error) throw error;
+      const made = new Map<string, number[]>();
+      for (const x of (data ?? []) as (SlotKey & { id: number })[]) made.set(keyOf(x), [...(made.get(keyOf(x)) ?? []), Number(x.id)]);
+      for (const { r, p } of part) {
+        const id = made.get(keyOf(p))?.shift();
+        if (!id) continue;
+        created++;
+        present.ids.add(id);
+        touched.push(id);
+        idWrites.push({ range: `'${TABS[tab]}'!${colLetter(c.id)}${r}`, values: [[id]] });
+        if (p.person) calendar.push({ slot_table: table, slot_id: id });
       }
     }
 
