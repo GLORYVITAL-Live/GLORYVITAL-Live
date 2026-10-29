@@ -63,7 +63,7 @@ export function EquipmentPage() {
         aria-label="หน้าอุปกรณ์" className="mt-1 mb-3 rounded-full border bg-card p-1"
       >
         {([["list", "รายการอุปกรณ์"], ["loans", "คำขอยืม"]] as const).map(([id, text]) => (
-          <ToggleGroupItem key={id} value={id} className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+          <ToggleGroupItem key={id} value={id} className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">
             {text}
           </ToggleGroupItem>
         ))}

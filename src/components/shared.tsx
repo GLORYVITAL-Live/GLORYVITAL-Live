@@ -357,11 +357,12 @@ export function MonthNav({ label, onPrev, onNext }: { label: string; onPrev: () 
 
 export function Stats({ items }: { items: [string, string][] }) {
   return (
-    <div className="my-3 grid grid-cols-3 gap-2">
+    // กล่องเดียวแบ่งช่องด้วยเส้นบาง: ป้ายเทาด้านบน ตัวเลขสีดำด้านล่าง (สีชมพูเก็บไว้ให้ข้อมูลที่ต้องตัดสินใจ)
+    <div className="my-3 grid grid-cols-3 divide-x rounded-xl border bg-card">
       {items.map(([n, l]) => (
-        <div key={l} className="rounded-xl bg-secondary px-3 py-2.5 text-center">
-          <span className="block text-xl font-bold text-primary tabular-nums">{n}</span>
-          <span className="text-xs text-muted-foreground">{l}</span>
+        <div key={l} className="min-w-0 px-3 py-2.5">
+          <span className="block truncate text-xs text-muted-foreground">{l}</span>
+          <span className="block text-xl font-semibold tabular-nums">{n}</span>
         </div>
       ))}
     </div>

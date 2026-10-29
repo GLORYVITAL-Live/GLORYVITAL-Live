@@ -27,7 +27,7 @@ export function PerformanceView() {
         {TABS.map(([id, text]) => (
           <ToggleGroupItem
             key={id} value={id}
-            className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!"
+            className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!"
           >
             {text}
           </ToggleGroupItem>

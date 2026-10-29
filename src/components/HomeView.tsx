@@ -113,13 +113,14 @@ export function HomeView({ go }: { go: Go }) {
         {stats.filter((s) => s.show).map((s) => (
           <button
             key={s.label} type="button" onClick={() => jump(s.target)}
-            className={cn(
-              "cursor-pointer rounded-xl border px-3 py-2.5 text-left transition-colors hover:border-primary",
-              s.tone === "warn" ? "border-warning-border bg-warning" : s.tone === "ok" ? "bg-card" : "bg-secondary",
-            )}
+            // ทุกช่องพื้นขาว: สีอยู่ที่ตัวเลขเท่านั้น (ส้ม = ต้องจัดการ / เขียว = ครบ / ดำ = ข้อมูล) หน้าจะไม่เป็นกล่องสีเต็มจอ
+            className="cursor-pointer rounded-xl border bg-card px-3 py-2.5 text-left transition-colors hover:border-primary"
           >
-            <span className="block text-xs text-muted-foreground">{s.label}</span>
-            <span className={cn("flex items-center gap-1 text-lg font-bold", s.tone === "warn" ? "text-warning-foreground" : s.tone === "ok" ? "text-success" : "text-primary")}>
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              {s.tone === "warn" ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning-foreground" /> : null}
+              {s.label}
+            </span>
+            <span className={cn("flex items-center gap-1 text-lg font-bold", s.tone === "warn" ? "text-warning-foreground" : s.tone === "ok" ? "text-success" : "text-foreground")}>
               {s.tone === "ok" ? <CheckCircle2Icon className="size-4" /> : null}
               <span className="truncate">{s.tone === "ok" && s.value === "0" ? "ครบ" : s.value}</span>
             </span>
@@ -350,7 +351,7 @@ export function HomeView({ go }: { go: Go }) {
                 <h3 className="font-semibold">GMV ที่กรอกรวมเกินยอดไลฟ์จริง <span className="font-normal text-muted-foreground">— น่าจะมี slot ที่กรอกยอดสะสมจากแดชบอร์ดโดยไม่ได้หัก slot ก่อนหน้า (ยอด / อันดับ Mc จะสูงเกินจริง)</span></h3>
                 <ul className="mt-1 space-y-1 text-xs">
                   {gmvOver.map((g) => (
-                    <li key={`${g.date}|${g.platform}|${g.from}`} className="rounded-lg border border-warning-border bg-warning px-2.5 py-1.5 text-warning-foreground">
+                    <li key={`${g.date}|${g.platform}|${g.from}`} className="rounded-lg border bg-card px-2.5 py-1.5 before:mr-1.5 before:inline-block before:size-1.5 before:rounded-full before:bg-warning-foreground before:align-middle before:content-['']">
                       <b>{dayText(g.date)} {g.platform} {g.from}–{g.to}</b>: กรอกรวม {baht(g.entered)} แต่ไลฟ์จริง (ไฟล์ Export) {baht(g.actual)}
                     </li>
                   ))}
@@ -362,7 +363,7 @@ export function HomeView({ go }: { go: Go }) {
                 <h3 className="font-semibold">GMV ราย slot ผิดปกติ <span className="font-normal text-muted-foreground">— ต่างจากยอดประมาณจากไฟล์ Export มาก (พิมพ์เลขเกิน / ใส่ตัวเลขอื่นที่ไม่ใช่ GMV / ยอดสะสม)</span></h3>
                 <ul className="mt-1 space-y-1 text-xs">
                   {gmvOdd.map((g) => (
-                    <li key={`${g.date}|${g.platform}|${g.time}`} className="rounded-lg border border-warning-border bg-warning px-2.5 py-1.5 text-warning-foreground">
+                    <li key={`${g.date}|${g.platform}|${g.time}`} className="rounded-lg border bg-card px-2.5 py-1.5 before:mr-1.5 before:inline-block before:size-1.5 before:rounded-full before:bg-warning-foreground before:align-middle before:content-['']">
                       <b>{dayText(g.date)} {g.platform} {g.time} {g.mc}</b>: กรอก {baht(g.gmv)} · ประมาณจาก Export {baht(g.est)} ({g.high ? "สูงกว่า" : "ต่ำกว่า"} {g.high ? (g.gmv / g.est).toFixed(1) : (g.est / Math.max(1, g.gmv)).toFixed(1)} เท่า)
                     </li>
                   ))}
@@ -375,7 +376,7 @@ export function HomeView({ go }: { go: Go }) {
                 <h3 className="font-semibold">มีคิวข้างหน้าแต่ยังไม่มีอีเมล <span className="font-normal text-muted-foreground">— login ไม่ได้ และคิวไม่ลงปฏิทิน</span></h3>
                 <ul className="mt-1 flex flex-wrap gap-1.5">
                   {data.issues.noEmail.map((p) => (
-                    <li key={`${p.role}|${p.name}`} className="rounded-full border border-warning-border bg-warning px-2.5 py-0.5 text-xs text-warning-foreground">
+                    <li key={`${p.role}|${p.name}`} className="rounded-full border bg-card px-2.5 py-0.5 text-xs before:mr-1.5 before:inline-block before:size-1.5 before:rounded-full before:bg-warning-foreground before:align-middle before:content-['']">
                       {p.role === "admin" ? `Admin ${p.name}` : p.name} · {p.upcoming} คิว
                     </li>
                   ))}
@@ -478,7 +479,8 @@ function IssueGroup({ title, note, items, action, chips = false }: {
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? items : items.slice(0, LIST_LIMIT);
-  const item = "border border-warning-border bg-warning text-warning-foreground";
+  // รายการที่ต้องแก้: พื้นขาว ขอบเส้นบาง มีจุดส้มนำหน้า (ไม่ถมส้มทั้งกล่อง หลายรายการแล้วหน้าจะดูรก)
+  const item = "border bg-card text-foreground before:mr-1.5 before:inline-block before:size-1.5 before:rounded-full before:bg-warning-foreground before:align-middle before:content-['']";
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-x-2">

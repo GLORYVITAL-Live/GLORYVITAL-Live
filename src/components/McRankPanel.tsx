@@ -184,7 +184,7 @@ export function McRankPanel() {
           aria-label="ช่วงที่ใช้จัดอันดับ" className="no-scrollbar max-w-full overflow-x-auto rounded-full border bg-card p-1"
         >
           {RANK_PERIODS.map(([id, text, short]) => (
-            <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+            <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">
               <span className="sm:hidden">{short}</span>
               <span className="max-sm:hidden">{id === "month" ? `${text} (${monthLabel(month)})` : text}</span>
             </ToggleGroupItem>

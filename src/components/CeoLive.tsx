@@ -135,7 +135,7 @@ export function CeoLiveView({ data, onChanged }: { data: CeoLiveData; onChanged?
           <ToggleGroup type="single" spacing={1} value={scope} onValueChange={(v) => { if (v) writeLocal(SCOPE_KEY, v); }}
             aria-label="ยอดทั้งวันนับ" className="rounded-full border bg-card p-1">
             {CEO_SCOPES.map(([id, text]) => (
-              <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+              <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">
                 {text}
               </ToggleGroupItem>
             ))}

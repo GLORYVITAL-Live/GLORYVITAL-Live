@@ -330,7 +330,7 @@ function PeriodPicker({ label, value, onChange, today, disabled, withClosed = fa
           <ToggleGroupItem
             key={id}
             value={id}
-            className="flex-1 rounded-full! px-1.5 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!"
+            className="flex-1 rounded-full! px-1.5 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!"
           >
             {text}
           </ToggleGroupItem>

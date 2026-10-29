@@ -6,30 +6,35 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * โทนแบรนด์ Glory Vital (#DE4481 จาก gloryofficialth.com) ใส่ในตัวแปรของ shadcn/ui
- *   primary = ชมพูแบรนด์ / secondary = ชมพูอ่อน (พื้นป้าย/กล่องข้อมูล) / muted = พื้นเทาชมพู
- *   success / warning = สถานะ / p0–p3 = สีประจำแพลตฟอร์ม
+ * โทนแบรนด์ Glory Vital แบบ "ชมพูเฉพาะจุดสำคัญ" (accent ladder)
+ *   ชมพูเข้ม (primary #c62f6a) ใช้แค่จุดเล็กที่ต้องตัดสินใจ: ปุ่มหลัก ของที่เลือกอยู่ ข้อมูลหลักในกราฟ
+ *   ชมพูอ่อน (accent / tint) ใช้กับพื้นที่ที่เลือกอยู่ (แถว/แท็บ/วันที่เลือก)
+ *   พื้น ตัวหนังสือ เส้นขอบ เป็นกลาง (ขาวอมชมพูจางมาก / ดำ / เทา) ชมพูรวมไม่เกินราว 10% ของจอ
+ *   secondary = พื้นเทาอ่อน (กล่องข้อมูล หัวตาราง) / success / warning = สถานะ / p0–p3 = สีประจำแพลตฟอร์ม
  */
 :root {
-  --radius: 0.75rem;
-  --background: #fff7fa;
-  --foreground: #3a1628;
+  --radius: 0.625rem;
+  --background: #fbf7f8;
+  --foreground: #1d1a1b;
   --card: #ffffff;
-  --card-foreground: #3a1628;
+  --card-foreground: #1d1a1b;
   --popover: #ffffff;
-  --popover-foreground: #3a1628;
+  --popover-foreground: #1d1a1b;
   --primary: #c62f6a;
   --primary-foreground: #ffffff;
-  --secondary: #fde8f0;
-  --secondary-foreground: #9c2356;
-  --muted: #faeef3;
-  --muted-foreground: #8c6879;
-  --accent: #fde8f0;
-  --accent-foreground: #9c2356;
+  --secondary: #f4eff1;
+  --secondary-foreground: #3d3539;
+  --muted: #f4eff1;
+  --muted-foreground: #665e62;
+  --accent: #fdeef4;
+  --accent-foreground: #8a1f4b;
+  --tint: #fdeef4;
+  --tint-border: #f3c6d8;
+  --tint-foreground: #8a1f4b;
   --destructive: #c0352b;
-  --border: #f2dce6;
-  --input: #ead0dc;
-  --ring: #de4481;
+  --border: #ebe4e7;
+  --input: #d9cfd4;
+  --ring: #c62f6a;
   --brand-glow: #de4481;
   --success: #1c7a4e;
   --warning: #fff2e8;
@@ -44,25 +49,29 @@
   --viz-prev: #5a8fd0;
   color-scheme: light;
 }
+/* โหมดมืด: ดำกลาง (ไม่อมม่วง) แยกชั้นด้วยความสว่าง ชมพูเฉพาะจุดสำคัญเหมือนโหมดสว่าง */
 :root.dark {
-  --background: #1a1016;
-  --foreground: #fbeaf1;
-  --card: #26171f;
-  --card-foreground: #fbeaf1;
-  --popover: #2c1b24;
-  --popover-foreground: #fbeaf1;
-  --primary: #f2699f;
-  --primary-foreground: #2b0a18;
-  --secondary: #46192e;
-  --secondary-foreground: #f8b6cf;
-  --muted: #2f1d27;
-  --muted-foreground: #c79fb2;
-  --accent: #46192e;
+  --background: #111011;
+  --foreground: #f5f2f3;
+  --card: #1b191a;
+  --card-foreground: #f5f2f3;
+  --popover: #222021;
+  --popover-foreground: #f5f2f3;
+  --primary: #f0679c;
+  --primary-foreground: #1f0712;
+  --secondary: #242123;
+  --secondary-foreground: #ddd6d9;
+  --muted: #242123;
+  --muted-foreground: #b4acb0;
+  --accent: #3a1a28;
   --accent-foreground: #f8b6cf;
+  --tint: #3a1a28;
+  --tint-border: #6b2a46;
+  --tint-foreground: #f8b6cf;
   --destructive: #ff8479;
-  --border: #3d2632;
-  --input: #4a2e3c;
-  --ring: #f2699f;
+  --border: #2c292a;
+  --input: #3d393b;
+  --ring: #f0679c;
   --brand-glow: #f2699f;
   --success: #5bcf93;
   --warning: #2e1d12;
@@ -94,6 +103,9 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-tint: var(--tint);
+  --color-tint-border: var(--tint-border);
+  --color-tint-foreground: var(--tint-foreground);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
   --color-input: var(--input);
@@ -116,7 +128,8 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
-  --shadow-card: 0 1px 2px rgb(122 31 71 / 0.05), 0 4px 14px rgb(122 31 71 / 0.06);
+  /* การ์ดที่วางนิ่ง: แยกด้วยเส้นขอบ ไม่ใช้เงา (เงาเหลือบางมากไว้แค่กันขอบจางบนจอสว่างจ้า) */
+  --shadow-card: 0 1px 2px rgb(29 26 27 / 0.03);
 }
 
 @layer base {
@@ -131,6 +144,7 @@
     font-size: 15px;
     line-height: 1.5;
     -webkit-text-size-adjust: 100%;
+    font-variant-numeric: tabular-nums; /* ตัวเลขกว้างเท่ากัน เวลา/ชั่วโมง/เงิน เรียงตรงกัน */
   }
   button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;

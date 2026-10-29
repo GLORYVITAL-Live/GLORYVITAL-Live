@@ -6,7 +6,6 @@ import { BookingWindowEditor } from "@/components/BookingWindow";
 import { PlanSlots } from "@/components/PlanSlots";
 import { SlotBoard } from "@/components/SlotBoard";
 import { SlotManager } from "@/components/SlotManager";
-import { Notice } from "@/components/shared";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
@@ -35,7 +34,7 @@ export function SlotWorkspace({ me, scope, edit, plan }: { me: Me; scope: OwnerS
   const savedRole = useLocal(ROLE_VIEW_KEY);
   const role = roles.find((r) => r === savedRole) ?? roles[0];
 
-  const pill = "rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!";
+  const pill = "rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!";
   return (
     <div>
       <ToggleGroup
@@ -69,7 +68,7 @@ export function SlotWorkspace({ me, scope, edit, plan }: { me: Me; scope: OwnerS
               <ToggleGroupItem value="admin" className={pill}>ที่ Admin เห็น</ToggleGroupItem>
             </ToggleGroup>
           ) : null}
-          {!me[role] ? <Notice>หน้าจองที่ {role === "mc" ? "Mc" : "Admin"} เห็น — ดูอย่างเดียว จองแทนไม่ได้</Notice> : null}
+          {/* แถบ "โหมดดูอย่างเดียว (เจ้าของ)" อยู่ใน SlotBoard แล้ว ไม่ต้องแจ้งซ้ำที่นี่ */}
           <SlotBoard key={role} me={me} role={role} preview={!me[role]} />
         </>
       ) : null}

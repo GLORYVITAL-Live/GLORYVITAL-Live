@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, EyeIcon, LayoutGridIcon, Rows3Icon } from "lucide-react";
+import { CheckIcon, LayoutGridIcon, Rows3Icon } from "lucide-react";
 import type { ActionResult, BookingLimits, Me, OpenSlot, SlotsResponse } from "@/lib/types";
 import {
   fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, monthLabel, parseKey, platformOf, relLabel,
@@ -10,7 +10,6 @@ import { quotaBlock, type MyQuota } from "@/lib/mc-quota";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, LoadError, Notice, NoticeStrip, PlatformBadge, StateBox, api, useToast,
 } from "@/components/shared";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toggle } from "@/components/ui/toggle";
@@ -373,17 +372,10 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
       {refreshing && data ? <div className="refresh-bar" /> : null}
 
       {preview ? (
-        <Alert role="status" className="my-2 px-3 py-2.5">
-          <EyeIcon />
-          <AlertDescription className="text-foreground">
-            <span>
-              <strong>โหมดดูอย่างเดียว (เจ้าของ)</strong>
-              <span className="text-muted-foreground">
-                {" "}— เห็นหน้านี้แบบเดียวกับที่{role === "mc" ? " Mc " : " Admin เสริม "}เห็น แต่เลือกหรือจองแทนไม่ได้
-              </span>
-            </span>
-          </AlertDescription>
-        </Alert>
+        // แถบบรรทัดเดียว (เดิมเป็นกล่องใหญ่) รายละเอียดกดดูได้บนมือถือ
+        <NoticeStrip title="โหมดดูอย่างเดียว (เจ้าของ)">
+          เห็นหน้านี้แบบเดียวกับที่{role === "mc" ? " Mc " : " Admin เสริม "}เห็น แต่เลือกหรือจองแทนไม่ได้
+        </NoticeStrip>
       ) : null}
 
       {data?.siteNotice ? <Notice variant="warning" icon className="font-medium">{data.siteNotice}</Notice> : null}
@@ -412,23 +404,32 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
           {" "}— ดูจนจบในหน้าเทรนนิ่ง ระบบนับให้อัตโนมัติ ครบแล้วกลับมา{t.verb}ได้เลย
         </NoticeStrip>
       ) : null}
-      {data && slots.length ? (
-        <p className="my-1 text-xs text-muted-foreground">
-          {role === "admin" ? "รับคิว" : "จอง"}ได้ไม่เกิน {limits.slotsPerDay} slot และ {limits.hoursPerDay} ชม. ต่อวัน
-          {limits.blocksPerDay ? ` · แบ่งได้ไม่เกิน ${limits.blocksPerDay} ช่วงต่อวัน` : ""} (นับรวมคิวที่มีอยู่แล้ว)
-          {role === "admin" ? " · เวลาห้ามทับกันแม้คนละแพลตฟอร์ม" : ""}
-        </p>
-      ) : null}
       {data?.quota?.length && slots.length ? <QuotaStrip quota={data.quota} picked={sorted} /> : null}
-      {data && updatedAt ? (
-        <div className="my-1 flex items-center justify-end gap-2 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden className={cn("size-1.5 rounded-full", loadError ? "bg-destructive" : "animate-pulse bg-success")} />
-            {loadError ? "เชื่อมต่อไม่สำเร็จ แสดงข้อมูลล่าสุดเมื่อ" : "อัปเดตอัตโนมัติ ล่าสุด"} {fmtClock.format(updatedAt)}
+      {/* กฎโควต้าต่อวัน + สถานะอัปเดต รวมเป็นแถวเดียว (เดิม 2 แถว) ให้ slot ขึ้นมาเร็วขึ้นบนมือถือ */}
+      {data && (slots.length || updatedAt) ? (
+        <div className="my-1 flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1">
+            {slots.length ? (
+              <>
+                {role === "admin" ? "รับคิว" : "จอง"}ได้ไม่เกิน {limits.slotsPerDay} slot · {limits.hoursPerDay} ชม. ต่อวัน
+                {limits.blocksPerDay ? ` · ไม่เกิน ${limits.blocksPerDay} ช่วง` : ""}
+                {role === "admin" ? " · เวลาห้ามทับกันแม้คนละแพลตฟอร์ม" : ""}
+                <span className="max-sm:hidden"> (นับรวมคิวที่มีอยู่แล้ว)</span>
+              </>
+            ) : null}
           </span>
-          <Button variant="outline" size="xs" className="rounded-full" onClick={reload} disabled={refreshing}>
-            {refreshing ? "กำลังโหลด..." : "รีเฟรช"}
-          </Button>
+          {updatedAt ? (
+            <>
+              <span className="flex shrink-0 items-center gap-1.5" title={`${loadError ? "เชื่อมต่อไม่สำเร็จ แสดงข้อมูลล่าสุดเมื่อ" : "อัปเดตอัตโนมัติ ล่าสุด"} ${fmtClock.format(updatedAt)}`}>
+                <span aria-hidden className={cn("size-1.5 rounded-full", loadError ? "bg-destructive" : "animate-pulse bg-success")} />
+                <span className="max-sm:hidden">{loadError ? "เชื่อมต่อไม่สำเร็จ แสดงข้อมูลล่าสุดเมื่อ" : "อัปเดตอัตโนมัติ ล่าสุด"} </span>
+                {fmtClock.format(updatedAt)}
+              </span>
+              <Button variant="outline" size="xs" className="shrink-0" onClick={reload} disabled={refreshing}>
+                {refreshing ? "กำลังโหลด..." : "รีเฟรช"}
+              </Button>
+            </>
+          ) : null}
         </div>
       ) : null}
 
@@ -453,10 +454,14 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                 <Button
                   key={k}
                   id={`chip-${k}`}
-                  variant={active ? "default" : "outline"}
+                  variant="outline"
                   aria-current={active ? "date" : undefined}
                   onClick={() => { document.getElementById(`day-${k}`)?.scrollIntoView({ behavior: "smooth", block: "start" }); setActiveDate(k); }}
-                  className={cn("relative h-auto min-w-[64px] flex-col gap-0 rounded-xl px-2 py-1.5 leading-tight font-normal", !active && "bg-card")}
+                  // วันที่เลือก: พื้นชมพูอ่อน + ขอบชมพู (ไม่ถมชมพูเต็ม)
+                  className={cn(
+                    "relative h-auto min-w-[64px] flex-col gap-0 rounded-xl px-2 py-1.5 leading-tight font-normal",
+                    active ? "border-primary bg-tint text-tint-foreground hover:bg-tint hover:text-tint-foreground" : "bg-card",
+                  )}
                 >
                   {selectedDates.has(k) ? <span className="absolute top-1 right-1 size-2 rounded-full bg-brand-glow ring-2 ring-card" /> : null}
                   <span className="text-[11px]">{relLabel(k) || fmtWeekShort.format(d)}</span>
@@ -487,7 +492,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                     size="sm"
                     pressed={p === null ? activeFilters.size === 0 : activeFilters.has(p)}
                     onPressedChange={() => toggleFilter(p)}
-                    className="rounded-full bg-card text-xs font-semibold"
+                    className="rounded-full bg-card text-xs font-semibold data-[state=on]:border-tint-border data-[state=on]:bg-tint data-[state=on]:text-tint-foreground"
                   >
                     {p ?? "ทั้งหมด"}
                   </Toggle>
@@ -566,7 +571,7 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
                     className={cn(
                       "flex w-full items-center gap-3 text-left transition outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                       view === "card"
-                        ? cn("rounded-xl border bg-card px-4 py-3 shadow-card", isSel ? "border-primary ring-2 ring-primary/30" : "hover:border-primary/50")
+                        ? cn("rounded-xl border bg-card px-4 py-3 shadow-card", isSel ? "border-primary bg-tint/50" : "hover:border-primary/50")
                         : cn("border-b px-3 py-2.5 last:border-b-0", isSel ? "bg-secondary" : "hover:bg-muted"),
                       blocked && "opacity-60",
                     )}
@@ -613,8 +618,8 @@ export function SlotBoard({ me, role, preview = false }: { me: Me; role: "mc" | 
             <div className="font-bold">เลือกแล้ว {selected.size} slot</div>
             <div className="text-sm text-muted-foreground">รวม {fmtHours(totalHours)}</div>
           </div>
-          <Button variant="outline" size="lg" className="rounded-full px-4" onClick={() => setSelected(new Map())}>ล้าง</Button>
-          <Button size="lg" className="rounded-full px-4" onClick={openConfirm}>{t.verb} {selected.size} slot</Button>
+          <Button variant="outline" size="lg" className="px-4" onClick={() => setSelected(new Map())}>ล้าง</Button>
+          <Button size="lg" className="px-4" onClick={openConfirm}>{t.verb} {selected.size} slot</Button>
         </div>
       </div>
 

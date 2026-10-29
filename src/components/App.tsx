@@ -374,7 +374,8 @@ function Shell({ me }: { me: Me | null }) {
 
       <section className="pt-4 pb-3">
         <h1 className="text-2xl font-bold sm:text-[28px]">{mode?.title ?? "ตารางไลฟ์ GLORY VITAL"}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        {/* หน้าจอง (Mc / Admin) บนมือถือ: ซ่อนคำอธิบายวิธีใช้ ให้ slot ขึ้นมาในจอแรก (กฎดูได้ที่ "กฎการทำงาน") */}
+        <p className={cn("mt-1 text-sm text-muted-foreground", (role === "mc" || role === "admin") && !shopee && "max-sm:hidden")}>
           {shopee
             ? "ทีม Shopee — คิวไลฟ์ในหน้านี้ตอนนี้เป็นของช่อง TikTok"
             : page === "training" && me?.briefs ? `${MODES.training.hint} · แท็บเฟรมไลฟ์: เฟรมของแต่ละช่อง / ช่วงวัน + บรีฟการแต่งตัวให้ Mc`
@@ -471,7 +472,7 @@ function OwnerTabs({ me }: { me: Me }) {
             key={id}
             value={id}
             aria-label={label}
-            className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-primary! data-active:text-primary-foreground! sm:text-sm"
+            className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-tint! data-active:text-tint-foreground! sm:text-sm"
           >
             <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{label}</span>
           </TabsTrigger>

@@ -127,7 +127,7 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
     <Tabs value={tab} onValueChange={(v) => writeLocal(TAB_KEY, v)} className="gap-0 pb-10">
       <TabsList aria-label="เมนูสถิติไลฟ์" className="my-3 h-auto! w-full rounded-full border bg-card p-1">
         {tabs.map(([id, label]) => (
-          <TabsTrigger key={id} value={id} className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-primary! data-active:text-primary-foreground! sm:text-sm">
+          <TabsTrigger key={id} value={id} className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-tint! data-active:text-tint-foreground! sm:text-sm">
             {label}
           </TabsTrigger>
         ))}
@@ -190,7 +190,7 @@ function FilterBar({ filter, sessions, children }: { filter: ReturnType<typeof u
           <ToggleGroupItem
             key={id}
             value={id}
-            className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!"
+            className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!"
           >
             {text}
           </ToggleGroupItem>
@@ -260,7 +260,7 @@ function Overview({ latest, dataMonths, version }: { latest: string; dataMonths:
       <ToggleGroup type="single" spacing={1} value={mode} onValueChange={(v) => { if (v) writeLocal(OVERVIEW_KEY, v); }}
         aria-label="ดูภาพรวมแบบ" className="mb-1 rounded-full border bg-card p-1">
         {[["month", "รายเดือน"], ["year", "ทั้งปี"]].map(([id, text]) => (
-          <ToggleGroupItem key={id} value={id} className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">
+          <ToggleGroupItem key={id} value={id} className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">
             {text}
           </ToggleGroupItem>
         ))}
@@ -984,7 +984,7 @@ function CompareView({ dataMonths, version }: { dataMonths: string[]; version: n
     <ToggleGroup type="single" spacing={1} value={mode} onValueChange={(v) => { if (v) setMode(v as CompareMode); }}
       aria-label="เทียบเป็น" className="no-scrollbar mb-3 max-w-full overflow-x-auto rounded-full border bg-card p-1">
       {COMPARE_MODES.map(([id, text, short]) => (
-        <ToggleGroupItem key={id} value={id} className="rounded-full! px-2.5 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground! sm:px-3">
+        <ToggleGroupItem key={id} value={id} className="rounded-full! px-2.5 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground! sm:px-3">
           <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{text}</span>
         </ToggleGroupItem>
       ))}
@@ -1529,7 +1529,7 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
                   <ToggleGroup type="single" spacing={1} value={groupBy} onValueChange={(v) => { if (v) setGroupBy(v as "account" | "time"); }}
                     aria-label="แบ่งกราฟตาม" className="rounded-full border bg-card p-0.5">
                     {[["account", "บัญชี"], ["time", timeText]].map(([id, text]) => (
-                      <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-primary! data-[state=on]:text-primary-foreground!">{text}</ToggleGroupItem>
+                      <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
                     ))}
                   </ToggleGroup>
                 ) : null}
