@@ -110,7 +110,13 @@ function vapid() {
   return vapidReady;
 }
 
-/** เด้งเข้าทุกเครื่องที่ผู้รับเปิดแจ้งเตือนไว้ · เครื่องที่เลิกใช้แล้ว (404 / 410) ลบทิ้ง */
+/**
+ * เครื่องที่สมัครไว้กับกุญแจแจ้งเตือนชุดเก่า (เปลี่ยนกุญแจตอนย้ายเว็บไป Render ต.ค. 2026) ส่งไม่ได้อีกแล้ว
+ *   Apple: 400 {"reason":"VapidPkHashMismatch"} · Google (FCM): 403 "...do not correspond to the credentials used to create the subscriptions"
+ */
+const KEY_MISMATCH = /VapidPkHashMismatch|do not correspond to the credentials/i;
+
+/** เด้งเข้าทุกเครื่องที่ผู้รับเปิดแจ้งเตือนไว้ · เครื่องที่เลิกใช้แล้ว (404 / 410) / สมัครไว้กับกุญแจชุดเก่า ลบทิ้ง */
 async function pushTo(rows: Pushed[]) {
   if (!rows.length || !vapid()) return;
   const db = createAdminClient();
@@ -131,8 +137,8 @@ async function pushTo(rows: Pushed[]) {
       );
       sent.add(s.id);
     } catch (err) {
-      const code = (err as { statusCode?: number }).statusCode;
-      if (code === 404 || code === 410) gone.add(s.id);
+      const { statusCode: code, body } = err as { statusCode?: number; body?: unknown };
+      if (code === 404 || code === 410 || KEY_MISMATCH.test(String(body ?? ""))) gone.add(s.id);
       else console.warn("ส่งแจ้งเตือนเข้าเครื่องไม่สำเร็จ:", code ?? "", (err as Error)?.message);
     }
   })));
