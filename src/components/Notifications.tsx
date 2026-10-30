@@ -68,6 +68,20 @@ function keyBytes(base64: string) {
   return out;
 }
 
+/** เครื่องนี้สมัครไว้กับกุญแจชุดเดียวกับเซิร์ฟเวอร์ไหม (เปลี่ยนกุญแจ = เครื่องที่สมัครไว้เดิมรับแจ้งเตือนไม่ได้ ต้องสมัครใหม่) */
+function sameKey(sub: PushSubscription, publicKey: string) {
+  const mine = sub.options?.applicationServerKey;
+  if (!mine) return true; // เบราว์เซอร์ไม่บอกกุญแจ = ถือว่าตรง
+  const a = new Uint8Array(mine), b = keyBytes(publicKey);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/** ยกเลิกเครื่องที่สมัครไว้กับกุญแจเก่า (ลบในเซิร์ฟเวอร์ด้วย) */
+async function dropStale(sub: PushSubscription) {
+  await api("/api/push", { endpoint: sub.endpoint }, "DELETE").catch(() => undefined);
+  await sub.unsubscribe().catch(() => false);
+}
+
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isStandalone = () => matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 
@@ -85,6 +99,14 @@ function usePush() {
         if (!alive) return;
         if (Notification.permission === "denied") return setState("denied");
         if (sub && Notification.permission === "granted") {
+          // สมัครไว้กับกุญแจเก่า (เช่น ย้ายเว็บ / เปลี่ยนกุญแจ) = ยกเลิก แล้วให้กดเปิดแจ้งเตือนใหม่
+          const { publicKey } = await api<{ publicKey: string | null }>("/api/push").catch(() => ({ publicKey: null }));
+          if (!alive) return;
+          if (publicKey && !sameKey(sub, publicKey)) {
+            await dropStale(sub);
+            if (alive) setState("off");
+            return;
+          }
           setState("on");
           api("/api/push", { subscription: sub.toJSON() }).catch(() => undefined);
         } else setState("off");
@@ -168,7 +190,10 @@ export function NotificationBell({ onGo }: { onGo: (page: string) => void }) {
           .then(() => navigator.serviceWorker.ready),
         15, "เตรียมแจ้งเตือนไม่สำเร็จ ลองรีเฟรชหน้าแล้วกดใหม่",
       );
-      const sub = (await reg.pushManager.getSubscription())
+      // เครื่องที่สมัครไว้กับกุญแจเก่า = ยกเลิกก่อน แล้วสมัครใหม่กับกุญแจของเซิร์ฟเวอร์ตอนนี้
+      const old = await reg.pushManager.getSubscription();
+      if (old && !sameKey(old, publicKey)) await dropStale(old);
+      const sub = (old && sameKey(old, publicKey) ? old : null)
         ?? await withTimeout(reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) }), 20, "เบราว์เซอร์ไม่ตอบ ลองรีเฟรชหน้าแล้วกดใหม่");
       const r = await api<{ message: string }>("/api/push", { subscription: sub.toJSON() });
       if (!r.ok) throw new Error(r.message);
