@@ -1,5 +1,5 @@
-# เว็บจริงบน Railway: build + รันด้วย Node 22 (เหมือนตอนอยู่ Vercel) · ติดตั้งแพ็กเกจด้วย bun ตาม bun.lock
-#   ค่า NEXT_PUBLIC_* ถูกฝังในไฟล์ตอน build → Railway ส่งตัวแปรของ service มาเป็น ARG ให้อัตโนมัติ
+# เว็บจริงบน Render: build + รันด้วย Node 22 (เหมือนตอนอยู่ Vercel) · ติดตั้งแพ็กเกจด้วย bun ตาม bun.lock
+#   ค่า NEXT_PUBLIC_* ถูกฝังในไฟล์ตอน build → Render ส่งตัวแปรของ service มาเป็น build arg ให้อัตโนมัติ
 #   ห้ามส่งวิดีโอ / ไฟล์ใหญ่ผ่านเซิร์ฟเวอร์นี้ (ปริมาณส่งข้อมูลคิดเงิน) — ให้เบราว์เซอร์โหลดจาก Google / YouTube ตรง
 FROM oven/bun:1.4.2 AS bun
 
@@ -19,5 +19,5 @@ RUN node node_modules/next/dist/bin/next build
 
 ENV NODE_ENV=production
 EXPOSE 3000
-# Railway กำหนด PORT ให้ (next start อ่าน PORT เอง)
+# Render กำหนด PORT ให้ (next start อ่าน PORT เอง)
 CMD ["node", "node_modules/next/dist/bin/next", "start"]

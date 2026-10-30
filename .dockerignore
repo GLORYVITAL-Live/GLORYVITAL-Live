@@ -1,4 +1,4 @@
-# ไม่ส่งเข้า build ของ Railway (ค่าลับอยู่ใน Variables ของ Railway ไม่ใช่ไฟล์ .env)
+# ไม่ส่งเข้า build ของ Render (ค่าลับอยู่ใน Environment ของ Render ไม่ใช่ไฟล์ .env)
 .git
 .github
 .next
