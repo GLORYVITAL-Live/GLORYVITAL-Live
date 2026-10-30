@@ -198,8 +198,8 @@ export function NotificationBell({ onGo }: { onGo: (page: string) => void }) {
 
   async function test() {
     try {
-      const r = await api<{ message: string }>("/api/push", { action: "test" });
-      toast(r.message ?? "ส่งแล้ว", r.ok ? undefined : "error");
+      const r = await api<{ message: string; warn?: boolean }>("/api/push", { action: "test" });
+      toast(r.message ?? "ส่งแล้ว", r.ok && !r.warn ? undefined : "error");
       setTimeout(load, 800);
     } catch (err) {
       toast((err as Error).message, "error");

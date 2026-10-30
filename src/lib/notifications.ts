@@ -100,29 +100,53 @@ export async function notifyMany(items: (Note & { email: string })[]) {
 }
 
 type Pushed = { id: number; email: string; title: string; body: string; page: string | null };
+/** ผลเด้งเข้าเครื่อง: total = จำนวนครั้งที่ส่ง (เรื่อง x เครื่อง) · skipped = เด้งไม่ได้ทั้งหมดเพราะอะไร */
+export type PushResult = { total: number; sent: number; failed: { device: string; reason: string }[]; skipped?: string };
 let vapidReady: boolean | null = null;
+let vapidError = "";
+/** ตั้งกุญแจแจ้งเตือนครั้งแรกที่ใช้ · ไม่มีกุญแจ / กุญแจผิดรูปแบบ = เด้งไม่ได้ (vapidError บอกสาเหตุ) */
 function vapid() {
   if (vapidReady === null) {
-    const pub = process.env.VAPID_PUBLIC_KEY, priv = process.env.VAPID_PRIVATE_KEY;
-    vapidReady = !!(pub && priv);
-    if (vapidReady) webpush.setVapidDetails(SITE, pub!, priv!);
+    const pub = process.env.VAPID_PUBLIC_KEY?.trim(), priv = process.env.VAPID_PRIVATE_KEY?.trim();
+    if (!pub || !priv) {
+      vapidReady = false;
+      vapidError = `ยังไม่ได้ตั้ง ${!pub ? "VAPID_PUBLIC_KEY" : "VAPID_PRIVATE_KEY"} ในเซิร์ฟเวอร์`;
+    } else {
+      try {
+        webpush.setVapidDetails(SITE, pub, priv);
+        vapidReady = true;
+      } catch (err) {
+        vapidReady = false;
+        vapidError = `กุญแจแจ้งเตือนไม่ถูกต้อง: ${(err as Error).message}`;
+        console.error("ตั้งกุญแจแจ้งเตือนไม่สำเร็จ:", vapidError);
+      }
+    }
   }
   return vapidReady;
 }
+/** ชื่อเครื่องจากที่อยู่บริการแจ้งเตือน (บอกผู้ใช้ว่าเครื่องไหนเด้งไม่ได้) */
+const deviceOf = (endpoint: string) => {
+  const host = (() => { try { return new URL(endpoint).host; } catch { return ""; } })();
+  return /apple.com$/.test(host) ? "iPhone / Mac (Safari)" : /googleapis.com$/.test(host) ? "Chrome / Android" : /mozilla/.test(host) ? "Firefox" : host || "เครื่องไม่ทราบชนิด";
+};
 
 /**
  * เครื่องที่สมัครไว้กับกุญแจแจ้งเตือนชุดเก่า (เปลี่ยนกุญแจตอนย้ายเว็บไป Render ต.ค. 2026) ส่งไม่ได้อีกแล้ว
  *   Apple: 400 {"reason":"VapidPkHashMismatch"} · Google (FCM): 403 "...do not correspond to the credentials used to create the subscriptions"
  */
 const KEY_MISMATCH = /VapidPkHashMismatch|do not correspond to the credentials/i;
+/** เครื่องที่สมัครก่อนเวลานี้ = สมัครกับกุญแจชุดเก่าแน่นอน (ลบได้) · สมัครหลังจากนี้แต่กุญแจไม่ตรง = กุญแจในเซิร์ฟเวอร์ตั้งผิด (ไม่ลบ แจ้งสาเหตุ) */
+const KEYS_SINCE = "2026-10-30T08:00:00Z";
 
 /** เด้งเข้าทุกเครื่องที่ผู้รับเปิดแจ้งเตือนไว้ · เครื่องที่เลิกใช้แล้ว (404 / 410) / สมัครไว้กับกุญแจชุดเก่า ลบทิ้ง */
-async function pushTo(rows: Pushed[]) {
-  if (!rows.length || !vapid()) return;
+async function pushTo(rows: Pushed[]): Promise<PushResult> {
+  const result: PushResult = { total: 0, sent: 0, failed: [] };
+  if (!rows.length) return result;
+  if (!vapid()) return { ...result, skipped: vapidError };
   const db = createAdminClient();
-  const { data: subs } = await db.from("push_subscriptions").select("id, email, endpoint, p256dh, auth")
+  const { data: subs } = await db.from("push_subscriptions").select("id, email, endpoint, p256dh, auth, created_at")
     .in("email", [...new Set(rows.map((r) => r.email))]);
-  if (!subs?.length) return;
+  if (!subs?.length) return result;
   const gone = new Set<number>(), sent = new Set<number>();
   await Promise.all(rows.flatMap((n) => subs.filter((s) => s.email === n.email).map(async (s) => {
     try {
@@ -136,14 +160,36 @@ async function pushTo(rows: Pushed[]) {
         { TTL: 6 * 3600, urgency: "high" },
       );
       sent.add(s.id);
+      result.sent++;
     } catch (err) {
       const { statusCode: code, body } = err as { statusCode?: number; body?: unknown };
-      if (code === 404 || code === 410 || KEY_MISMATCH.test(String(body ?? ""))) gone.add(s.id);
-      else console.warn("ส่งแจ้งเตือนเข้าเครื่องไม่สำเร็จ:", code ?? "", (err as Error)?.message);
+      const mismatch = KEY_MISMATCH.test(String(body ?? ""));
+      const old = mismatch && String(s.created_at ?? "") < KEYS_SINCE;
+      if (code === 404 || code === 410 || old) gone.add(s.id);
+      else console.warn("ส่งแจ้งเตือนเข้าเครื่องไม่สำเร็จ:", code ?? "", (err as Error)?.message, String(body ?? "").slice(0, 200));
+      result.failed.push({
+        device: deviceOf(s.endpoint),
+        reason: old ? "เปิดแจ้งเตือนไว้จากเว็บเก่า (ลบแล้ว กดเปิดแจ้งเตือนใหม่บนเครื่องนั้น)"
+          : mismatch ? "กุญแจแจ้งเตือนในเซิร์ฟเวอร์ไม่ตรงกับที่เครื่องสมัครไว้ (ตรวจ VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY)"
+          : code === 404 || code === 410 ? "เครื่องเลิกใช้แล้ว (ลบแล้ว)"
+          : `${code ?? ""} ${String(body ?? "").trim() || (err as Error)?.message || ""}`.trim().slice(0, 160),
+      });
+    } finally {
+      result.total++;
     }
   })));
   if (gone.size) await db.from("push_subscriptions").delete().in("id", [...gone]);
   if (sent.size) await db.from("push_subscriptions").update({ last_ok_at: new Date().toISOString() }).in("id", [...sent]);
+  return result;
+}
+
+/** ทดสอบแจ้งเตือน: บันทึกเข้ากระดิ่ง + เด้งเข้าทุกเครื่องของคนนี้ แล้วบอกผลรายเครื่อง */
+export async function sendTestNotification(email: string): Promise<PushResult> {
+  const { data, error } = await createAdminClient().from("notifications")
+    .insert({ email: email.trim().toLowerCase(), kind: "test", title: "ทดสอบแจ้งเตือน GLORY VITAL", body: "ถ้าเห็นข้อความนี้ แปลว่าเครื่องนี้รับแจ้งเตือนได้แล้ว" })
+    .select("id, email, title, body, page");
+  if (error) throw new Error(error.message);
+  return pushTo((data ?? []) as Pushed[]);
 }
 
 // ---------- ผู้รับ / ข้อมูล slot ----------

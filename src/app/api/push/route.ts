@@ -1,5 +1,5 @@
 import { fail, ok, requireMe } from "@/lib/api";
-import { notify } from "@/lib/notifications";
+import { sendTestNotification } from "@/lib/notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // แจ้งเตือนเด้งเข้ามือถือ (Web Push) ของเครื่องนี้
@@ -23,11 +23,16 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const db = createAdminClient();
 
+  // ทดสอบ: บอกผลรายเครื่อง (เด้งไม่ได้เพราะอะไร) ไม่ใช่แค่จำนวนเครื่อง
   if (body?.action === "test") {
-    const { count, error } = await db.from("push_subscriptions").select("id", { count: "exact", head: true }).eq("email", r.me.email);
-    if (error) return dbFail(error.message);
-    await notify([r.me.email], { kind: "test", title: "ทดสอบแจ้งเตือน GLORY VITAL", body: "ถ้าเห็นข้อความนี้ แปลว่าเครื่องนี้รับแจ้งเตือนได้แล้ว" });
-    return ok({ devices: count ?? 0, message: count ? `ส่งแล้ว (${count} เครื่อง)` : "ส่งเข้ากระดิ่งแล้ว (ยังไม่มีเครื่องที่เปิดแจ้งเตือน)" });
+    const res = await sendTestNotification(r.me.email).catch((err: Error) => err);
+    if (res instanceof Error) return dbFail(res.message);
+    const failed = res.failed.map((f) => `${f.device}: ${f.reason}`);
+    const message = res.skipped ? `บันทึกเข้ากระดิ่งแล้ว แต่เด้งเข้าเครื่องไม่ได้: ${res.skipped}`
+      : !res.total ? "ส่งเข้ากระดิ่งแล้ว (ยังไม่มีเครื่องที่เปิดแจ้งเตือน)"
+      : failed.length ? `เด้งได้ ${res.sent}/${res.total} เครื่อง · ไม่ได้ — ${failed.join(" · ")}`
+      : `ส่งแล้ว (${res.sent} เครื่อง)`;
+    return ok({ devices: res.total, sent: res.sent, failed, warn: !!(res.skipped || failed.length), message });
   }
 
   const sub = body?.subscription;
