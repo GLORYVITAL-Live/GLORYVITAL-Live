@@ -14,7 +14,7 @@ import type { BriefView, FrameFile, FrameView } from "@/lib/types";
  *     โครงชีตอ่านที่ src/lib/frames.ts
  *   บรีฟ: ตาราง live_briefs 1 ชุดต่อช่วงวันของเฟรม ใช้กับทุกช่อง (platform = "all") ข้อความ + รูปชุดตัวอย่างใน bucket live-briefs
  *     บรีฟแยกช่องแบบเดิมยังแสดงกับช่องนั้นจนกว่าจะเขียนบรีฟรวมของช่วงนั้น (pickBrief ใน src/lib/frames.ts)
- *   ไฟล์ในไดรฟ์เปิดผ่านเว็บ (/api/frames/media) ได้เฉพาะไฟล์ที่อยู่ในชีตเฟรม
+ *   ไฟล์ในไดรฟ์เปิดจาก Google โดยตรง (src/components/FrameMedia.tsx) — ต้องแชร์แบบ "ทุกคนที่มีลิงก์ดูได้"
  */
 
 export const FRAMES_SQL = "ต้องรัน SQL 20261113000000_live_frames ใน Supabase ก่อน";
@@ -131,12 +131,6 @@ export async function framesForSlots(slots: { platform: string; date: string }[]
   const [file, briefs] = await Promise.all([filesOf(used.map((w) => w.frameId)), briefsBetween(dates[0], dates[dates.length - 1])]);
   for (const [k, w] of hit) if (w) out.set(k, { frame: file(w.frameId), brief: pickBrief(briefs, w) });
   return out;
-}
-
-/** ไฟล์นี้อยู่ในชีตเฟรมไหม (เปิดผ่านเว็บได้เฉพาะไฟล์เหล่านี้) */
-export async function isFrameFile(id: string) {
-  const r = await frameWindows();
-  return r.windows.some((w) => w.frameId === id || w.productId === id);
 }
 
 type Target = Pick<FrameWindow, "platform" | "from" | "to">;

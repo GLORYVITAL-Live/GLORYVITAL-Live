@@ -29,7 +29,7 @@ export type Me = {
   briefs?: boolean;
 };
 
-/** ไฟล์ในไดรฟ์ที่แสดงในเว็บ (เปิดผ่าน /api/frames/media?id=) */
+/** ไฟล์ในไดรฟ์ที่แสดงในเว็บ (เปิดจาก Google โดยตรง — src/components/FrameMedia.tsx) */
 export type FrameFile = { id: string; kind: "video" | "image" | "file"; name: string };
 /** บรีฟการแต่งตัวของช่วงวัน (ใช้กับทุกช่อง) · images = ลิงก์ชั่วคราว 1 ชม. */
 export type BriefView = { note: string; images: { path: string; url: string }[]; updatedBy: string; updatedAt: string };
