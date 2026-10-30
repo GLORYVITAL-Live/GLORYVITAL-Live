@@ -1,0 +1,12 @@
+# ไม่ส่งเข้า build ของ Railway (ค่าลับอยู่ใน Variables ของ Railway ไม่ใช่ไฟล์ .env)
+.git
+.github
+.next
+node_modules
+.env
+.env.*
+legacy
+coverage
+*.log
+tsconfig.tsbuildinfo
+.vercel

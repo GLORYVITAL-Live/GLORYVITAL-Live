@@ -1,4 +1,5 @@
 import "server-only";
+import { SITE } from "@/lib/site";
 import webpush from "web-push";
 import { missingCalendarCounts } from "@/lib/calendar";
 import { bookingRange, getSettings, proofsBySlot, windowAlerts, type BookSide, type Settings } from "@/lib/data";
@@ -46,7 +47,6 @@ export type Note = { kind: NoteKind; title: string; body: string; page?: NotePag
 type Side = "mc" | "admin";
 type Table = "mc_slots" | "admin_slots";
 
-const SITE = "https://glory-vital-live.vercel.app";
 /** ยกเลิกก่อนไลฟ์ไม่ถึงกี่ชั่วโมง = [ด่วน] */
 const URGENT_HOURS = 48;
 /** เตือนก่อนเริ่มไลฟ์ภายในกี่นาที (cron ทุก 15 นาที + GitHub อาจช้า จึงเผื่อ) */

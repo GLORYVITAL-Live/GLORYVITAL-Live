@@ -1,4 +1,5 @@
 import "server-only";
+import { SITE } from "@/lib/site";
 import { fmtDayLong, parseKey } from "@/lib/format";
 import { escapeHtml, sendMail } from "@/lib/mail";
 import { platformLabel } from "@/lib/platform";
@@ -16,7 +17,6 @@ import { createAdminClient } from "@/lib/supabase/server";
  * ผู้รับจริงตั้งในหน้าพนักงาน > Owner > "รับอีเมลแจ้งยกเลิกคิว" (staff.notify_cancel_mc / notify_cancel_admin)
  */
 export const NOTIFY_TO = "kunraroj.d@glorythailand.com";
-const SITE = "https://glory-vital-live.vercel.app";
 /** ยกเลิกก่อนไลฟ์ไม่ถึงกี่ชั่วโมง = ขึ้น [ด่วน] ที่หัวเรื่อง */
 const URGENT_HOURS = 48;
 

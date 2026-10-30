@@ -1,0 +1,32 @@
+# งานตั้งเวลาของเว็บ (เดิมอยู่ใน vercel.json — ย้ายมาเพราะเว็บอยู่บน Railway แล้ว)
+#   ทุกเช้า ~07:00 เวลาไทย: /api/cron/calendar (ลงปฏิทิน / สรุปประจำวัน)
+#   วันจันทร์ ~04:00 เวลาไทย: /api/cron/backup (สำรองข้อมูลลง Google Drive)
+# ใช้ Secret CRON_SECRET + Variable SITE_URL ตัวเดียวกับ notify.yml · กดรันเองได้ที่แท็บ Actions > งานตั้งเวลา > Run workflow
+name: งานตั้งเวลา
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+    - cron: "0 21 * * 0"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "งานที่จะรัน"
+        type: choice
+        options: [calendar, backup]
+        default: calendar
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: เรียกงานตั้งเวลา
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SITE: ${{ vars.SITE_URL || 'https://glory-vital-live.up.railway.app' }}
+          JOB: ${{ github.event.schedule == '0 21 * * 0' && 'backup' || inputs.job || 'calendar' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "ยังไม่ได้ตั้ง Secret CRON_SECRET"; exit 1; fi
+          echo "รัน /api/cron/$JOB"
+          curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" "$SITE/api/cron/$JOB"

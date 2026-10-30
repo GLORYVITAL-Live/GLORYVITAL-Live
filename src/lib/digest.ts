@@ -1,4 +1,5 @@
 import "server-only";
+import { SITE } from "@/lib/site";
 import { fetchAll } from "@/lib/data";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import { dataHealth, healthCount } from "@/lib/health";
@@ -14,7 +15,6 @@ import { addDays } from "@/lib/window";
  *   ไม่มี slot ว่างในฝั่งของคนนั้น = ไม่ส่ง (ท้ายเมลบอกจำนวน "ข้อมูลที่ควรแก้" ในหน้าแรกด้วย)
  */
 
-const SITE = "https://glory-vital-live.vercel.app";
 const HOURS = 48;
 /** เริ่มไลฟ์ภายในกี่ชั่วโมง = ขึ้นสีแดง "ด่วน" */
 const URGENT_HOURS = 24;

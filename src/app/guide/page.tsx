@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CalendarSteps } from "@/components/CalendarGuide";
 import { AppProviders } from "@/components/shared";
+import { SITE_HOST } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "วิธีใช้ | GLORY VITAL Live",
@@ -48,7 +49,7 @@ export default function GuidePage() {
             aria-label="วิดีโอวิธีเพิ่มเว็บไว้หน้าจอโฮมบน iPhone"
           />
           <ol className="list-decimal space-y-1 pl-5">
-            <li>เปิดเว็บ <b>glory-vital-live.vercel.app</b> ใน Safari</li>
+            <li>เปิดเว็บ <b>{SITE_HOST}</b> ใน Safari</li>
             <li>กดปุ่มแชร์ (สี่เหลี่ยมมีลูกศรชี้ขึ้น) ที่แถบล่าง</li>
             <li>เลื่อนลง กด &quot;เพิ่มไปยังหน้าจอโฮม&quot;</li>
             <li>กด &quot;เพิ่ม&quot; มุมขวาบน ไอคอน GLORY VITAL จะอยู่บนหน้าจอโฮม</li>
@@ -57,7 +58,7 @@ export default function GuidePage() {
         <div className="rounded-xl border bg-card p-4 text-sm">
           <h3 className="mb-2 font-semibold">Android (Chrome)</h3>
           <ol className="list-decimal space-y-1 pl-5">
-            <li>เปิดเว็บ <b>glory-vital-live.vercel.app</b> ใน Chrome</li>
+            <li>เปิดเว็บ <b>{SITE_HOST}</b> ใน Chrome</li>
             <li>กด ⋮ มุมขวาบน</li>
             <li>กด &quot;เพิ่มลงในหน้าจอหลัก&quot; หรือ &quot;ติดตั้งแอป&quot; แล้วกดยืนยัน</li>
           </ol>

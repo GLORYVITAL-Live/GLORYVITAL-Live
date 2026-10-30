@@ -4,7 +4,7 @@ import { backupToDrive } from "@/lib/backup";
 
 export const maxDuration = 60;
 
-// สำรองข้อมูลรายสัปดาห์ลง Google Drive (vercel.json: วันจันทร์ ~04:00 เวลาไทย) ต้องส่ง header  Authorization: Bearer <CRON_SECRET>
+// สำรองข้อมูลรายสัปดาห์ลง Google Drive (GitHub Actions .github/workflows/cron.yml: วันจันทร์ ~04:00 เวลาไทย) ต้องส่ง header  Authorization: Bearer <CRON_SECRET>
 //   ไม่สำเร็จ = ส่งเมลแจ้ง error (alert.ts)
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;

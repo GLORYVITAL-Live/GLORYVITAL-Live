@@ -3,7 +3,7 @@ import { escapeHtml, sendMail } from "@/lib/mail";
 /**
  * แจ้งทางอีเมลเมื่อเว็บจริงเกิด error ฝั่งเซิร์ฟเวอร์ (ส่งเข้ากล่องเมลบัญชีระบบ)
  *   เรียกจาก instrumentation.ts (error ที่ไม่ได้ดักไว้) และ fail(..., 500) ใน src/lib/api.ts
- *   ส่งเฉพาะเว็บจริงบน Vercel (localhost ไม่ส่ง) · กันเมลรัว: error เดียวกันไม่เกิน 1 ฉบับต่อ 30 นาที และรวมไม่เกิน 10 ฉบับต่อชั่วโมง
+ *   ส่งเฉพาะเว็บจริง (Railway / Vercel ที่เป็น production · localhost ไม่ส่ง) · กันเมลรัว: error เดียวกันไม่เกิน 1 ฉบับต่อ 30 นาที และรวมไม่เกิน 10 ฉบับต่อชั่วโมง
  *   (นับแยกต่อเครื่องเซิร์ฟเวอร์ ถ้าเว็บแตกหลายเครื่องอาจได้ซ้ำบ้าง)
  */
 
@@ -18,7 +18,8 @@ let hourStart = 0, hourCount = 0;
 const IGNORE = /NEXT_REDIRECT|NEXT_NOT_FOUND|NEXT_HTTP_ERROR_FALLBACK|aborted|AbortError|ECONNRESET/i;
 
 export async function alertError(o: { where: string; message: string; digest?: string }) {
-  if (process.env.VERCEL_ENV !== "production" || IGNORE.test(o.message)) return;
+  const live = process.env.RAILWAY_ENVIRONMENT_NAME === "production" || process.env.VERCEL_ENV === "production";
+  if (!live || IGNORE.test(o.message)) return;
   const now = Date.now();
   const key = `${o.where}|${o.message.slice(0, 160)}`;
   if (now - (sentAt.get(key) ?? 0) < SAME_ERROR_MS) return;

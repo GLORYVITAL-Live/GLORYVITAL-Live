@@ -1,5 +1,5 @@
 /**
- * ซิงค์ชีต -> เว็บ GLORY VITAL Live (https://glory-vital-live.vercel.app)
+ * ซิงค์ชีต -> เว็บ GLORY VITAL Live (https://glory-vital-live.up.railway.app)
  * ======================================================================
  * วางไฟล์นี้ในโปรเจค Apps Script ที่ผูกกับชีต LIVE GLORY 2026 (Extensions > Apps Script)
  * เป็นไฟล์ใหม่ชื่อ web-sync.gs
@@ -17,7 +17,7 @@
  * เวลามาสาย (ใช้หักเงิน): Deal Mc คอลัมน์ L / Admin เสริม คอลัมน์ M / MC Shopee คอลัมน์ N เช่น "15" หรือ "สาย 15 นาที"
  */
 
-const WEB_SYNC_URL = 'https://glory-vital-live.vercel.app/api/sync/sheet';
+const WEB_SYNC_URL = 'https://glory-vital-live.up.railway.app/api/sync/sheet';
 const WEB_SYNC_SHEET_ID = '1r17--dnbXyVk416Zc3mGwUb-aDw3OCxelOC25NJW7Xo'; // ชีต LIVE GLORY 2026 (ใช้ได้แม้สคริปต์ไม่ได้ผูกกับชีต)
 const WEB_SYNC_TABS = ['ลงตาราง Deal Mc', 'ลงตาราง Admin เสริม', 'ลงตาราง MC Shopee'];
 // คอลัมน์สุดท้ายที่เป็นข้อมูล slot ของแต่ละแท็บ

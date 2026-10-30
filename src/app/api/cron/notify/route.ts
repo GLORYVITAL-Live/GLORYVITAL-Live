@@ -8,7 +8,7 @@ import { processSheetJobs } from "@/lib/sheet-sync";
 export const maxDuration = 60;
 
 // เตือนก่อนไลฟ์ — GitHub Actions เรียกทุก 15 นาที (.github/workflows/notify.yml)
-//   ต้องส่ง header  Authorization: Bearer <CRON_SECRET>  (ค่าเดียวกับใน Vercel ใส่ไว้ใน GitHub > Settings > Secrets)
+//   ต้องส่ง header  Authorization: Bearer <CRON_SECRET>  (ค่าเดียวกับในโฮสต์ ใส่ไว้ใน GitHub > Settings > Secrets)
 //   Vercel cron แบบฟรีรันได้วันละครั้ง จึงใช้ GitHub เรียกแทน (เวลาอาจคลาด 5–15 นาที)
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;

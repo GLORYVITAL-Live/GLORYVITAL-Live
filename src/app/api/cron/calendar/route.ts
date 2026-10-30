@@ -10,7 +10,7 @@ import { processSyncJobs } from "@/lib/sync";
 
 export const maxDuration = 60;
 
-// งานประจำวัน (vercel.json: ทุกเช้า ~07:00 เวลาไทย) ต้องส่ง header  Authorization: Bearer <CRON_SECRET>
+// งานประจำวัน (GitHub Actions .github/workflows/cron.yml: ทุกเช้า ~07:00 เวลาไทย) ต้องส่ง header  Authorization: Bearer <CRON_SECRET>
 //   1. ลบ slot ที่ถูกลบแถวในชีตแล้วแต่เว็บยังไม่รู้ (เช่น Apps Script ส่งไม่สำเร็จ)
 //   2. เมลสรุปเช้า + แจ้งเตือนในเว็บ "slot ยังว่างใน 48 ชม." (ทำก่อนงานยาว ไม่ให้หมดเวลาก่อนส่ง)
 //   3. ปิดงานลงปฏิทินที่ระบบเลิกลองแล้ว + คนที่เพิ่งแชร์ปฏิทิน ลงคิวที่ค้างให้
