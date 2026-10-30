@@ -1,7 +1,7 @@
 import { fail, ok, requireMe } from "@/lib/api";
 import { isStaff } from "@/lib/auth";
 import {
-  TRAINING_GATE_SQL, TRAINING_ITEMS_SQL, addTrainingClip, loadTraining, logTrainingView, myTrainingGate, removeTrainingClip, renameTraining,
+  TRAINING_GATE_SQL, TRAINING_ITEMS_SQL, addTrainingClip, loadTraining, logTrainingView, moveToYouTube, myTrainingGate, removeTrainingClip, renameTraining,
   setTrainingGate, setTrainingHidden, setTrainingPassed, setTrainingRequired, slideDeck, trainingProgress, trainingViews,
 } from "@/lib/training";
 import type { Me, Training, TrainingProgress, TrainingViews } from "@/lib/types";
@@ -16,6 +16,7 @@ import type { Me, Training, TrainingProgress, TrainingViews } from "@/lib/types"
 //     { action: "rename", ref, title }           แก้ชื่อที่แสดง (ว่าง = ใช้ชื่อไฟล์ / ชื่อโฟลเดอร์)
 //     { action: "add", url, title?, group }      เพิ่มคลิปจากลิงก์ Google Drive / YouTube
 //     { action: "remove", ref }                  ลบคลิปที่เพิ่มจากลิงก์
+//     { action: "youtube", ref, url }            ย้ายคลิปในไดรฟ์ ('drive:') ไปเล่นจาก YouTube (ซ่อนคลิปเดิม · คนที่ดูจบแล้วไม่ต้องดูซ้ำ)
 //     { action: "refresh" }                      อ่านรายชื่อในไดรฟ์ใหม่ทันที
 //     { action: "required", ref, required }      ติ๊ก / เอาติ๊ก บังคับดูก่อนจองคิว (คลิป หรือทั้งกลุ่ม)
 //     { action: "gate", on }                     เปิด / ปิด บังคับดูก่อนจอง (เปิด = แจ้งคนที่ยังดูไม่ครบ)
@@ -101,6 +102,11 @@ export async function POST(request: Request) {
         await loadTraining(true); // รายชื่อในไดรฟ์ล่าสุด (กันเพิ่มคลิปที่อยู่ในโฟลเดอร์แล้ว)
         const res = await addTrainingClip(body.url, body.title, body.group, by);
         message = `เพิ่ม "${res.title}" แล้ว`;
+        break;
+      }
+      case "youtube": {
+        const res = await moveToYouTube(body.ref, body.url, by);
+        message = `ย้าย "${res.title}" ไปเล่นจาก YouTube แล้ว${res.copied ? ` · คนที่ดูจบแล้ว ${res.copied} คนไม่ต้องดูซ้ำ` : ""}`;
         break;
       }
       case "remove":

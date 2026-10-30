@@ -2,7 +2,6 @@ import "server-only";
 import { google } from "googleapis";
 import { driveClient, driveError } from "@/lib/drive";
 import { googleAuth } from "@/lib/google";
-import { driveMediaResponse } from "@/lib/drive-media";
 import { notifyMany } from "@/lib/notifications";
 import { isTestAccount } from "@/lib/staff-check";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -13,7 +12,9 @@ import type { Me, Training, TrainingBlock, TrainingGroup, TrainingProgress, Trai
  *   วิดีโอ: settings.training_drive_folder > โฟลเดอร์ย่อยรายสินค้า (ไม่เกิน 2 ชั้น) > ไฟล์วิดีโอ — กลุ่มตามโฟลเดอร์ย่อย
  *   สไลด์: settings.training_slides (id หรือลิงก์ Google Slides)
  *   Owner จัดการในเว็บ (ตาราง training_items): ซ่อน / แสดง คลิปหรือทั้งโฟลเดอร์ · แก้ชื่อที่แสดง · เพิ่มคลิปจากลิงก์ (Google Drive / YouTube)
+ *     · ย้ายคลิปในไดรฟ์ไปเล่นจาก YouTube (moveToYouTube)
  *   เล่น / เปิดในหน้าเว็บด้วยตัวเล่นของ Google / YouTube (ไฟล์ในไดรฟ์ต้องแชร์ "ทุกคนที่มีลิงก์ดูได้") — เว็บไม่ดึงไฟล์วิดีโอเอง
+ *     (เคยส่งวิดีโอผ่านเซิร์ฟเวอร์ของเว็บ → ปริมาณส่งข้อมูลของ Vercel เกินโควตาจนเว็บถูกปิด ต.ค. 2026 — ห้ามกลับไปทำแบบนั้น)
  *   รายชื่อไฟล์ในไดรฟ์จำไว้ 10 นาที (ปุ่มรีเฟรช = อ่านใหม่ทันที) · ที่ Owner ตั้งในเว็บมีผลทันที
  */
 
@@ -142,13 +143,17 @@ export async function loadTraining(manage: boolean, refresh = false): Promise<Tr
       videos: g.videos.map((v) => video(`drive:${v.id}`, v.name, v.minutes, false, !!it?.required)),
     };
   });
-  // คลิปที่เพิ่มจากลิงก์: เข้ากลุ่มที่ชื่อตรงกัน ไม่มี = กลุ่มใหม่ (ท้ายสุด)
+  // คลิปที่เพิ่มจากลิงก์: เข้ากลุ่ม (group_name = 'folder:<id>' ของกลุ่มในไดรฟ์ หรือชื่อกลุ่ม) ไม่มี = กลุ่มใหม่ (ท้ายสุด)
+  //   'folder:<id>' แต่อ่านไดรฟ์ไม่ได้ = สร้างกลุ่มจากที่ตั้งไว้ในเว็บ (ชื่อ / ซ่อน / บังคับทั้งกลุ่ม) — คลิป YouTube ไม่ขึ้นกับไดรฟ์
   for (const it of items ?? []) {
     if (!it.added) continue;
-    const name = it.group_name?.trim() || "คลิปเพิ่มเติม";
-    let g = groups.find((x) => x.name === name);
+    const key = it.group_name?.trim() || "คลิปเพิ่มเติม";
+    let g = groups.find((x) => x.ref === key) ?? groups.find((x) => x.name === key);
     if (!g) {
-      g = { ref: null, name, folderName: null, hidden: false, required: false, videos: [] };
+      const folder = key.startsWith("folder:") ? itemOf.get(key) : undefined;
+      g = key.startsWith("folder:")
+        ? { ref: key, name: folder?.title?.trim() || "คลิปเพิ่มเติม", folderName: null, hidden: !!folder?.hidden, required: !!folder?.required, videos: [] }
+        : { ref: null, name: key, folderName: null, hidden: false, required: false, videos: [] };
       groups.push(g);
     }
     g.videos.push(video(it.ref, it.title?.trim() || "ไม่มีชื่อ", null, true, g.required));
@@ -222,29 +227,34 @@ export async function addTrainingClip(url: unknown, title: unknown, group: unkno
   return { title: name };
 }
 
-// ---------- ส่งไฟล์วิดีโอให้ตัวเล่นของเว็บ (src/lib/drive-media.ts) ----------
-//   ส่งได้เฉพาะคลิปที่อยู่ในหน้าเทรนนิ่ง (กันใช้เปิดไฟล์อื่นที่บัญชีระบบเข้าถึงได้ เช่น ใบ 50 ทวิ / เอกสารรับเงิน)
-
-let allowed: { manage: boolean; at: number; ids: Set<string> }[] = [];
-
-/** คลิปไดรฟ์ที่เปิดได้ (จำไว้ 10 นาที · Owner ที่จัดการได้ = รวมที่ซ่อน) */
-async function allowedIds(manage: boolean) {
-  const hit = allowed.find((a) => a.manage === manage && Date.now() - a.at < TTL);
-  if (hit) return hit.ids;
-  const t = await loadTraining(manage);
-  const ids = new Set(t.groups.flatMap((g) => g.videos).filter((v) => v.kind === "drive").map((v) => v.id));
-  allowed = [...allowed.filter((a) => a.manage !== manage), { manage, at: Date.now(), ids }];
-  return ids;
-}
-
 /**
- * ส่งวิดีโอ 1 ช่วงตาม header Range (ไม่มี = ช่วงแรก) · ไม่ใช่คลิปในหน้าเทรนนิ่ง = 404
- *   ส่งต่อทันทีที่ได้จากไดรฟ์ (ไม่รอครบช่วง — เริ่มเล่น / เลื่อนเวลาได้เร็ว) · ตัวเล่นยกเลิกคำขอ (เลื่อนไปที่อื่น) = หยุดดึงจากไดรฟ์
+ * ย้ายคลิปในไดรฟ์ไปเล่นจาก YouTube (อัปโหลดเองแบบ "ไม่เป็นสาธารณะ" แล้ววางลิงก์)
+ *   เพิ่มคลิป YouTube ในกลุ่มเดิม (ชื่อ + บังคับรายคลิปเหมือนเดิม · บังคับทั้งกลุ่มได้จากกลุ่ม) แล้วซ่อนคลิปในไดรฟ์
+ *   คนที่ดูคลิปเดิมจบแล้ว = นับว่าดูคลิป YouTube จบด้วย (ไม่ต้องดูซ้ำ)
  */
-export async function trainingVideoChunk(id: string, range: string | null, manage: boolean, signal?: AbortSignal): Promise<Response> {
-  if (!/^[\w-]{10,}$/.test(id) || !(await allowedIds(manage)).has(id)) return new Response("not found", { status: 404 });
-  // วิดีโอขอแบบ Range เสมอ (ไม่มี Range = ช่วงแรก 4MB เหมือนเดิม — ไม่ส่งทั้งไฟล์แบบ 200)
-  return driveMediaResponse(id, range ?? "bytes=0-", signal);
+export async function moveToYouTube(ref: unknown, url: unknown, by: string) {
+  if (!okRef(ref) || !ref.startsWith("drive:")) throw new Error("ไม่พบคลิปนี้");
+  const yt = clipRef(String(url ?? ""));
+  if (!yt?.startsWith("youtube:")) throw new Error("ลิงก์ไม่ถูกต้อง — ใช้ลิงก์ YouTube (youtube.com/watch?v=… หรือ youtu.be/…)");
+  const t = await loadTraining(true);
+  const group = t.groups.find((g) => g.videos.some((v) => v.ref === ref));
+  const clip = group?.videos.find((v) => v.ref === ref);
+  if (!group || !clip) throw new Error("ไม่พบคลิปนี้ในหน้าเทรนนิ่ง (กดรีเฟรชจากไดรฟ์แล้วลองใหม่)");
+  const db = createAdminClient();
+  const { data: cur } = await db.from("training_items").select("added").eq("ref", yt).maybeSingle();
+  if (cur?.added) throw new Error("คลิป YouTube นี้อยู่ในหน้าเทรนนิ่งแล้ว");
+  // กลุ่มในไดรฟ์: จำชื่อกลุ่มไว้ในเว็บ (อ่านไดรฟ์ไม่ได้ก็ยังขึ้นชื่อเดิม)
+  if (group.ref && group.name === group.folderName) await upsert(group.ref, { title: group.name }, by);
+  const { data: own } = await db.from("training_items").select("required").eq("ref", ref).maybeSingle();
+  await upsert(yt, { added: true, title: clip.title, group_name: group.ref ?? group.name, hidden: false, ...(own?.required ? { required: true } : {}) }, by);
+  await upsert(ref, { hidden: true }, by);
+  // ดูจบคลิปเดิมแล้ว = ดูจบคลิป YouTube ด้วย
+  const { data: views } = await db.from("training_views").select("email, who, role").eq("kind", "done").eq("ref", ref);
+  const seen = new Set<string>();
+  const rows = (views ?? []).filter((v) => !seen.has(v.email) && seen.add(v.email))
+    .map((v) => ({ email: v.email, who: v.who, role: v.role, kind: "done", ref: yt, title: clip.title }));
+  if (rows.length) await db.from("training_views").insert(rows);
+  return { title: clip.title, copied: rows.length };
 }
 
 // ---------- ประวัติการเข้าชม (SQL 20261105000000_training_views) ----------

@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, ListChecksIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
-  RefreshCwIcon, RotateCcwIcon, RotateCwIcon, Settings2Icon, ShirtIcon, Trash2Icon, UsersIcon, VideoIcon, Volume2Icon, VolumeXIcon, XIcon,
+  CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, ListChecksIcon, MaximizeIcon, PencilIcon, PlayIcon, PlusIcon, PresentationIcon,
+  RefreshCwIcon, Settings2Icon, ShirtIcon, SquarePlayIcon, Trash2Icon, UsersIcon, VideoIcon, XIcon,
 } from "lucide-react";
 import { LiveFrames } from "@/components/LiveFrames";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, Notice, api, useConfirm, useToast } from "@/components/shared";
@@ -17,7 +17,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * หน้าเทรนนิ่ง: วิดีโอ product training + สไลด์บรีฟโปรดักต์ — เล่น / เปิดในหน้าเว็บด้วยตัวเล่นของ Google / YouTube (ไม่ต้องไปที่ไดรฟ์)
- *   โหลดตัวเล่นวิดีโอทีละ 1 ตัว (ตัวที่เลือก)
+ *   โหลดตัวเล่นวิดีโอทีละ 1 ตัว (ตัวที่เลือก) · วิดีโอไม่ผ่านเซิร์ฟเวอร์ของเว็บ (กันปริมาณส่งข้อมูลของ Vercel เกินโควตา)
+ *   คลิป YouTube = นับดูจบอัตโนมัติ (YouTubePlayer) · คลิปในไดรฟ์ = ตัวเล่นของ Google กด "ดูจบแล้ว" เอง → Owner ย้ายไป YouTube ได้ในโหมดจัดการคลิป
  *   Owner ที่จัดการได้: โหมด "จัดการคลิป" = ซ่อน / แสดง คลิปหรือทั้งกลุ่ม · แก้ชื่อที่แสดง · เพิ่มคลิปจากลิงก์ · รีเฟรชจากไดรฟ์
  */
 
@@ -42,6 +43,7 @@ export function TrainingPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [rename, setRename] = useState<Rename | null>(null);
   const [adding, setAdding] = useState(false);
+  const [moving, setMoving] = useState<TrainingVideo | null>(null);
   // คลิปที่ดูจบแล้วในรอบนี้ (รวมกับที่เซิร์ฟเวอร์ส่งมา) — ป้าย "ดูแล้ว" ขึ้นทันทีไม่ต้องโหลดใหม่
   const [justDone, setJustDone] = useState<string[]>([]);
   const player = useRef<HTMLDivElement>(null);
@@ -176,7 +178,7 @@ export function TrainingPage() {
               <Notice className="mb-3" title={gate.passed ? "ผ่านเทรนนิ่งแล้ว (ทีมงานให้ผ่าน)" : `ดูคลิปบังคับครบแล้ว ${requiredDone}/${requiredClips.length} ✓`}>จองคิวได้ตามปกติ</Notice>
             ) : (
               <Notice variant="warning" icon className="mb-3" title={`ดูคลิปที่มีป้าย "บังคับ" ให้ครบก่อนจองคิว — ดูแล้ว ${requiredDone}/${requiredClips.length}`}>
-                เล่นในหน้านี้จนจบ ระบบนับให้อัตโนมัติ (คลิป YouTube กด &quot;ดูจบแล้ว&quot; ใต้คลิป) ครบแล้วกลับไปจองได้เลย
+                เล่นในหน้านี้จนจบ ระบบนับให้อัตโนมัติ (คลิปที่ขึ้นปุ่ม &quot;ดูจบแล้ว&quot; ใต้คลิป กดเองเมื่อดูจบ) ครบแล้วกลับไปจองได้เลย
               </Notice>
             )
           ) : null}
@@ -186,6 +188,7 @@ export function TrainingPage() {
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   ซ่อน = ทีมไม่เห็นในหน้าเทรนนิ่ง (ไฟล์ในไดรฟ์ไม่ถูกลบ กดแสดงกลับได้) · แก้ชื่อ = เปลี่ยนเฉพาะชื่อที่แสดงในเว็บ
                   · คลิปใหม่ในโฟลเดอร์ไดรฟ์ขึ้นเองภายใน 10 นาที (กดรีเฟรชให้ขึ้นทันที)
+                  · ย้ายไป YouTube = อัปโหลดคลิปขึ้น YouTube แบบ &quot;ไม่เป็นสาธารณะ&quot; แล้ววางลิงก์ — ระบบนับดูจบให้อัตโนมัติ (คลิปในไดรฟ์ต้องกดดูจบเอง)
                   · บังคับ = Mc ใหม่ (ยังไม่มีคิว) ต้องดูจบก่อนจองคิว (ติ๊กที่คลิป หรือทั้งกลุ่ม)
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -202,8 +205,8 @@ export function TrainingPage() {
           <div ref={player} className="scroll-mt-4">
             {playing ? (
               <div className="mb-4">
-                {playing.kind === "drive" ? (
-                  <VideoPlayer key={playing.ref} id={playing.id} title={playing.title} onDone={() => markDone(playing)} />
+                {playing.kind === "youtube" ? (
+                  <YouTubePlayer key={playing.ref} video={playing} done={done.has(playing.ref)} onDone={() => markDone(playing)} />
                 ) : (
                   <Frame
                     key={playing.ref} src={playerUrl(playing)} title={playing.title}
@@ -211,9 +214,9 @@ export function TrainingPage() {
                       <>
                         <b className="w-full text-sm break-words sm:w-auto sm:flex-1">{playing.title}</b>
                         <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
-                          <a href={openUrl(playing)} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดใน YouTube</a>
+                          <a href={openUrl(playing)} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดในไดรฟ์</a>
                         </Button>
-                        {/* YouTube: เว็บรู้ไม่ได้ว่าดูจบหรือยัง → กดเองเมื่อดูจบ (คลิปบังคับ) */}
+                        {/* ตัวเล่นของไดรฟ์: เว็บรู้ไม่ได้ว่าดูจบหรือยัง → กดเองเมื่อดูจบ (คลิปบังคับ) */}
                         {playing.required ? (
                           <Button size="sm" variant={done.has(playing.ref) ? "outline" : "default"} disabled={done.has(playing.ref)} onClick={() => markDone(playing)}>
                             <CheckIcon />{done.has(playing.ref) ? "ดูจบแล้ว" : "ดูจบแล้ว กดยืนยัน"}
@@ -301,6 +304,9 @@ export function TrainingPage() {
                               className={cn(v.required && "bg-warning text-warning-foreground hover:bg-warning")}
                             ><ListChecksIcon /></ClipButton>
                           ) : null}
+                          {v.kind === "drive" && !v.added ? (
+                            <ClipButton label="YouTube" title="ย้ายไปเล่นจาก YouTube (นับดูจบอัตโนมัติ)" disabled={!!busy} onClick={() => setMoving(v)}><SquarePlayIcon /></ClipButton>
+                          ) : null}
                           {v.added ? (
                             <ClipButton label="ลบ" disabled={!!busy} className="text-destructive" onClick={() => removeClip(v)}><Trash2Icon /></ClipButton>
                           ) : null}
@@ -322,6 +328,14 @@ export function TrainingPage() {
       <AddDialog
         open={adding} busy={!!busy} groups={data.groups.map((g) => g.name)} onClose={() => setAdding(false)}
         onAdd={async (body) => { if (await run("add", { action: "add", ...body })) setAdding(false); }}
+      />
+      <MoveDialog
+        video={moving} busy={!!busy} onClose={() => setMoving(null)}
+        onMove={async (url) => {
+          if (!moving || !(await run(`yt${moving.ref}`, { action: "youtube", ref: moving.ref, url }))) return;
+          if (playing?.ref === moving.ref) setPlaying(null);
+          setMoving(null);
+        }}
       />
     </div>
   );
@@ -439,7 +453,7 @@ function RequiredProgress() {
         ))}
       </ul>
       <p className="mt-1 text-[11px] text-muted-foreground">
-        ดูจบ = เล่นในเว็บจริงเกิน 85% ของคลิป (เลื่อนข้ามไม่นับ) · คลิป YouTube = กด &quot;ดูจบแล้ว&quot; เอง
+        ดูจบ = คลิป YouTube เล่นในเว็บจริงเกิน 85% ของคลิป (เลื่อนข้ามไม่นับ) · คลิปในไดรฟ์ = กด &quot;ดูจบแล้ว&quot; เอง
         · อ่านสไลด์ครบ = เปิดในเว็บครบทุกหน้า (หน้าละอย่างน้อย 3 วินาที) · ให้ผ่าน = จองได้โดยไม่ต้องดู (เช่น เทรนนอกเว็บแล้ว)
       </p>
     </section>
@@ -630,6 +644,41 @@ function AddDialog({ open, busy, groups, onClose, onAdd }: {
   );
 }
 
+/** ย้ายคลิปในไดรฟ์ไปเล่นจาก YouTube: วางลิงก์คลิปที่อัปโหลดแล้ว (แบบไม่เป็นสาธารณะ) */
+function MoveDialog({ video, busy, onClose, onMove }: { video: TrainingVideo | null; busy: boolean; onClose: () => void; onMove: (url: string) => void }) {
+  const [url, setUrl] = useState("");
+  const [ref, setRef] = useState<string | null>(null);
+  // เปิดหน้าต่างใหม่ = ล้างช่องลิงก์
+  if (video && video.ref !== ref) { setRef(video.ref); setUrl(""); }
+  if (!video && ref) setRef(null);
+  return (
+    <AppDialog
+      open={!!video} onClose={onClose} busy={busy} title="ย้ายคลิปไปเล่นจาก YouTube"
+      description={video ? <>คลิป: {video.title}</> : undefined}
+    >
+      <DialogBody className="space-y-2 text-sm">
+        <ol className="list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+          <li>
+            <a href={video ? openUrl(video) : undefined} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline-offset-2 hover:underline">
+              ดาวน์โหลดคลิปจากไดรฟ์
+            </a>{" "}แล้วอัปโหลดขึ้น YouTube ตั้งค่าการเผยแพร่เป็น <b className="text-foreground">&quot;ไม่เป็นสาธารณะ&quot; (Unlisted)</b>
+          </li>
+          <li>คัดลอกลิงก์คลิปจาก YouTube มาวางด้านล่าง</li>
+        </ol>
+        <Label htmlFor="training-yt" className="mb-1.5">ลิงก์ YouTube</Label>
+        <Input id="training-yt" value={url} inputMode="url" placeholder="https://youtu.be/…" onChange={(e) => setUrl(e.target.value)} autoFocus />
+        <p className="text-xs text-muted-foreground">
+          คลิป YouTube ได้ชื่อ + ป้ายบังคับเหมือนเดิม และระบบนับดูจบให้อัตโนมัติ · คลิปในไดรฟ์จะถูกซ่อน (ไม่ลบ) · คนที่ดูจบแล้วไม่ต้องดูซ้ำ
+        </p>
+      </DialogBody>
+      <DialogActions>
+        <Button variant="outline" disabled={busy} onClick={onClose}>ยกเลิก</Button>
+        <Button disabled={busy || !url.trim()} onClick={() => onMove(url)}>{busy ? "กำลังย้าย..." : "ย้ายไป YouTube"}</Button>
+      </DialogActions>
+    </AppDialog>
+  );
+}
+
 /** รูปสไลด์หน้า i (เริ่ม 0) ของรุ่นนี้ — เซิร์ฟเวอร์ดึงจาก Google ครั้งแรกแล้วเก็บไว้ */
 const slideUrl = (i: number, rev: string) => `/api/training/slide?i=${i}&r=${encodeURIComponent(rev)}`;
 /** อ่านหน้านี้นานเท่านี้ขึ้นไป = นับว่าอ่านแล้ว */
@@ -785,226 +834,130 @@ function SlidesView({ id }: { id: string }) {
   );
 }
 
-/** วิดีโอในไดรฟ์ ส่งผ่านเซิร์ฟเวอร์ของเว็บทีละช่วง (Google บล็อกไม่ให้เว็บอื่นดึงจากลิงก์ไดรฟ์ตรงๆ) */
-const streamUrl = (id: string) => `/api/training/video?id=${encodeURIComponent(id)}`;
-const SPEEDS = [1, 1.25, 1.5, 2, 0.75];
 const POS_KEY = (id: string) => `glory_training_pos_${id}`;
 /** วินาทีที่เล่นจริงสะสม (เลื่อนข้ามไม่นับ) ใช้ตัดสินว่าดูจบ — จำในเครื่องนี้ ดูต่อวันอื่นได้ */
 const WATCH_KEY = (id: string) => `glory_training_watched_${id}`;
 /** เล่นจริงเกินเท่านี้ของความยาวคลิป = ดูจบ */
 const DONE_RATIO = 0.85;
-const readWatched = (id: string) => {
-  try { return Number(localStorage.getItem(WATCH_KEY(id))) || 0; } catch { return 0; }
+const readNum = (key: string) => {
+  try { return Number(localStorage.getItem(key)) || 0; } catch { return 0; }
 };
-/** "1:02:03" / "4:05" */
-const clock = (s: number) => {
-  if (!Number.isFinite(s) || s < 0) s = 0;
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.floor(s % 60);
-  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
-};
+
+/** YouTube IFrame API (โหลดสคริปต์ครั้งเดียว) — อ่านเวลาที่เล่นของคลิป YouTube ที่ฝังในหน้า */
+type YTPlayer = { getCurrentTime(): number; getDuration(): number; getPlayerState(): number };
+type YTApi = { loaded?: number; Player: new (el: HTMLIFrameElement, opts: { events: Record<string, (e: { data: number }) => void> }) => YTPlayer };
+let ytApi: Promise<YTApi> | null = null;
+function loadYouTubeApi() {
+  const w = window as unknown as { YT?: YTApi; onYouTubeIframeAPIReady?: () => void };
+  if (w.YT?.loaded) return Promise.resolve(w.YT);
+  ytApi ??= new Promise<YTApi>((resolve, reject) => {
+    const prev = w.onYouTubeIframeAPIReady;
+    w.onYouTubeIframeAPIReady = () => { prev?.(); resolve(w.YT!); };
+    const el = document.createElement("script");
+    el.src = "https://www.youtube.com/iframe_api";
+    el.async = true;
+    el.onerror = () => { ytApi = null; el.remove(); reject(new Error("โหลด YouTube API ไม่ได้")); };
+    document.head.appendChild(el);
+  });
+  return ytApi;
+}
 
 /**
- * ตัวเล่นวิดีโอของเว็บ (คลิปในไดรฟ์) — ควบคุมได้ทั้งหมด: เล่น / หยุด (แตะที่ภาพได้) · แถบเลื่อนเวลา · ย้อน / ข้าม 10 วิ
- *   · ความเร็ว · ปิดเสียง · เต็มจอ (iPhone = ตัวเล่นเต็มจอของ iPhone เอง) · เล่นต่อจากที่ดูค้าง (จำในเครื่อง)
- *   ปุ่มซ่อนเองหลังเล่น 3 วินาที (แตะ / ขยับเมาส์ = แสดง) · คีย์บอร์ด: เว้นวรรค = เล่น / หยุด · ← → = 10 วิ
- *   เล่นไม่ได้ (Google จำกัดการดาวน์โหลดชั่วคราว / เน็ตหลุด) = ข้อความ + ปุ่มเปิดในไดรฟ์
+ * คลิป YouTube: ตัวเล่นของ YouTube (วิดีโอไม่ผ่านเซิร์ฟเวอร์ของเว็บ) + นับเวลาที่เล่นจริงทุก 1 วินาที (YouTube IFrame API)
+ *   เล่นต่อเนื่อง = นับ (เล่นเร็วถึง 2x ได้ · แท็บพื้นหลังที่เบราว์เซอร์หน่วงเวลาก็นับ) · เลื่อนข้าม / หยุด = ไม่นับ
+ *   ครบ 85% ของคลิป = onDone ครั้งเดียว · จำเวลาที่นับ + ตำแหน่งที่ดูค้างในเครื่องนี้ (เปิดอีกครั้งเล่นต่อจากเดิม)
+ *   โหลดตัวนับไม่ได้ (เน็ต / ส่วนขยายบล็อก) = ปุ่ม "ดูจบแล้ว" ให้กดเอง (คลิปบังคับ)
  */
-function VideoPlayer({ id, title, onDone }: { id: string; title: string; onDone?: () => void }) {
-  const toast = useToast();
-  // ดูจบ: นับเวลาที่เล่นจริง (ช่วงห่างของ timeupdate < 3 วินาที = เล่นต่อเนื่อง · เลื่อนข้าม = ไม่นับ) ครบ 85% → onDone ครั้งเดียว
-  const watched = useRef<number | null>(null);
-  const lastT = useRef<number | null>(null);
-  const doneSent = useRef(false);
-  const box = useRef<HTMLDivElement>(null);
-  const vid = useRef<HTMLVideoElement>(null);
-  const hideAt = useRef(0);
-  const [paused, setPaused] = useState(true);
-  const [time, setTime] = useState(0);
-  const [dur, setDur] = useState(0);
-  const [buffering, setBuffering] = useState(true);
-  const [failed, setFailed] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const [speed, setSpeed] = useState(1);
-  const [shown, setShown] = useState(true);
-  const [isFull, setIsFull] = useState(false);
+function YouTubePlayer({ video, done, onDone }: { video: TrainingVideo; done: boolean; onDone: () => void }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [pct, setPct] = useState(0);
+  const [noApi, setNoApi] = useState(false);
+  const onDoneRef = useRef(onDone);
+  useEffect(() => { onDoneRef.current = onDone; });
+  // เริ่มจากที่ดูค้าง (อ่านครั้งเดียว — src ไม่เปลี่ยนระหว่างเล่น)
+  const [src] = useState(() => {
+    const at = readNum(POS_KEY(video.id));
+    const q = new URLSearchParams({ rel: "0", playsinline: "1", enablejsapi: "1", origin: window.location.origin, ...(at > 10 ? { start: String(Math.floor(at)) } : {}) });
+    return `https://www.youtube-nocookie.com/embed/${video.id}?${q}`;
+  });
 
-  const poke = () => { hideAt.current = Date.now() + 3000; setShown(true); };
   useEffect(() => {
-    // ซ่อนปุ่มเมื่อเล่นอยู่และไม่ได้แตะ 3 วินาที
-    const t = window.setInterval(() => { if (Date.now() > hideAt.current) setShown(false); }, 500);
-    const onFs = () => setIsFull(document.fullscreenElement === box.current);
-    document.addEventListener("fullscreenchange", onFs);
-    return () => { window.clearInterval(t); document.removeEventListener("fullscreenchange", onFs); };
-  }, []);
-
-  const v = () => vid.current;
-  const toggle = () => {
-    const el = v();
-    if (!el) return;
-    if (el.paused) el.play().catch(() => setPaused(true));
-    else el.pause();
-    poke();
-  };
-  const seekTo = (s: number) => { const el = v(); if (el) el.currentTime = Math.max(0, Math.min(dur || el.duration || 0, s)); poke(); };
-  const skip = (d: number) => seekTo((v()?.currentTime ?? 0) + d);
-  const cycleSpeed = () => {
-    const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
-    if (v()) v()!.playbackRate = next;
-    setSpeed(next);
-    poke();
-  };
-  const toggleMute = () => { const el = v(); if (el) { el.muted = !el.muted; setMuted(el.muted); } poke(); };
-  function fullscreen() {
-    const el = v() as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
-    if (document.fullscreenElement) { document.exitFullscreen().catch(() => undefined); return; }
-    // iPhone: เต็มจอได้เฉพาะตัว video (ตัวเล่นของ iPhone มีปุ่มครบ) · อื่นๆ = เต็มจอทั้งกรอบ (ใช้ปุ่มของเว็บ)
-    if (document.fullscreenEnabled && box.current) box.current.requestFullscreen().catch(() => el?.webkitEnterFullscreen?.());
-    else el?.webkitEnterFullscreen?.();
-  }
-
-  // จำตำแหน่งที่ดูไว้ (ทุก 5 วินาที / ตอนหยุด) — ดูจบ = ลบ
-  const lastSave = useRef(0);
-  const savePos = (t: number, d: number) => {
-    try {
-      if (d && t > d - 15) localStorage.removeItem(POS_KEY(id));
-      else if (t > 10) localStorage.setItem(POS_KEY(id), String(Math.floor(t)));
-    } catch { /* ไม่มีที่เก็บ = ไม่จำ */ }
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === " " || e.key === "k") { e.preventDefault(); toggle(); }
-    else if (e.key === "ArrowLeft") { e.preventDefault(); skip(-10); }
-    else if (e.key === "ArrowRight") { e.preventDefault(); skip(10); }
-  };
-  const showUi = shown || paused || failed;
-  const iconBtn = "grid size-9 shrink-0 cursor-pointer place-items-center rounded-full text-white hover:bg-white/15 [&_svg]:size-5";
+    const id = video.id;
+    let player: YTPlayer | null = null;
+    let timer = 0, alive = true, sent = false, saved = 0;
+    let watched = readNum(WATCH_KEY(id));
+    let last: { t: number; at: number } | null = null;
+    const save = (t: number, d: number) => {
+      try {
+        localStorage.setItem(WATCH_KEY(id), String(Math.floor(watched)));
+        if (d && t > d - 15) localStorage.removeItem(POS_KEY(id));
+        else if (t > 10) localStorage.setItem(POS_KEY(id), String(Math.floor(t)));
+      } catch { /* ไม่มีที่เก็บ = นับเฉพาะรอบนี้ */ }
+    };
+    const tick = (force = false) => {
+      if (!player) return;
+      try {
+        const t = player.getCurrentTime(), d = player.getDuration(), now = Date.now();
+        // เวลาในคลิปเดินไปไม่เกินเวลาจริงที่ผ่านไป x2 (+1 วิ) = เล่นต่อเนื่อง · เกินนั้น = เลื่อนข้าม
+        if (last && player.getPlayerState() === 1) {
+          const step = t - last.t;
+          if (step > 0 && step <= ((now - last.at) / 1000) * 2 + 1) watched = Math.min(d || Infinity, watched + step);
+        }
+        last = { t, at: now };
+        if (d) setPct(Math.min(100, Math.floor((watched / d) * 100)));
+        if (!sent && d && watched >= d * DONE_RATIO) { sent = true; onDoneRef.current(); }
+        if (force || now - saved > 5000) { saved = now; save(t, d); }
+      } catch { /* ตัวเล่นยังไม่พร้อม */ }
+    };
+    loadYouTubeApi().then((YT) => {
+      if (!alive || !frame.current) return;
+      player = new YT.Player(frame.current, {
+        events: {
+          onReady: () => { timer = window.setInterval(() => tick(), 1000); },
+          // หยุด / จบ = นับ + จำตำแหน่งทันที · เริ่มเล่น = เริ่มนับจากตรงนี้
+          onStateChange: (e) => { if (e.data === 1) last = null; else tick(true); },
+        },
+      });
+    }).catch(() => { if (alive) setNoApi(true); });
+    return () => { alive = false; window.clearInterval(timer); tick(true); };
+  }, [video.id]);
 
   return (
-    <div>
-      <div className="mx-auto w-full max-w-[calc((100svh-120px)*16/9)]">
-        <div
-          ref={box} tabIndex={0} onKeyDown={onKeyDown} onMouseMove={poke}
-          className={cn("group relative w-full overflow-hidden bg-black outline-none select-none", isFull ? "h-full" : "aspect-video rounded-xl border shadow-card", !showUi && "cursor-none")}
-        >
-          <video
-            ref={vid} src={streamUrl(id)} playsInline preload="metadata" autoPlay title={title}
-            className="absolute inset-0 size-full object-contain" onClick={toggle}
-            onLoadedMetadata={(e) => {
-              const el = e.currentTarget;
-              setDur(el.duration);
-              try {
-                const at = Number(localStorage.getItem(POS_KEY(id)));
-                if (at > 10 && at < el.duration - 15) { el.currentTime = at; toast(`เล่นต่อจาก ${clock(at)}`); }
-              } catch { /* ไม่มีที่เก็บ */ }
-            }}
-            onDurationChange={(e) => setDur(e.currentTarget.duration)}
-            onTimeUpdate={(e) => {
-              const el = e.currentTarget;
-              setTime(el.currentTime);
-              watched.current ??= readWatched(id);
-              const step = lastT.current === null ? 0 : el.currentTime - lastT.current;
-              if (!el.paused && step > 0 && step < 3) watched.current = Math.min(el.duration || Infinity, watched.current + step);
-              lastT.current = el.currentTime;
-              if (!doneSent.current && el.duration && watched.current >= el.duration * DONE_RATIO) { doneSent.current = true; onDone?.(); }
-              if (Date.now() - lastSave.current > 5000) {
-                lastSave.current = Date.now();
-                savePos(el.currentTime, el.duration);
-                try { localStorage.setItem(WATCH_KEY(id), String(Math.floor(watched.current))); } catch { /* ไม่มีที่เก็บ = นับเฉพาะรอบนี้ */ }
-              }
-            }}
-            onPlay={() => { setPaused(false); poke(); }}
-            onPause={(e) => { setPaused(true); savePos(e.currentTarget.currentTime, e.currentTarget.duration); }}
-            onEnded={(e) => { setPaused(true); savePos(e.currentTarget.duration, e.currentTarget.duration); }}
-            onWaiting={() => setBuffering(true)} onCanPlay={() => setBuffering(false)} onPlaying={() => setBuffering(false)}
-            onError={() => { setFailed(true); setBuffering(false); }}
-          />
-
-          {/* กลางจอ: กำลังโหลด / ปุ่มเล่นใหญ่ / เล่นไม่ได้ */}
-          {failed ? (
-            <div className="absolute inset-0 grid place-items-center bg-black/80 p-4 text-center text-sm text-white">
-              <div>
-                <p className="font-semibold">เล่นวิดีโอนี้ในเว็บไม่ได้ตอนนี้</p>
-                <p className="mt-1 text-xs text-white/70">Google อาจจำกัดการเปิดไฟล์นี้ชั่วคราว (คนเปิดพร้อมกันเยอะ) หรือเน็ตหลุด</p>
-                <Button size="sm" variant="secondary" className="mt-3" asChild>
-                  <a href={`https://drive.google.com/file/d/${id}/view`} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดในไดรฟ์</a>
-                </Button>
-              </div>
-            </div>
-          ) : buffering && !paused ? (
-            <div className="pointer-events-none absolute inset-0 grid place-items-center">
-              <span className="size-10 animate-spin rounded-full border-4 border-white/30 border-t-white" />
-            </div>
-          ) : paused ? (
-            <button
-              type="button" onClick={toggle} aria-label="เล่น"
-              className="absolute inset-0 m-auto grid size-12 -translate-y-5 cursor-pointer place-items-center rounded-full bg-black/55 text-white sm:size-16 sm:-translate-y-4 [&_svg]:size-6 sm:[&_svg]:size-8"
-            >
-              {buffering && !dur ? <span className="size-6 animate-spin rounded-full border-4 border-white/30 border-t-white" /> : <PlayIcon className="fill-current" />}
-            </button>
+    <Frame
+      src={src} title={video.title} frameRef={frame}
+      footer={(
+        <>
+          <b className="w-full text-sm break-words sm:w-auto sm:flex-1">{video.title}</b>
+          <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
+            <a href={openUrl(video)} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดใน YouTube</a>
+          </Button>
+          {video.required ? (
+            done ? <Badge className="bg-success text-white">ดูจบแล้ว ✓</Badge>
+              : noApi ? (
+                <Button size="sm" onClick={onDone}><CheckIcon />ดูจบแล้ว กดยืนยัน</Button>
+              ) : (
+                <span className="text-xs text-muted-foreground tabular-nums" title="ต้องเล่นจริงเกิน 85% ของคลิป (เลื่อนข้ามไม่นับ)">
+                  นับดูแล้ว {pct}% / {Math.round(DONE_RATIO * 100)}%
+                </span>
+              )
           ) : null}
-
-          {/* แถบปุ่มด้านล่าง */}
-          {!failed ? (
-            <div
-              className={cn(
-                "absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-6 pb-1 transition-opacity",
-                showUi ? "opacity-100" : "pointer-events-none opacity-0",
-              )}
-              onClick={poke}
-            >
-              <div className="flex items-center gap-2 px-1 text-[11px] font-semibold text-white tabular-nums">
-                <span>{clock(time)}</span>
-                <input
-                  type="range" min={0} max={dur || 0} step={0.1} value={Math.min(time, dur || 0)} aria-label="เลื่อนเวลา"
-                  onChange={(e) => seekTo(Number(e.target.value))}
-                  className="h-1.5 min-w-0 flex-1 cursor-pointer accent-primary"
-                />
-                <span>{clock(dur)}</span>
-              </div>
-              <div className="flex items-center gap-0.5">
-                <button type="button" className={iconBtn} onClick={toggle} aria-label={paused ? "เล่น" : "หยุด"}>
-                  {paused ? <PlayIcon className="fill-current" /> : <PauseIcon className="fill-current" />}
-                </button>
-                <button type="button" className={cn(iconBtn, "relative")} onClick={() => skip(-10)} aria-label="ย้อน 10 วินาที">
-                  <RotateCcwIcon /><span className="absolute inset-0 grid place-items-center pt-px text-[8px] font-bold">10</span>
-                </button>
-                <button type="button" className={cn(iconBtn, "relative")} onClick={() => skip(10)} aria-label="ข้าม 10 วินาที">
-                  <RotateCwIcon /><span className="absolute inset-0 grid place-items-center pt-px text-[8px] font-bold">10</span>
-                </button>
-                <button type="button" className={iconBtn} onClick={toggleMute} aria-label={muted ? "เปิดเสียง" : "ปิดเสียง"}>
-                  {muted ? <VolumeXIcon /> : <Volume2Icon />}
-                </button>
-                <span className="flex-1" />
-                <button type="button" onClick={cycleSpeed} aria-label="ความเร็ว" className="h-8 shrink-0 cursor-pointer rounded-full px-2.5 text-xs font-bold text-white tabular-nums hover:bg-white/15">
-                  {speed}x
-                </button>
-                <button type="button" className={iconBtn} onClick={fullscreen} aria-label={isFull ? "ออกจากเต็มจอ" : "เต็มจอ"}>
-                  {isFull ? <MinimizeIcon /> : <MaximizeIcon />}
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <b className="w-full text-sm break-words sm:w-auto sm:flex-1">{title}</b>
-        <Button size="sm" variant="ghost" className="-ml-2 text-muted-foreground" asChild>
-          <a href={`https://drive.google.com/file/d/${id}/view`} target="_blank" rel="noopener noreferrer"><ExternalLinkIcon />เปิดในไดรฟ์</a>
-        </Button>
-      </div>
-    </div>
+        </>
+      )}
+    />
   );
 }
 
 /**
- * ตัวเล่นที่ฝังมาจาก Google / YouTube (คลิป YouTube + สไลด์) 16:9 + ปุ่ม "เต็มจอ" ของเว็บ
+ * ตัวเล่นที่ฝังมาจาก Google / YouTube (คลิป YouTube / คลิปในไดรฟ์ + สไลด์) 16:9 + ปุ่ม "เต็มจอ" ของเว็บ
  *   ความสูงกรอบ = กว้าง × 9/16 + extra (px) — แถบปุ่มของ Google ที่อยู่นอกภาพ (สไลด์ 37px)
  *   กว้างไม่เกินที่ทำให้สูงพอดีจอ (มือถือแนวนอน: เดิมกรอบสูงเกินจอ ต้องเลื่อนดูภาพล่าง)
  *   เต็มจอ: Safari บน iPhone สั่งเต็มจอให้กรอบที่ฝังมาไม่ได้ → ขยายกรอบเดิมให้เต็มหน้าจอเอง (ไม่สร้างใหม่ เล่นต่อ) + เบราว์เซอร์ที่รองรับ = เต็มจอจริงด้วย
  *     ใหญ่สุดที่พอดีจอแบบ 16:9 อยู่กลางจอ · เผื่อแค่รอยบาก / ขอบจอ (safe area) · ปุ่มออกลอยมุมซ้ายบน (พื้นที่ดำข้างกรอบ)
- *   คลิปในไดรฟ์ใช้ VideoPlayer (ตัวเล่นของเว็บเอง — ตัวเล่นที่ฝังมาจากไดรฟ์ควบคุมไม่ได้)
+ *   คลิป YouTube ใช้ผ่าน YouTubePlayer (frameRef = ต่อ IFrame API นับเวลาที่ดู)
  */
-function Frame({ src, title, extra = 0, footer }: { src: string; title: string; extra?: number; footer?: React.ReactNode }) {
+function Frame({ src, title, extra = 0, footer, frameRef }: {
+  src: string; title: string; extra?: number; footer?: React.ReactNode; frameRef?: React.Ref<HTMLIFrameElement>;
+}) {
   const [full, setFull] = useState(false);
   const add = extra;
   // เต็มจอ (cq = ขนาดกรอบเต็มจอ): พื้นที่ใช้ได้ = จอ - safe area → กว้าง / สูงพอดีแบบ 16:9 (+ add) อยู่กลาง
@@ -1060,7 +1013,7 @@ function Frame({ src, title, extra = 0, footer }: { src: string; title: string; 
             </button>
           ) : null}
           <iframe
-            src={src} title={title} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen
+            ref={frameRef} src={src} title={title} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen
             className={full ? "absolute" : "absolute inset-0 size-full"} style={full ? fullStyle : undefined}
           />
         </div>
