@@ -405,10 +405,10 @@ export async function slideImageResponse(index: number, rev: string): Promise<Re
 }
 
 // ---------- บังคับก่อนจองคิว (SQL 20261111000000_pay_sync) ----------
-//   เปิดใช้ (settings.training_required) → คนใหม่ (ยังไม่เคยไลฟ์ = ไม่มีคิวที่ผ่านมาแล้วเลย) ต้องผ่านก่อนจองผ่านเว็บ
+//   เปิดใช้ (settings.training_required) → คนใหม่ (ยังไม่มีคิวเลย) ต้องผ่านก่อนจองผ่านเว็บ
 //     Mc ใหม่ = ดูคลิปที่ Owner ติ๊ก "บังคับดู" (ที่คลิป / ทั้งกลุ่ม) ให้จบครบ
 //     Admin เสริมใหม่ = อ่านสไลด์บรีฟโปรดักต์ให้ครบทุกหน้า (ตัวอ่านทีละหน้าของเว็บ)
-//   Mc / Admin ที่เคยไลฟ์แล้ว = ไม่ต้อง · staff.training_passed = Owner ให้ผ่าน
+//   Mc / Admin ที่มีคิวแล้ว (คิวที่ผ่านมาหรือคิวข้างหน้า ไม่นับที่ยกเลิก / ปฏิเสธ) = ไม่ต้อง ทุกกรณี · staff.training_passed = Owner ให้ผ่าน
 //   ดูจบ = ตัวเล่นของเว็บ (คลิปในไดรฟ์) เล่นจริงเกือบทั้งคลิป · YouTube = กด "ดูจบแล้ว" เอง
 
 export const TRAINING_GATE_SQL = "ต้องรัน SQL 20261111000000_pay_sync ใน Supabase ก่อน (คลิปบังคับก่อนจอง)";
@@ -438,17 +438,16 @@ async function passed(staffId: number) {
   return !error && data?.training_passed === true;
 }
 
-const bkkToday = () => new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
 
-/** คนที่เคยไลฟ์แล้ว (มีคิวก่อนวันนี้อย่างน้อย 1 คิว ไม่นับที่ยกเลิก / ปฏิเสธ) — ids = เฉพาะคนเหล่านี้ (Mc / Admin) */
-async function livedStaff(role: "mc" | "admin", ids: number[]) {
+/** คนที่มีคิวแล้ว (อย่างน้อย 1 คิว ทั้งที่ผ่านมาและข้างหน้า ไม่นับที่ยกเลิก / ปฏิเสธ) — ids = เฉพาะคนเหล่านี้ (Mc / Admin) */
+async function queuedStaff(role: "mc" | "admin", ids: number[]) {
   const table = role === "mc" ? "mc_slots" : "admin_slots", col = role === "mc" ? "mc_id" : "admin_id";
   const out = new Set<number>();
   for (let i = 0; i < ids.length; i += 200) {
     const part = ids.slice(i, i + 200);
     for (let from = 0; ; from += 1000) {
       const { data, error } = await createAdminClient().from(table).select(col)
-        .in(col, part).lt("live_date", bkkToday()).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true")
+        .in(col, part).eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true")
         .order("id").range(from, from + 999);
       if (error) throw error;
       for (const r of (data ?? []) as unknown as Record<string, number>[]) out.add(Number(r[col]));
@@ -459,20 +458,20 @@ async function livedStaff(role: "mc" | "admin", ids: number[]) {
 }
 
 /**
- * คนนี้ต้องผ่านอะไรก่อนจอง: Mc ใหม่ = clips · Admin เสริมใหม่ = slides · คนที่เคยไลฟ์แล้ว / Admin ประจำ = null
+ * คนนี้ต้องผ่านอะไรก่อนจอง: Mc ใหม่ = clips · Admin เสริมใหม่ = slides · คนที่มีคิวแล้ว / Admin ประจำ = null
  *   อ่านไม่ได้ = ไม่บล็อก
  */
 async function requirementOf(staffId: number): Promise<"clips" | "slides" | null> {
   const { data } = await createAdminClient().from("staff").select("role, is_extra_admin").eq("id", staffId).maybeSingle();
   const role = data?.role === "mc" ? "mc" : data?.role === "admin" && data.is_extra_admin ? "admin" : null;
   if (!role) return null;
-  const lived = await livedStaff(role, [staffId]).catch(() => new Set([staffId]));
-  return lived.has(staffId) ? null : role === "mc" ? "clips" : "slides";
+  const queued = await queuedStaff(role, [staffId]).catch(() => new Set([staffId]));
+  return queued.has(staffId) ? null : role === "mc" ? "clips" : "slides";
 }
 
 /**
  * หน้าจอง / ตอนจอง: ยังไม่ผ่าน = { kind, total, done, missing } · null = จองได้
- *   (ปิดอยู่ / เคยไลฟ์แล้ว / ไม่มีคลิปบังคับหรือสไลด์ / ให้ผ่านแล้ว / ดูครบ)
+ *   (ปิดอยู่ / มีคิวแล้ว / ไม่มีคลิปบังคับหรือสไลด์ / ให้ผ่านแล้ว / ดูครบ)
  *   on = ค่าตั้งที่โหลดมาแล้ว (ไม่ส่ง = อ่านเอง)
  */
 export async function trainingBlock(email: string, staffId: number, on?: boolean): Promise<TrainingBlock | null> {
@@ -501,7 +500,7 @@ export async function myTrainingGate(me: Me): Promise<Training["gate"]> {
 }
 
 /**
- * ความคืบหน้ารายคน (Owner) — คนใหม่ (ยังไม่เคยไลฟ์) ที่มีอีเมล (ไม่รวมบัญชีทดสอบ)
+ * ความคืบหน้ารายคน (Owner) — คนใหม่ (ยังไม่มีคิว) ที่มีอีเมล (ไม่รวมบัญชีทดสอบ)
  *   Mc ใหม่ = คลิปบังคับ (done = ดูจบกี่คลิป) · Admin เสริมใหม่ = สไลด์ (done 1 = อ่านครบทุกหน้าแล้ว)
  */
 export async function trainingProgress(): Promise<TrainingProgress> {
@@ -519,14 +518,14 @@ export async function trainingProgress(): Promise<TrainingProgress> {
   const mine = (email: unknown) => doneOf.get(String(email).trim().toLowerCase()) ?? new Set<string>();
   const crew = (staff.data ?? []).filter((s) => (s.role === "mc" || s.is_extra_admin) && !isTestAccount(s.name));
   const mcs = crew.filter((s) => s.role === "mc"), admins = crew.filter((s) => s.role === "admin");
-  const [livedMc, livedAdmin] = await Promise.all([livedStaff("mc", mcs.map((s) => Number(s.id))), livedStaff("admin", admins.map((s) => Number(s.id)))]);
+  const [queuedMc, queuedAdmin] = await Promise.all([queuedStaff("mc", mcs.map((s) => Number(s.id))), queuedStaff("admin", admins.map((s) => Number(s.id)))]);
   const people = [
-    ...mcs.filter((s) => !livedMc.has(Number(s.id))).map((s) => ({
+    ...mcs.filter((s) => !queuedMc.has(Number(s.id))).map((s) => ({
       id: Number(s.id), who: `Mc ${s.name}`, role: "mc" as const, need: "clips" as const,
       done: clips.filter((c) => mine(s.email).has(c.ref)).length, passed: s.training_passed === true,
     })),
     // ยังไม่ได้ตั้งสไลด์ = Admin ไม่ต้องอ่าน
-    ...(deckId ? admins.filter((s) => !livedAdmin.has(Number(s.id))).map((s) => ({
+    ...(deckId ? admins.filter((s) => !queuedAdmin.has(Number(s.id))).map((s) => ({
       id: Number(s.id), who: String(s.name), role: "admin" as const, need: "slides" as const,
       done: mine(s.email).has(slidesRef(deckId)) ? 1 : 0, passed: s.training_passed === true,
     })) : []),
