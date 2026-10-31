@@ -28,10 +28,11 @@ export async function POST(request: Request) {
     const res = await sendTestNotification(r.me.email).catch((err: Error) => err);
     if (res instanceof Error) return dbFail(res.message);
     const failed = res.failed.map((f) => `${f.device}: ${f.reason}`);
+    const cleaned = res.removed ? ` · ล้างเครื่องเก่าที่เลิกใช้ / เปิดจากเว็บเดิม ${res.removed} เครื่อง` : "";
     const message = res.skipped ? `บันทึกเข้ากระดิ่งแล้ว แต่เด้งเข้าเครื่องไม่ได้: ${res.skipped}`
-      : !res.total ? "ส่งเข้ากระดิ่งแล้ว (ยังไม่มีเครื่องที่เปิดแจ้งเตือน)"
-      : failed.length ? `เด้งได้ ${res.sent}/${res.total} เครื่อง · ไม่ได้ — ${failed.join(" · ")}`
-      : `ส่งแล้ว (${res.sent} เครื่อง)`;
+      : !res.total || res.total === res.removed ? `ส่งเข้ากระดิ่งแล้ว (ยังไม่มีเครื่องที่เปิดแจ้งเตือน — กดเปิดแจ้งเตือนบนเครื่องนี้)${cleaned}`
+      : failed.length ? `เด้งได้ ${res.sent}/${res.total - res.removed} เครื่อง · ไม่ได้ — ${failed.join(" · ")}${cleaned}`
+      : `ส่งแล้ว (${res.sent} เครื่อง)${cleaned}`;
     return ok({ devices: res.total, sent: res.sent, failed, warn: !!(res.skipped || failed.length), message });
   }
 

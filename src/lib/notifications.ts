@@ -100,8 +100,11 @@ export async function notifyMany(items: (Note & { email: string })[]) {
 }
 
 type Pushed = { id: number; email: string; title: string; body: string; page: string | null };
-/** ผลเด้งเข้าเครื่อง: total = จำนวนครั้งที่ส่ง (เรื่อง x เครื่อง) · skipped = เด้งไม่ได้ทั้งหมดเพราะอะไร */
-export type PushResult = { total: number; sent: number; failed: { device: string; reason: string }[]; skipped?: string };
+/**
+ * ผลเด้งเข้าเครื่อง: total = จำนวนครั้งที่ส่ง (เรื่อง x เครื่อง) · removed = เครื่องเลิกใช้ / เปิดจากเว็บเก่า (ลบทิ้งแล้ว ไม่ใช่ปัญหา)
+ *   failed = เด้งไม่ได้เพราะอะไร · skipped = เด้งไม่ได้ทั้งหมดเพราะอะไร
+ */
+export type PushResult = { total: number; sent: number; removed: number; failed: { device: string; reason: string }[]; skipped?: string };
 let vapidReady: boolean | null = null;
 let vapidError = "";
 /** ตั้งกุญแจแจ้งเตือนครั้งแรกที่ใช้ · ไม่มีกุญแจ / กุญแจผิดรูปแบบ = เด้งไม่ได้ (vapidError บอกสาเหตุ) */
@@ -140,7 +143,7 @@ const KEYS_SINCE = "2026-10-30T08:00:00Z";
 
 /** เด้งเข้าทุกเครื่องที่ผู้รับเปิดแจ้งเตือนไว้ · เครื่องที่เลิกใช้แล้ว (404 / 410) / สมัครไว้กับกุญแจชุดเก่า ลบทิ้ง */
 async function pushTo(rows: Pushed[]): Promise<PushResult> {
-  const result: PushResult = { total: 0, sent: 0, failed: [] };
+  const result: PushResult = { total: 0, sent: 0, removed: 0, failed: [] };
   if (!rows.length) return result;
   if (!vapid()) return { ...result, skipped: vapidError };
   const db = createAdminClient();
@@ -165,13 +168,16 @@ async function pushTo(rows: Pushed[]): Promise<PushResult> {
       const { statusCode: code, body } = err as { statusCode?: number; body?: unknown };
       const mismatch = KEY_MISMATCH.test(String(body ?? ""));
       const old = mismatch && String(s.created_at ?? "") < KEYS_SINCE;
-      if (code === 404 || code === 410 || old) gone.add(s.id);
-      else console.warn("ส่งแจ้งเตือนเข้าเครื่องไม่สำเร็จ:", code ?? "", (err as Error)?.message, String(body ?? "").slice(0, 200));
+      // เครื่องเลิกใช้ / เปิดจากเว็บเก่า = ลบทิ้ง (นับแยก ไม่ใช่ข้อผิดพลาด)
+      if (code === 404 || code === 410 || old) {
+        gone.add(s.id);
+        result.removed++;
+        return;
+      }
+      console.warn("ส่งแจ้งเตือนเข้าเครื่องไม่สำเร็จ:", code ?? "", (err as Error)?.message, String(body ?? "").slice(0, 200));
       result.failed.push({
         device: deviceOf(s.endpoint),
-        reason: old ? "เปิดแจ้งเตือนไว้จากเว็บเก่า (ลบแล้ว กดเปิดแจ้งเตือนใหม่บนเครื่องนั้น)"
-          : mismatch ? "กุญแจแจ้งเตือนในเซิร์ฟเวอร์ไม่ตรงกับที่เครื่องสมัครไว้ (ตรวจ VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY)"
-          : code === 404 || code === 410 ? "เครื่องเลิกใช้แล้ว (ลบแล้ว)"
+        reason: mismatch ? "กุญแจแจ้งเตือนในเซิร์ฟเวอร์ไม่ตรงกับที่เครื่องสมัครไว้ (ตรวจ VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY)"
           : `${code ?? ""} ${String(body ?? "").trim() || (err as Error)?.message || ""}`.trim().slice(0, 160),
       });
     } finally {
