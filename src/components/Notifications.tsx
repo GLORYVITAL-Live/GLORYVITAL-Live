@@ -99,12 +99,15 @@ function usePush() {
         if (!alive) return;
         if (Notification.permission === "denied") return setState("denied");
         if (sub && Notification.permission === "granted") {
-          // สมัครไว้กับกุญแจเก่า (เช่น ย้ายเว็บ / เปลี่ยนกุญแจ) = ยกเลิก แล้วให้กดเปิดแจ้งเตือนใหม่
+          // สมัครไว้กับกุญแจเก่า (เช่น ย้ายเว็บ / เปลี่ยนกุญแจ) = ยกเลิก แล้วสมัครใหม่ให้เอง (อนุญาตไว้แล้ว)
+          //   เบราว์เซอร์ไม่ยอมสมัครโดยไม่ได้กด (เช่น iPhone บางรุ่น) = ให้กดเปิดแจ้งเตือนใหม่
           const { publicKey } = await api<{ publicKey: string | null }>("/api/push").catch(() => ({ publicKey: null }));
           if (!alive) return;
           if (publicKey && !sameKey(sub, publicKey)) {
             await dropStale(sub);
-            if (alive) setState("off");
+            const fresh = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) }).catch(() => null);
+            const saved = fresh ? await api("/api/push", { subscription: fresh.toJSON() }).catch(() => null) : null;
+            if (alive) setState(saved?.ok ? "on" : "off");
             return;
           }
           setState("on");
