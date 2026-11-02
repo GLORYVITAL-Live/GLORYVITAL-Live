@@ -15,6 +15,7 @@ import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
 import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
+import { CountUp } from "@/components/motion";
 import { CeoLive } from "@/components/CeoLive";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast,
@@ -236,7 +237,8 @@ function KpiGrid({ cur, compare }: { cur: Totals; compare: { totals: Totals; lab
         return (
           <div key={m.key} className="rounded-xl border bg-card px-3 py-2.5">
             <div className="text-xs text-muted-foreground">{m.label}{m.note ? <span className="opacity-80"> · {m.note}</span> : null}</div>
-            <div className="text-lg font-bold">{fmtMetric(m.kind, v)}</div>
+            {/* ตัวเลขนับจากค่าเดิมไปค่าใหม่ (ตอนโหลด / เปลี่ยนตัวกรอง) */}
+            <div className="text-lg font-bold">{v === null ? fmtMetric(m.kind, v) : <CountUp value={v} format={(n) => fmtMetric(m.kind, n)} />}</div>
             {v === null && m.key === "co" && cur.coBase === null ? (
               <div className="text-xs text-muted-foreground">สูตรต่างกัน เลือก TikTok หรือ Shopee เพื่อดู</div>
             ) : v === null ? null : (

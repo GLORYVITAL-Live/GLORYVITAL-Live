@@ -7,7 +7,11 @@ import { cn } from "@/lib/utils";
 
 // กราฟของหน้าสถิติไลฟ์ (SVG ล้วน): สีจาก --viz-cur / --viz-prev ใน globals.css
 
-export type Series = { name: string; color: string; values: (number | null)[] };
+/** faded = แท่งที่ยังไม่ใช่ตัวเลขจริง (เช่น คิวที่จองไว้ข้างหน้า) วาดสีจางของชุดเดียวกัน — ใส่ใน Legend ด้วย fadedColor() */
+export type Series = { name: string; color: string; values: (number | null)[]; faded?: boolean[] };
+
+/** สีจางของชุด (แท่งที่ faded + จุดใน Legend ใช้สีเดียวกัน) */
+export const fadedColor = (color: string) => `color-mix(in srgb, ${color} 38%, transparent)`;
 
 /** ความกว้างจริงของกล่อง (กราฟวาดตามจอ ตัวหนังสือไม่ย่อตาม) */
 function useWidth() {
@@ -105,7 +109,13 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
                   const v = s.values[i];
                   if (v === null || v <= 0) return null;
                   const bx = gx + (groupW - inner) / 2 + j * (barW + gap);
-                  return <path key={j} d={barPath(bx, y(v), barW, y(0) - y(v))} fill={s.color} opacity={dim ? 0.45 : 1} />;
+                  // แท่งโตขึ้นจากแกนตอนข้อมูลมาถึง ทยอยจากซ้าย (ลดการเคลื่อนไหว = ไม่โต · globals.css .bar-grow)
+                  return (
+                    <path
+                      key={j} d={barPath(bx, y(v), barW, y(0) - y(v))} fill={s.faded?.[i] ? fadedColor(s.color) : s.color} opacity={dim ? 0.45 : 1}
+                      className="bar-grow" style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}
+                    />
+                  );
                 })}
                 {i % every === 0 ? (
                   <text x={gx + groupW / 2} y={height - 8} textAnchor="middle" className={cn("fill-muted-foreground text-[11px]", highlight === i && "fill-foreground font-semibold")}>
@@ -142,14 +152,17 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
   );
 }
 
-/** ▲ 12.3% / ▼ 4.0% (ไม่มีฐานเทียบ = ข้อความแจ้ง) */
-export function ChangeText({ cur, prev, suffix, className }: { cur: number | null; prev: number | null; suffix?: ReactNode; className?: string }) {
+/**
+ * ▲ 12.3% / ▼ 4.0% (ไม่มีฐานเทียบ = ข้อความแจ้ง)
+ *   neutral = ขึ้น / ลงไม่ได้แปลว่าดี / แย่ (เช่น ค่าจ้างรวม) ใช้สีเทา
+ */
+export function ChangeText({ cur, prev, suffix, className, neutral = false }: { cur: number | null; prev: number | null; suffix?: ReactNode; className?: string; neutral?: boolean }) {
   const c = changeOf(cur, prev);
   if (c === null) return <span className={cn("text-xs text-muted-foreground", className)}>ไม่มีข้อมูลเทียบ{suffix ? <> {suffix}</> : null}</span>;
   const up = c > 0, flat = Math.abs(c) < 0.0005;
   const Icon = up ? ArrowUpIcon : ArrowDownIcon;
   return (
-    <span className={cn("inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums", flat ? "text-muted-foreground" : up ? "text-success" : "text-destructive", className)}>
+    <span className={cn("inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums", flat || neutral ? "text-muted-foreground" : up ? "text-success" : "text-destructive", className)}>
       {flat ? null : <Icon className="size-3" aria-label={up ? "เพิ่มขึ้น" : "ลดลง"} />}
       {flat ? "เท่าเดิม" : `${(Math.abs(c) * 100).toFixed(1)}%`}
       {suffix ? <span className="font-normal text-muted-foreground">&nbsp;{suffix}</span> : null}
@@ -180,7 +193,7 @@ export function PairBars({ label, note, cur, prev, format, curName, prevName }: 
         {rows.map(([name, v, color]) => (
           <div key={name} className="grid grid-cols-[1fr_auto] items-center gap-2">
             <div className="h-3 rounded-r-[4px] bg-muted" title={name}>
-              <div className="h-full rounded-r-[4px]" style={{ width: `${((v ?? 0) / max) * 100}%`, background: color }} />
+              <div className="bar-fill h-full rounded-r-[4px]" style={{ width: `${((v ?? 0) / max) * 100}%`, background: color }} />
             </div>
             <span className="min-w-20 text-right text-xs tabular-nums">{format(v)}</span>
           </div>

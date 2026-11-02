@@ -534,4 +534,38 @@ export type OwnerSummary = {
 /** ส่วนต่างของคนหนึ่ง: before = ตอนปิดงวด / after = ข้อมูลตอนนี้ */
 export type PeriodChange = { name: string; items: { label: string; before: string; after: string }[] };
 
+/** เดือนนี้ถึงตอนนี้ (cur) เทียบเดือนก่อนช่วงวันเดียวกัน (prev) */
+export type DashPair = { cur: number; prev: number };
+
+/**
+ * แดชบอร์ดเดือนนี้บนหน้าแรกของเจ้าของ (src/lib/dashboard.ts) — นับเฉพาะคิวที่เริ่มไลฟ์แล้ว (ไม่นับที่ยกเลิก / บัญชีทดสอบ)
+ *   เทียบกับเดือนก่อนตั้งแต่วันที่ 1 ถึงวันที่และเวลาเดียวกัน
+ */
+export type DashboardData = {
+  month: string; // YYYY-MM
+  prevMonth: string;
+  upTo: string; // วันนี้ YYYY-MM-DD
+  prevUpTo: string; // วันเดียวกันของเดือนก่อน (เดือนก่อนสั้นกว่า = วันสุดท้ายของเดือนนั้น)
+  hours: DashPair; // ชั่วโมงไลฟ์ของ Mc
+  slots: DashPair; // จำนวนคิวของ Mc
+  /** ค่าจ้างสะสม (ฝั่งที่จัดการได้ = เห็นค่าจ้าง) · null = ไม่มีสิทธิ์ดูค่าจ้าง */
+  pay: (DashPair & { sides: ("mc" | "admin")[] }) | null;
+  /**
+   * GMV จากไฟล์ Export (TikTok + Shopee) · null = ไม่มีสิทธิ์ดูสถิติไลฟ์
+   *   upTo / time = วันที่ / เวลาเริ่มของไลฟ์ล่าสุดในไฟล์ของเดือนนี้ (เดือนก่อนนับถึงวันที่และเวลาเดียวกัน — หน้าสถิติไลฟ์นับทั้งวัน)
+   *   null = ยังไม่มีไฟล์ของเดือนนี้
+   */
+  gmv: { cur: number | null; prev: number | null; upTo: string | null; time: string | null } | null;
+  /** ชั่วโมงรายวันทั้งเดือน (รวมคิวที่จองไว้) · planned = ยังไม่ถึงวัน · prev = วันที่เดียวกันของเดือนก่อน (ไม่มีวันนั้น = null) */
+  daily: { date: string; hours: number; planned: boolean; prev: number | null }[];
+  /**
+   * แยกแพลตฟอร์ม (เดือนนี้ถึงตอนนี้) · mc = จำนวน Mc ที่ไลฟ์ · pay null = ไม่มีสิทธิ์ดูค่าจ้าง Mc
+   *   gmv = จากไฟล์ Export ถึงไลฟ์ล่าสุดในไฟล์ (null = ไม่มีสิทธิ์ดูสถิติไลฟ์ / ยังไม่มีไฟล์ของเดือนนี้)
+   */
+  platforms: { key: "tiktok" | "shopee"; slots: number; hours: number; mc: number; pay: number | null; gmv: number | null }[];
+  /** Mc ที่ไลฟ์มากที่สุด 5 คน · gmv = ยอดที่ Mc กรอก (null = ยังไม่กรอกเลย) · proof = หลักฐานที่แนบแล้ว / ที่ต้องแนบ */
+  topMc: { name: string; slots: number; hours: number; gmv: number | null; proofDone: number; proofNeed: number }[];
+  mcCount: number; // Mc ที่ไลฟ์แล้วเดือนนี้
+};
+
 export type ApiError = { ok: false; message: string; authError?: boolean };

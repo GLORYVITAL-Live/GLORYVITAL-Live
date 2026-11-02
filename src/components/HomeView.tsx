@@ -2,16 +2,18 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  AlertTriangleIcon, CalendarClockIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, DatabaseBackupIcon, FileTextIcon, RadioIcon, ReceiptTextIcon,
-  RefreshCwIcon, UserXIcon,
+  AlertTriangleIcon, CalendarClockIcon, ChartColumnIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, DatabaseBackupIcon, FileTextIcon, RadioIcon,
+  ReceiptTextIcon, RefreshCwIcon, UserXIcon,
 } from "lucide-react";
 import { windowText } from "@/lib/campaign";
-import { fmtDayShort, parseKey } from "@/lib/format";
+import { fmtDayMonth, fmtDayShort, fmtMonthShort, money, monthLabel, num, parseKey } from "@/lib/format";
 import { SLOT_VIEW_KEY, writeLocal } from "@/lib/hooks";
 import { tawiMonthLabel } from "@/lib/tawi-name";
 import { fmtDay } from "@/lib/window";
-import type { HomeData, HomeSlot } from "@/lib/types";
+import type { DashboardData, HomeData, HomeSlot } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { BarChart, ChangeText, Legend, fadedColor } from "@/components/LiveCharts";
+import { CountUp, MotionProvider, Reveal } from "@/components/motion";
 import { LoadError, LoadingBlock, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 
@@ -58,7 +60,6 @@ export function HomeView({ go }: { go: Go }) {
   const healthCount = h ? Object.values(h).reduce((n, list) => n + (list?.length ?? 0), 0) : 0;
   const windows = data.windows ?? [];
   const issueCount = data.issues.noEmail.length + data.issues.samePhone.length + gmvOver.length + gmvOdd.length + healthCount;
-  const baht = (n: number) => `฿${Math.round(n).toLocaleString("th-TH")}`;
   const receipts = data.receipts ?? null;
   const tawi = data.tawi ?? null;
   const tawiCount = tawi ? tawi.unmatched.length + tawi.noEmail.length + (tawi.missingMonth ? 1 : 0) : 0;
@@ -84,6 +85,7 @@ export function HomeView({ go }: { go: Go }) {
   const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   return (
+    <MotionProvider>
     <div className="pb-10">
       <div className="mb-3 flex items-center justify-between gap-2">
         <span className="text-sm text-muted-foreground">วันนี้ {dayText(data.today)}{liveNow.length ? ` · กำลังไลฟ์ ${liveNow.length} ช่อง` : ""}</span>
@@ -110,23 +112,27 @@ export function HomeView({ go }: { go: Go }) {
       ) : null}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {stats.filter((s) => s.show).map((s) => (
-          <button
-            key={s.label} type="button" onClick={() => jump(s.target)}
-            // ทุกช่องพื้นขาว: สีอยู่ที่ตัวเลขเท่านั้น (ส้ม = ต้องจัดการ / เขียว = ครบ / ดำ = ข้อมูล) หน้าจะไม่เป็นกล่องสีเต็มจอ
-            className="cursor-pointer rounded-xl border bg-card px-3 py-2.5 text-left transition-colors hover:border-primary"
-          >
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              {s.tone === "warn" ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning-foreground" /> : null}
-              {s.label}
-            </span>
-            <span className={cn("flex items-center gap-1 text-lg font-bold", s.tone === "warn" ? "text-warning-foreground" : s.tone === "ok" ? "text-success" : "text-foreground")}>
-              {s.tone === "ok" ? <CheckCircle2Icon className="size-4" /> : null}
-              <span className="truncate">{s.tone === "ok" && s.value === "0" ? "ครบ" : s.value}</span>
-            </span>
-          </button>
+        {stats.filter((s) => s.show).map((s, i) => (
+          <Reveal key={s.label} index={i}>
+            <button
+              type="button" onClick={() => jump(s.target)}
+              // ทุกช่องพื้นขาว: สีอยู่ที่ตัวเลขเท่านั้น (ส้ม = ต้องจัดการ / เขียว = ครบ / ดำ = ข้อมูล) หน้าจะไม่เป็นกล่องสีเต็มจอ
+              className="size-full cursor-pointer rounded-xl border bg-card px-3 py-2.5 text-left transition-colors hover:border-primary"
+            >
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                {s.tone === "warn" ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning-foreground" /> : null}
+                {s.label}
+              </span>
+              <span className={cn("flex items-center gap-1 text-lg font-bold", s.tone === "warn" ? "text-warning-foreground" : s.tone === "ok" ? "text-success" : "text-foreground")}>
+                {s.tone === "ok" ? <CheckCircle2Icon className="size-4" /> : null}
+                <span className="truncate">{s.tone === "ok" && s.value === "0" ? "ครบ" : s.value}</span>
+              </span>
+            </button>
+          </Reveal>
         ))}
       </div>
+
+      <MonthDashboard go={go} attempt={attempt} />
 
       {scope.mc || scope.proofs ? (
         <Section id="home-live" title="ไลฟ์วันนี้" icon={<RadioIcon />} action={<GoButton onClick={() => go("proof")}>หน้าหลักฐานไลฟ์</GoButton>}>
@@ -399,6 +405,216 @@ export function HomeView({ go }: { go: Go }) {
       </Section>
 
       {data.canBackup ? <BackupSection /> : null}
+    </div>
+    </MotionProvider>
+  );
+}
+
+// ---------- ภาพรวมเดือนนี้ (แดชบอร์ด) ----------
+
+const CUR = "var(--viz-cur)", PREV = "var(--viz-prev)";
+const shortMonthOf = (key: string) => fmtMonthShort.format(parseKey(`${key}-01`));
+const baht = (n: number) => `฿${money(n)}`;
+/** "1–2 พ.ย." / "1 พ.ย." */
+const rangeText = (upTo: string) => {
+  const day = Number(upTo.slice(8)), month = shortMonthOf(upTo.slice(0, 7));
+  return day === 1 ? `1 ${month}` : `1–${day} ${month}`;
+};
+/** วันเดียวกันของเดือนก่อน (เดือนก่อนสั้นกว่า = วันสุดท้าย) */
+function sameDayPrev(date: string, prevMonth: string) {
+  const [y, m] = prevMonth.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${prevMonth}-${String(Math.min(Number(date.slice(8)), last)).padStart(2, "0")}`;
+}
+
+/**
+ * ภาพรวมเดือนนี้ (โหลดแยกจากงานค้าง ไม่ให้หน้าแรกช้า): ตัวเลขหลักเทียบเดือนก่อนช่วงวันเดียวกัน · ชั่วโมงรายวัน · TikTok / Shopee · Mc ที่ไลฟ์มากที่สุด
+ *   attempt = กดรีเฟรชหน้าแรก (โหลดใหม่ ตัวเลขเดิมค้างไว้จนข้อมูลใหม่มา) · ไม่มีสิทธิ์ฝั่ง Mc = ไม่แสดง
+ */
+function MonthDashboard({ go, attempt }: { go: Go; attempt: number }) {
+  const [state, setState] = useState<{ data: DashboardData | null } | null>(null);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    api<{ dashboard: DashboardData | null }>("/api/owner/dashboard")
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) { setState({ data: res.dashboard }); setError(""); }
+      })
+      .catch((err) => { if (alive) setError((err as Error).message); });
+    return () => { alive = false; };
+  }, [attempt, retry]);
+
+  if (state && !state.data) return null;
+  const d = state?.data;
+  return (
+    <Section
+      id="home-month" title={d ? `ภาพรวมเดือน${monthLabel(d.month)}` : "ภาพรวมเดือนนี้"} icon={<ChartColumnIcon />}
+      action={<GoButton onClick={() => go("owner", "summary")}>สรุปรายเดือน</GoButton>}
+    >
+      {d ? <DashboardBody d={d} go={go} /> : error ? (
+        <p className="py-2 text-sm text-destructive">
+          โหลดภาพรวมไม่สำเร็จ: {error}{" "}
+          <button type="button" onClick={() => setRetry((n) => n + 1)} className="cursor-pointer font-semibold text-primary underline">ลองใหม่</button>
+        </p>
+      ) : <DashboardSkeleton />}
+    </Section>
+  );
+}
+
+/** ระหว่างโหลด: โครงเดียวกับตอนมีข้อมูล (ไม่กระโดดตอนข้อมูลมา) */
+function DashboardSkeleton() {
+  return (
+    <div aria-busy className="mt-1">
+      <div className="h-4 w-56 rounded bg-muted" />
+      <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="bg-card px-3 py-2.5">
+            <div className="h-3 w-16 rounded bg-muted" /><div className="mt-2 h-6 w-20 rounded bg-muted" /><div className="mt-1.5 h-3 w-24 rounded bg-muted" />
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 h-[226px] rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+
+function DashboardBody({ d, go }: { d: DashboardData; go: Go }) {
+  const vs = `เทียบ ${rangeText(d.prevUpTo)}`;
+  // GMV: เดือนก่อนนับถึงเวลาเดียวกับไลฟ์ล่าสุดในไฟล์ (หน้าสถิติไลฟ์นับทั้งวัน ตัวเลข % จึงต่างกันได้ — บอกเวลาไว้)
+  const gmvVs = d.gmv?.upTo ? `เทียบ ${rangeText(sameDayPrev(d.gmv.upTo, d.prevMonth))} ถึง ${d.gmv.time} น.` : "";
+  const kpis: { label: string; value: number | null; format: (n: number) => string; unit?: string; delta: ReactNode; note?: string }[] = [
+    { label: "ชั่วโมงไลฟ์", value: d.hours.cur, format: (n) => num(Math.round(n * 100) / 100), unit: "ชม.", delta: <ChangeText cur={d.hours.cur} prev={d.hours.prev} suffix={vs} /> },
+    { label: "คิวที่ไลฟ์", value: d.slots.cur, format: (n) => Math.round(n).toLocaleString("th-TH"), unit: "คิว", delta: <ChangeText cur={d.slots.cur} prev={d.slots.prev} suffix={vs} /> },
+    ...(d.gmv ? [{
+      label: "GMV (ไฟล์ Export)", value: d.gmv.cur, format: baht,
+      note: d.gmv.upTo ? (d.gmv.upTo < d.upTo ? `ข้อมูลถึง ${fmtDayMonth.format(parseKey(d.gmv.upTo))}` : undefined) : "ยังไม่มีไฟล์ของเดือนนี้",
+      delta: d.gmv.cur === null ? null : <ChangeText cur={d.gmv.cur} prev={d.gmv.prev} suffix={gmvVs} />,
+    }] : []),
+    ...(d.pay ? [{
+      label: d.pay.sides.length === 2 ? "ค่าจ้างสะสม Mc + Admin" : d.pay.sides[0] === "admin" ? "ค่าจ้างสะสม Admin" : "ค่าจ้างสะสม Mc",
+      value: d.pay.cur, format: baht, delta: <ChangeText cur={d.pay.cur} prev={d.pay.prev} suffix={vs} neutral />,
+    }] : []),
+  ];
+  const todayIndex = d.daily.findIndex((x) => x.date === d.upTo);
+  const planned = d.daily.some((x) => x.planned && x.hours > 0);
+  const curName = shortMonthOf(d.month), prevName = shortMonthOf(d.prevMonth);
+
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">
+        {rangeText(d.upTo)} ถึงตอนนี้ {vs} ถึงเวลาเดียวกัน · นับคิวที่ถึงเวลาเริ่มไลฟ์แล้ว{d.mcCount ? ` · Mc ${d.mcCount} คน` : ""}
+      </p>
+
+      {/* ตัวเลขหลัก: กล่องเดียวแบ่งช่องด้วยเส้นบาง (มือถือ 2 คอลัมน์ · 3 ช่อง = ช่องสุดท้ายเต็มแถว) */}
+      <Reveal>
+        <dl className={cn("mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border", kpis.length === 4 ? "sm:grid-cols-4" : kpis.length === 3 ? "sm:grid-cols-3" : "")}>
+          {kpis.map((k, i) => (
+            <div key={k.label} className={cn("min-w-0 bg-card px-3 py-2.5", kpis.length === 3 && i === 2 && "col-span-2 sm:col-span-1")}>
+              <dt className="truncate text-xs text-muted-foreground">{k.label}</dt>
+              <dd className="text-xl font-semibold">
+                {k.value === null ? <span className="text-muted-foreground">—</span> : <CountUp value={k.value} format={k.format} />}
+                {k.unit && k.value !== null ? <span className="ml-1 text-xs font-normal text-muted-foreground">{k.unit}</span> : null}
+              </dd>
+              <dd className="mt-0.5 text-xs leading-snug">
+                {k.delta}
+                {k.note ? <span className="block text-muted-foreground">{k.note}</span> : null}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </Reveal>
+
+      <Reveal index={1} className="mt-4">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <h3 className="text-sm font-semibold">ชั่วโมงไลฟ์รายวัน</h3>
+          <Legend series={[
+            { name: `${curName} ไลฟ์แล้ว`, color: CUR },
+            ...(planned ? [{ name: "จองไว้", color: fadedColor(CUR) }] : []),
+            { name: `${prevName} วันที่เดียวกัน`, color: PREV },
+          ]} />
+        </div>
+        <BarChart
+          label={`ชั่วโมงไลฟ์รายวัน ${curName} เทียบ ${prevName}`}
+          categories={d.daily.map((x) => String(Number(x.date.slice(8))))}
+          tooltipTitles={d.daily.map((x) => `${dayText(x.date)}${x.planned ? " · จองไว้" : ""}`)}
+          series={[
+            { name: curName, color: CUR, values: d.daily.map((x) => x.hours), faded: d.daily.map((x) => x.planned) },
+            { name: prevName, color: PREV, values: d.daily.map((x) => x.prev) },
+          ]}
+          format={(v) => (v === null ? "—" : `${num(v)} ชม.`)} formatAxis={(v) => String(v)}
+          highlight={todayIndex >= 0 ? todayIndex : undefined} height={200}
+        />
+      </Reveal>
+
+      <div className="mt-4 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+        <Reveal index={2}><PlatformSplit platforms={d.platforms} /></Reveal>
+        <Reveal index={3}>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">Mc ที่ไลฟ์มากที่สุด</h3>
+            <GoButton onClick={() => go("owner", "performance")}>ผลงาน Mc</GoButton>
+          </div>
+          {d.topMc.length ? (
+            <ol className="divide-y">
+              {d.topMc.map((m, i) => (
+                <li key={m.name} className="flex items-start gap-2.5 py-2">
+                  <span className="w-3 pt-px text-sm text-muted-foreground tabular-nums">{i + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold">{m.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {m.slots} คิว{m.gmv !== null ? ` · GMV ที่กรอก ${baht(m.gmv)}` : ""}
+                      {m.proofNeed ? <> · <span className={cn(m.proofDone < m.proofNeed && "font-semibold text-warning-foreground")}>หลักฐาน {m.proofDone}/{m.proofNeed}</span></> : null}
+                    </div>
+                  </div>
+                  <span className="text-sm font-semibold tabular-nums">{num(m.hours)}<span className="ml-1 text-xs font-normal text-muted-foreground">ชม.</span></span>
+                </li>
+              ))}
+            </ol>
+          ) : <p className="py-2 text-sm text-muted-foreground">ยังไม่มีคิวที่ไลฟ์แล้วในเดือนนี้</p>}
+        </Reveal>
+      </div>
+    </div>
+  );
+}
+
+/** TikTok กับ Shopee: แถบสัดส่วนต่อเรื่อง (คิว / ชั่วโมง / Mc / ค่าจ้าง / GMV) ยาวตามสัดส่วนจริง */
+function PlatformSplit({ platforms }: { platforms: DashboardData["platforms"] }) {
+  const [tt, sp] = [platforms.find((p) => p.key === "tiktok")!, platforms.find((p) => p.key === "shopee")!];
+  type Row = [string, number, number, (n: number) => string];
+  const count = (n: number) => n.toLocaleString("th-TH");
+  const rows: Row[] = [
+    ["คิว", tt.slots, sp.slots, count],
+    ["ชั่วโมง", tt.hours, sp.hours, (n) => `${num(n)} ชม.`],
+    ["Mc ที่ไลฟ์", tt.mc, sp.mc, (n) => `${count(n)} คน`],
+    ...(tt.pay !== null && sp.pay !== null ? [["ค่าจ้าง", tt.pay, sp.pay, baht] as Row] : []),
+    ...(tt.gmv !== null && sp.gmv !== null ? [["GMV (ไฟล์ Export)", tt.gmv, sp.gmv, baht] as Row] : []),
+  ];
+  const SHOPEE = "var(--muted-foreground)";
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold">TikTok กับ Shopee</h3>
+        <Legend series={[{ name: "TikTok", color: CUR }, { name: "Shopee", color: SHOPEE }]} />
+      </div>
+      <div className="mt-1 space-y-3">
+        {rows.map(([label, a, b, fmt]) => (
+          <div key={label}>
+            <div className="flex items-baseline justify-between gap-2 text-xs">
+              <span className="text-muted-foreground">{label}</span>
+              <span className="tabular-nums">
+                <b className="font-semibold">{fmt(a)}</b>
+                <span className="text-muted-foreground"> · </span>
+                <b className="font-semibold">{fmt(b)}</b>
+              </span>
+            </div>
+            <div className="mt-1 flex h-2 gap-0.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={`${label} TikTok ${fmt(a)} Shopee ${fmt(b)}`}>
+              {a > 0 ? <div className="bar-fill h-full" style={{ flex: `${a} 1 0`, background: CUR }} /> : null}
+              {b > 0 ? <div className="bar-fill h-full" style={{ flex: `${b} 1 0`, background: SHOPEE }} /> : null}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
