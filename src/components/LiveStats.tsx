@@ -17,6 +17,7 @@ import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components
 import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
 import { CountUp } from "@/components/motion";
 import { CeoLive } from "@/components/CeoLive";
+import { McCostView } from "@/components/McCostView";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast,
 } from "@/components/shared";
@@ -99,9 +100,9 @@ async function fetchCampaigns() {
 }
 
 /** หน้า Data analytics · readOnly = ดูได้อย่างเดียว (ไม่มีแท็บอัปโหลด / แก้แคมเปญไม่ได้ แต่ส่งออกได้) */
-export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
+export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boolean; cost?: boolean }) {
   const saved = useLocal(TAB_KEY);
-  const tab = saved === "compare" || saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) ? saved : "overview";
+  const tab = saved === "compare" || saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) || (saved === "cost" && cost) ? saved : "overview";
   const [months, setMonths] = useState<MonthRow[] | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [error, setError] = useState("");
@@ -119,8 +120,10 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
   if (error) return <LoadError title="โหลดสถิติไลฟ์ไม่สำเร็จ" message={error} onRetry={() => setAttempt((n) => n + 1)} />;
   if (!months || !campaigns) return <LoadingBlock />;
 
+  // ความคุ้มค่า Mc = ค่าจ้าง: เฉพาะ Owner ที่จัดการฝั่ง Mc ได้ (เห็นค่าจ้าง)
   const tabs = [
-    ["overview", "ภาพรวม"], ["compare", "เทียบช่วง"], ["campaign", "แคมเปญ"], ["ceo", "CEO Live"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const]),
+    ["overview", "ภาพรวม"], ["compare", "เทียบช่วง"], ["campaign", "แคมเปญ"], ...(cost ? [["cost", "คุ้มค่า Mc"] as const] : []),
+    ["ceo", "CEO Live"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const]),
   ] as const;
   const dataMonths = [...new Set(months.map((m) => m.month))];
   const empty = <EmptyData readOnly={readOnly} />;
@@ -128,7 +131,8 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
     <Tabs value={tab} onValueChange={(v) => writeLocal(TAB_KEY, v)} className="gap-0 pb-10">
       <TabsList aria-label="เมนูสถิติไลฟ์" className="my-3 h-auto! w-full rounded-full border bg-card p-1">
         {tabs.map(([id, label]) => (
-          <TabsTrigger key={id} value={id} className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-tint! data-active:text-tint-foreground! sm:text-sm">
+          // มือถือ: แท็บ 6 อันต้องพอดีแถวเดียว (ระยะข้างแคบลง)
+          <TabsTrigger key={id} value={id} className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-tint! data-active:text-tint-foreground! max-sm:px-1 max-sm:text-[12.5px] sm:text-sm">
             {label}
           </TabsTrigger>
         ))}
@@ -142,6 +146,7 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
       <TabsContent value="campaign">
         <CampaignView campaigns={campaigns} dataMonths={dataMonths} version={version} readOnly={readOnly} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />
       </TabsContent>
+      {cost ? <TabsContent value="cost"><McCostView /></TabsContent> : null}
       {/* หน้าเดียวกับที่บัญชี Marketing เห็น */}
       <TabsContent value="ceo"><CeoLive key={version} /></TabsContent>
       {readOnly ? null : (
@@ -232,10 +237,11 @@ const shortMonth = (key: string) => {
 function KpiGrid({ cur, compare }: { cur: Totals; compare: { totals: Totals; label: string }[] }) {
   return (
     <div className="my-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-      {METRICS.map((m) => {
+      {METRICS.map((m, i) => {
         const v = m.value(cur);
         return (
-          <div key={m.key} className="rounded-xl border bg-card px-3 py-2.5">
+          // มือถือ 2 คอลัมน์: จำนวนช่องเป็นเลขคี่ = ช่องสุดท้ายเต็มแถว (ไม่เหลือช่องว่าง)
+          <div key={m.key} className={cn("rounded-xl border bg-card px-3 py-2.5", METRICS.length % 2 && i === METRICS.length - 1 && "col-span-2 sm:col-span-1")}>
             <div className="text-xs text-muted-foreground">{m.label}{m.note ? <span className="opacity-80"> · {m.note}</span> : null}</div>
             {/* ตัวเลขนับจากค่าเดิมไปค่าใหม่ (ตอนโหลด / เปลี่ยนตัวกรอง) */}
             <div className="text-lg font-bold">{v === null ? fmtMetric(m.kind, v) : <CountUp value={v} format={(n) => fmtMetric(m.kind, n)} />}</div>
@@ -329,6 +335,7 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
             { totals: prev, label: `MoM vs ${shortMonth(prevKey)}${cutText}` },
             { totals: yoy, label: `YoY vs ${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}${cutText}` },
           ]} />
+          <Funnel cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} />
         </>
       )}
 
@@ -371,6 +378,95 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
 
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
+  );
+}
+
+// ---------- Funnel: ยอดมาจากไหน ----------
+
+type FunnelStep = { label: string; value: (t: Totals) => number | null; kind: "int" | "pct" | "baht"; rate?: boolean; why?: [string, string] };
+const ratioOf = (a: number | null, b: number | null) => (a === null || b === null || !b ? null : a / b);
+/** ขั้นของแต่ละแพลตฟอร์ม: ขั้นหลัก (จำนวน) สลับกับอัตรา (rate) · why = คำอธิบายเมื่อขั้นนั้นทำให้ยอดเปลี่ยน [ลดลง, เพิ่มขึ้น] */
+const FUNNEL_STEPS: Record<Platform, FunnelStep[]> = {
+  TikTok: [
+    { label: "Product Impressions", value: (t) => t.impressions, kind: "int", why: ["คนเห็นสินค้าน้อยลง", "คนเห็นสินค้ามากขึ้น"] },
+    { label: "CTR", value: (t) => ratioOf(t.clicks, t.impressions), kind: "pct", rate: true, why: ["คนคลิกสินค้าน้อยลง", "คนคลิกสินค้ามากขึ้น"] },
+    { label: "คลิก", value: (t) => t.clicks, kind: "int" },
+    { label: "CO", value: (t) => ratioOf(t.orders, t.clicks), kind: "pct", rate: true, why: ["คลิกแล้วซื้อน้อยลง", "คลิกแล้วซื้อมากขึ้น"] },
+    { label: "ออเดอร์", value: (t) => t.orders, kind: "int" },
+    { label: "มูลค่าต่อออเดอร์", value: (t) => ratioOf(t.gmv, t.orders), kind: "baht", rate: true, why: ["มูลค่าต่อออเดอร์ลดลง", "มูลค่าต่อออเดอร์เพิ่มขึ้น"] },
+    { label: "GMV", value: (t) => t.gmv, kind: "baht" },
+  ],
+  Shopee: [
+    { label: "Viewers", value: (t) => t.viewers, kind: "int", why: ["คนดูน้อยลง", "คนดูมากขึ้น"] },
+    { label: "CO", value: (t) => ratioOf(t.orders, t.viewers), kind: "pct", rate: true, why: ["คนดูแล้วซื้อน้อยลง", "คนดูแล้วซื้อมากขึ้น"] },
+    { label: "ออเดอร์", value: (t) => t.orders, kind: "int" },
+    { label: "มูลค่าต่อออเดอร์", value: (t) => ratioOf(t.gmv, t.orders), kind: "baht", rate: true, why: ["มูลค่าต่อออเดอร์ลดลง", "มูลค่าต่อออเดอร์เพิ่มขึ้น"] },
+    { label: "GMV", value: (t) => t.gmv, kind: "baht" },
+  ],
+};
+
+/**
+ * GMV = ขั้นแรก × อัตราทุกขั้น → การเปลี่ยนของ GMV แยกเป็นผลของแต่ละตัวได้ด้วย log ของอัตราส่วน (ผลรวมทุกตัว = การเปลี่ยนของ GMV)
+ *   ตัวที่ผลมากที่สุดในทิศเดียวกับ GMV = สาเหตุหลัก · ข้อมูลไม่ครบ (มีค่า 0 / ไม่มีช่วงเทียบ) = ไม่บอก
+ */
+function funnelCause(steps: FunnelStep[], cur: Totals, prev: Totals) {
+  const g1 = cur.gmv, g0 = prev.gmv;
+  if (!g1 || !g0) return null;
+  const parts = steps.filter((s) => s.why).map((s) => ({ s, a: s.value(cur), b: s.value(prev) }));
+  if (parts.some((p) => !p.a || !p.b)) return null;
+  const total = Math.log(g1 / g0);
+  const effects = parts.map((p) => ({ s: p.s, e: Math.log(p.a! / p.b!), change: p.a! / p.b! - 1 }));
+  const same = effects.filter((x) => Math.sign(x.e) === Math.sign(total));
+  const main = (same.length ? same : effects).reduce((m, x) => (Math.abs(x.e) > Math.abs(m.e) ? x : m));
+  return { up: total > 0, change: g1 / g0 - 1, main };
+}
+
+function Funnel({ cur, prev, prevLabel }: { cur: LiveSession[]; prev: LiveSession[]; prevLabel: string }) {
+  const platforms = (["TikTok", "Shopee"] as const).filter((p) => cur.some((s) => s.platform === p));
+  if (!platforms.length) return null;
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <h2 className="font-bold">ยอดมาจากไหน</h2>
+      <p className="text-xs text-muted-foreground">GMV = จำนวนคนขั้นแรก × อัตราแต่ละขั้น · เทียบ {prevLabel} · ขั้นที่ทำให้ยอดเปลี่ยนมากที่สุดเป็นตัวหนา</p>
+      <div className={cn("mt-3 grid gap-x-6 gap-y-5", platforms.length === 2 && "sm:grid-cols-2")}>
+        {platforms.map((p) => (
+          <FunnelColumn key={p} platform={p} cur={totalsOf(cur.filter((s) => s.platform === p))} prev={totalsOf(prev.filter((s) => s.platform === p))} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FunnelColumn({ platform, cur, prev }: { platform: Platform; cur: Totals; prev: Totals }) {
+  const steps = FUNNEL_STEPS[platform];
+  const cause = prev.lives ? funnelCause(steps, cur, prev) : null;
+  const pct = (n: number) => `${n > 0 ? "+" : "−"}${Math.abs(n * 100).toFixed(1)}%`;
+  return (
+    <div>
+      <h3 className="text-sm font-semibold">{platform}</h3>
+      <ol className="mt-1">
+        {steps.map((s) => {
+          const v = s.value(cur), main = cause?.main.s === s;
+          return (
+            <li
+              key={s.label}
+              className={cn("flex items-baseline justify-between gap-3", s.rate ? "py-0.5 pl-4 text-xs text-muted-foreground" : "border-b py-1.5 text-sm last:border-b-0", main && "font-semibold text-foreground")}
+            >
+              <span className="min-w-0 truncate">{s.rate ? <ChevronDownIcon className="mr-1 inline size-3 align-[-2px]" aria-hidden /> : null}{s.label}</span>
+              <span className="flex shrink-0 items-baseline gap-2">
+                <span className={cn("tabular-nums", !s.rate && "font-semibold")}>{fmtMetric(s.kind, v)}</span>
+                <span className="w-16 text-right">{prev.lives ? <ChangeText cur={v} prev={s.value(prev)} /> : null}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      {cause ? (
+        <p className="mt-2 rounded-lg bg-muted px-2.5 py-1.5 text-xs leading-relaxed">
+          GMV {cause.up ? "เพิ่มขึ้น" : "ลดลง"} {Math.abs(cause.change * 100).toFixed(1)}% — มาจาก<b>{cause.main.s.why![cause.main.change > 0 ? 1 : 0]}</b>มากที่สุด ({cause.main.s.label} {pct(cause.main.change)})
+        </p>
+      ) : null}
+    </div>
   );
 }
 

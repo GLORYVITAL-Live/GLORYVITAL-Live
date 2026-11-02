@@ -154,15 +154,17 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
 
 /**
  * ▲ 12.3% / ▼ 4.0% (ไม่มีฐานเทียบ = ข้อความแจ้ง)
- *   neutral = ขึ้น / ลงไม่ได้แปลว่าดี / แย่ (เช่น ค่าจ้างรวม) ใช้สีเทา
+ *   neutral = ขึ้น / ลงไม่ได้แปลว่าดี / แย่ (เช่น ค่าจ้างรวม) ใช้สีเทา · goodDown = ลดลงคือดี (เช่น ค่าจ้างต่อยอดขาย)
  */
-export function ChangeText({ cur, prev, suffix, className, neutral = false }: { cur: number | null; prev: number | null; suffix?: ReactNode; className?: string; neutral?: boolean }) {
+export function ChangeText({ cur, prev, suffix, className, neutral = false, goodDown = false }: {
+  cur: number | null; prev: number | null; suffix?: ReactNode; className?: string; neutral?: boolean; goodDown?: boolean;
+}) {
   const c = changeOf(cur, prev);
   if (c === null) return <span className={cn("text-xs text-muted-foreground", className)}>ไม่มีข้อมูลเทียบ{suffix ? <> {suffix}</> : null}</span>;
   const up = c > 0, flat = Math.abs(c) < 0.0005;
   const Icon = up ? ArrowUpIcon : ArrowDownIcon;
   return (
-    <span className={cn("inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums", flat || neutral ? "text-muted-foreground" : up ? "text-success" : "text-destructive", className)}>
+    <span className={cn("inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums", flat || neutral ? "text-muted-foreground" : up !== goodDown ? "text-success" : "text-destructive", className)}>
       {flat ? null : <Icon className="size-3" aria-label={up ? "เพิ่มขึ้น" : "ลดลง"} />}
       {flat ? "เท่าเดิม" : `${(Math.abs(c) * 100).toFixed(1)}%`}
       {suffix ? <span className="font-normal text-muted-foreground">&nbsp;{suffix}</span> : null}
