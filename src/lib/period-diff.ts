@@ -3,8 +3,13 @@ import { num } from "@/lib/format";
 import type { OwnerDetail, OwnerPerson, OwnerSummary, PeriodChange } from "@/lib/types";
 
 export type Side = "mc" | "admin";
-/** shopeeRates = ค่าจ้าง Shopee ของ Mc (ฝั่ง Mc · งวดที่ปิดก่อนมีค่าจ้าง Shopee แยก = ไม่มี) */
-export type PeriodSnapshot = { people: OwnerPerson[]; details: OwnerDetail[]; rates: Record<string, number>; defaultRate: number; shopeeRates?: Record<string, number> };
+/**
+ * shopeeRates = ค่าจ้าง Shopee ของ Mc (ฝั่ง Mc · งวดที่ปิดก่อนมีค่าจ้าง Shopee แยก = ไม่มี)
+ * travel = ฝั่ง Admin ที่ปิดหลังมีค่ารถ (ค่ารถอยู่ใน details[].travel · งวดที่ปิดก่อนหน้านั้น = ไม่มี ไม่เทียบค่ารถ)
+ */
+export type PeriodSnapshot = {
+  people: OwnerPerson[]; details: OwnerDetail[]; rates: Record<string, number>; defaultRate: number; shopeeRates?: Record<string, number>; travel?: true;
+};
 const TYPE: Record<Side, "Mc" | "Admin"> = { mc: "Mc", admin: "Admin" };
 
 /** ตัวเลขของฝั่งนี้จากสรุปรายเดือน (เก็บตอนปิด / ใช้เทียบส่วนต่าง) */
@@ -14,7 +19,11 @@ export const snapshotOf = (s: Pick<OwnerSummary, "mc" | "admin" | "details" | "r
   rates: s.rates[side],
   defaultRate: side === "mc" ? s.rates.defaultMc : s.rates.defaultAdmin,
   ...(side === "mc" && s.rates.shopee && Object.keys(s.rates.shopee).length ? { shopeeRates: s.rates.shopee } : {}),
+  ...(side === "admin" ? { travel: true as const } : {}),
 });
+
+/** ค่ารถรวมของคนนี้ในตัวเลขชุดนี้ */
+const travelSum = (s: PeriodSnapshot, name: string) => s.details.reduce((a, d) => a + (d.name === name && !d.cancelled ? d.travel ?? 0 : 0), 0);
 
 /** ส่วนต่างรายคน: ข้อมูลตอนนี้ (live) เทียบตัวเลขตอนปิด (closed) — ไม่ต่าง = ไม่อยู่ในรายการ */
 export function periodChanges(closed: PeriodSnapshot, live: PeriodSnapshot): PeriodChange[] {
@@ -39,6 +48,8 @@ export function periodChanges(closed: PeriodSnapshot, live: PeriodSnapshot): Per
     cmp("ค่าจ้าง/ชม.", rate(closed, a), rate(live, b));
     // ค่าจ้าง Shopee: เทียบเฉพาะงวดที่ปิดหลังมีค่าจ้าง Shopee แยก (งวดเก่าไม่มีข้อมูลนี้ = ไม่ขึ้นส่วนต่างปลอม)
     if (closed.shopeeRates) cmp("ค่าจ้าง Shopee/ชม.", closed.shopeeRates[name] ?? 0, live.shopeeRates?.[name] ?? 0);
+    // ค่ารถ (Admin): เทียบเฉพาะงวดที่ปิดหลังมีค่ารถ
+    if (closed.travel) cmp("ค่ารถ (บาท)", travelSum(closed, name), travelSum(live, name));
     if (!!a.salaried !== !!b.salaried) items.push({ label: "พนักงานประจำ", before: a.salaried ? "ใช่" : "ไม่ใช่", after: b.salaried ? "ใช่" : "ไม่ใช่" });
     if (items.length) out.push({ name, items });
   }

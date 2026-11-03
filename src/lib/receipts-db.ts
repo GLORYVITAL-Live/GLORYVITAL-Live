@@ -58,7 +58,7 @@ const norm = (email: string) => email.trim().toLowerCase();
 type StaffLite = { id: number; role: Role; name: string; email: string | null; legal_name?: string | null; tawi_verified_keys?: string[] | null; live_platform?: string | null };
 const label = (s: Pick<StaffLite, "role" | "name">) => (s.role === "mc" ? `Mc ${s.name}` : s.name);
 const personOf = (s: Pick<StaffLite, "id" | "email">) => (s.email?.trim() ? `e:${norm(s.email)}` : `s:${s.id}`);
-const chunks = <T,>(list: T[], size = 300) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
+export const chunks = <T,>(list: T[], size = 300) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 const isWeb = (r: Pick<ReceiptRow, "source">) => r.source !== "drive";
 
 export const receiptView = (r: ReceiptRow): ReceiptView => ({
@@ -362,7 +362,7 @@ export async function downloadReceipt(fileId: string) {
 }
 
 /** ทุกแถว (ทีละ 1000 แถว) */
-async function allRows<T>(fetchPage: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>) {
+export async function allRows<T>(fetchPage: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>) {
   const out: T[] = [];
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await fetchPage(from, from + PAGE - 1);
@@ -558,10 +558,10 @@ export async function notifyReceiptRejected(row: ReceiptRow, reason: string) {
 
 // ---------- ไฟล์เดิมใน Drive (ตาราง receipt_files) ----------
 
-type DFile = { id: string; name: string; mime: string; size: number; created: string | null; parent: string };
+export type DFile = { id: string; name: string; mime: string; size: number; created: string | null; parent: string };
 
-/** ลูกของหลายโฟลเดอร์ในคำขอเดียว (ทีละ 40 โฟลเดอร์) — kind: เฉพาะโฟลเดอร์ / เฉพาะไฟล์ / ทั้งหมด */
-async function listIn(drive: Drive, parents: string[], kind: "folders" | "files" | "all") {
+/** ลูกของหลายโฟลเดอร์ในคำขอเดียว (ทีละ 40 โฟลเดอร์) — kind: เฉพาะโฟลเดอร์ / เฉพาะไฟล์ / ทั้งหมด (ใช้กับสลิปโอนเงินด้วย) */
+export async function listIn(drive: Drive, parents: string[], kind: "folders" | "files" | "all") {
   const out: DFile[] = [];
   for (const part of chunks(parents, 40)) {
     const type = kind === "folders" ? ` and mimeType = '${FOLDER}'` : kind === "files" ? ` and mimeType != '${FOLDER}'` : "";

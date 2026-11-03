@@ -3,9 +3,10 @@ import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, mySlots } from "@/lib/data";
 import { framesForSlots } from "@/lib/live-frames";
 import { isLiveRoom, roomForPlatform } from "@/lib/loans";
-import { cleanTiers, platformRates, slotPay } from "@/lib/pay";
+import { cleanTiers, platformRates, slotPay, travelPicks } from "@/lib/pay";
 import { paymentsOf } from "@/lib/pay-months";
 import { lockedRates } from "@/lib/pay-rates";
+import { mySlips } from "@/lib/slips-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { BriefView, FrameFile } from "@/lib/types";
 
@@ -51,7 +52,7 @@ export async function GET(request: Request) {
   if (!person) return fail("บัญชีนี้ไม่มีสิทธิ์ดูตารางนี้", 403);
 
   const db = createAdminClient();
-  const [settings, items, staff, rooms, locked, paid, shopeeRow] = await Promise.all([
+  const [settings, items, staff, rooms, locked, paid, extraRow] = await Promise.all([
     getSettings(),
     mySlots(role as "mc" | "admin", person.id, first, last),
     db.from("staff").select("name, email, phone, hourly_rate, commit_tiers, is_salaried").eq("id", person.id).single(),
@@ -60,8 +61,9 @@ export async function GET(request: Request) {
     // เรทที่ล็อกไว้ของเดือนนี้ (เปลี่ยนเรทภายหลัง / โอนแล้ว) + การโอน — ตัวเลขเดียวกับหน้าสรุปของเจ้าของ
     lockedRates(key, [person.id]),
     paymentsOf(key, [person.id]),
-    // ค่าจ้าง Shopee (Mc · ยังไม่ได้รัน SQL 20261116000000_shopee_rate = ไม่มี)
-    role === "mc" ? db.from("staff").select("shopee_rate").eq("id", person.id).maybeSingle() : Promise.resolve(null),
+    // ค่าจ้าง Shopee (Mc · ยังไม่ได้รัน SQL 20261116000000_shopee_rate = ไม่มี) / ค่ารถ (Admin · ยังไม่ได้รัน SQL 20261119000000_admin_travel = ไม่มี)
+    db.from("staff").select(role === "mc" ? "shopee_rate" : "travel_allowance").eq("id", person.id)
+      .maybeSingle().overrideTypes<{ shopee_rate?: number | null; travel_allowance?: number | null } | null, { merge: false }>(),
   ]);
   if (staff.error) return fail(staff.error.message, 500);
   const roomNames = [...new Set((rooms.data ?? []).map((x) => String(x.location)).filter(isLiveRoom))];
@@ -71,7 +73,14 @@ export async function GET(request: Request) {
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
   const lock = locked.get(person.id);
   const salaried = lock ? lock.salaried : !!staff.data.is_salaried;
-  const subs = role === "mc" ? await subsPay(person.id, key, first, last, defaultRate).catch(() => []) : [];
+  const [subs, slips] = await Promise.all([
+    role === "mc" ? subsPay(person.id, key, first, last, defaultRate).catch(() => []) : [],
+    // สลิปโอนเงินจากโฟลเดอร์ Slip ใน Drive (ทุกรอบ · ยังไม่ได้รัน SQL = ว่าง)
+    mySlips(person.id),
+  ]);
+  // ค่ารถ (Admin ที่ติ๊กได้ค่ารถ): คิวเลิก 23:30 วันละครั้ง — ตัวเลขเดียวกับสรุปของเจ้าของ (src/lib/data.ts ownerSummary)
+  const travel = role !== "admin" || salaried ? null : lock ? lock.travel : Number(extraRow.data?.travel_allowance) || null;
+  const picks = new Set(travel ? travelPicks(items) : []);
 
   return ok({
     month: key,
@@ -81,6 +90,7 @@ export async function GET(request: Request) {
     // หาห้องจากชื่อช่องเดิมก่อน (GLORY MALL) แล้วค่อยเปลี่ยนเป็นชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
     items: withPlatformLabels(items.map((i) => ({
       ...i, room: roomForPlatform(i.platform, roomNames), ...(frames.get(`${i.platform}|${i.date}`) ?? {}),
+      ...(travel && picks.has(i) ? { travel } : {}),
     }))),
     profile: {
       name: role === "mc" ? `Mc ${staff.data.name}` : staff.data.name,
@@ -90,9 +100,10 @@ export async function GET(request: Request) {
       rate: salaried ? 0 : lock ? lock.rate : Number(staff.data.hourly_rate) || defaultRate,
       commitTiers: salaried ? [] : lock ? lock.tiers : cleanTiers(staff.data.commit_tiers),
       // ค่าจ้างคิว Shopee ที่ตั้งแยก (null = เท่ากับ TikTok) — ตัวเลขเดียวกับหน้าสรุปของเจ้าของ (src/lib/pay.ts platformRates)
-      shopeeRate: salaried ? null : lock ? lock.shopeeRate : Number(shopeeRow?.data?.shopee_rate) || null,
+      shopeeRate: salaried || role !== "mc" ? null : lock ? lock.shopeeRate : Number(extraRow.data?.shopee_rate) || null,
     },
     payments: (paid.map.get(person.id) ?? []).map((p) => ({ amount: p.amount, paidOn: p.paidOn })),
     ...(subs.length ? { subs } : {}),
+    ...(slips.length ? { slips } : {}),
   });
 }

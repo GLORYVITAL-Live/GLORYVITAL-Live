@@ -39,6 +39,7 @@ const TABLE: Record<"mc" | "admin", { table: "mc_slots" | "admin_slots"; col: st
 const ROLE_LABEL: Record<Role, string> = { mc: "Mc", admin: "Admin", owner: "Owner", marketing: "Marketing", borrower: "ทีมอื่น" };
 
 const requireOwner = (access: Access = "write") => requireOwnerScope("บัญชีนี้ไม่มีสิทธิ์จัดการพนักงาน", access);
+const TRAVEL_SQL = "ต้องรัน SQL 20261119000000_admin_travel ใน Supabase ก่อน ถึงจะตั้งค่ารถได้";
 /** สิทธิ์ "ดูได้อย่างเดียว" ของ Owner (บันทึกเฉพาะตอนส่งมา ยังไม่ได้รัน SQL = ไม่แตะ) */
 const VIEW_FIELDS = ["can_view_mc", "can_view_admin", "can_view_proofs", "can_view_plan", "analytics_readonly"] as const;
 /** รับอีเมลแจ้งเมื่อ Mc / Admin เสริมกดยกเลิกคิว (SQL 20261020000000_notify_cancel) — ไม่ใช่สิทธิ์ ตั้งให้ตัวเองได้ */
@@ -90,6 +91,14 @@ function clean(role: Role, body: Record<string, unknown>, partial: boolean) {
     const rate = raw === "" ? null : Number(raw);
     if (rate !== null && (!Number.isFinite(rate) || rate < 0)) return { error: "ค่าจ้าง Shopee ต้องเป็นตัวเลข" };
     out.shopee_rate = rate || null;
+  }
+  // ค่ารถต่อวัน (Admin · SQL 20261119000000_admin_travel) ว่าง = ไม่ได้ค่ารถ · ได้เฉพาะวันที่มีคิวเลิก 23:30 · บันทึกเฉพาะตอนส่งมา
+  if (role === "admin" && "travel_allowance" in body) {
+    const raw = String(body.travel_allowance ?? "").replace(/[,\s฿]/g, "");
+    const amount = raw === "" ? null : Number(raw);
+    if (amount !== null && (!Number.isFinite(amount) || amount < 0)) return { error: "ค่ารถต้องเป็นตัวเลข" };
+    if (amount !== null && amount > 5000) return { error: "ค่ารถต่อวันสูงผิดปกติ (เกิน 5,000 บาท) ตรวจตัวเลขอีกครั้ง" };
+    out.travel_allowance = amount || null;
   }
   // จ่ายค่าตัวผ่าน Mc อีกคน (Mc ในเครือ · SQL 20261117000000_pay_to) ว่าง = จ่ายให้ตัวเอง · บันทึกเฉพาะตอนส่งมา (ตรวจรายชื่อตอนบันทึก)
   if (role === "mc" && "pay_to_id" in body) {
@@ -243,6 +252,11 @@ export async function GET() {
     ? await db.from("staff").select("id, shopee_rate").eq("role", "mc")
     : { data: null, error: { message: "hidden" } };
   const shopeeRate = new Map((shopeeErr ? [] : shopeeRows ?? []).map((x) => [x.id as number, x.shopee_rate === null ? null : Number(x.shopee_rate)]));
+  // ค่ารถของ Admin (ยังไม่ได้รัน SQL 20261119000000_admin_travel = ไม่มีช่องนี้ · ฝั่ง Admin ดูได้อย่างเดียว = ไม่ส่ง)
+  const { data: travelRows, error: travelErr } = edit.admin
+    ? await db.from("staff").select("id, travel_allowance").eq("role", "admin")
+    : { data: null, error: { message: "hidden" } };
+  const travel = new Map((travelErr ? [] : travelRows ?? []).map((x) => [x.id as number, x.travel_allowance === null ? null : Number(x.travel_allowance)]));
   // จ่ายค่าตัวผ่าน Mc อีกคน (ยังไม่ได้รัน SQL 20261117000000_pay_to = ไม่มีช่องนี้)
   const { data: payToRows, error: payToErr } = await db.from("staff").select("id, pay_to_id").eq("role", "mc");
   const payTo = new Map((payToErr ? [] : payToRows ?? []).map((x) => [x.id as number, x.pay_to_id === null ? null : Number(x.pay_to_id)]));
@@ -278,6 +292,7 @@ export async function GET() {
       ...(briefs.has(s.id) ? { can_manage_briefs: briefs.get(s.id) } : {}),
       ...(team.has(s.id) ? { live_platform: team.get(s.id) } : {}),
       ...(shopeeRate.has(s.id) ? { shopee_rate: shopeeRate.get(s.id) } : {}),
+      ...(travel.has(s.id) ? { travel_allowance: travel.get(s.id) } : {}),
       ...(payTo.has(s.id) ? { pay_to_id: payTo.get(s.id) } : {}),
       ...(quotaMgr.has(s.id) ? { can_manage_quota: quotaMgr.get(s.id) } : {}),
       ...(teamName.has(s.id) ? { team_name: teamName.get(s.id) } : {}),
@@ -327,9 +342,10 @@ export async function POST(request: Request) {
   if (error && role === "borrower" && /staff_role_check|check constraint|team_name/.test(error.message)) {
     return fail("ต้องรัน SQL 20261110000000_equipment_loans ใน Supabase ก่อน ถึงจะเพิ่มบัญชีทีมอื่นได้");
   }
+  if (error && /travel_allowance/.test(error.message)) return fail(TRAVEL_SQL);
   if (error) return fail(docsSql(needViewSql(dupMessage(error.message))));
-  const detail = staffChangeText({}, Object.fromEntries(Object.entries(c.data!).filter(([k]) => ["hourly_rate", "is_salaried", "is_extra_admin", "live_platform"].includes(k))));
-  after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"${detail ? ` (${detail.replace(/ว่าง → |ปิด → |ค่าเริ่มต้น → |TikTok → /g, "")})` : ""}`, data.id));
+  const detail = staffChangeText({}, Object.fromEntries(Object.entries(c.data!).filter(([k]) => ["hourly_rate", "is_salaried", "is_extra_admin", "live_platform", "travel_allowance"].includes(k))));
+  after(() => log(r.me, `เพิ่มพนักงาน ${role} "${c.data!.name}"${detail ? ` (${detail.replace(/ว่าง → |ปิด → |ค่าเริ่มต้น → |TikTok → |ไม่ได้ → /g, "")})` : ""}`, data.id));
   return ok({ id: data.id });
 }
 
@@ -455,13 +471,21 @@ export async function PATCH(request: Request) {
     shopeeBefore = Number(s?.shopee_rate) || null;
     if ((Number(changes.shopee_rate) || null) === shopeeBefore) delete changes.shopee_rate;
   }
-  // เปลี่ยนเรท / Commit / พนักงานประจำ / เรท Shopee: เดือนก่อน "มีผลตั้งแต่" ล็อกเรทเดิมไว้ (สรุป / ไฟล์เบิก / ตารางของฉันของเดือนเก่าไม่เปลี่ยนตาม)
+  // ค่ารถเดิม (เหมือนค่าจ้าง Shopee: ตรวจว่าเปลี่ยน + บันทึกประวัติ · ไม่เปลี่ยน = ไม่ส่ง)
+  let travelBefore: number | null | undefined;
+  if ("travel_allowance" in changes) {
+    const { data: t, error: tErr } = await db.from("staff").select("travel_allowance").eq("id", id).maybeSingle();
+    if (tErr) return fail(/travel_allowance/.test(tErr.message) ? TRAVEL_SQL : tErr.message);
+    travelBefore = Number(t?.travel_allowance) || null;
+    if ((Number(changes.travel_allowance) || null) === travelBefore) delete changes.travel_allowance;
+  }
+  // เปลี่ยนเรท / Commit / พนักงานประจำ / เรท Shopee / ค่ารถ: เดือนก่อน "มีผลตั้งแต่" ล็อกเรทเดิมไว้ (สรุป / ไฟล์เบิก / ตารางของฉันของเดือนเก่าไม่เปลี่ยนตาม)
   if (isCrew(role)) {
     const old = cur as unknown as { id: number; role: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
     const rateChanged = ("hourly_rate" in changes && (Number(changes.hourly_rate) || null) !== (Number(old.hourly_rate) || null))
       || ("commit_tiers" in changes && JSON.stringify(changes.commit_tiers ?? []) !== JSON.stringify(old.commit_tiers ?? []))
       || ("is_salaried" in changes && !!changes.is_salaried !== !!old.is_salaried)
-      || "shopee_rate" in changes;
+      || "shopee_rate" in changes || "travel_allowance" in changes;
     if (rateChanged) await lockBeforeRateChange(old, rateFrom(body?.rate_from));
   }
   const { error } = await db.from("staff").update(changes).eq("id", id);
@@ -469,6 +493,7 @@ export async function PATCH(request: Request) {
     if (/can_manage_equipment/.test(error.message)) return fail("ต้องรัน SQL 20261025000000_equipment ใน Supabase ก่อน ถึงจะตั้งสิทธิ์หน้าอุปกรณ์ได้");
     if (/can_manage_briefs/.test(error.message)) return fail("ต้องรัน SQL 20261113000000_live_frames ใน Supabase ก่อน ถึงจะตั้งสิทธิ์บรีฟการแต่งตัวได้");
     if (/team_name/.test(error.message)) return fail("ต้องรัน SQL 20261110000000_equipment_loans ใน Supabase ก่อน");
+    if (/travel_allowance/.test(error.message)) return fail(TRAVEL_SQL);
     return fail(docsSql(needViewSql(dupMessage(error.message))));
   }
 
@@ -493,7 +518,10 @@ export async function PATCH(request: Request) {
   }
   // ประวัติ: เปลี่ยนอะไร จากเท่าไรเป็นเท่าไร (ไม่มีอะไรเปลี่ยนจริง = ไม่บันทึก)
   const diff = staffChangeText(
-    { ...cur, can_manage_equipment: equipBefore, can_manage_briefs: briefsBefore, live_platform: teamBefore, shopee_rate: shopeeBefore, pay_to_id: payToBefore },
+    {
+      ...cur, can_manage_equipment: equipBefore, can_manage_briefs: briefsBefore, live_platform: teamBefore, shopee_rate: shopeeBefore,
+      travel_allowance: travelBefore, pay_to_id: payToBefore,
+    },
     "pay_to_id" in changes ? { ...changes, pay_to_id: payToAfter } : changes,
   );
   if (diff) after(() => log(r.me, `แก้พนักงาน ${role} "${cur.name}": ${diff}`, id));

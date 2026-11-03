@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { fmtMonthShort, money, monthKey } from "@/lib/format";
-import { parseTierHours, tiersLabel } from "@/lib/pay";
+import { parseTierHours, tiersLabel, TRAVEL_END } from "@/lib/pay";
 import { liveTeamLabel, type LiveTeam } from "@/lib/live-team";
 import { isTestAccount } from "@/lib/staff-check";
 import type { CommitTier, OwnerScope } from "@/lib/types";
@@ -62,6 +62,8 @@ type Person = {
   live_platform?: LiveTeam;
   /** Mc: ค่าจ้าง Shopee/ชม. (null = เท่ากับ TikTok · ไม่มี = ยังไม่ได้รัน SQL 20261116000000_shopee_rate / ดูได้อย่างเดียว) */
   shopee_rate?: number | null;
+  /** Admin: ค่ารถต่อวัน (คิวเลิก 23:30 วันละครั้ง · null = ไม่ได้ · ไม่มี = ยังไม่ได้รัน SQL 20261119000000_admin_travel / ดูได้อย่างเดียว) */
+  travel_allowance?: number | null;
   /** Mc: จ่ายค่าตัวผ่าน Mc คนนี้ (Mc ในเครือ · null = จ่ายให้ตัวเอง · ไม่มี = ยังไม่ได้รัน SQL 20261117000000_pay_to) */
   pay_to_id?: number | null;
   /** เอกสารทำเบิก (เฉพาะ Owner ที่ดูได้): ok = ส่งในเว็บแล้ว / drive = มีเอกสารเดิมใน Drive / missing = ต้องส่งแต่ยังไม่มี / ไม่มี = ไม่ต้องส่ง */
@@ -449,6 +451,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
                   {p.phone ? ` · ${p.phone}` : ""}
                   {p.hourly_rate ? ` · ${money(p.hourly_rate)} บาท/ชม.` : ""}
                   {p.shopee_rate ? ` · Shopee ${money(p.shopee_rate)} บาท/ชม.` : ""}
+                  {p.travel_allowance ? ` · ค่ารถ ${money(p.travel_allowance)}/วัน` : ""}
                   {p.commit_tiers?.length ? ` · Commit ${tiersLabel(0, p.commit_tiers)}` : ""}
                 </span>
               </span>
@@ -654,6 +657,9 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   const [rate, setRate] = useState(person?.hourly_rate != null ? String(person.hourly_rate) : "");
   // ค่าจ้าง Shopee (Mc ทีม Shopee / TikTok + Shopee) ว่าง = เท่ากับ TikTok
   const [shopeeRate, setShopeeRate] = useState(person?.shopee_rate ? String(person.shopee_rate) : "");
+  // ค่ารถ (Admin เสริม): ติ๊ก + ยอดต่อวัน · ได้เฉพาะวันที่มีคิวเลิก 23:30 วันละครั้ง
+  const [travelOn, setTravelOn] = useState(!!person?.travel_allowance);
+  const [travelAmount, setTravelAmount] = useState(person?.travel_allowance ? String(person.travel_allowance) : "");
   // จ่ายค่าตัวผ่าน Mc อีกคน (Mc ในเครือ) — แก้ได้เฉพาะ Mc ที่มีอยู่แล้ว + รัน SQL แล้ว
   const [payTo, setPayTo] = useState<number | null>(person?.pay_to_id ?? null);
   const payToReady = role === "mc" && !!person && person.pay_to_id !== undefined;
@@ -704,11 +710,16 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   // ช่องค่าจ้าง Shopee: Mc ที่ติ๊กทีม Shopee · มีค่าเดิมอยู่แล้วก็แสดง (เอาออกได้)
   const showShopeeRate = role === "mc" && (shopee || !!person?.shopee_rate);
   const shopeeDirty = showShopeeRate && (Number(shopeeRate.replace(/[,\s]/g, "")) || null) !== (Number(person?.shopee_rate) || null);
+  // ช่องค่ารถ: Admin ที่ไม่ใช่ Admin ประจำ · คนเดิมต้องรัน SQL แล้ว (มีค่ามากับรายชื่อ) · ไม่ติ๊ก = ไม่ได้ค่ารถ
+  const showTravel = role === "admin" && !salaried && (!person || person.travel_allowance !== undefined);
+  const travelValue = showTravel && travelOn ? Number(travelAmount.replace(/[,\s]/g, "")) || null : null;
+  const travelDirty = role === "admin" && (person ? person.travel_allowance !== undefined : travelOn)
+    && travelValue !== (Number(person?.travel_allowance) || null);
   const rateDirty = !!person && isCrew(role) && (
     (Number(rate.replace(/[,\s]/g, "")) || null) !== (Number(person.hourly_rate) || null)
     || tierKey(filledTiers) !== tierKey(person.commit_tiers ?? [])
     || salaried !== person.is_salaried
-    || shopeeDirty);
+    || shopeeDirty || travelDirty);
   // เอาอีเมลออกทั้งที่ยังมีคิวข้างหน้า = เข้าเว็บไม่ได้แต่คิวยังอยู่ในชื่อ → เลือกปล่อยคิวพร้อมบันทึกได้
   const emailCleared = !!person?.email && !email.trim() && isCrew(role) && person.upcoming > 0;
   const [releaseOnSave, setReleaseOnSave] = useState(false);
@@ -734,6 +745,10 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
         confirmText: "ถูกต้อง บันทึก",
       }))) return;
     }
+    if (showTravel && travelOn && !travelValue) {
+      toast("ใส่ยอดค่ารถต่อวัน (หรือเอาติ๊ก \"ได้ค่ารถ\" ออก)", "error");
+      return;
+    }
     setSaving(true);
     try {
       const manage = {
@@ -755,6 +770,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
         ...(isCrew(role) && (teamReady || liveTeam !== "tiktok") ? { live_platform: liveTeam } : {}),
         // ค่าจ้าง Shopee: ส่งเมื่อเปลี่ยน (ยังไม่รัน SQL = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(shopeeDirty ? { shopee_rate: shopeeRate } : {}),
+        // ค่ารถ: ส่งเมื่อเปลี่ยน (ยังไม่รัน SQL = เซิร์ฟเวอร์แจ้งให้รันก่อน)
+        ...(travelDirty ? { travel_allowance: travelValue } : {}),
         ...(payToReady && payTo !== (person?.pay_to_id ?? null) ? { pay_to_id: payTo } : {}),
         // สิทธิ์ Owner: แก้สิทธิ์ตัวเองไม่ได้ (server ตรวจซ้ำ)
         ...(role === "owner" && !isMe ? { ...manage, ...view } : {}),
@@ -1050,6 +1067,28 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
               </span>
             </span>
           </Label>
+        ) : null}
+
+        {/* ค่ารถ (Admin ที่ไม่ใช่ Admin ประจำ): ติ๊ก + ยอดต่อวัน */}
+        {showTravel ? (
+          <div className="space-y-2">
+            <Label className="items-start leading-snug font-normal">
+              <Checkbox checked={travelOn} onCheckedChange={(v) => setTravelOn(v === true)} className="mt-0.5" />
+              <span>
+                ได้ค่ารถ
+                <span className="block text-xs text-muted-foreground">
+                  คิดให้วันละครั้ง เฉพาะวันที่มีคิว Admin เลิก {TRAVEL_END} · รวมในยอดเงิน สรุปรายเดือน ไฟล์เบิก และตารางของฉัน
+                </span>
+              </span>
+            </Label>
+            {travelOn ? (
+              <div className="ml-6">
+                <Field label="ค่ารถต่อวัน (บาท)">
+                  {(id) => <Input id={id} inputMode="decimal" value={travelAmount} onChange={(e) => setTravelAmount(e.target.value)} placeholder="เช่น 150" />}
+                </Field>
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {rateDirty ? (

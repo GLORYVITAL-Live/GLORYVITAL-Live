@@ -35,11 +35,13 @@ export async function POST(request: Request) {
   }
   const { error: upErr } = await db.from("admin_slots").update({ late_minutes: minutes }).eq("id", id);
   if (upErr) return fail(upErr.message, 500);
-  await db.from("booking_logs").insert({
+  const { error: logErr } = await db.from("booking_logs").insert({
     email: r.me.email, role: "Owner", name: r.me.owner?.name || r.me.email,
     action: minutes ? `ใส่สถานะมาสาย: ${person} ${minutes} นาที` : `ลบสถานะมาสาย: ${person}`,
     slot_table: "admin_slots", slot_id: id, platform: s.platform, live_date: s.live_date,
     time_range: `${String(s.start_time).slice(0, 5)}-${String(s.end_time).slice(0, 5)}`, result: "สำเร็จ",
   });
+  // บันทึกประวัติไม่ได้ไม่ทำให้การใส่สายล้ม (ชีต + ฐานข้อมูลเขียนแล้ว) แต่เก็บสาเหตุไว้ใน log ของเซิร์ฟเวอร์
+  if (logErr) console.error("admin-late: บันทึกประวัติไม่สำเร็จ", logErr.message);
   return ok({ late: minutes, message: minutes ? `บันทึกแล้ว: ${person} สาย ${minutes} นาที` : `ลบสถานะมาสายของ ${person} แล้ว` });
 }

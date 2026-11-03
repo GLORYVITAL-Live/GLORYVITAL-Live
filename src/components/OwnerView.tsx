@@ -5,7 +5,7 @@ import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/ty
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey, todayKey } from "@/lib/format";
 import { fmtGmv } from "@/lib/gmv";
 import { bonusPaidMinutes, lateCut, slotPaidHours, slotPay, tiersLabel } from "@/lib/pay";
-import { hasRateOf, itemRate, payOfItems, rateOf, shopeeRateOf, type PayType } from "@/lib/owner-pay";
+import { hasRateOf, itemRate, payOfItems, rateOf, shopeeRateOf, travelOf, type PayType } from "@/lib/owner-pay";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { ChevronRightIcon, LockIcon, LockOpenIcon } from "lucide-react";
 import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
@@ -14,6 +14,7 @@ import { ExportMenu } from "@/components/ExportMenu";
 import { DatePicker } from "@/components/date-picker";
 import { AdminLateDialog, type AdminLateTarget } from "@/components/AdminLateDialog";
 import { ReceiptPanel } from "@/components/ReceiptPanel";
+import { SlipPanel } from "@/components/SlipPanel";
 import { TawiPanel } from "@/components/TawiPanel";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, MonthNav, Notice, Stats, api, useConfirm, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
@@ -117,7 +118,7 @@ function summaryBook(data: OwnerSummary) {
   const rows: unknown[][] = [[
     "ประเภท", "ชื่อ", "จำนวน slot", "ชั่วโมงรวม", "จำนวนวัน", "ยกเลิก", "slot ที่สาย", "ไลฟ์ชดเชย (นาที)",
     "หลักฐาน (แนบแล้ว/ต้องแนบ)", "GMV", "GMV/ชม.", "ชม. ช่วง Campaign",
-    "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ยอดเงิน",
+    "ชั่วโมงที่ได้เงิน", "Commit", "ค่าจ้าง/ชม.", "ค่ารถ", "ยอดเงิน",
   ]];
   for (const [type, people] of groups(data)) for (const r of people) {
     const paid = hasRateOf(data, type, r.name);
@@ -132,36 +133,43 @@ function summaryBook(data: OwnerSummary) {
       need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "ไม่ต้องแนบ",
       gmv.count ? round2(gmv.total) : "", gmvPerHour(items),
       round2(items.filter((d) => d.campaign).reduce((a, d) => a + d.hours, 0)) || "",
-      r.paidHours, commit, paid ? rateLabel(data, type, r.name) : r.salaried ? "เงินเดือน" : "", paid ? payOfItems(data, type, items) : "",
+      r.paidHours, commit, paid ? rateLabel(data, type, r.name) : r.salaried ? "เงินเดือน" : "",
+      items.reduce((a, d) => a + travelOf(d), 0) || "", paid ? payOfItems(data, type, items) : "",
     ]);
   }
-  return book(`GLORY สรุป ${data.month}`, "สรุป", payHiddenAll(data) ? dropCols(rows, [13, 14, 15]) : rows);
+  // คอลัมน์ค่ารถ: เฉพาะเดือนที่มีคนได้ค่ารถ
+  const drop = [...(payHiddenAll(data) ? [13, 14, 15, 16] : []), ...(hasTravel(data) ? [] : [15])];
+  return book(`GLORY สรุป ${data.month}`, "สรุป", drop.length ? dropCols(rows, drop) : rows);
 }
+
+/** เดือนนี้มีคิวที่ได้ค่ารถไหม (ไม่มี = ไม่ใส่คอลัมน์ค่ารถในไฟล์) */
+const hasTravel = (data: OwnerSummary) => data.details.some((d) => d.travel && !d.cancelled);
 
 // ใบสรุปค่าจ้างรายคน: ทุกคิวของแต่ละคน + แถวรวมต่อคน (ไม่นับคิวที่ยกเลิก หักมาสายตามกฎ + ไลฟ์ชดเชย)
 function payrollBook(data: OwnerSummary) {
-  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "Campaign", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ยอดเงิน", "GMV", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
+  const rows: unknown[][] = [["ชื่อ", "Platform", "วันที่", "เริ่ม", "จบ", "Campaign", "ชั่วโมง", "สาย (นาที)", "หัก", "ชดเชย (นาที)", "ค่าจ้าง/ชม.", "ค่ารถ", "ยอดเงิน", "GMV", "ไลฟ์จริง (หลักฐาน)", "แนบโดย", "ลิงก์หลักฐาน (Google Drive)"]];
   for (const [type, people] of groups(data)) {
-    let groupHours = 0, groupMoney = 0, groupGmv = 0, groupGmvCount = 0;
+    let groupHours = 0, groupMoney = 0, groupTravel = 0, groupGmv = 0, groupGmvCount = 0;
     for (const p of people) {
       const paid = hasRateOf(data, type, p.name);
       const items = slotsOf(data, type, p.name);
       if (!items.length) continue;
       const gmv = gmvOf(items);
-      let h = 0, m = 0;
+      let h = 0, m = 0, tr = 0;
       for (const d of items) {
         const hrs = round2(d.hours);
         const cut = lateCut(d.lateMinutes);
         const bonus = bonusPaidMinutes(d.bonusMinutes);
-        // ปัดเงินทีละคิวแล้วรวม (ตัวเลขเดียวกับไฟล์เบิก / หน้าจอ) · เรทของคิวนี้ (คิว Shopee = เรท Shopee ถ้าตั้งแยก)
+        // ปัดเงินทีละคิวแล้วรวม (ตัวเลขเดียวกับไฟล์เบิก / หน้าจอ) · เรทของคิวนี้ (คิว Shopee = เรท Shopee ถ้าตั้งแยก) + ค่ารถของคิวนี้
         const rate = itemRate(data, type, d);
-        const pay = slotPay(d.hours, d.lateMinutes, d.bonusMinutes, rate);
+        const pay = slotPay(d.hours, d.lateMinutes, d.bonusMinutes, rate) + travelOf(d);
         h += hrs;
         m += pay;
+        tr += travelOf(d);
         rows.push([
           p.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end), d.campaign, hrs,
           lateText(d), cut ? `${Math.round(cut * 100)}%` : "",
-          bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", rate ? pay : "",
+          bonus ? `+${d.bonusMinutes} (คิด ${bonus})${d.bonusFromProof ? " จากหลักฐาน" : ""}` : "", rate || "", d.travel || "", rate ? pay : "",
           d.gmv ?? (d.gmvCoveredBy ? `รวมในคิว ${d.gmvCoveredBy}` : ""),
           d.proof ? proofTime(d.proof) : d.noProof ? noProofText(d) : "ยังไม่มีหลักฐาน",
           d.proof?.by ?? "",
@@ -169,23 +177,26 @@ function payrollBook(data: OwnerSummary) {
         ]);
       }
       rows.push([
-        `รวม ${p.name}`, `${items.length} slot`, "", "", "", "", round2(h), "", "", "", "", paid ? m : "",
+        `รวม ${p.name}`, `${items.length} slot`, "", "", "", "", round2(h), "", "", "", "", tr || "", paid ? m : "",
         gmv.count ? round2(gmv.total) : "", "", "",
-        // คอลัมน์ O: โฟลเดอร์รวมหลักฐานทั้งเดือนของ Mc คนนี้ใน Google Drive
+        // คอลัมน์ลิงก์หลักฐาน: โฟลเดอร์รวมหลักฐานทั้งเดือนของ Mc คนนี้ใน Google Drive
         type === "Mc" ? monthFolderText(items) : "",
       ], []);
       groupHours += h;
       groupMoney += m;
+      groupTravel += tr;
       groupGmv += gmv.total;
       groupGmvCount += gmv.count;
     }
     rows.push([
-      `รวม ${type} ทั้งหมด`, "", "", "", "", "", round2(groupHours), "", "", "", "", groupMoney || "", groupGmvCount ? round2(groupGmv) : "",
+      `รวม ${type} ทั้งหมด`, "", "", "", "", "", round2(groupHours), "", "", "", "", groupTravel || "", groupMoney || "", groupGmvCount ? round2(groupGmv) : "",
     ], []);
   }
+  // คอลัมน์ค่ารถ: เฉพาะเดือนที่มีคนได้ค่ารถ
+  const noTravel = hasTravel(data) ? [] : [11];
   return payHiddenAll(data)
-    ? book(`GLORY ใบสรุปรายคน ${data.month}`, "สรุปรายคน", dropCols(rows, [10, 11]))
-    : book(`GLORY ใบสรุปค่าจ้างรายคน ${data.month}`, "ค่าจ้างรายคน", rows);
+    ? book(`GLORY ใบสรุปรายคน ${data.month}`, "สรุปรายคน", dropCols(rows, [10, 11, 12]))
+    : book(`GLORY ใบสรุปค่าจ้างรายคน ${data.month}`, "ค่าจ้างรายคน", noTravel.length ? dropCols(rows, noTravel) : rows);
 }
 
 // ---------- ไฟล์เบิก: รายคน (Mc / Admin) + ตารางคุม Advance Payment (หน้าตาเดียวกับเอกสารที่ทีมใช้) ----------
@@ -263,29 +274,33 @@ const CLAIM_HEAD = ["ชื่อ", "Name", "channel", "วันที่ live"
 /**
  * ต่อแถวรายคน (แถวละคิว) ของคิวกลุ่มหนึ่งลงในแผ่นงาน: หัวเรื่อง (สี titleBg) / หัวตาราง / คิว / แถวรวม
  *   ราคาต่อชั่วโมง = เรทของแต่ละคิว (คิว Shopee = เรท Shopee ถ้าตั้งแยก) · คืนยอดรวม (ไม่มีคนเลย = null)
+ *   Admin ที่มีค่ารถ: เพิ่มคอลัมน์ "ค่ารถ" ก่อน Total (แบบไฟล์ของฝ่ายบัญชี) Total รวมค่ารถแล้ว · travelCol = มีคอลัมน์นี้
  */
 function claimRows(out: SheetParts, data: OwnerSummary, type: Type, keep: (d: OwnerDetail) => boolean, title: string, titleBg: string, totalLabel: string) {
   const { people, salaried, noRate } = claimPeople(data, type, keep);
   if (!people.length) return null;
+  const travelCol = people.some(({ items }) => items.some((d) => d.travel));
+  const tv = (cell: Cell) => (travelCol ? [cell] : []);
   const { rows, rowStyles, cellStyles } = out;
   rowStyles[rows.length] = { bg: titleBg, color: titleBg === "000000" ? "FFFFFF" : "000000", bold: true };
   rows.push(["", title]);
   rowStyles[rows.length] = { bg: "F3F3F3", bold: true, border: true };
-  rows.push([madeOn(), ...CLAIM_HEAD]);
-  let grand = 0, grandGmv = 0, grandHours = 0;
+  rows.push([madeOn(), ...CLAIM_HEAD.slice(0, 9), ...tv("ค่ารถ"), ...CLAIM_HEAD.slice(9)]);
+  let grand = 0, grandGmv = 0, grandHours = 0, grandTravel = 0;
   for (const { p, items } of people) {
     let total = 0;
     const gmv = gmvOf(items);
     items.forEach((d, i) => {
       const rate = itemRate(data, type, d);
       const money_ = slotMoney(d, rate);
-      total += money_;
+      total += money_ + travelOf(d);
+      grandTravel += travelOf(d);
       const lastRow = i === items.length - 1;
       cellStyles[`${rows.length}:3`] = channelStyle(d.platform);
       // Name = คนที่ไลฟ์คิวนั้น (Mc ในเครือที่จ่ายผ่านคนนี้ใช้ชื่อตัวเอง + เรทของตัวเอง)
       rows.push([
         "", i === 0 ? p.name : "", d.name, d.platform, fmtDayMonth.format(parseKey(d.date)), shortTime(d.start), shortTime(d.end),
-        round2(d.hours), { v: rate, f: "int" }, { v: money_, f: "int" },
+        round2(d.hours), { v: rate, f: "int" }, { v: money_, f: "int" }, ...tv(d.travel ? { v: d.travel, f: "int" } : null),
         lastRow ? { v: total, f: "money" } : null, lastRow && gmv.count ? { v: round2(gmv.total), f: "money" } : null,
         [d.name !== p.name ? `จ่ายผ่าน ${p.name}` : "", claimRemark(d)].filter(Boolean).join(" · "),
       ]);
@@ -296,14 +311,19 @@ function claimRows(out: SheetParts, data: OwnerSummary, type: Type, keep: (d: Ow
     rows.push([]);
   }
   rowStyles[rows.length] = { bg: "F3F3F3", bold: true, border: true };
-  rows.push(["", totalLabel, `${people.length} คน`, "", "", "", "", round2(grandHours), "", "", { v: grand, f: "money" }, grandGmv ? { v: round2(grandGmv), f: "money" } : null, ""]);
+  rows.push([
+    "", totalLabel, `${people.length} คน`, "", "", "", "", round2(grandHours), "", "", ...tv({ v: grandTravel, f: "money" }),
+    { v: grand, f: "money" }, grandGmv ? { v: round2(grandGmv), f: "money" } : null, "",
+  ]);
   if (salaried.length || noRate.length) rows.push([]);
   if (salaried.length) rows.push(["", `ไม่อยู่ในไฟล์เบิก (${type} ประจำ ได้เงินเดือน): ${salaried.map((p) => p.name).join(", ")}`]);
   if (noRate.length) rows.push(["", `ไม่อยู่ในไฟล์เบิก (ยังไม่ได้ตั้งค่าจ้างรายชั่วโมง): ${noRate.map((p) => p.name).join(", ")}`]);
-  return { grand, people: people.length };
+  return { grand, people: people.length, travelCol };
 }
 
 const CLAIM_WIDTHS = [12, 14, 14, 14, 10, 10, 12, 10, 12, 12, 13, 16, 26];
+/** ความกว้างคอลัมน์ไฟล์เบิก (มีคอลัมน์ค่ารถ = แทรกก่อน Total) */
+const claimWidths = (travelCol: boolean) => (travelCol ? [...CLAIM_WIDTHS.slice(0, 10), 10, ...CLAIM_WIDTHS.slice(10)] : CLAIM_WIDTHS);
 
 function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
   const { first, last } = monthSpan(data.month);
@@ -312,8 +332,9 @@ function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
   const where = shopee && tiktok ? "Tiktok / Shopee" : shopee ? "Shopee" : "Tiktok";
   const out: SheetParts = { rows: [], rowStyles: {}, cellStyles: {} };
   const title = `สรุปรายละเอียดชั่วโมงทำงาน ${type === "Mc" ? "MC" : "ADMIN"} LIVESTREAMING ${where} รอบ ${dmy(first)} - ${dmy(last)}`;
-  if (!claimRows(out, data, type, () => true, title, "000000", `รวม ${type} ทั้งหมด`)) return null;
-  return { name: `รายคน ${type}`, ...out, header: 1, colWidths: CLAIM_WIDTHS };
+  const res = claimRows(out, data, type, () => true, title, "000000", `รวม ${type} ทั้งหมด`);
+  if (!res) return null;
+  return { name: `รายคน ${type}`, ...out, header: 1, colWidths: claimWidths(res.travelCol) };
 }
 
 /** ตารางคุม Advance Payment ประจำเดือน: วันละแถว จ่าย = ค่าตัว Mc + Admin ของวันนั้น / WHT 3% / ก่อน VAT = จ่าย - WHT */
@@ -324,7 +345,7 @@ function advanceSheet(data: OwnerSummary, requester: string): ExportSheet | null
       const rate = itemRate(data, type, d);
       if (!rate) continue;
       const x = byDate.get(d.date) ?? { mc: 0, admin: 0 };
-      x[type === "Mc" ? "mc" : "admin"] += slotMoney(d, rate);
+      x[type === "Mc" ? "mc" : "admin"] += slotMoney(d, rate) + travelOf(d);
       byDate.set(d.date, x);
     }
   }
@@ -454,9 +475,11 @@ function accountBook(data: OwnerSummary): ExportBook {
     const title = `สรุปรายละเอียดชั่วโมงทำงาน ${g.detail} รอบ ${dmy(first)} - ${dmy(last)}`;
     const res = claimRows(det, data, g.type, g.keep, title, g.bg, "Grand Total");
     if (!res) { det.rows.length = start; continue; }
-    det.rows.push(["", "", "", "", "", "", "", "", "", "", `Duration : ${dm(first)} - ${dm(last)}`]);
+    // ใต้คอลัมน์ Total (มีคอลัมน์ค่ารถ = เลื่อนไป 1 ช่อง)
+    const pad = Array<Cell>(res.travelCol ? 11 : 10).fill("");
+    det.rows.push([...pad, `Duration : ${dm(first)} - ${dm(last)}`]);
     det.rowStyles[det.rows.length] = { bg: "F3F3F3", bold: true };
-    det.rows.push(["", "", "", "", "", "", "", "", "", "", "Total Cost", { v: res.grand, f: "money" }]);
+    det.rows.push([...pad, "Total Cost", { v: res.grand, f: "money" }]);
   }
 
   return {
@@ -638,6 +661,8 @@ export function OwnerView({ requester = "" }: { requester?: string }) {
       </div>
       {/* เอกสารบัญชีรายเดือน (Owner ที่ติ๊กสิทธิ์ดูเอกสาร) — แต่ละแผงเลือกเดือนเองข้างใน */}
       {data.docs?.mc || data.docs?.admin ? <><TawiPanel /><ReceiptPanel /></> : null}
+      {/* สลิปโอนเงินจากโฟลเดอร์ Slip ใน Drive (Owner ที่บันทึกโอนได้) */}
+      {data.paySides?.mc || data.paySides?.admin ? <SlipPanel /> : null}
       {groups(view).filter(([type]) => !(shown === "shopee" && type === "Admin")).map(([type, rows]) => (
         <section key={type} className="mt-5">
           <h2 className="mb-2 flex flex-wrap items-baseline gap-2 text-lg font-bold">
@@ -1061,6 +1086,11 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                         ประจำ
                       </Badge>
                     ) : null}
+                    {showPay && items.some((d) => d.travel) ? (
+                      <Badge title="ค่ารถ: คิวเลิก 23:30 วันละครั้ง (ตั้งที่หน้าพนักงาน) รวมอยู่ในยอดเงินแล้ว" className="ml-1.5 bg-success/15 text-[11px] text-success">
+                        ค่ารถ {items.filter((d) => d.travel).length} วัน · {money(items.reduce((a, d) => a + travelOf(d), 0))}
+                      </Badge>
+                    ) : null}
                     {r.commit ? (
                       <Badge
                         title={`Commit: ${tiersLabel(r.commit.baseRate, r.commit.tiers)} (ทุกชั่วโมงของเดือนคิดราคาเทียร์ที่จองถึง)`}
@@ -1174,6 +1204,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                                   ชดเชย +{d.bonusMinutes} น.{d.bonusFromProof ? " (จากหลักฐาน)" : ""}
                                 </span>
                               ) : null}
+                              {showPay && d.travel ? <span className="font-semibold text-success">ค่ารถ +{money(d.travel)}</span> : null}
                               {d.proof ? (
                                 <a href={proofUrl(d.proof)} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline">
                                   หลักฐาน: ไลฟ์จริง {proofTime(d.proof)}

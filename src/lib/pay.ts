@@ -159,6 +159,22 @@ export function checkInOf(remark: string | null | undefined, startMs: number, en
 export const slotPay = (hours: number, lateMinutes: number | null | undefined, bonusMinutes: number | null | undefined, rate: number) =>
   rate ? Math.round(slotPaidHours(Math.round(hours * 100) / 100, lateMinutes, bonusMinutes) * rate) : 0;
 
+/** ค่ารถ Admin (staff.travel_allowance ติ๊กรายคน): ได้เฉพาะวันที่มีคิวเลิกเวลานี้ */
+export const TRAVEL_END = "23:30";
+
+/**
+ * คิวที่ได้ค่ารถของคนหนึ่งคน: คิวที่ไม่ยกเลิกและเลิก 23:30 วันละครั้ง (วันเดียวมีหลายคิว = คิวแรกที่เจอ)
+ *   ใช้ที่เดียวกันทั้งสรุปรายเดือนของเจ้าของ (src/lib/data.ts) และตารางของฉัน (/api/my)
+ */
+export function travelPicks<T extends { date: string; end: string; cancelled: boolean }>(items: T[]): T[] {
+  const days = new Set<string>();
+  return items.filter((i) => {
+    if (i.cancelled || i.end.slice(0, 5) !== TRAVEL_END || days.has(i.date)) return false;
+    days.add(i.date);
+    return true;
+  });
+}
+
 /** ยอดเงินรวมของหลายคิว (ปัดทีละคิวแล้วรวม) */
 export const sumPay = (items: { hours: number; lateMinutes: number | null; bonusMinutes: number | null }[], rate: number) =>
   items.reduce((a, d) => a + slotPay(d.hours, d.lateMinutes, d.bonusMinutes, rate), 0);

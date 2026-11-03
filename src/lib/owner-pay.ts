@@ -27,9 +27,12 @@ export const shopeeRateOf = (data: PayData, type: PayType, name: string) =>
 export const itemRate = (data: PayData, type: PayType, d: OwnerDetail) =>
   (d.shopee && shopeeRateOf(data, type, d.name)) || rateOf(data, type, d.name);
 
-/** ยอดเงินของหลายคิว (ปัดทีละคิวแล้วรวม · คิดตามเรทของแต่ละคิว) — สูตรเดียวกับไฟล์เบิก / ตารางของฉัน */
+/** ค่ารถของคิวนี้ (Admin ที่ได้ค่ารถ · คิวเลิก 23:30 วันละครั้ง — คิดที่เซิร์ฟเวอร์) ไม่มี = 0 */
+export const travelOf = (d: Pick<OwnerDetail, "travel">) => d.travel ?? 0;
+
+/** ยอดเงินของหลายคิว (ปัดทีละคิวแล้วรวม · คิดตามเรทของแต่ละคิว + ค่ารถ) — สูตรเดียวกับไฟล์เบิก / ตารางของฉัน */
 export const payOfItems = (data: PayData, type: PayType, items: OwnerDetail[]) =>
-  items.reduce((a, d) => a + slotPay(d.hours, d.lateMinutes, d.bonusMinutes, itemRate(data, type, d)), 0);
+  items.reduce((a, d) => a + slotPay(d.hours, d.lateMinutes, d.bonusMinutes, itemRate(data, type, d)) + travelOf(d), 0);
 
 /** คนนี้มีค่าจ้างรายชั่วโมงไหม (เรทหลัก หรือเรท Shopee) */
 export const hasRateOf = (data: PayData, type: PayType, name: string) => rateOf(data, type, name) > 0 || shopeeRateOf(data, type, name) > 0;

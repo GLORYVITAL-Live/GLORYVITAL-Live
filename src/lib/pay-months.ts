@@ -2,7 +2,7 @@ import "server-only";
 import { fmtDayMonth, monthLabel, money, parseKey, todayKey } from "@/lib/format";
 import { notifyMany, type Note } from "@/lib/notifications";
 import { cleanTiers, monthsToLock } from "@/lib/pay";
-import type { MonthRate } from "@/lib/pay-rates";
+import { LATER_RATE_COLS, type MonthRate } from "@/lib/pay-rates";
 import { receiptGaps } from "@/lib/receipts-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { PaymentView } from "@/lib/types";
@@ -23,30 +23,38 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 type StaffPay = { id: number; role: string; hourly_rate: number | string | null; commit_tiers: unknown; is_salaried: boolean | null };
 
-/** เรท Shopee ที่ตั้งไว้ตอนนี้ (Mc · ไม่ตั้ง / ยังไม่ได้รัน SQL 20261116000000_shopee_rate = null) */
-async function currentShopeeRate(s: StaffPay) {
-  if (s.role !== "mc") return null;
-  const { data, error } = await createAdminClient().from("staff").select("shopee_rate").eq("id", s.id).maybeSingle();
-  return !error && Number(data?.shopee_rate) > 0 ? Number(data!.shopee_rate) : null;
+/** ค่าที่ตั้งไว้ตอนนี้ของคอลัมน์ที่เพิ่มทีหลัง: เรท Shopee (Mc) / ค่ารถ (Admin) · ไม่ตั้ง / ยังไม่ได้รัน SQL ของคอลัมน์นั้น = null */
+async function currentExtra(s: StaffPay, col: "shopee_rate" | "travel_allowance") {
+  const { data, error } = await createAdminClient().from("staff").select(col).eq("id", s.id).maybeSingle();
+  const v = Number((data as Record<string, unknown> | null)?.[col]);
+  return !error && v > 0 ? v : null;
 }
 
 /** เรทของคนนี้ตอนนี้ (ไม่ได้ตั้งรายคน = ค่าเริ่มต้นของฝั่งนั้น) — ไม่ใช้ src/lib/data.ts (data.ts เรียกไฟล์นี้) */
 async function currentRate(s: StaffPay): Promise<MonthRate> {
   const { data: settings } = await createAdminClient().from("settings").select("default_mc_rate, default_admin_rate").eq("id", 1).maybeSingle();
   const def = Number(s.role === "mc" ? settings?.default_mc_rate : settings?.default_admin_rate) || 0;
-  return { rate: Number(s.hourly_rate) || def, tiers: cleanTiers(s.commit_tiers), salaried: !!s.is_salaried, shopeeRate: await currentShopeeRate(s) };
+  return {
+    rate: Number(s.hourly_rate) || def, tiers: cleanTiers(s.commit_tiers), salaried: !!s.is_salaried,
+    shopeeRate: s.role === "mc" ? await currentExtra(s, "shopee_rate") : null,
+    travel: s.role === "admin" ? await currentExtra(s, "travel_allowance") : null,
+  };
 }
 
-/** ล็อกเรทของเดือนเหล่านี้ (เดือนที่ล็อกไว้แล้วไม่ทับ · ยังไม่ได้รัน SQL shopee_rate = ล็อกแบบเดิม ไม่มีเรท Shopee) */
+/** ล็อกเรทของเดือนเหล่านี้ (เดือนที่ล็อกไว้แล้วไม่ทับ · ยังไม่ได้รัน SQL shopee_rate / ค่ารถ = ล็อกโดยไม่มีค่านั้น) */
 async function lockMonths(staffId: number, months: string[], r: MonthRate) {
   if (!months.length) return;
-  const rows = (withShopee: boolean) => months.map((month) => ({
-    staff_id: staffId, month, hourly_rate: r.rate, commit_tiers: r.tiers, is_salaried: r.salaried, ...(withShopee ? { shopee_rate: r.shopeeRate } : {}),
-  }));
-  const upsert = (withShopee: boolean) => createAdminClient().from("pay_month_rates")
-    .upsert(rows(withShopee), { onConflict: "staff_id,month", ignoreDuplicates: true });
-  let { error } = await upsert(true);
-  if (error && /shopee_rate/.test(error.message)) ({ error } = await upsert(false));
+  const later: Record<(typeof LATER_RATE_COLS)[number], number | null> = { shopee_rate: r.shopeeRate, travel_allowance: r.travel };
+  const upsert = (cols: readonly (typeof LATER_RATE_COLS)[number][]) => createAdminClient().from("pay_month_rates").upsert(months.map((month) => ({
+    staff_id: staffId, month, hourly_rate: r.rate, commit_tiers: r.tiers, is_salaried: r.salaried,
+    ...Object.fromEntries(cols.map((c) => [c, later[c]])),
+  })), { onConflict: "staff_id,month", ignoreDuplicates: true });
+  let cols: readonly (typeof LATER_RATE_COLS)[number][] = LATER_RATE_COLS;
+  let { error } = await upsert(cols);
+  for (let missing = cols.find((c) => error?.message.includes(c)); missing; missing = cols.find((c) => error?.message.includes(c))) {
+    cols = cols.filter((c) => c !== missing);
+    ({ error } = await upsert(cols));
+  }
   if (error) throw new Error(noSql(error.message) ? PAY_SYNC_SQL : error.message);
 }
 

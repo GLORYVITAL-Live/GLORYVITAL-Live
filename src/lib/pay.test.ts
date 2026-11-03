@@ -2,8 +2,36 @@
 import { describe, expect, test } from "bun:test";
 import {
   bonusPaidMinutes, cleanTiers, lateCut, monthRate, paidHours, parseBonusMinutes, parseLateMinutes, parseTierHours,
-  checkInOf, monthsToLock, platformRates, resolveLateBonus, slotPaidHours, slotPay, sumPay,
+  checkInOf, monthsToLock, platformRates, resolveLateBonus, slotPaidHours, slotPay, sumPay, travelPicks,
 } from "@/lib/pay";
+import { payOfItems } from "@/lib/owner-pay";
+import type { OwnerDetail } from "@/lib/types";
+
+describe("ค่ารถ Admin (คิวเลิก 23:30 วันละครั้ง)", () => {
+  const q = (date: string, start: string, end: string, cancelled = false) => ({ date, start, end, cancelled });
+  test("ได้เฉพาะคิวที่เลิก 23:30 · ไม่นับคิวที่ยกเลิก · วันละครั้ง", () => {
+    const items = [
+      q("2026-11-01", "19:30", "21:30"),
+      q("2026-11-01", "21:30", "23:30"),
+      q("2026-11-02", "21:30", "23:30", true), // ยกเลิก
+      q("2026-11-03", "21:30", "23:30"),
+      q("2026-11-03", "21:30", "23:30"), // คิวเวลาเดียวกันอีกช่อง = วันเดียวกัน ได้ครั้งเดียว
+      q("2026-11-04", "19:30", "23:30"),
+      q("2026-11-05", "23:30", "02:30"), // เริ่ม 23:30 แต่เลิกตีสอง = ไม่ได้
+      q("2026-11-06", "21:30", "23:30:00"), // เวลาแบบมีวินาที
+    ];
+    expect(travelPicks(items).map((i) => i.date)).toEqual(["2026-11-01", "2026-11-03", "2026-11-04", "2026-11-06"]);
+    expect(travelPicks(items)[1]).toBe(items[3]);
+  });
+
+  test("ยอดเงินรวมค่ารถด้วย (สูตรเดียวกับสรุปรายเดือน / ไฟล์เบิก)", () => {
+    const d = (travel?: number) => ({
+      type: "Admin", name: "ปัน", hours: 2, lateMinutes: null, bonusMinutes: null, ...(travel ? { travel } : {}),
+    }) as OwnerDetail;
+    const data = { rates: { mc: {}, admin: { ปัน: 150 }, defaultMc: 0, defaultAdmin: 0 }, mc: [], admin: [] };
+    expect(payOfItems(data, "Admin", [d(), d(150)])).toBe(300 + 300 + 150);
+  });
+});
 
 describe("หักเงินมาสาย", () => {
   test.each([

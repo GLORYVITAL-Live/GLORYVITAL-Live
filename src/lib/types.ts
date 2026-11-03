@@ -291,6 +291,8 @@ export type MyItem = {
   /** เฟรมไลฟ์ + บรีฟการแต่งตัวของช่อง + วันนี้ (ไม่มี = ไม่แสดง) */
   frame?: FrameFile | null;
   brief?: BriefView | null;
+  /** ค่ารถของคิวนี้ (Admin ที่ได้ค่ารถ · คิวเลิก 23:30 วันละครั้ง) รวมในยอดเงิน */
+  travel?: number;
 };
 
 /** เอกสารทำเบิกที่ส่งแล้ว (ข้อมูลกรอก + มีไฟล์หรือยัง) — เห็นเฉพาะเจ้าตัว และ Owner ที่ดูเอกสารทำเบิกได้ */
@@ -412,6 +414,8 @@ export type MyResponse = {
   payments?: { amount: number; paidOn: string }[];
   /** Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้: ยอดของเดือนนี้ (รวมอยู่ในยอดที่ต้องได้ / การโอน) */
   subs?: { name: string; slots: number; hours: number; pay: number }[];
+  /** สลิปโอนเงินล่าสุดของคนนี้ (ทุกรอบ ไม่ขึ้นกับเดือนที่เลือก · ยังไม่ได้ตั้งระบบ / ไม่มี = ว่าง) */
+  slips?: MySlip[];
 };
 
 export type OwnerDetail = {
@@ -448,6 +452,8 @@ export type OwnerDetail = {
   shopee?: boolean;
   /** id ของ slot (mc_slots / admin_slots ตาม type) — ใส่สถานะมาสายของ Admin · ยกเลิกผ่านเว็บ / ตัวเลขตอนปิดงวด = ไม่มี */
   slotId?: number;
+  /** ค่ารถของคิวนี้ (บาท · Admin ที่ติ๊กได้ค่ารถ คิวเลิก 23:30 วันละครั้ง — src/lib/pay.ts travelPicks) รวมในยอดเงิน */
+  travel?: number;
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */
@@ -508,6 +514,16 @@ export type CommitTier = { hours: number; rate: number };
 
 /** การโอนค่าจ้าง 1 ครั้ง (src/lib/pay-months.ts) */
 export type PaymentView = { id: number; amount: number; paidOn: string; note: string; by: string; at: string };
+
+/** สลิปโอนเงินของฉัน (จากโฟลเดอร์ Slip ใน Drive) label = "รอบ 2 ต.ค. 69" · group = "MC LIVESTREAM Tiktok" */
+export type MySlip = { id: number; label: string; group: string };
+/** หน้า Owner: สลิปของฝั่งที่จัดการได้ (who = ชื่อคนที่จับคู่ · by = ระบบ / Owner เลือก · null = ยังไม่จับคู่) */
+export type OwnerSlip = {
+  id: number; round: string; label: string; role: "mc" | "admin"; group: string; fileName: string;
+  staffId: number | null; who: string | null; by: "auto" | "owner" | null;
+};
+export type OwnerSlips = { configured: boolean; slips: OwnerSlip[]; people: { id: number; role: "mc" | "admin"; label: string }[] };
+export type SlipScan = { configured: boolean; files: number; added: number; removed: number; matched: number; unmatched: number; notified: number };
 
 export type OwnerSummary = {
   ok: true;

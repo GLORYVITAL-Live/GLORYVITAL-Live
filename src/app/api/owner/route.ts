@@ -44,8 +44,10 @@ export async function GET(request: Request) {
     payHidden: hide,
     mc: mc ? people(s.mc, hide.mc) : [],
     admin: admin ? people(s.admin, hide.admin) : [],
-    // ชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม) ไฟล์ส่งออกใช้ข้อมูลชุดนี้
-    details: withPlatformLabels(s.details.filter((d) => (d.type === "Mc" ? mc : admin))),
+    // ชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม) ไฟล์ส่งออกใช้ข้อมูลชุดนี้ · ค่ารถเป็นเงิน: ฝั่งที่ดูได้อย่างเดียวไม่ส่ง
+    details: withPlatformLabels(s.details.filter((d) => (d.type === "Mc" ? mc : admin))
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .map(({ travel, ...d }) => (travel && !hide[d.type === "Mc" ? "mc" : "admin"] ? { ...d, travel } : d))),
     rates: {
       mc: mc && !hide.mc ? s.rates.mc : {}, admin: admin && !hide.admin ? s.rates.admin : {},
       shopee: mc && !hide.mc ? s.rates.shopee ?? {} : {},

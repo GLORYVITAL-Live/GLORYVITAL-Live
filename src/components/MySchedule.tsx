@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import type { MyItem, MyResponse } from "@/lib/types";
+import type { MyItem, MyResponse, MySlip } from "@/lib/types";
 import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabel } from "@/lib/pay";
 import Link from "next/link";
 import {
-  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ShirtIcon, UserIcon, WalletIcon,
+  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ReceiptTextIcon, ShirtIcon, UserIcon,
+  WalletIcon,
 } from "lucide-react";
 import { FrameMedia } from "@/components/FrameMedia";
 import {
@@ -78,9 +79,12 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const hasShopeeRate = commit.split && shopeeHours > 0;
   const hoursText = (h: number) => (Number.isInteger(h) ? String(h) : h.toFixed(1));
   // ชั่วโมงที่ได้เงิน = หลังหักมาสาย + ไลฟ์ชดเชย (ปัดขึ้นทีละ 15 นาที)
-  // เงินปัดทีละคิวแล้วรวม (ตัวเลขเดียวกับสรุปของเจ้าของ / ไฟล์เบิก)
-  const payOf = (list: MyItem[]) => list.reduce((a, i) => a + slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rateOf(i)), 0);
+  // เงินปัดทีละคิวแล้วรวม (ตัวเลขเดียวกับสรุปของเจ้าของ / ไฟล์เบิก) + ค่ารถ (Admin · คิวเลิก 23:30 วันละครั้ง)
+  const itemPay = (i: MyItem) => slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rateOf(i)) + (i.travel ?? 0);
+  const payOf = (list: MyItem[]) => list.reduce((a, i) => a + itemPay(i), 0);
   const total = payOf(active);
+  const travelDays = active.filter((i) => i.travel);
+  const travelMoney = travelDays.reduce((a, i) => a + (i.travel ?? 0), 0);
   const earned = payOf(active.filter((i) => i.endMs <= now));
   const lateCutMoney = Math.round(active.reduce((a, i) => a + (i.hours - paidHours(i.hours, i.lateMinutes)) * rateOf(i), 0));
   const bonusMin = active.reduce((a, i) => a + bonusPaidMinutes(i.bonusMinutes), 0);
@@ -174,6 +178,9 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
               {bonusMoney > 0 ? (
                 <div className="mt-1 text-xs font-semibold text-success tabular-nums">รวมไลฟ์ชดเชย {bonusMin} นาที +{money(bonusMoney)} บาท</div>
               ) : null}
+              {travelMoney > 0 ? (
+                <div className="mt-1 text-xs font-semibold text-success tabular-nums">รวมค่ารถ {travelDays.length} วัน (คิวเลิก 23:30) +{money(travelMoney)} บาท</div>
+              ) : null}
               {commit.hasCommit ? (
                 <div className="mt-1 text-xs text-muted-foreground tabular-nums">
                   {commit.tier
@@ -205,6 +212,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             <WorkLocationLink />
           </div>
           <div className="mb-3 empty:hidden"><MyTawi open={open} /></div>
+          {/* สลิปโอนเงินจากฝ่ายบัญชี (ทุกรอบ ไม่ขึ้นกับเดือนที่เลือก) */}
+          {data?.slips?.length ? <MySlips slips={data.slips} /> : null}
           {error && !items ? (
             <div className="py-6 text-center text-sm text-muted-foreground">
               <strong className="block text-foreground">โหลดข้อมูลไม่สำเร็จ</strong>
@@ -263,7 +272,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                                     ชดเชย +{i.bonusMinutes} นาที{i.bonusFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                                   </Badge>
                                 ) : null}
-                                {rateOf(i) ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rateOf(i)))} บาท</span> : null}
+                                {i.travel ? <Badge className="mx-1.5 bg-success/15 font-semibold text-success">ค่ารถ +{money(i.travel)}</Badge> : null}
+                                {rateOf(i) ? <span className="ml-1.5 font-semibold text-foreground tabular-nums">{money(itemPay(i))} บาท</span> : null}
                               </>}
                           <ChevronRightIcon aria-hidden className="-mr-1 ml-0.5 inline size-4 align-[-3px]" />
                         </span>
@@ -332,6 +342,38 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
 
 const telOf = (phone: string) => phone.replace(/[^0-9+]/g, "");
 
+/** สลิปโอนเงินของฉัน: 3 รอบล่าสุด (กดดูทั้งหมดได้) · เปิดดู / ดาวน์โหลด (ไฟล์ส่งผ่านเซิร์ฟเวอร์ ไม่ต้องมีสิทธิ์ Drive) */
+function MySlips({ slips }: { slips: MySlip[] }) {
+  const [all, setAll] = useState(false);
+  const list = all ? slips : slips.slice(0, 3);
+  return (
+    <div className="mb-3 rounded-xl border px-3 py-2">
+      <span className="flex items-center gap-1.5 text-sm font-semibold">
+        <ReceiptTextIcon aria-hidden className="size-4 text-muted-foreground" />สลิปโอนเงิน
+      </span>
+      <ul className="mt-1 divide-y text-sm">
+        {list.map((s) => (
+          <li key={s.id} className="flex items-center justify-between gap-2 py-1.5">
+            <span className="min-w-0">
+              <span className="font-semibold">{s.label}</span>
+              {s.group ? <span className="block truncate text-xs text-muted-foreground">{s.group}</span> : null}
+            </span>
+            <span className="flex shrink-0 gap-3 text-[13px]">
+              <a href={`/api/slips/file?id=${s.id}&inline=1`} target="_blank" rel="noopener" className="font-semibold text-primary underline pointer-coarse:py-1.5">เปิดดู</a>
+              <a href={`/api/slips/file?id=${s.id}`} download className="font-semibold text-primary underline pointer-coarse:py-1.5">ดาวน์โหลด</a>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {slips.length > 3 ? (
+        <Button variant="link" size="xs" className="h-auto px-0 font-semibold" onClick={() => setAll(!all)}>
+          {all ? "ย่อ" : `ดูทั้งหมด ${slips.length} รอบ`}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 /** แถวในรายละเอียด slot: ไอคอน + หัวข้อ + ค่า */
 function DetailRow({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
   return (
@@ -389,8 +431,9 @@ function SlotDetail({ item, role, rate, now, canCancel, tooLate, minH, adminChat
               <DetailRow icon={<WalletIcon />} label="ค่าจ้าง">
                 {i.cancelled ? "ไม่คิดเงิน (ยกเลิกแล้ว)" : (
                   <>
-                    <span className="text-lg font-bold text-primary tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rate))} บาท</span>
+                    <span className="text-lg font-bold text-primary tabular-nums">{money(slotPay(i.hours, i.lateMinutes, i.bonusMinutes, rate) + (i.travel ?? 0))} บาท</span>
                     <Note className="tabular-nums">{fmtHours(i.hours)} × {money(rate)} บาท/ชม.</Note>
+                    {i.travel ? <Note className="font-semibold text-success">รวมค่ารถ +{money(i.travel)} บาท (คิวเลิก 23:30)</Note> : null}
                     {late > 0 ? (
                       <Note className="font-semibold text-destructive">
                         สาย {i.lateMinutes} นาที หัก {Math.round(late * 100)}%{i.lateFromProof ? " (จากหลักฐานไลฟ์)" : ""}

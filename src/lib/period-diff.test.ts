@@ -1,7 +1,7 @@
 // เทสส่วนต่างหลังปิดงวด (bun test)
 import { describe, expect, test } from "bun:test";
 import { periodChanges, type PeriodSnapshot } from "@/lib/period-diff";
-import type { OwnerPerson } from "@/lib/types";
+import type { OwnerDetail, OwnerPerson } from "@/lib/types";
 
 const person = (name: string, x: Partial<OwnerPerson> = {}): OwnerPerson => ({
   name, slots: 10, hours: 20, paidHours: 20, lateSlots: 0, bonusMinutes: 0, days: 5, cancelled: 0, commit: null, ...x,
@@ -29,5 +29,12 @@ describe("ส่วนต่างหลังปิดงวด", () => {
   test("เปลี่ยนเป็นพนักงานประจำ = ค่าจ้าง/ชม. เป็น 0 ด้วย", () => {
     const [c] = periodChanges(snap([person("เตย")], { เตย: 500 }), snap([person("เตย", { salaried: true })], { เตย: 500 }));
     expect(c.items.map((i) => i.label)).toEqual(["ค่าจ้าง/ชม.", "พนักงานประจำ"]);
+  });
+  test("ค่ารถ: เทียบเฉพาะงวดที่ปิดหลังมีค่ารถ (งวดเก่าไม่ขึ้นส่วนต่างปลอม)", () => {
+    const d = (travel?: number) => ({ name: "ปัน", cancelled: false, ...(travel ? { travel } : {}) }) as OwnerDetail;
+    const live: PeriodSnapshot = { ...snap([person("ปัน")]), details: [d(150), d(150), d()], travel: true };
+    expect(periodChanges(snap([person("ปัน")]), live)).toEqual([]);
+    const [c] = periodChanges({ ...snap([person("ปัน")]), details: [d(150)], travel: true }, live);
+    expect(c.items).toEqual([{ label: "ค่ารถ (บาท)", before: "150", after: "300" }]);
   });
 });

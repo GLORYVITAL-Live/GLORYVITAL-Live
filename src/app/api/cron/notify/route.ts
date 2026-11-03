@@ -4,6 +4,7 @@ import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySu
 import { sendLoanLiveAlerts, sendLoanReminders } from "@/lib/loans-db";
 import { sendReceiptReminders } from "@/lib/receipts-db";
 import { processSheetJobs } from "@/lib/sheet-sync";
+import { scanSlips } from "@/lib/slips-db";
 
 export const maxDuration = 60;
 
@@ -25,6 +26,10 @@ export async function GET(request: Request) {
     const weekly = await sendWeeklySummary().then((x) => ({ sent: x.sent })).catch(fail);
     // ยังไม่ส่งเอกสารรับเงิน (เดือนที่บังคับ) → เตือนทุก 3 วัน
     const receipt = await sendReceiptReminders().then((x) => ({ sent: x.sent })).catch(fail);
+    // สลิปโอนเงินใหม่ในโฟลเดอร์ Slip (Drive) → จับคู่ + แจ้งเจ้าตัว · ชั่วโมงละครั้ง (รอบที่ตรงต้นชั่วโมง)
+    const slips = new Date().getUTCMinutes() < 15
+      ? await scanSlips().then((x) => ({ matched: x.matched, notified: x.notified })).catch(fail)
+      : null;
     // ยืมอุปกรณ์: ใกล้ถึง / เลยกำหนดคืน → ผู้ยืม (+ คนที่อนุมัติได้ ถ้าเลยกำหนด)
     const loans = await sendLoanReminders().then((sent) => ({ sent })).catch(fail);
     // เพิ่ม / ย้ายไลฟ์ทีหลังจนชนของที่อนุมัติให้ยืมไปแล้ว → คนจัดการอุปกรณ์
@@ -34,7 +39,7 @@ export async function GET(request: Request) {
     // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
     const calendar = await processCalendarJobs(30, 15_000).catch(fail);
     await pruneNotifications().catch(() => undefined);
-    return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, loans, loanLive, sheet, calendar });
+    return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, loans, loanLive, sheet, calendar });
   } catch (err) {
     return NextResponse.json({ ok: false, message: String((err as Error)?.message ?? err) }, { status: 500 });
   }

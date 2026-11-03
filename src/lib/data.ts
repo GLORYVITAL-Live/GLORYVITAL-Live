@@ -3,7 +3,7 @@ import { canonicalCampaign } from "@/lib/campaign";
 import { gmvCoverage } from "@/lib/gmv";
 import { lockedRates } from "@/lib/pay-rates";
 import {
-  bonusPaidMinutes, checkInOf, cleanTiers, lateCut, platformRates, proofMinutes, resolveLateBonus, slotPaidHours,
+  bonusPaidMinutes, checkInOf, cleanTiers, lateCut, platformRates, proofMinutes, resolveLateBonus, slotPaidHours, travelPicks,
 } from "@/lib/pay";
 import { isShopeePlatform } from "@/lib/platform";
 import type { Board } from "@/lib/live-team";
@@ -431,7 +431,10 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
       const byId = new Map((payees ?? []).map((p) => [Number(p.id), p]));
       return new Map(rows.flatMap((r) => (byId.has(Number(r.pay_to_id)) ? [[Number(r.id), byId.get(Number(r.pay_to_id))!] as const] : [])));
     });
-  const [settings, locked, shopeeRateOf, payToOf] = await Promise.all([getSettings(db), lockedRates(key), shopeeRates, payTos]);
+  // ค่ารถ Admin รายคน (SQL 20261119000000_admin_travel · ยังไม่ได้รัน = ไม่มีใครได้ค่ารถ)
+  const travels = db.from("staff").select("id, travel_allowance").eq("role", "admin").not("travel_allowance", "is", null)
+    .then(({ data, error }) => new Map((error ? [] : data ?? []).map((s) => [Number(s.id), Number(s.travel_allowance) || null])));
+  const [settings, locked, shopeeRateOf, payToOf, travelOf] = await Promise.all([getSettings(db), lockedRates(key), shopeeRates, payTos, travels]);
   type Person = { id: number; name: string; hourly_rate: number | null; commit_tiers: unknown; is_salaried: boolean | null };
   type Row = SlotRow & { person: Person | null; campaign?: string | null; remark?: string | null; sheet_tab?: string | null };
 
@@ -514,6 +517,14 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
   };
   collect(mcRows, "Mc");
   collect(adminRows, "Admin");
+  // ค่ารถ Admin: คิวเลิก 23:30 วันละครั้ง · เดือนที่ล็อกเรทไว้ใช้ค่ารถตอนล็อก · Admin ประจำ (เงินเดือน) ไม่คิด
+  for (const [name, info] of persons) {
+    if (!name.startsWith("Admin|")) continue;
+    const lock = locked.get(Number(info.id));
+    const amount = (lock ? lock.salaried : info.is_salaried) ? null : lock ? lock.travel : travelOf.get(Number(info.id));
+    if (!amount) continue;
+    for (const d of travelPicks(details.filter((x) => x.type === "Admin" && x.name === info.name))) d.travel = amount;
+  }
   // ยกเลิกผ่านเว็บ: นับในช่อง "ยกเลิก" ของคนที่กดยกเลิก (ไม่มีชั่วโมง / ไม่มีเงิน)
   for (const c of cancels) {
     details.push({
