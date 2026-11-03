@@ -3,7 +3,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { MyItem, MyResponse } from "@/lib/types";
 import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
-import { arrivalMissing } from "@/lib/arrival";
 import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabel } from "@/lib/pay";
 import Link from "next/link";
 import {
@@ -21,10 +20,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
-
-/** ที่มาของนาทีสายที่ระบบคิดเอง (ช่องในชีตว่าง): Mc = หลักฐานไลฟ์ / Admin = เวลาที่กด "มาถึงแล้ว" */
-const lateSource = (i: MyItem) => (i.lateFromProof ? " (จากหลักฐานไลฟ์)" : i.lateFromArrival ? " (จากเวลากดมาถึง)" : "");
-const arriveTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
 
 /** "ตารางของฉัน" (กดที่โปรไฟล์มุมขวาบน) + รายละเอียด slot + ยกเลิกคิว */
 export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDocs, canBook = true }: {
@@ -254,14 +249,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                             : <>
                                 {lateCut(i.lateMinutes) > 0 ? (
                                   <Badge variant="destructive" className="mr-1.5 font-semibold">
-                                    สาย {i.lateMinutes} นาที −{Math.round(lateCut(i.lateMinutes) * 100)}%{lateSource(i)}
+                                    สาย {i.lateMinutes} นาที −{Math.round(lateCut(i.lateMinutes) * 100)}%{i.lateFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                                   </Badge>
-                                ) : null}
-                                {/* Admin: เวลาที่กด "มาถึงแล้ว" / คิวที่เริ่มแล้วแต่ไม่ได้กด */}
-                                {i.arrival?.at ? (
-                                  <Badge variant="outline" className="mr-1.5 font-semibold">มาถึง {arriveTime.format(new Date(i.arrival.at))}</Badge>
-                                ) : arrivalMissing(i.arrival, i.startMs, now) ? (
-                                  <Badge variant="outline" className="mr-1.5 text-muted-foreground">ไม่ได้กดมาถึง</Badge>
                                 ) : null}
                                 {i.checkIn ? (
                                   <Badge variant="outline" className="mr-1.5 font-semibold" title="เวลาเข้างานจริงที่ทีมงานบันทึก ชั่วโมงและเงินคิดจากเวลานี้">
@@ -394,9 +383,6 @@ function SlotDetail({ item, role, rate, now, canCancel, tooLate, minH, adminChat
               <span className="tabular-nums">{i.start} – {i.end}</span>
               <span className="font-normal text-muted-foreground"> ({fmtHours(i.checkIn?.slotHours ?? i.hours)})</span>
               {i.checkIn ? <Note>เข้างาน {i.checkIn.time} คิดเงิน {fmtHours(i.hours)}</Note> : null}
-              {i.arrival?.at ? <Note>กดมาถึง {arriveTime.format(new Date(i.arrival.at))}</Note>
-                : i.arrival?.continued ? <Note>ต่อจากคิวก่อนหน้า (ไม่ต้องกดมาถึง)</Note>
-                  : arrivalMissing(i.arrival, i.startMs, now) ? <Note>ไม่ได้กด &quot;มาถึงแล้ว&quot;</Note> : null}
             </DetailRow>
             {/* Mc / Admin ประจำ (เงินเดือน) หรือยังไม่ตั้งค่าจ้าง = ไม่มีแถวนี้ */}
             {rate ? (
@@ -407,7 +393,7 @@ function SlotDetail({ item, role, rate, now, canCancel, tooLate, minH, adminChat
                     <Note className="tabular-nums">{fmtHours(i.hours)} × {money(rate)} บาท/ชม.</Note>
                     {late > 0 ? (
                       <Note className="font-semibold text-destructive">
-                        สาย {i.lateMinutes} นาที หัก {Math.round(late * 100)}%{lateSource(i)}
+                        สาย {i.lateMinutes} นาที หัก {Math.round(late * 100)}%{i.lateFromProof ? " (จากหลักฐานไลฟ์)" : ""}
                       </Note>
                     ) : null}
                     {bonusPaidMinutes(i.bonusMinutes) > 0 ? (

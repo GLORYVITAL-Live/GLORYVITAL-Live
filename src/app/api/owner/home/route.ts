@@ -23,7 +23,8 @@ export async function GET() {
       docs.then((s) => (any(s) ? receiptPending(s) : null)).catch(() => null),
       docs.then((s) => (any(s) ? tawiHome(bkkToday(), s) : null)).catch(() => null),
     ]);
-    return ok({ home: { ...withPlatformLabels(home), canBackup, receipts, tawi } });
+    // canAdminLate = ใส่สถานะมาสายของ Admin ได้ (Owner ที่จัดการฝั่ง Admin)
+    return ok({ home: { ...withPlatformLabels(home), canBackup, receipts, tawi, canAdminLate: r.me.owner!.admin } });
   } catch (err) {
     return fail((err as Error).message, 500);
   }

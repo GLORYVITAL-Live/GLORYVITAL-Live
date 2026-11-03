@@ -375,6 +375,29 @@ export async function sortDaysGloryFirst(tab: TabKey, from: string, to: string, 
   return dryRun ? run() : withSheetLock(run);
 }
 
+/**
+ * เจ้าของใส่ "มาสาย" ให้ Admin จากเว็บ: เขียนช่องสายของแถวนั้น (แท็บ Admin เสริม คอลัมน์ M) — ช่องเดียวกับที่ทีมพิมพ์เอง
+ *   ไลฟ์ชดเชยที่อยู่ช่องเดียวกันเก็บไว้ ("สาย 20 ชดเชย 10" — parseLateMinutes / parseBonusMinutes อ่านได้ทั้งคู่) · late null = ลบเฉพาะสาย
+ *   หาแถวจากรหัสในคอลัมน์ V (รหัสซ้ำหลายแถว = แถวที่วัน / เวลาตรงกับ slot) · ไม่เจอ = error (ไม่เขียน)
+ */
+export async function writeAdminLate(slot: SlotKey & { id: number }, late: number | null, bonus: number | null) {
+  const c = COLS.admin;
+  const text = [late ? `สาย ${late}` : "", bonus !== null ? `ชดเชย ${bonus}` : ""].filter(Boolean).join(" ");
+  const done = await withSheetLock(async () => {
+    const rows = await readTab("admin");
+    const hits = rows.map((r, i) => ({ r, row: i + 1 })).filter(({ r }) => Number(str(r[c.id])) === slot.id);
+    if (!hits.length) throw new Error("ไม่พบแถวของคิวนี้ในชีต (แท็บ Admin เสริม) — ซิงค์ชีตก่อนแล้วลองใหม่");
+    const want = { platform: slot.platform, live_date: slot.live_date, start_time: hm(slot.start_time), end_time: hm(slot.end_time) };
+    const hit = hits.find(({ r }) => { const p = parseRow("admin", r); return !!p && sameSlot(p, want); }) ?? hits[0];
+    await sheetsApi().spreadsheets.values.update({
+      spreadsheetId: SHEET_ID, range: `'${TABS.admin}'!${colLetter(c.late)}${hit.row}`,
+      valueInputOption: "USER_ENTERED", requestBody: { values: [[text]] },
+    });
+    return true;
+  });
+  if (!done) throw new Error("มีงานซิงค์ชีตอื่นกำลังทำอยู่ ลองใหม่อีกครั้งในอีกสักครู่");
+}
+
 /** แทรกแถวไม่ได้เพราะแท็บเปิดตัวกรอง (filter) ซ่อนแถวอยู่ — ไม่ใช่ความผิดของงาน ลองใหม่ได้เรื่อยๆ จนกว่าจะปิดตัวกรอง */
 export const isFilteredError = (msg: string | null | undefined) => /filtered rows|คัดกรอง/i.test(msg ?? "");
 

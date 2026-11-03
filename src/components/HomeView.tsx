@@ -7,13 +7,14 @@ import {
 } from "lucide-react";
 import { windowText } from "@/lib/campaign";
 import { fmtDayMonth, fmtDayShort, fmtMonthShort, money, monthLabel, num, parseKey } from "@/lib/format";
-import { lateCut } from "@/lib/pay";
 import { SLOT_VIEW_KEY, writeLocal } from "@/lib/hooks";
+import { lateCut } from "@/lib/pay";
 import { tawiMonthLabel } from "@/lib/tawi-name";
 import { fmtDay } from "@/lib/window";
 import type { DashboardData, HomeData, HomeSlot } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BarChart, ChangeText, Legend, fadedColor } from "@/components/LiveCharts";
+import { AdminLateDialog, type AdminLateTarget } from "@/components/AdminLateDialog";
 import { CountUp, MotionProvider, Reveal } from "@/components/motion";
 import { LoadError, LoadingBlock, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,8 @@ export function HomeView({ go }: { go: Go }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // ใส่สถานะมาสายของ Admin (slot ใน "ไลฟ์วันนี้")
+  const [lateTarget, setLateTarget] = useState<AdminLateTarget | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -147,7 +150,12 @@ export function HomeView({ go }: { go: Go }) {
                   <span className="min-w-0 flex-1 truncate max-sm:order-2">
                     {s.mc ?? <span className="font-semibold text-warning-foreground">ยังไม่มี Mc</span>}
                     <span className="text-muted-foreground"> · {s.admin ?? "ยังไม่มี Admin"}</span>
-                    <AdminArrival s={s} />
+                    {s.adminSlot && s.admin ? (
+                      <AdminLate
+                        late={s.adminSlot.late} canEdit={!!data.canAdminLate} started={s.status !== "next"}
+                        onEdit={() => setLateTarget({ slotId: s.adminSlot!.id, who: s.admin!, when: `${dayText(s.date)} ${s.start}–${s.end} ${s.platform}`, late: s.adminSlot!.late })}
+                      />
+                    ) : null}
                   </span>
                   <StatusChip status={s.status} />
                   <span aria-hidden className="hidden max-sm:order-1 max-sm:block max-sm:basis-full" />
@@ -407,6 +415,14 @@ export function HomeView({ go }: { go: Go }) {
       </Section>
 
       {data.canBackup ? <BackupSection /> : null}
+
+      <AdminLateDialog
+        target={lateTarget} onClose={() => setLateTarget(null)}
+        onSaved={(late) => {
+          const id = lateTarget?.slotId;
+          setData((d) => d && { ...d, live: d.live.map((x) => (x.adminSlot?.id === id ? { ...x, adminSlot: { ...x.adminSlot!, late } } : x)) });
+        }}
+      />
     </div>
     </MotionProvider>
   );
@@ -727,18 +743,22 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="flex items-center gap-1.5 py-1 text-sm text-success"><CheckCircle2Icon className="size-4" />{children}</p>;
 }
 
-const arriveTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
-
-/** Admin ของ slot กด "มาถึงแล้ว" หรือยัง: มาถึง HH:MM / สาย X นาที / เริ่มแล้วยังไม่กด (คิวที่ต่อจากคิวก่อน = ไม่ต้องกด) */
-function AdminArrival({ s }: { s: HomeData["live"][number] }) {
-  const a = s.adminArrival;
-  if (!a || a.continued) return null;
-  if (a.at) {
-    return lateCut(a.late) > 0
-      ? <span className="font-semibold text-warning-foreground"> · Admin สาย {a.late} นาที</span>
-      : <span className="text-success"> · Admin มาถึง {arriveTime.format(new Date(a.at))}</span>;
+/**
+ * สถานะมาสายของ Admin ใน "ไลฟ์วันนี้": สายแล้ว = ป้ายส้ม (กดแก้ได้) · ยังไม่ได้ใส่ + คิวเริ่มแล้ว = ปุ่มเล็ก "มาสาย?"
+ *   ใส่ได้เฉพาะ Owner ที่จัดการฝั่ง Admin (canEdit) · คนอื่นเห็นป้ายอย่างเดียว
+ */
+function AdminLate({ late, canEdit, started, onEdit }: { late: number | null; canEdit: boolean; started: boolean; onEdit: () => void }) {
+  if (late) {
+    const text = <>Admin สาย {late} นาที{lateCut(late) > 0 ? ` −${Math.round(lateCut(late) * 100)}%` : ""}</>;
+    return canEdit
+      ? <button type="button" onClick={onEdit} className="ml-1.5 cursor-pointer rounded-full bg-warning px-2 text-xs font-semibold text-warning-foreground hover:underline">{text}</button>
+      : <span className="ml-1.5 rounded-full bg-warning px-2 text-xs font-semibold text-warning-foreground">{text}</span>;
   }
-  return s.status === "next" ? null : <span className="font-semibold text-warning-foreground"> · Admin ยังไม่กดมาถึง</span>;
+  return canEdit && started ? (
+    <button type="button" onClick={onEdit} className="ml-1.5 cursor-pointer rounded-full border px-2 text-xs text-muted-foreground hover:border-primary hover:text-primary pointer-coarse:py-1">
+      Admin มาสาย?
+    </button>
+  ) : null;
 }
 
 function StatusChip({ status }: { status: "done" | "live" | "next" }) {

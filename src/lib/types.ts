@@ -1,4 +1,3 @@
-import type { Arrival } from "@/lib/arrival";
 import type { GmvBefore } from "@/lib/gmv";
 import type { LiveSession } from "@/lib/live-stats";
 import type { LiveTeam } from "@/lib/live-team";
@@ -101,9 +100,11 @@ export type HomeData = {
   /** slot ของ Mc วันนี้ (รวมช่วงหลังเที่ยงคืนของเมื่อวานที่ยังไม่จบ) */
   live: (HomeSlot & {
     status: "done" | "live" | "next"; proof: boolean; noProof: boolean; gmv: boolean;
-    /** Admin กด "มาถึงแล้ว": at = เวลาที่กด · late = นาทีสาย · continued = ต่อจากคิวก่อน (ไม่ต้องกด) · ยังไม่ได้รัน SQL / ไม่มี Admin = ไม่มี */
-    adminArrival?: { at: string | null; late: number | null; continued: boolean };
+    /** slot ของ Admin คู่กัน: id + นาทีสาย (ชีตคอลัมน์ M · เจ้าของใส่ในเว็บได้) · ไม่มี Admin = ไม่มี */
+    adminSlot?: { id: number; late: number | null };
   })[];
+  /** Owner คนนี้ใส่สถานะมาสายของ Admin ได้ (จัดการฝั่ง Admin) */
+  canAdminLate?: boolean;
   /** 7 วันข้างหน้า (รวมวันนี้) slot ที่ยังไม่มี Mc / ยังไม่มี Admin */
   noMc: HomeSlot[];
   noAdmin: HomeSlot[];
@@ -290,9 +291,6 @@ export type MyItem = {
   /** เฟรมไลฟ์ + บรีฟการแต่งตัวของช่อง + วันนี้ (ไม่มี = ไม่แสดง) */
   frame?: FrameFile | null;
   brief?: BriefView | null;
-  /** Admin: นาทีสายคิดจากเวลาที่กด "มาถึงแล้ว" (ช่องสายในชีตว่าง) · arrival = สถานะการกด (ยังไม่ได้รัน SQL = ไม่มี) */
-  lateFromArrival?: boolean;
-  arrival?: Arrival;
 };
 
 /** เอกสารทำเบิกที่ส่งแล้ว (ข้อมูลกรอก + มีไฟล์หรือยัง) — เห็นเฉพาะเจ้าตัว และ Owner ที่ดูเอกสารทำเบิกได้ */
@@ -448,9 +446,8 @@ export type OwnerDetail = {
   checkInBad?: string | null;
   /** คิว Shopee ของ Mc (แท็บ MC Shopee) — คิดค่าจ้างด้วย rates.shopee ของคนนั้น (ไม่มี = เรทเดียวกับ TikTok) */
   shopee?: boolean;
-  /** Admin: ช่องสายในชีตว่าง นาทีสายคิดจากเวลาที่กด "มาถึงแล้ว" · arrival = สถานะการกด (ยังไม่ได้รัน SQL = ไม่มี) */
-  lateFromArrival?: boolean;
-  arrival?: Arrival;
+  /** id ของ slot (mc_slots / admin_slots ตาม type) — ใส่สถานะมาสายของ Admin · ยกเลิกผ่านเว็บ / ตัวเลขตอนปิดงวด = ไม่มี */
+  slotId?: number;
 };
 
 /** หลักฐานไลฟ์: เวลาเริ่ม/จบจริงเป็น ISO (ดูรูปที่ /api/proofs/image?id=) */

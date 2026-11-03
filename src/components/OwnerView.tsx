@@ -12,6 +12,7 @@ import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { ExportMenu } from "@/components/ExportMenu";
 import { DatePicker } from "@/components/date-picker";
+import { AdminLateDialog, type AdminLateTarget } from "@/components/AdminLateDialog";
 import { ReceiptPanel } from "@/components/ReceiptPanel";
 import { TawiPanel } from "@/components/TawiPanel";
 import { AppDialog, DialogActions, DialogBody, LoadError, LoadingBlock, MonthNav, Notice, Stats, api, useConfirm, useToast } from "@/components/shared";
@@ -55,17 +56,7 @@ const proofTime = (p: ProofInfo) => `${hms.format(new Date(p.startedAt))}–${hm
 const proofUrl = (p: ProofInfo) => `/api/proofs/image?id=${p.id}`;
 
 /** นาทีสายสำหรับไฟล์ที่ส่งออก เช่น "12" / "10 (จากหลักฐาน)" */
-const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${lateSource(d)}` : "");
-/** ที่มาของนาทีสายที่ระบบคิดเอง (ช่องในชีตว่าง): Mc = หลักฐานไลฟ์ / Admin = เวลาที่กด "มาถึงแล้ว" */
-const lateSource = (d: OwnerDetail) => (d.lateFromProof ? " (จากหลักฐาน)" : d.lateFromArrival ? " (จากเวลากดมาถึง)" : "");
-const arriveTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
-
-/** Admin: เวลาที่กด "มาถึงแล้ว" · คิววันก่อนหน้าที่ไม่ได้กด (ไม่ได้ต่อจากคิวก่อน) = แจ้ง · ยังไม่ได้รัน SQL = ไม่แสดง */
-function ArrivalText({ d }: { d: OwnerDetail }) {
-  if (!d.arrival || d.cancelled) return null;
-  if (d.arrival.at) return <span className="text-muted-foreground">มาถึง {arriveTime.format(new Date(d.arrival.at))}</span>;
-  return !d.arrival.continued && d.date < todayKey() ? <span className="text-muted-foreground">ไม่ได้กดมาถึง</span> : null;
-}
+const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${d.lateFromProof ? " (จากหลักฐาน)" : ""}` : "");
 
 /** ไม่ต้องแนบหลักฐาน เพราะอะไร (Mc ประจำ / คิว Shopee) */
 const noProofText = (d: OwnerDetail) => (d.shopee ? "ไม่ต้องแนบ (คิว Shopee)" : "ไม่ต้องแนบ (Mc ประจำ)");
@@ -965,8 +956,11 @@ const SUM_COLS: [string, string][] = [
 function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; type: Type; rows: OwnerPerson[]; onChanged: () => void }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<SortState>(null);
+  // Admin: เจ้าของที่จัดการฝั่ง Admin ใส่ / แก้สถานะมาสายรายคิวได้ (คิวจากตัวเลขตอนปิดงวดไม่มี slotId = ไม่มีปุ่ม)
+  const [lateTarget, setLateTarget] = useState<AdminLateTarget | null>(null);
   if (!base.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
   const showPay = !payHiddenOf(data, type);
+  const canLate = type === "Admin" && data.scope.admin && !data.payHidden?.admin;
   const cols = showPay ? SUM_COLS : SUM_COLS.filter(([k]) => k !== "pay");
   const valueOf = (r: OwnerPerson, k: string): number | string | null => {
     const items = slotsOf(data, type, r.name);
@@ -1161,10 +1155,20 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                               ) : null}
                               {lateCut(d.lateMinutes) > 0 ? (
                                 <span className="font-semibold text-destructive">
-                                  สาย {d.lateMinutes} น. −{Math.round(lateCut(d.lateMinutes) * 100)}%{lateSource(d)}
+                                  สาย {d.lateMinutes} น. −{Math.round(lateCut(d.lateMinutes) * 100)}%{d.lateFromProof ? " (จากหลักฐาน)" : ""}
                                 </span>
                               ) : null}
-                              <ArrivalText d={d} />
+                              {canLate && d.slotId && !d.cancelled ? (
+                                <button
+                                  type="button" className="cursor-pointer font-semibold text-primary underline pointer-coarse:py-1"
+                                  onClick={() => setLateTarget({
+                                    slotId: d.slotId!, who: d.name, late: d.lateMinutes,
+                                    when: `${fmtDayShort.format(parseKey(d.date))} ${shortTime(d.start)}–${shortTime(d.end)} ${d.platform}`,
+                                  })}
+                                >
+                                  {d.lateMinutes ? "แก้สาย" : "ใส่สาย"}
+                                </button>
+                              ) : null}
                               {bonusPaidMinutes(d.bonusMinutes) > 0 ? (
                                 <span className="font-semibold text-success">
                                   ชดเชย +{d.bonusMinutes} น.{d.bonusFromProof ? " (จากหลักฐาน)" : ""}
@@ -1234,6 +1238,8 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
           </TableRow>
         </TableFooter>
       </Table>
+      {/* ใส่สถานะมาสายของ Admin (เขียนลงชีตคอลัมน์ M) → โหลดสรุปใหม่ ยอดเงินหักตามกฎเดิม */}
+      {canLate ? <AdminLateDialog target={lateTarget} onClose={() => setLateTarget(null)} onSaved={onChanged} /> : null}
     </div>
   );
 }

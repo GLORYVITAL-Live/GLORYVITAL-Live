@@ -25,6 +25,16 @@ describe("ไลฟ์ชดเชย", () => {
   });
 });
 
+// ข้อความที่เว็บเขียนลงช่องสายของ Admin (sheet-sync.ts writeAdminLate) ต้องอ่านกลับได้ตรง ทั้งสายและชดเชยในช่องเดียวกัน
+describe("ช่องสายของ Admin ที่เจ้าของใส่จากเว็บ", () => {
+  test.each([
+    ["สาย 20", 20, null], ["สาย 20 ชดเชย 10", 20, 10], ["ชดเชย 10", null, 10], ["", null, null],
+  ] as const)("\"%s\" = สาย %p ชดเชย %p", (text, late, bonus) => {
+    expect(parseLateMinutes(text)).toBe(late);
+    expect(parseBonusMinutes(text)).toBe(bonus);
+  });
+});
+
 describe("ค่าจ้างแบบ Commit เป็นขั้น", () => {
   const tiers = [{ hours: 21, rate: 900 }, { hours: 10, rate: 950 }, { hours: 41, rate: 850 }];
   test("เรียงขั้นตามชั่วโมง และตัดข้อมูลผิดทิ้ง", () => {
