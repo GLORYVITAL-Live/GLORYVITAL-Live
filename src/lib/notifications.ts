@@ -523,7 +523,9 @@ export async function sendPreLiveReminders(now = Date.now(), dryRun = false) {
     items.push({
       email, kind: "reminder", page: s.side, dedupe: `soon:${s.side}:${s.id}`,
       title: `อีก ${mins} นาทีไลฟ์ ${hm(s.start_time)}–${hm(s.end_time)} ${platformLabel(s.platform)}`,
-      body: pairName ? `คู่ไลฟ์: ${s.side === "mc" ? pairName : `Mc ${pairName}`}` : `${s.side === "mc" ? "ยังไม่มี Admin" : "ยังไม่มี Mc"} ใน slot นี้`,
+      body: (pairName ? `คู่ไลฟ์: ${s.side === "mc" ? pairName : `Mc ${pairName}`}` : `${s.side === "mc" ? "ยังไม่มี Admin" : "ยังไม่มี Mc"} ใน slot นี้`)
+        // Admin: ลงเวลามาถึงในเว็บ (ใช้คิดเวลามาสาย — src/lib/arrival.ts)
+        + (s.side === "admin" ? ` · ถึงที่ทำงานแล้วกด "มาถึงแล้ว" ในเว็บ` : ""),
     });
   }
   // dryRun = ดูว่าจะส่งอะไร (ไม่ส่งจริง) ใช้ตรวจก่อน

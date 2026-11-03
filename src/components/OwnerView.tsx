@@ -55,7 +55,17 @@ const proofTime = (p: ProofInfo) => `${hms.format(new Date(p.startedAt))}–${hm
 const proofUrl = (p: ProofInfo) => `/api/proofs/image?id=${p.id}`;
 
 /** นาทีสายสำหรับไฟล์ที่ส่งออก เช่น "12" / "10 (จากหลักฐาน)" */
-const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${d.lateFromProof ? " (จากหลักฐาน)" : ""}` : "");
+const lateText = (d: OwnerDetail) => (d.lateMinutes ? `${d.lateMinutes}${lateSource(d)}` : "");
+/** ที่มาของนาทีสายที่ระบบคิดเอง (ช่องในชีตว่าง): Mc = หลักฐานไลฟ์ / Admin = เวลาที่กด "มาถึงแล้ว" */
+const lateSource = (d: OwnerDetail) => (d.lateFromProof ? " (จากหลักฐาน)" : d.lateFromArrival ? " (จากเวลากดมาถึง)" : "");
+const arriveTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+
+/** Admin: เวลาที่กด "มาถึงแล้ว" · คิววันก่อนหน้าที่ไม่ได้กด (ไม่ได้ต่อจากคิวก่อน) = แจ้ง · ยังไม่ได้รัน SQL = ไม่แสดง */
+function ArrivalText({ d }: { d: OwnerDetail }) {
+  if (!d.arrival || d.cancelled) return null;
+  if (d.arrival.at) return <span className="text-muted-foreground">มาถึง {arriveTime.format(new Date(d.arrival.at))}</span>;
+  return !d.arrival.continued && d.date < todayKey() ? <span className="text-muted-foreground">ไม่ได้กดมาถึง</span> : null;
+}
 
 /** ไม่ต้องแนบหลักฐาน เพราะอะไร (Mc ประจำ / คิว Shopee) */
 const noProofText = (d: OwnerDetail) => (d.shopee ? "ไม่ต้องแนบ (คิว Shopee)" : "ไม่ต้องแนบ (Mc ประจำ)");
@@ -1151,9 +1161,10 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                               ) : null}
                               {lateCut(d.lateMinutes) > 0 ? (
                                 <span className="font-semibold text-destructive">
-                                  สาย {d.lateMinutes} น. −{Math.round(lateCut(d.lateMinutes) * 100)}%{d.lateFromProof ? " (จากหลักฐาน)" : ""}
+                                  สาย {d.lateMinutes} น. −{Math.round(lateCut(d.lateMinutes) * 100)}%{lateSource(d)}
                                 </span>
                               ) : null}
+                              <ArrivalText d={d} />
                               {bonusPaidMinutes(d.bonusMinutes) > 0 ? (
                                 <span className="font-semibold text-success">
                                   ชดเชย +{d.bonusMinutes} น.{d.bonusFromProof ? " (จากหลักฐาน)" : ""}

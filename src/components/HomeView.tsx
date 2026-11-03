@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { windowText } from "@/lib/campaign";
 import { fmtDayMonth, fmtDayShort, fmtMonthShort, money, monthLabel, num, parseKey } from "@/lib/format";
+import { lateCut } from "@/lib/pay";
 import { SLOT_VIEW_KEY, writeLocal } from "@/lib/hooks";
 import { tawiMonthLabel } from "@/lib/tawi-name";
 import { fmtDay } from "@/lib/window";
@@ -146,6 +147,7 @@ export function HomeView({ go }: { go: Go }) {
                   <span className="min-w-0 flex-1 truncate max-sm:order-2">
                     {s.mc ?? <span className="font-semibold text-warning-foreground">ยังไม่มี Mc</span>}
                     <span className="text-muted-foreground"> · {s.admin ?? "ยังไม่มี Admin"}</span>
+                    <AdminArrival s={s} />
                   </span>
                   <StatusChip status={s.status} />
                   <span aria-hidden className="hidden max-sm:order-1 max-sm:block max-sm:basis-full" />
@@ -723,6 +725,20 @@ function GoButton({ onClick, children }: { onClick: () => void; children: ReactN
 
 function Empty({ children }: { children: ReactNode }) {
   return <p className="flex items-center gap-1.5 py-1 text-sm text-success"><CheckCircle2Icon className="size-4" />{children}</p>;
+}
+
+const arriveTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+
+/** Admin ของ slot กด "มาถึงแล้ว" หรือยัง: มาถึง HH:MM / สาย X นาที / เริ่มแล้วยังไม่กด (คิวที่ต่อจากคิวก่อน = ไม่ต้องกด) */
+function AdminArrival({ s }: { s: HomeData["live"][number] }) {
+  const a = s.adminArrival;
+  if (!a || a.continued) return null;
+  if (a.at) {
+    return lateCut(a.late) > 0
+      ? <span className="font-semibold text-warning-foreground"> · Admin สาย {a.late} นาที</span>
+      : <span className="text-success"> · Admin มาถึง {arriveTime.format(new Date(a.at))}</span>;
+  }
+  return s.status === "next" ? null : <span className="font-semibold text-warning-foreground"> · Admin ยังไม่กดมาถึง</span>;
 }
 
 function StatusChip({ status }: { status: "done" | "live" | "next" }) {

@@ -36,6 +36,7 @@ const BorrowPage = dynamic(() => import("@/components/Loans").then((m) => m.Borr
 const MySchedule = dynamic(() => import("@/components/MySchedule").then((m) => m.MySchedule), { loading: Nothing });
 const PayDocs = dynamic(() => import("@/components/PayDocs").then((m) => m.PayDocs), { loading: Nothing });
 const RulesDialog = dynamic(() => import("@/components/RulesDialog").then((m) => m.RulesDialog), { loading: Nothing });
+const ArrivalBanner = dynamic(() => import("@/components/ArrivalBanner").then((m) => m.ArrivalBanner), { loading: Nothing });
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -405,6 +406,8 @@ function Shell({ me }: { me: Me | null }) {
       ) : null}
 
       {mode?.rule ? <Notice>{mode.rule}</Notice> : null}
+      {/* Admin: ปุ่ม "มาถึงแล้ว" เมื่อมีคิวใกล้เริ่ม / กำลังไลฟ์ (ทุกหน้า) */}
+      {me?.admin && registered ? <ArrivalBanner /> : null}
 
       {me?.owner && role === "owner" ? <OwnerTabs me={me} /> : null}
       {/* เอกสารทำเบิก: ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้ (เปิดจาก "ตารางของฉัน" ได้ด้วย) */}

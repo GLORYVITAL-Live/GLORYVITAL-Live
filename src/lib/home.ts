@@ -1,7 +1,8 @@
 import "server-only";
+import { arrivalLate, continuedIds } from "@/lib/arrival";
 import { assignCampaigns, instLabel } from "@/lib/campaign";
 import { slotPlatformOf } from "@/lib/campaign-data";
-import { bkkToday, fetchAll, getSettings, proofsBySlot, windowAlerts } from "@/lib/data";
+import { arrivalsBySlot, bkkToday, fetchAll, getSettings, proofsBySlot, windowAlerts } from "@/lib/data";
 import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { loadSessions } from "@/lib/live-stats-db";
@@ -60,6 +61,17 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   ]);
 
   const adminOf = new Map(adminRows.map((r) => [keyOf(r), r]));
+  // Admin กด "มาถึงแล้ว" (เฉพาะ slot ของ Admin ที่อยู่ใน "ไลฟ์วันนี้" · ยังไม่ได้รัน SQL = ไม่แสดง)
+  const yesterday0 = addDays(today, -1);
+  const todayAdmin = adminRows.filter((r) => r.admin_id && r.live_date >= yesterday0 && r.live_date <= today);
+  const arrivals = scope.mc || scope.proofs ? await arrivalsBySlot(db, yesterday0, today, todayAdmin.map((r) => Number(r.id))) : null;
+  const continued = continuedIds(todayAdmin.map((r) => ({ id: Number(r.id), who: r.admin_id!, startMs: ms(r.starts_at), endMs: ms(r.ends_at) })));
+  const adminArrival = (r: Row) => {
+    const a = adminOf.get(keyOf(r));
+    if (!arrivals || !a?.admin_id) return undefined;
+    const at = arrivals.get(Number(a.id)) ?? null;
+    return { at, late: at ? arrivalLate(ms(at), ms(a.starts_at)) : null, continued: continued.has(Number(a.id)) };
+  };
   const mcOf = new Map(mcRows.map((r) => [keyOf(r), r]));
   const slot = (r: Row, mc: string | null, admin: string | null): HomeSlot => ({
     id: Number(r.id), date: r.live_date, platform: r.platform, start: hm(r.start_time), end: hm(r.end_time), mc, admin,
@@ -92,6 +104,7 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
         ...slot(r, mcName(r), adminName(r)),
         status: s1 <= now ? "done" : s0 <= now ? "live" : "next",
         proof: proofs.has(Number(r.id)), noProof: !!r.person?.is_salaried || shopee(r), gmv: hasGmv(r) || shopee(r),
+        ...(adminArrival(r) ? { adminArrival: adminArrival(r) } : {}),
       });
     }
     // หลักฐานค้าง: slot ที่จบแล้วใน 7 วันล่าสุด มี Mc (ไม่ใช่ Mc ประจำ / ไม่ใช่คิว Shopee) แต่ยังไม่แนบรูป
