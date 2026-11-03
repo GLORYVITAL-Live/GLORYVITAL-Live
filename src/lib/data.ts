@@ -39,6 +39,10 @@ export type Settings = {
   shopee_max_hours_per_day?: number;
   mc_quota_on?: boolean; // จำกัดสิทธิ์จองของ Mc ต่อเดือนตามแร็งค์ (SQL 20261107000000_mc_quota · src/lib/mc-quota-db.ts)
   work_location_url?: string; // ลิงก์โลเคชั่นที่ทำงาน เห็นเฉพาะคนที่มีบัญชี (SQL 20261109000000_work_location) ว่าง = ไม่แสดง
+  // ยกเลิกคิวตอนกลางคืน: LINE คนดูแลแต่ละฝ่าย (SQL 20261121000000_night_cancel · src/lib/cancel-rule.ts) ว่าง = ใช้ admin_chat_url
+  cancel_line_mc_tiktok?: string | null;
+  cancel_line_mc_shopee?: string | null;
+  cancel_line_admin?: string | null;
   training_required?: boolean; // ต้องดูคลิปเทรนนิ่งที่บังคับให้ครบก่อนจอง (SQL 20261111000000_pay_sync · src/lib/training.ts)
 };
 

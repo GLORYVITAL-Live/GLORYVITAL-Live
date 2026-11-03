@@ -41,6 +41,10 @@ export async function GET(request: Request) {
     adminChatUrl: s.admin_chat_url ?? "",
     // ลิงก์โลเคชั่นที่ทำงาน (ทุกคนที่มีบัญชีเห็นอยู่แล้วที่หัวเว็บ)
     workLocationUrl: s.work_location_url ?? "",
+    // ยกเลิกช่วงกลางคืน: LINE คนดูแลแต่ละฝ่าย (หน้าตั้งค่าของ Owner — คนอื่นได้ลิงก์ของฝ่ายตัวเองจาก /api/my)
+    ...(r.me.owner ? {
+      cancelLineMcTiktok: s.cancel_line_mc_tiktok ?? "", cancelLineMcShopee: s.cancel_line_mc_shopee ?? "", cancelLineAdmin: s.cancel_line_admin ?? "",
+    } : {}),
   });
 }
 
@@ -49,10 +53,14 @@ const LINKS = {
   adminChatUrl: { col: "admin_chat_url", label: "ลิงก์แชทแอดมิน", example: "https://line.me/..." },
   // SQL 20261109000000_work_location
   workLocationUrl: { col: "work_location_url", label: "ลิงก์โลเคชั่นที่ทำงาน", example: "https://maps.app.goo.gl/..." },
+  // SQL 20261121000000_night_cancel (ยกเลิกช่วง 22:00–08:00 ต้องทัก LINE คนดูแลฝ่ายนั้น)
+  cancelLineMcTiktok: { col: "cancel_line_mc_tiktok", label: "ลิงก์ LINE แอดมินดูแล Mc TikTok", example: "https://line.me/ti/p/..." },
+  cancelLineMcShopee: { col: "cancel_line_mc_shopee", label: "ลิงก์ LINE แอดมินดูแล Mc Shopee", example: "https://line.me/ti/p/..." },
+  cancelLineAdmin: { col: "cancel_line_admin", label: "ลิงก์ LINE Owner (Admin เสริมยกเลิกคิว)", example: "https://line.me/ti/p/..." },
 } as const;
 
 /**
- * ลิงก์แชทแอดมิน / โลเคชั่นที่ทำงาน — PATCH { adminChatUrl } หรือ { workLocationUrl } ว่าง = ไม่มีปุ่ม
+ * ลิงก์แชทแอดมิน / โลเคชั่นที่ทำงาน / LINE คนดูแลแต่ละฝ่าย — PATCH { <ชื่อช่องใน LINKS>: url } ว่าง = ไม่มีปุ่ม
  *   Owner ที่จัดการได้อย่างน้อยหนึ่งฝั่ง
  */
 export async function PATCH(request: Request) {
@@ -69,7 +77,10 @@ export async function PATCH(request: Request) {
     if (!valid || url.length > 500) return fail(`ลิงก์ต้องขึ้นต้นด้วย https:// (เช่น ${example})`);
   }
   const { error } = await createAdminClient().from("settings").update({ [col]: url }).eq("id", 1);
-  if (error) return fail(/work_location_url/.test(error.message) ? "ต้องรัน SQL 20261109000000_work_location ใน Supabase ก่อน" : error.message, 500);
+  if (error) {
+    if (/cancel_line/.test(error.message)) return fail("ต้องรัน SQL 20261121000000_night_cancel ใน Supabase ก่อน", 409);
+    return fail(/work_location_url/.test(error.message) ? "ต้องรัน SQL 20261109000000_work_location ใน Supabase ก่อน" : error.message, 500);
+  }
   await createAdminClient().from("booking_logs").insert({
     email: r.me.email, role: "Owner", name: r.me.owner?.name ?? "", action: url ? `แก้${label}` : `ลบ${label}`, result: "สำเร็จ",
   });

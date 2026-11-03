@@ -402,6 +402,8 @@ export type MyResponse = {
   month: string;
   cancelMinHours: number;
   adminChatUrl: string;
+  /** ยกเลิกช่วง 22:00–08:00: LINE คนดูแลฝ่ายของคนนี้ (src/lib/cancel-rule.ts · ว่าง = ใช้ adminChatUrl) */
+  cancelLines?: { tiktok?: string; shopee?: string; admin?: string };
   canCancel: boolean;
   items: MyItem[];
   /**

@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { MyItem, MyResponse, MySlip } from "@/lib/types";
 import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabel } from "@/lib/pay";
+import { NIGHT_CANCEL_TEXT, cancelContact, isNightCancel } from "@/lib/cancel-rule";
 import Link from "next/link";
 import {
   BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ReceiptTextIcon, ShirtIcon, UserIcon,
@@ -99,10 +100,16 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const due = total + subTotal;
 
   const minH = data?.cancelMinHours ?? 6;
+  // ช่วง 22:00–08:00 ยกเลิกผ่านเว็บไม่ได้: ปุ่มยกเลิกเปลี่ยนเป็นทัก LINE คนดูแลฝ่ายนั้น (เซิร์ฟเวอร์ตรวจซ้ำ — src/lib/cancel-rule.ts)
+  const night = isNightCancel(now);
+  const contactOf = (i: MyItem) => cancelContact(role, !!i.shopee, data?.cancelLines, data?.adminChatUrl ?? "");
   const cancelOf = (i: MyItem) => {
-    const canCancel = !!data?.canCancel && !i.cancelled && i.startMs - now >= minH * 3600_000;
+    const allowed = !!data?.canCancel && !i.cancelled && i.startMs - now >= minH * 3600_000;
     // ยังไม่เริ่มแต่เหลือไม่ถึง N ชม. = ไม่มีปุ่มยกเลิก บอกเหตุผล + ทางติดต่อ
-    return { canCancel, tooLate: !!data?.canCancel && !i.cancelled && !canCancel && i.startMs > now };
+    return {
+      canCancel: allowed && !night, night: allowed && night,
+      tooLate: !!data?.canCancel && !i.cancelled && !allowed && i.startMs > now,
+    };
   };
 
   return (
@@ -236,7 +243,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                   <DayBadge label={relLabel(k)} />
                 </h3>
                 {list.map((i) => {
-                  const { canCancel, tooLate } = cancelOf(i);
+                  const { canCancel, night: nightOnly, tooLate } = cancelOf(i);
                   return (
                     <div
                       key={i.id}
@@ -290,6 +297,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                             <Button variant="destructive" size="xs" className="relative z-10 rounded-full font-semibold" onClick={() => setCancelItem(i)}>
                               ยกเลิกคิว
                             </Button>
+                          ) : nightOnly ? (
+                            <NightCancel contact={contactOf(i)} className="relative z-10 text-right" />
                           ) : tooLate ? (
                             <span className="relative z-10 shrink-0 text-right text-[11px] leading-tight">
                               ยกเลิกผ่านเว็บไม่ได้แล้ว (เหลือไม่ถึง {minH} ชม.)
@@ -320,9 +329,10 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
         now={now}
         minH={minH}
         adminChatUrl={data?.adminChatUrl ?? ""}
+        contact={detail ? contactOf(detail) : null}
         onCancel={() => { setCancelItem(detail); setDetail(null); }}
         onClose={() => setDetail(null)}
-        {...(detail ? cancelOf(detail) : { canCancel: false, tooLate: false })}
+        {...(detail ? cancelOf(detail) : { canCancel: false, night: false, tooLate: false })}
       />
 
       <CancelDialog
@@ -341,6 +351,20 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
 }
 
 const telOf = (phone: string) => phone.replace(/[^0-9+]/g, "");
+
+/** ช่วงกลางคืน: แทนปุ่มยกเลิก — ทัก LINE คนดูแลฝ่ายนั้น (ยังไม่ได้ตั้งลิงก์ = บอกให้ติดต่อเอง) */
+function NightCancel({ contact, className }: { contact: { url: string; who: string }; className?: string }) {
+  return (
+    <span className={cn("shrink-0 text-[11px] leading-tight", className)}>
+      {contact.url ? (
+        <Button variant="destructive" size="xs" className="rounded-full font-semibold" asChild>
+          <a href={contact.url} target="_blank" rel="noopener">ยกเลิกคิว: ทัก LINE</a>
+        </Button>
+      ) : <b className="text-foreground">ยกเลิกต้องทัก {contact.who}</b>}
+      <span className="mt-0.5 block">ช่วง {NIGHT_CANCEL_TEXT} ยกเลิกผ่านเว็บไม่ได้ · ทัก {contact.who}</span>
+    </span>
+  );
+}
 
 /** สลิปโอนเงินของฉัน: 3 รอบล่าสุด (กดดูทั้งหมดได้) · เปิดดู / ดาวน์โหลด (ไฟล์ส่งผ่านเซิร์ฟเวอร์ ไม่ต้องมีสิทธิ์ Drive) */
 function MySlips({ slips }: { slips: MySlip[] }) {
@@ -389,15 +413,18 @@ const Note = ({ className, children }: { className?: string; children: ReactNode
   <span className={cn("mt-0.5 block text-xs font-normal text-muted-foreground", className)}>{children}</span>;
 
 /** รายละเอียด slot ของฉัน (กดที่การ์ด): ช่อง · วันเวลา · ค่าจ้าง · สถานที่ · คู่ไลฟ์ (Admin ของ Mc / Mc ของ Admin) + เบอร์ */
-function SlotDetail({ item, role, rate, now, canCancel, tooLate, minH, adminChatUrl, onCancel, onClose }: {
+function SlotDetail({ item, role, rate, now, canCancel, night, tooLate, minH, adminChatUrl, contact, onCancel, onClose }: {
   item: MyItem | null;
   role: "mc" | "admin";
   rate: number;
   now: number;
   canCancel: boolean;
+  /** ช่วงกลางคืน: ยกเลิกได้ทางทัก LINE คนดูแลเท่านั้น */
+  night: boolean;
   tooLate: boolean;
   minH: number;
   adminChatUrl: string;
+  contact: { url: string; who: string } | null;
   onCancel: () => void;
   onClose: () => void;
 }) {
@@ -495,11 +522,20 @@ function SlotDetail({ item, role, rate, now, canCancel, tooLate, minH, adminChat
                 : "ติดต่อแอดมิน"}
             </p>
           ) : null}
+          {night && contact ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              ช่วง {NIGHT_CANCEL_TEXT} ยกเลิกคิวผ่านเว็บไม่ได้ ต้องทัก LINE {contact.who} เพื่อยกเลิก{contact.url ? "" : " (ยังไม่ได้ตั้งลิงก์ ติดต่อทีมงาน)"}
+            </p>
+          ) : null}
         </DialogBody>
       ) : null}
       <DialogActions>
         {canCancel ? (
           <Button variant="outline" size="lg" className="font-semibold text-destructive hover:text-destructive" onClick={onCancel}>ยกเลิกคิว</Button>
+        ) : night && contact?.url ? (
+          <Button variant="outline" size="lg" className="font-semibold text-destructive hover:text-destructive" asChild>
+            <a href={contact.url} target="_blank" rel="noopener">ยกเลิกคิว: ทัก LINE</a>
+          </Button>
         ) : null}
         <Button size="lg" onClick={onClose}>ปิด</Button>
       </DialogActions>
@@ -522,14 +558,20 @@ function CancelDialog({ item, role, cancelMinHours, adminChatUrl, onClose }: {
     return `ยกเลิกผ่านเว็บได้ก่อนเวลาไลฟ์อย่างน้อย ${cancelMinHours} ชั่วโมง ระบบจะลบ event ในปฏิทินและเปิด slot นี้ให้ ${who}ทันที หลังยกเลิกกรุณาทักแชทแจ้งแอดมินด้วย`;
   });
   const [chatUrl, setChatUrl] = useState(adminChatUrl);
+  // ยกเลิกช่วงกลางคืนไม่ได้: ลิงก์ LINE ที่เซิร์ฟเวอร์ส่งมา (มี = ปุ่มยืนยันเปลี่ยนเป็นทัก LINE)
+  const [nightUrl, setNightUrl] = useState("");
 
   async function submit() {
     if (!item) return;
     setState("busy");
     try {
       // ไม่ลองซ้ำอัตโนมัติ: ถ้าคำขอแรกสำเร็จแล้ว ครั้งที่สองจะขึ้นว่าไม่ใช่คิวของคุณ
-      const res = await api<{ adminChatUrl: string }>("/api/cancel", { role, id: item.id });
-      if (!res.ok) { setState("confirm"); setNote(res.message ?? ""); toast(res.message ?? "ยกเลิกไม่สำเร็จ", "error"); return; }
+      const res = await api<{ adminChatUrl: string; chatUrl?: string }>("/api/cancel", { role, id: item.id });
+      if (!res.ok) {
+        // เลยเวลา 22:00 ระหว่างเปิดหน้าต่างนี้ = เซิร์ฟเวอร์ส่งลิงก์ LINE คนดูแลมาให้ทักแทน
+        if (res.chatUrl) { setChatUrl(res.chatUrl); setNightUrl(res.chatUrl); }
+        setState("confirm"); setNote(res.message ?? ""); toast(res.message ?? "ยกเลิกไม่สำเร็จ", "error"); return;
+      }
       if (res.adminChatUrl) setChatUrl(res.adminChatUrl);
       setNote("⚠️ อย่าลืมทักแชทแจ้งแอดมินว่ายกเลิกคิวนี้ เพื่อให้ทีมหาคนแทนได้ทัน");
     } catch {
@@ -568,9 +610,15 @@ function CancelDialog({ item, role, cancelMinHours, adminChatUrl, onClose }: {
         ) : (
           <>
             <Button variant="outline" size="lg" disabled={state === "busy"} onClick={() => onClose(false)}>ไม่ยกเลิก</Button>
-            <Button variant="danger" size="lg" disabled={state === "busy"} onClick={submit}>
-              {state === "busy" ? <><Spinner />กำลังยกเลิก...</> : "ยืนยันยกเลิก"}
-            </Button>
+            {nightUrl ? (
+              <Button variant="danger" size="lg" asChild>
+                <a href={nightUrl} target="_blank" rel="noopener">ทัก LINE เพื่อยกเลิก</a>
+              </Button>
+            ) : (
+              <Button variant="danger" size="lg" disabled={state === "busy"} onClick={submit}>
+                {state === "busy" ? <><Spinner />กำลังยกเลิก...</> : "ยืนยันยกเลิก"}
+              </Button>
+            )}
           </>
         )}
       </DialogActions>

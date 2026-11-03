@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { fail, ok, requireMe } from "@/lib/api";
+import { NIGHT_CANCEL_TEXT, cancelContact, cancelLinesOf, isNightCancel } from "@/lib/cancel-rule";
 import { processSyncJobs } from "@/lib/sync";
 import { getSettings, writeLogs } from "@/lib/data";
 import { notifyCancelled } from "@/lib/notifications";
@@ -7,6 +8,7 @@ import { notifyCancel } from "@/lib/notify";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // ยกเลิกคิวของตัวเอง ก่อนเวลาไลฟ์อย่างน้อย cancel_min_hours — แทน action "cancel" / "adminCancel"
+//   ช่วง 22:00–08:00 ยกเลิกผ่านเว็บไม่ได้ (ตอบ chatUrl = LINE คนดูแลฝ่ายนั้น)
 export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
@@ -33,6 +35,16 @@ export async function POST(request: Request) {
     log = { role: "Admin", name: r.me.admin.name, action: "ยกเลิกคิว Admin" };
   } else {
     return fail("ไม่รู้จักบทบาทนี้");
+  }
+
+  // ช่วงกลางคืน (22:00–08:00) ยกเลิกผ่านเว็บไม่ได้ → ส่งลิงก์ LINE คนดูแลฝ่ายนั้นกลับไปให้ทัก (src/lib/cancel-rule.ts)
+  if (isNightCancel()) {
+    const settings = await getSettings();
+    const { data: s } = table === "mc_slots"
+      ? await createAdminClient().from("mc_slots").select("sheet_tab").eq("id", id).maybeSingle()
+      : { data: null };
+    const c = cancelContact(body.role, s?.sheet_tab === "shopee", cancelLinesOf(settings), settings.admin_chat_url);
+    return fail(`ช่วง ${NIGHT_CANCEL_TEXT} ยกเลิกคิวผ่านเว็บไม่ได้ กรุณาทัก LINE ${c.who} เพื่อยกเลิก`, 400, { chatUrl: c.url });
   }
 
   const { data, error } = await createAdminClient().rpc("cancel_slot", { p_table: table, p_person_id: personId, p_slot_id: id });

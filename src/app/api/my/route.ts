@@ -1,4 +1,5 @@
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
+import { cancelLinesOf } from "@/lib/cancel-rule";
 import { withPlatformLabels } from "@/lib/platform";
 import { getSettings, mySlots } from "@/lib/data";
 import { framesForSlots } from "@/lib/live-frames";
@@ -86,6 +87,10 @@ export async function GET(request: Request) {
     month: key,
     cancelMinHours: Number(settings.cancel_min_hours),
     adminChatUrl: settings.admin_chat_url,
+    // ยกเลิกช่วงกลางคืน: LINE คนดูแลฝ่ายของคนนี้ (Mc = TikTok / Shopee · Admin เสริม = Owner) — ไม่ส่งลิงก์ของฝ่ายอื่น
+    cancelLines: role === "mc"
+      ? { tiktok: cancelLinesOf(settings).tiktok, shopee: cancelLinesOf(settings).shopee }
+      : { admin: cancelLinesOf(settings).admin },
     canCancel: role === "mc" || !!r.me.admin?.isExtra,
     // หาห้องจากชื่อช่องเดิมก่อน (GLORY MALL) แล้วค่อยเปลี่ยนเป็นชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
     items: withPlatformLabels(items.map((i) => ({

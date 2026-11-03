@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { NIGHT_CANCEL_TEXT } from "@/lib/cancel-rule";
 import { BONUS_TIERS, LATE_TIERS } from "@/lib/pay";
 import type { OwnerScope } from "@/lib/types";
 
@@ -25,6 +26,10 @@ export function RulesEditor({ scope, edit }: { scope: OwnerScope; edit: OwnerSco
       {roles.map((r) => <RoleRules key={r} role={r} readOnly={!edit[r]} />)}
       {roles.length ? <LinkSetting field="adminChatUrl" role={roles[0]} readOnly={!(edit.mc || edit.admin)} /> : null}
       {roles.length ? <LinkSetting field="workLocationUrl" role={roles[0]} readOnly={!(edit.mc || edit.admin)} /> : null}
+      {/* ยกเลิกช่วง 22:00–08:00 ต้องทัก LINE คนดูแลฝ่ายนั้น (src/lib/cancel-rule.ts) */}
+      {scope.mc ? <LinkSetting field="cancelLineMcTiktok" role="mc" readOnly={!edit.mc} /> : null}
+      {scope.mc ? <LinkSetting field="cancelLineMcShopee" role="mc" readOnly={!edit.mc} /> : null}
+      {scope.admin ? <LinkSetting field="cancelLineAdmin" role="admin" readOnly={!edit.admin} /> : null}
       <Card size="sm">
         <CardHeader>
           <CardTitle className="font-bold">การมาสาย / ไลฟ์ชดเชย (แก้ที่นี่ไม่ได้)</CardTitle>
@@ -65,6 +70,18 @@ const LINK_TEXT = {
   workLocationUrl: {
     title: "ลิงก์โลเคชั่นที่ทำงาน", placeholder: "https://maps.app.goo.gl/...",
     hint: "ปุ่มหมุดแผนที่ที่หัวเว็บ + ลิงก์ \"สถานที่ทำงาน\" ในตารางของฉัน · เห็นเฉพาะคนที่ login และมีบัญชีในระบบ · ว่าง = ไม่มีปุ่ม",
+  },
+  cancelLineMcTiktok: {
+    title: "ลิงก์ LINE แอดมินดูแล Mc TikTok", placeholder: "https://line.me/ti/p/...",
+    hint: `ช่วง ${NIGHT_CANCEL_TEXT} Mc กดยกเลิกคิว TikTok เองไม่ได้ ปุ่มยกเลิกจะเปิด LINE นี้ให้ทักแทน · ว่าง = ใช้ลิงก์แชทแอดมินด้านบน`,
+  },
+  cancelLineMcShopee: {
+    title: "ลิงก์ LINE แอดมินดูแล Mc Shopee", placeholder: "https://line.me/ti/p/...",
+    hint: `ช่วง ${NIGHT_CANCEL_TEXT} Mc กดยกเลิกคิว Shopee เองไม่ได้ ปุ่มยกเลิกจะเปิด LINE นี้ให้ทักแทน · ว่าง = ใช้ลิงก์แชทแอดมินด้านบน`,
+  },
+  cancelLineAdmin: {
+    title: "ลิงก์ LINE Owner (Admin เสริมยกเลิกคิว)", placeholder: "https://line.me/ti/p/...",
+    hint: `ช่วง ${NIGHT_CANCEL_TEXT} Admin เสริมกดยกเลิกคิวเองไม่ได้ ปุ่มยกเลิกจะเปิด LINE นี้ให้ทักแทน · ว่าง = ใช้ลิงก์แชทแอดมินด้านบน`,
   },
 } as const;
 
