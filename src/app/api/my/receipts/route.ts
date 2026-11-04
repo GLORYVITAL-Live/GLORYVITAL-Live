@@ -3,13 +3,14 @@ import { fail, ok, requireMe } from "@/lib/api";
 import { RECEIPT_MAX_BYTES, RECEIPT_TYPES, isMonth, sniffType } from "@/lib/receipts";
 import { RECEIPT_SQL, myReceipts, receiptView, saveReceipt } from "@/lib/receipts-db";
 import { createAdminClient } from "@/lib/supabase/server";
-import { myTawi } from "@/lib/tawi";
+import { myTawi, scanTawi } from "@/lib/tawi";
 import { tawiMonthLabel } from "@/lib/tawi-name";
 import type { MyTawi, ReceiptView } from "@/lib/types";
 
 // เอกสารยืนยันการรับเงินของตัวเอง (Mc / Admin — ทุกบทบาทของอีเมลนี้)
 //   GET   เดือนเริ่มบังคับ + เอกสารที่ส่งแล้ว (ใหม่ก่อน)
 //   POST  multipart { month: "YYYY-MM", file: รูป / PDF ไม่เกิน 4 MB } ส่ง / ส่งใหม่ -> ขึ้น Google Drive -> ดาวน์โหลดใบ 50 ทวิเดือนนั้นได้ทันที
+//         ยังไม่มีใบเดือนนั้นในระบบ = ส่งไว้ก่อนได้ + ตรวจโฟลเดอร์ใบ 50 ทวิให้ทันที (ทีมบัญชีเพิ่งวางไฟล์ = ได้ใบเลย ไม่ต้องรอรอบตรวจ)
 //         ตอบข้อมูลใบ 50 ทวิชุดใหม่ (tawi) ให้หน้าเว็บอัปเดตปุ่มเลย
 export const maxDuration = 60;
 
@@ -55,8 +56,15 @@ export async function POST(request: Request) {
       action: `${res.replaced ? "ส่งใหม่" : "ส่ง"}เอกสารรับเงิน ${tawiMonthLabel(month)}`, result: "สำเร็จ",
     });
   });
-  return ok<{ message: string; tawi: MyTawi }>({
-    message: `ส่งเอกสารรับเงิน ${tawiMonthLabel(month)} แล้ว ดาวน์โหลดใบ 50 ทวิได้เลย`,
-    tawi: await myTawi(r.me.email),
-  });
+  let tawi = await myTawi(r.me.email);
+  // ตรวจไม่สำเร็จ / มีคนตรวจอยู่ = ข้าม (ส่งเอกสารสำเร็จแล้ว รอบตรวจถัดไปจะได้ใบเอง)
+  if (!tawi.docs.some((d) => d.month === month)) {
+    await scanTawi().catch(() => undefined);
+    tawi = await myTawi(r.me.email);
+  }
+  const docs = tawi.docs.filter((d) => d.month === month);
+  const next = !docs.length ? "ใบ 50 ทวิเข้าระบบเมื่อไหร่ ดาวน์โหลดได้ทันที ไม่ต้องส่งซ้ำ"
+    : docs.every((d) => d.verified) ? "ดาวน์โหลดใบ 50 ทวิได้เลย"
+    : "กรอกชื่อจริงยืนยันตัวตน แล้วดาวน์โหลดใบ 50 ทวิได้เลย";
+  return ok<{ message: string; tawi: MyTawi }>({ message: `ส่งเอกสารรับเงิน ${tawiMonthLabel(month)} แล้ว ${next}`, tawi });
 }

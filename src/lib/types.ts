@@ -337,15 +337,18 @@ export type ReceiptView = {
  *   receipt = เอกสารรับเงินของเดือนนี้ (ต้อง ok / none ถึงดาวน์โหลดได้)
  */
 export type TawiDoc = { id: number; month: string; verified: boolean; receipt: ReceiptState };
+/** เดือนที่ยังไม่มีใบ 50 ทวิในระบบ แต่ส่งเอกสารรับเงินไว้ก่อนได้ · rounds = รอบสลิปโอนเงินของเดือนนี้ ("รอบ 4 พ.ย. 69") */
+export type EarlyReceipt = { month: string; rounds: string[]; receipt: ReceiptState };
 /**
  * GET /api/my/tawi — ready = รัน SQL 20261029000000_tawi50 แล้ว (ไม่พร้อม = ซ่อนส่วนนี้)
  *   verifyReady = รัน SQL 20261030000000_tawi_verify แล้ว (ยัง = ดาวน์โหลดไม่ได้ชั่วคราว)
  *   locked = กรอกชื่อไม่ตรงครบจำนวนของวันนี้แล้ว
  *   receiptFrom = ต้องส่งเอกสารรับเงินตั้งแต่เดือนนี้ (null = ไม่บังคับ) · receipts = เอกสารรับเงินที่ส่งแล้ว
+ *   early = เดือนที่ส่งเอกสารรับเงินไว้ก่อนได้ (ใบ 50 ทวิยังไม่เข้าระบบ)
  */
 export type MyTawi = {
   ready: boolean; verifyReady: boolean; locked: boolean; docs: TawiDoc[];
-  receiptFrom: string | null; receipts: ReceiptView[];
+  receiptFrom: string | null; receipts: ReceiptView[]; early: EarlyReceipt[];
 };
 /** คน 1 คนในหน้าเอกสารรับเงินของ Owner (key = อีเมล / รายชื่อที่ไม่มีอีเมล) */
 export type OwnerReceiptPerson = {

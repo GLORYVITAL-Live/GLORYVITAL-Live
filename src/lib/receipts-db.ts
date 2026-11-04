@@ -486,7 +486,8 @@ export async function ownerReceipts(month: string | null, scope: DocsScope): Pro
       unmatched: (unmatchedBy.get(m) ?? []).filter((f) => !f.matched_by).length,
     };
   });
-  const pick = month && allMonths.includes(month) ? month : allMonths[0] ?? null;
+  // ไม่ระบุเดือน = เดือนล่าสุดที่มีคนต้องส่ง (เดือนที่มีแค่เอกสารที่ส่งไว้ก่อนใบเข้าระบบ เลือกดูเองได้)
+  const pick = month && allMonths.includes(month) ? month : months.find((m) => m.required)?.month ?? allMonths[0] ?? null;
 
   const people: OwnerReceiptPerson[] = [];
   let driveFiles: ReceiptDriveFile[] = [];

@@ -184,7 +184,7 @@ export function ReceiptPanel() {
             </p>
           ) : (
             <p className="text-xs text-muted-foreground">
-              บังคับตั้งแต่ใบ 50 ทวิเดือน {tawiMonthLabel(data.requiredFrom)} · ต้องส่ง = คนที่มีใบ 50 ทวิเดือนนั้น · ส่งแล้วดาวน์โหลดได้ทันที
+              บังคับตั้งแต่ใบ 50 ทวิเดือน {tawiMonthLabel(data.requiredFrom)} · ต้องส่ง = คนที่มีใบ 50 ทวิเดือนนั้น · ส่งไว้ก่อนใบเข้าระบบได้ · ส่งแล้วดาวน์โหลดได้ทันที
             </p>
           )}
           {data.folderSet && !data.drive.ready ? (

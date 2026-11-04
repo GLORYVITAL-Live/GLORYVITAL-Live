@@ -1,7 +1,7 @@
 // เทสเอกสารยืนยันการรับเงิน (bun test) — ชื่อในเทสเป็นชื่อสมมติ
 import { describe, expect, test } from "bun:test";
 import {
-  bkkMonth, cleanReason, cleanRequiredFrom, receiptFolders, receiptMonthOk, receiptRole, receiptState,
+  bkkMonth, cleanReason, cleanRequiredFrom, earlyReceiptMonths, receiptFolders, receiptMonthOk, receiptRole, receiptState,
   shiftMonth, sniffType, RECEIPT_REASON_MAX,
 } from "@/lib/receipts";
 import { tawiAccess } from "@/lib/tawi-verify";
@@ -73,6 +73,29 @@ describe("เดือนที่ส่งได้", () => {
     expect(shiftMonth("2026-01", -1)).toBe("2025-12");
     expect(shiftMonth("2026-10", -18)).toBe("2025-04");
     expect(shiftMonth("2026-12", 1)).toBe("2027-01");
+  });
+});
+
+describe("ส่งเอกสารไว้ก่อนใบ 50 ทวิเข้าระบบ", () => {
+  // 4 พ.ย. 2026 เวลาไทย
+  const NOV = Date.UTC(2026, 10, 4, 3);
+  const base = { requiredFrom: "2026-09", slipMonths: [], sentMonths: [], docMonths: [], now: NOV };
+  test("เดือนที่มีสลิปแต่ยังไม่มีใบ = ส่งได้ ใหม่ก่อน", () => {
+    expect(earlyReceiptMonths({ ...base, slipMonths: ["2026-10", "2026-11"] })).toEqual(["2026-11", "2026-10"]);
+  });
+  test("เดือนที่มีใบแล้ว = ไม่ซ้ำ (ส่งจากแถวของใบนั้น)", () => {
+    expect(earlyReceiptMonths({ ...base, slipMonths: ["2026-09", "2026-10"], docMonths: ["2026-09"] })).toEqual(["2026-10"]);
+  });
+  test("ส่งไว้แล้วแต่ไม่มีสลิป = ยังเห็นสถานะ · สลิป + ส่งแล้วเดือนเดียวกัน = แถวเดียว", () => {
+    expect(earlyReceiptMonths({ ...base, sentMonths: ["2026-10"] })).toEqual(["2026-10"]);
+    expect(earlyReceiptMonths({ ...base, slipMonths: ["2026-10"], sentMonths: ["2026-10"] })).toEqual(["2026-10"]);
+  });
+  test("ก่อนเดือนเริ่มบังคับ / เดือนอนาคต / ไม่บังคับ = ไม่แสดง", () => {
+    expect(earlyReceiptMonths({ ...base, slipMonths: ["2026-08", "2026-12"] })).toEqual([]);
+    expect(earlyReceiptMonths({ ...base, requiredFrom: null, slipMonths: ["2026-10"] })).toEqual([]);
+  });
+  test("ไม่มีสลิป ไม่มีเอกสาร (เช่น พนักงานประจำ) = ไม่แสดง", () => {
+    expect(earlyReceiptMonths(base)).toEqual([]);
   });
 });
 

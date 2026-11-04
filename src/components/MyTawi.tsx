@@ -12,7 +12,7 @@ import { shrinkImage } from "@/lib/image";
 import { RECEIPT_MAX_BYTES } from "@/lib/receipts";
 import { tawiMonthLabel } from "@/lib/tawi-name";
 import { TAWI_VERIFY_MAX_FAILS } from "@/lib/tawi-verify";
-import type { MyTawi as MyTawiData, ReceiptView, TawiDoc } from "@/lib/types";
+import type { EarlyReceipt, MyTawi as MyTawiData, ReceiptState, ReceiptView, TawiDoc } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const fileUrl = (id: number) => `/api/tawi/file?id=${id}`;
@@ -22,6 +22,7 @@ const receiptUrl = (id: number) => `/api/receipts/file?id=${id}&inline=1`;
  * ใบ 50 ทวิของฉัน (ใน "ตารางของฉัน"): ใบล่าสุด + ดาวน์โหลด · ดูเดือนอื่นได้
  *   ใบที่ทีมงานจับคู่ให้แล้วแต่ยังไม่ยืนยัน = กรอกชื่อ-นามสกุลจริงยืนยันตัวตนก่อน (ครั้งเดียว — ใบที่ชื่อต่างไปต้องยืนยันใหม่)
  *   เดือนที่บังคับ (ตั้งแต่ receiptFrom) = ส่งเอกสารยืนยันการรับเงินของเดือนนั้นก่อน (ส่งแล้วโหลดได้ทันที · ไม่ผ่าน = ส่งใหม่)
+ *     ส่งได้เลย ไม่ต้องรอยืนยันตัวตน · เดือนที่ใบยังไม่เข้าระบบ = ส่งไว้ก่อนได้ (EarlyReceipts) พอใบเข้าระบบดาวน์โหลดได้เลย
  *   ยังไม่มีใบ = แค่บอกว่ายังไม่มี (การกรอกชื่อไม่จับคู่ใบให้) · ยังไม่ได้รัน SQL = ไม่แสดง
  */
 export function MyTawi({ open }: { open: boolean }) {
@@ -106,9 +107,9 @@ export function MyTawi({ open }: { open: boolean }) {
   const [latest, ...older] = data.docs;
   const pending = data.verifyReady && data.docs.some((d) => !d.verified);
   const verifiedSome = data.docs.some((d) => d.verified);
-  // เดือนที่ยืนยันตัวตนแล้วแต่ยังต้องส่งเอกสารรับเงิน (ไม่ผ่าน = ต้องส่งใหม่)
+  // เดือนที่ยังต้องส่งเอกสารรับเงิน (ไม่ผ่าน = ต้องส่งใหม่)
   const needMonths = data.verifyReady
-    ? [...new Set(data.docs.filter((d) => d.verified && (d.receipt === "missing" || d.receipt === "rejected")).map((d) => d.month))]
+    ? [...new Set(data.docs.filter((d) => d.receipt === "missing" || d.receipt === "rejected").map((d) => d.month))]
     : [];
   const receipts = new Map(data.receipts.map((r) => [r.month, r]));
   // หลายใบในเดือนเดียว = เอกสารรับเงินชุดเดียว แสดงบรรทัดสถานะครั้งเดียว
@@ -116,8 +117,8 @@ export function MyTawi({ open }: { open: boolean }) {
   const action = (d: TawiDoc) => (
     <DocAction doc={d} ready={data.verifyReady} uploading={uploading} onUpload={upload} />
   );
-  const line = (d: TawiDoc) => (data.verifyReady && d.verified && firstOfMonth.has(d.id) ? (
-    <ReceiptLine doc={d} receipt={receipts.get(d.month)} uploading={uploading} onUpload={upload} />
+  const line = (d: TawiDoc) => (data.verifyReady && firstOfMonth.has(d.id) ? (
+    <ReceiptLine month={d.month} state={d.receipt} receipt={receipts.get(d.month)} uploading={uploading} onUpload={upload} />
   ) : null);
 
   return (
@@ -182,6 +183,8 @@ export function MyTawi({ open }: { open: boolean }) {
         )
       ) : null}
 
+      {data.early.length ? <EarlyReceipts items={data.early} receipts={receipts} uploading={uploading} onUpload={upload} /> : null}
+
       {older.length ? (
         <>
           <button
@@ -213,27 +216,57 @@ export function MyTawi({ open }: { open: boolean }) {
 
 type Upload = { uploading: string | null; onUpload: (month: string, file: File | undefined) => void };
 
+const needsUpload = (state: ReceiptState) => state === "missing" || state === "rejected";
+const uploadText = (state: ReceiptState) => (state === "rejected" ? "ส่งเอกสารใหม่" : "ส่งเอกสารรับเงิน");
+
 /**
- * ปุ่มของใบนี้ (ลำดับ: ยืนยันตัวตน -> ส่งเอกสารรับเงิน -> ดาวน์โหลด)
- *   ยังไม่ยืนยัน = ป้ายล็อก (ปุ่มจะได้ไม่พาไปหน้า error) · ยังไม่ส่ง / ไม่ผ่าน = ปุ่มส่งเอกสารแทนปุ่มดาวน์โหลด
+ * ปุ่มของใบนี้: ยังไม่ส่ง / ไม่ผ่าน = ปุ่มส่งเอกสารได้เลย (ไม่ต้องรอยืนยันตัวตน)
+ *   ส่งแล้วแต่ยังไม่ยืนยัน = ป้ายล็อก (ปุ่มจะได้ไม่พาไปหน้า error) · ครบแล้ว = ดาวน์โหลด
  */
 function DocAction({ doc, ready, uploading, onUpload }: { doc: TawiDoc; ready: boolean } & Upload) {
-  if (!ready || !doc.verified) {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-        <LockIcon className="size-3.5" aria-hidden />{ready ? "รอยืนยันตัวตน" : "ยังดาวน์โหลดไม่ได้"}
-      </span>
-    );
+  const lock = (text: string) => (
+    <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+      <LockIcon className="size-3.5" aria-hidden />{text}
+    </span>
+  );
+  if (!ready) return lock("ยังดาวน์โหลดไม่ได้");
+  if (needsUpload(doc.receipt)) {
+    return <UploadButton month={doc.month} uploading={uploading} onUpload={onUpload} variant="default" text={uploadText(doc.receipt)} />;
   }
-  if (doc.receipt === "missing" || doc.receipt === "rejected") {
-    return (
-      <UploadButton
-        month={doc.month} uploading={uploading} onUpload={onUpload} variant="default"
-        text={doc.receipt === "rejected" ? "ส่งเอกสารใหม่" : "ส่งเอกสารรับเงิน"}
-      />
-    );
-  }
-  return <TawiDownload doc={doc} />;
+  return doc.verified ? <TawiDownload doc={doc} /> : lock("รอยืนยันตัวตน");
+}
+
+/**
+ * เดือนที่ใบ 50 ทวิยังไม่เข้าระบบ: ส่งเอกสารรับเงินไว้ก่อนได้เลย ตามรอบสลิปของคนนี้
+ *   พอใบเข้าระบบ เดือนนี้ย้ายไปอยู่แถวของใบ และดาวน์โหลดได้เลย (ไม่ต้องส่งซ้ำ)
+ */
+function EarlyReceipts({ items, receipts, uploading, onUpload }: { items: EarlyReceipt[]; receipts: Map<string, ReceiptView> } & Upload) {
+  return (
+    <div className="mt-2 border-t pt-2">
+      <p className="text-xs leading-snug font-semibold">ส่งเอกสารรับเงินไว้ก่อนได้เลย</p>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        ใบ 50 ทวิของเดือนเหล่านี้ยังไม่เข้าระบบ ส่งสลิปโอนเงิน หรือใบสำคัญรับเงินที่เซ็นแล้วไว้ก่อน พอใบเข้าระบบดาวน์โหลดได้ทันที ไม่ต้องส่งซ้ำ
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {items.map((e) => (
+          <li key={e.month} className="rounded-lg bg-muted px-2.5 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 leading-snug">
+                <span className="tabular-nums">{tawiMonthLabel(e.month)}</span>
+                {e.rounds.length ? <span className="block text-[11px] text-muted-foreground">สลิปโอนเงิน {e.rounds.join(", ")}</span> : null}
+              </span>
+              {needsUpload(e.receipt) ? (
+                <UploadButton month={e.month} uploading={uploading} onUpload={onUpload} variant="default" text={uploadText(e.receipt)} />
+              ) : (
+                <span className="shrink-0 text-xs text-muted-foreground">รอใบ 50 ทวิ</span>
+              )}
+            </div>
+            <ReceiptLine month={e.month} state={e.receipt} receipt={receipts.get(e.month)} uploading={uploading} onUpload={onUpload} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 /**
@@ -348,15 +381,15 @@ function UploadButton({ month, text, variant, uploading, onUpload }: {
  * สถานะเอกสารรับเงินของเดือนนี้ (ใต้แถวใบ 50 ทวิ): ไม่ผ่าน + เหตุผล / ส่งแล้ว + ดูไฟล์ + ส่งใหม่
  *   เดือนก่อนบังคับที่มีเอกสารแล้ว (เช่น ไฟล์เดิมใน Drive ที่ทีมงานจับคู่ให้) = แสดงว่าส่งแล้วด้วย
  */
-function ReceiptLine({ doc, receipt, uploading, onUpload }: { doc: TawiDoc; receipt: ReceiptView | undefined } & Upload) {
-  if (!receipt || doc.receipt === "missing" || (doc.receipt === "none" && receipt.status === "rejected")) return null;
+function ReceiptLine({ month, state, receipt, uploading, onUpload }: { month: string; state: ReceiptState; receipt: ReceiptView | undefined } & Upload) {
+  if (!receipt || state === "missing" || (state === "none" && receipt.status === "rejected")) return null;
   const fromDrive = receipt.source === "drive";
   const view = (
     <a href={receiptUrl(receipt.id)} target="_blank" rel="noopener" className="font-semibold text-primary underline-offset-2 hover:underline pointer-coarse:inline-flex pointer-coarse:min-h-8 pointer-coarse:items-center">
       {fromDrive ? "ดูไฟล์" : "ดูไฟล์ที่ส่ง"}
     </a>
   );
-  if (doc.receipt === "rejected") {
+  if (state === "rejected") {
     return (
       <p role="alert" className="mt-1 text-xs leading-relaxed text-destructive">
         <TriangleAlertIcon className="mr-1 inline size-3.5 align-[-2px]" aria-hidden />
@@ -370,7 +403,7 @@ function ReceiptLine({ doc, receipt, uploading, onUpload }: { doc: TawiDoc; rece
         <CircleCheckIcon className="size-3.5" aria-hidden />ส่งเอกสารรับเงินแล้ว{fromDrive ? " (จาก Drive)" : ""}
       </span>
       {view}
-      <UploadButton month={doc.month} text="ส่งใหม่" variant="link" uploading={uploading} onUpload={onUpload} />
+      <UploadButton month={month} text="ส่งใหม่" variant="link" uploading={uploading} onUpload={onUpload} />
     </p>
   );
 }

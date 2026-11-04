@@ -1,6 +1,7 @@
 // เอกสารยืนยันการรับเงิน (สลิป / ใบสำคัญรับเงินที่เซ็นแล้ว) รายเดือน — ฟังก์ชันล้วน (เทสได้ ใช้ทั้งเซิร์ฟเวอร์และหน้าเว็บ)
 //   ตั้งแต่เดือนที่ตั้งไว้ (settings.receipt_required_from) เจ้าตัวต้องส่งเอกสารของเดือนนั้นก่อน ถึงดาวน์โหลดใบ 50 ทวิเดือนนั้นได้
 //   ส่งแล้วดาวน์โหลดได้ทันที · Owner กด "ไม่ผ่าน" = ล็อกใบเดือนนั้นอีกครั้งจนกว่าจะส่งใหม่
+//   ส่งไว้ก่อนใบ 50 ทวิเข้าระบบได้ (earlyReceiptMonths) พอใบเข้าระบบ = ดาวน์โหลดได้เลย ไม่ต้องส่งซ้ำ
 import type { ReceiptState } from "@/lib/types";
 
 /** ไฟล์ใหญ่สุด — Vercel รับคำขอได้ไม่เกิน ~4.5 MB จึงตั้ง 4 MB (รูปย่อในเครื่องก่อนส่ง ปกติไม่ถึง 1 MB) */
@@ -42,6 +43,23 @@ export function receiptMonthOk(month: unknown, tawiMonths: string[], now = Date.
   if (tawiMonths.includes(month)) return true;
   const cur = bkkMonth(now);
   return month <= cur && month >= shiftMonth(cur, -RECEIPT_BACK_MONTHS);
+}
+
+/**
+ * เดือนที่ส่งเอกสารรับเงินไว้ก่อนได้ (คนนี้ยังไม่มีใบ 50 ทวิของเดือนนั้นในระบบ) ใหม่ก่อน
+ *   เดือนของใบ 50 ทวิ = เดือนของรอบโอน (สลิปรอบ 4 พ.ย. = ใบเดือน พ.ย. ไม่ใช่เดือนที่ทำงาน) จึงใช้รอบสลิปของคนนี้บอกเดือน ไม่ให้เลือกเอง
+ *   + เดือนที่ส่งไว้แล้ว (ยังเห็นสถานะ / ส่งใหม่ได้) · ตั้งแต่เดือนเริ่มบังคับถึงเดือนปัจจุบัน · ไม่บังคับ = ไม่มี
+ */
+export function earlyReceiptMonths(a: {
+  requiredFrom: string | null; slipMonths: string[]; sentMonths: string[]; docMonths: string[]; now?: number;
+}) {
+  const from = a.requiredFrom;
+  if (!from) return [];
+  const cur = bkkMonth(a.now);
+  const docs = new Set(a.docMonths);
+  return [...new Set([...a.slipMonths, ...a.sentMonths])]
+    .filter((m) => isMonth(m) && m >= from && m <= cur && !docs.has(m))
+    .sort((x, y) => y.localeCompare(x));
 }
 
 /**
