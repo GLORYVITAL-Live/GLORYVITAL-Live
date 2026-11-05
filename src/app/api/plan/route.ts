@@ -13,9 +13,10 @@ import type { Me } from "@/lib/types";
 // หน้า Plan Slot Live: แพลน slot ทั้งเดือน แล้วเขียนลงชีตทั้งแท็บ "ลงตาราง Deal Mc" และ "ลงตาราง Admin เสริม"
 //   GET    ?month=YYYY-MM  slot ที่มีอยู่แล้วทั้งเดือน (จับคู่ Mc + Admin) + แพลตฟอร์ม / แคมเปญที่เคยใช้
 //   POST   { create: [{ date, platform, start, end, campaign }], campaigns: [{ mcId, campaign }],
-//            agencyCreate: [{ agency, date, platform, start, end }], agencyDelete: [id] }
+//            agencyCreate: [{ agency, date, platform, start, end }], agencyDelete: [id], agencyAdjust: [{ agency, date, on }] }
 //          สร้าง slot (ทั้งฝั่ง Mc + Admin ข้ามที่มีอยู่แล้ว) + แก้ Campaign ของ slot เดิม
 //          + แพลนของ Agency (ตาราง agency_slots ไว้ดูภาพรวม / สรุปชั่วโมง ไม่เขียนลงชีต)
+//          + สถานะ Adjusted รายวันของ Agency (ตาราง agency_adjusted)
 //   DELETE { slots: [{ mcId?, adminId? }] }  ลบ slot ที่ยังว่าง (ไม่มีคน + ไม่มี event ในปฏิทิน)
 // สิทธิ์: Owner ที่ติ๊ก "Plan Slot Live" เท่านั้น (เขียนได้ทั้งสองแท็บ)
 // slot ของแท็บ "ลงตาราง MC Shopee" (mc_slots.sheet_tab = 'shopee') ไม่อยู่ในหน้านี้ — แพลน Shopee ยังเป็นแพลนในเว็บ (agency_slots)
@@ -79,7 +80,7 @@ export async function GET(request: Request) {
   const since = new Date(Date.now() - 180 * 86400_000).toISOString().slice(0, 10);
 
   try {
-    const [mc, admin, recent, regulars] = await Promise.all([
+    const [mc, admin, recent, regulars, adjusted] = await Promise.all([
       all<SlotRow & { mc_id: number | null; campaign: string }>((a, b) => db.from("mc_slots")
         .select(`${cols}, mc_id, campaign, person:staff!mc_id(name)`).eq("sheet_tab", "mc").gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<SlotRow & { admin_id: number | null; needs_extra_admin: boolean }>((a, b) => db.from("admin_slots")
@@ -89,6 +90,8 @@ export async function GET(request: Request) {
       // Mc ประจำ (เงินเดือน) ให้เลือกลงชื่อตอนติ๊กแพลนได้เลย
       all<{ id: number; name: string }>((a, b) => db.from("staff")
         .select("id, name").eq("role", "mc").eq("is_salaried", true).order("name").range(a, b)),
+      all<{ agency: string; live_date: string }>((a, b) => db.from("agency_adjusted")
+        .select("agency, live_date").gte("live_date", first).lte("live_date", last).order("live_date").order("agency").range(a, b)),
     ]);
 
     // แพลนของ Agency (ยังไม่มีตาราง = ยังใช้ไม่ได้ ส่วนอื่นของหน้าใช้ได้ตามปกติ)
@@ -146,6 +149,7 @@ export async function GET(request: Request) {
         id: x.id, agency: x.agency, platform: x.platform, date: x.live_date, start: hm(x.start_time), end: hm(x.end_time),
       })),
       agencyReady,
+      agencyAdjusted: adjusted.map((x) => ({ agency: x.agency, date: x.live_date })),
       regulars: regulars.map((x) => ({ id: x.id, name: x.name })),
     });
   } catch (err) {
@@ -189,15 +193,22 @@ export async function POST(request: Request) {
     agencyCreate.push({ agency, platform, live_date: x.date, start_time: start, end_time: end, created_by: r.me.email });
   }
   const agencyDelete: number[] = (Array.isArray(body?.agencyDelete) ? body.agencyDelete : []).filter((id: unknown) => Number.isInteger(id));
+  // สถานะ Adjusted รายวันของ Agency: on = ตั้ง / false = เอาออก
+  const agencyAdjust: { agency: string; date: string; on: boolean }[] = [];
+  for (const x of Array.isArray(body?.agencyAdjust) ? body.agencyAdjust : []) {
+    const agency = cleanAgency(x?.agency);
+    if (!agency || !DATE_RE.test(String(x?.date ?? "")) || typeof x?.on !== "boolean") return fail("ข้อมูลสถานะ Adjusted ไม่ถูกต้อง");
+    agencyAdjust.push({ agency, date: x.date, on: x.on });
+  }
   // ลงชื่อ Mc ใน slot เดิมที่ยังว่าง { slotId (mc_slots), personId (staff) }
   const assigns: { slotId: number; personId: number }[] = [];
   for (const x of Array.isArray(body?.assigns) ? body.assigns : []) {
     if (!Number.isInteger(x?.slotId) || !Number.isInteger(x?.personId)) return fail("ข้อมูลลงชื่อ Mc ไม่ถูกต้อง");
     assigns.push({ slotId: x.slotId, personId: x.personId });
   }
-  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length && !assigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
+  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length && !agencyAdjust.length && !assigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
   if (assigns.length > MAX_CREATE) return fail(`ลงชื่อ Mc ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
-  if (agencyCreate.length > MAX_CREATE || agencyDelete.length > MAX_CREATE) return fail(`แก้แพลนของ Agency ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
+  if (agencyCreate.length > MAX_CREATE || agencyDelete.length > MAX_CREATE || agencyAdjust.length > MAX_CREATE) return fail(`แก้แพลนของ Agency ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (create.length > MAX_CREATE) return fail(`สร้างได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (campaigns.length > MAX_CREATE) return fail(`แก้ Campaign ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
 
@@ -330,6 +341,19 @@ export async function POST(request: Request) {
       const msg = (err as Error).message;
       if (noAgencyTable(msg)) throw new Error("ยังบันทึกแพลนของ Agency ไม่ได้: ต้องรัน SQL 20261017000000_plan_slots ใน Supabase ก่อน");
       throw err;
+    }
+
+    // สถานะ Adjusted: ตั้ง = เพิ่มแถว (มีแล้ว = ข้าม) / เอาออก = ลบแถว
+    const adjustOn = agencyAdjust.filter((x) => x.on).map((x) => ({ agency: x.agency, live_date: x.date, created_by: r.me.email }));
+    if (adjustOn.length) {
+      const { error } = await db.from("agency_adjusted").upsert(adjustOn, { onConflict: "agency,live_date", ignoreDuplicates: true });
+      if (error) throw new Error(error.message);
+    }
+    const adjustOff = agencyAdjust.filter((x) => !x.on);
+    for (const agency of new Set(adjustOff.map((x) => x.agency))) {
+      const { error } = await db.from("agency_adjusted").delete().eq("agency", agency)
+        .in("live_date", adjustOff.filter((x) => x.agency === agency).map((x) => x.date));
+      if (error) throw new Error(error.message);
     }
 
     // หลังตอบผู้ใช้: เขียนชีต (DB trigger จดงานเขียนชีตไว้ให้แล้ว)

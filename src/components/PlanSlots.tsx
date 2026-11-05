@@ -11,7 +11,7 @@ import {
 } from "@/components/shared";
 import { DatePicker, DateRangePicker, MonthPicker, TimePicker } from "@/components/date-picker";
 import { ExportMenu } from "@/components/ExportMenu";
-import { agencyCampaign, agencySheet, clock, dayEn, hmText, mergeRanges } from "@/lib/agency-sheet";
+import { agencyCampaign, agencySheet, agencyStatus, clock, dayEn, hmText, mergeRanges } from "@/lib/agency-sheet";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,7 @@ type AgencySlot = { id: number; agency: string; platform: string; date: string; 
 type PlanData = {
   month: string; slots: Existing[]; platforms: string[]; campaigns: string[];
   agencySlots: AgencySlot[]; agencyReady: boolean; // agencyReady = false: ยังไม่ได้รัน SQL ตาราง agency_slots
+  agencyAdjusted: { agency: string; date: string }[]; // วันที่ตั้ง Adjusted ของแต่ละ Agency
   regulars?: { id: number; name: string }[]; // Mc ประจำ ที่เลือกลงชื่อตอนติ๊กได้
 };
 /** agency = แพลนของ Agency (เช่น "TDH") ไม่ระบุ / null = slot ของเรา (ลงชีต) / mcId = ลงชื่อ Mc ประจำไว้เลย */
@@ -52,9 +53,11 @@ type CampaignRange = { from: string; to: string; platform: string; campaign: str
 /**
  * ร่างของเดือน: slot ใหม่ (ของเรา + Agency) / Campaign ที่แก้ของ slot เดิม (ตาม key) / slot เดิมที่จะลบ (key)
  *   / ช่วง Campaign / แพลน Agency เดิมที่จะลบ (key ของ Agency) / ลงชื่อ Mc ใน slot เดิมที่ยังว่าง (key -> รหัส Mc)
+ *   / สถานะ Adjusted ที่จะเปลี่ยน (adjustKey -> ค่าใหม่)
  */
 type Draft = {
   add: NewSlot[]; campaign: Record<string, string>; del: string[]; ranges: CampaignRange[]; agencyDel: string[]; assign: Record<string, number>;
+  adjust: Record<string, boolean>;
 };
 /** กลุ่มคอลัมน์ติ๊ก: แพลตฟอร์ม (+ Agency ที่ไลฟ์ผ่านช่องนั้น) */
 type Column = { platform: string; agency?: string; times: { start: string; end: string }[] };
@@ -66,7 +69,7 @@ type Item = {
   assign: { id: number; name: string } | null;
 };
 
-const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agencyDel: [], assign: {} };
+const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agencyDel: [], assign: {}, adjust: {} };
 const DRAFT_KEY = "glory_plan_draft_";
 const MONTH_KEY = "glory_plan_month";
 const VIEW_KEY = "glory_plan_view";
@@ -80,6 +83,8 @@ const keyOf = (s: { platform: string; date: string; start: string; end: string }
 const agencyKey = (agency: string, k: string) => `@${agency}|${k}`;
 /** key ของช่องติ๊ก: ของเรา = keyOf / Agency = agencyKey */
 const ownKey = (k: string, agency: string | null | undefined) => (agency ? agencyKey(agency, k) : k);
+/** key ของสถานะ Adjusted (ต่อ Agency ต่อวัน) */
+const adjustKey = (agency: string, date: string) => `${agency}|${date}`;
 const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 const fmtMin = (m: number) => `${String(Math.floor((((m % 1440) + 1440) % 1440) / 60)).padStart(2, "0")}:${String(((m % 60) + 60) % 60).padStart(2, "0")}`;
 /** ความยาว slot เป็นนาที (เวลาจบก่อนเวลาเริ่ม = ข้ามเที่ยงคืน) */
@@ -146,6 +151,7 @@ function parseDraft(raw: string | null): Draft | null {
       ranges: Array.isArray(v?.ranges) ? v.ranges : [],
       agencyDel: Array.isArray(v?.agencyDel) ? v.agencyDel : [],
       assign: v?.assign && typeof v.assign === "object" ? v.assign : {},
+      adjust: v?.adjust && typeof v.adjust === "object" ? v.adjust : {},
     };
   } catch {
     return null;
@@ -209,7 +215,7 @@ const hoursCell = (h: number): Cell => (h ? { v: h, f: "dec" } : null);
  *   ภาพรวม = แถววัน x ช่อง/ช่วงเวลา (✓ / ชื่อ Mc / ร่าง) + รวม ชม./วัน ของแต่ละกลุ่ม
  *   สรุปชั่วโมง = ชม./วัน ของแต่ละกลุ่ม / รายการ slot = แบบชีต (ของเรา + Agency)
  */
-function planBook(month: string, columns: Column[], items: Item[], mode: Mode = "tiktok"): ExportBook {
+function planBook(month: string, columns: Column[], items: Item[], mode: Mode, isAdjusted: (agency: string, date: string) => boolean): ExportBook {
   const days = daysOf(month);
   const live = items.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
   const own = (c: Column, x: Item) => x.platform === c.platform && x.agency === (c.agency ?? null);
@@ -308,7 +314,7 @@ function planBook(month: string, columns: Column[], items: Item[], mode: Mode = 
     const mine = sorted.filter((x) => own(c, x));
     if (!c.agency) return { name: c.platform, rows: [listHead, ...mine.map(listRow), totalOf(mine)] };
     return agencySheet(`${c.platform === SHOPEE ? "Shopee " : ""}${ownerLabel(c.agency)}`, month, mine.map((x) => (
-      { date: x.date, start: x.start, end: x.end, campaign: agencyCampaignOf(x), draft: !x.agencyId }
+      { date: x.date, start: x.start, end: x.end, campaign: agencyCampaignOf(x), draft: !x.agencyId, adjusted: isAdjusted(c.agency!, x.date) }
     )));
   });
 
@@ -384,6 +390,18 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
   const brushId = mode === "tiktok" && regulars.some((m) => m.id === brush) ? brush : null;
   const existingMap = useMemo(() => new Map((plan?.slots ?? []).map((s) => [s.key, s])), [plan]);
   const agencyMap = useMemo(() => new Map((plan?.agencySlots ?? []).map((s) => [agencyKey(s.agency, keyOf(s)), s])), [plan]);
+  const adjustedSaved = useMemo(() => new Set((plan?.agencyAdjusted ?? []).map((x) => adjustKey(x.agency, x.date))), [plan]);
+  /** สถานะ Adjusted ของ Agency ในวันนั้น (รวมร่าง) */
+  const isAdjusted = (agency: string, date: string) => draft.adjust[adjustKey(agency, date)] ?? adjustedSaved.has(adjustKey(agency, date));
+  /** สลับ Adjusted ลงร่าง: กลับมาเท่าค่าที่บันทึกไว้ = ไม่มีอะไรต้องบันทึก */
+  function toggleAdjusted(agency: string, date: string) {
+    const k = adjustKey(agency, date);
+    update((d) => {
+      const { [k]: cur, ...rest } = d.adjust;
+      const on = !(cur ?? adjustedSaved.has(k));
+      return { ...d, adjust: on === adjustedSaved.has(k) ? rest : { ...rest, [k]: on } };
+    });
+  }
 
   // รวม slot เดิม + ร่างใหม่ (ของเรา + แพลน Agency) เรียงตามชีต (วัน > แพลตฟอร์ม > เวลา) และหาเวลาที่ทับกันในแพลตฟอร์มเดียวกัน
   const items = useMemo<Item[]>(() => {
@@ -459,11 +477,13 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     // ลงชื่อ Mc ประจำใน slot เดิมที่ยังว่าง
     const assigns = ours.filter((x) => x.existing?.mc && x.assign && !x.deleting)
       .map((x) => ({ slotId: x.existing!.mc!.id, personId: x.assign!.id }));
+    const agencyAdjust = Object.entries(draft.adjust).filter(([k, on]) => on !== adjustedSaved.has(k))
+      .map(([k, on]) => ({ agency: k.split("|")[0], date: k.split("|")[1], on }));
     return {
-      create, campaigns, deletes, agencyCreate, agencyDelete, assigns,
-      total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length + assigns.length,
+      create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust,
+      total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length + assigns.length + agencyAdjust.length,
     };
-  }, [items, ours]);
+  }, [items, ours, draft.adjust, adjustedSaved]);
 
   // ---------- ติ๊ก ----------
   // ช่องเดียวกัน (แพลตฟอร์ม + วัน + เวลา) เป็นของเรา (agency = null) หรือของ Agency อย่างใดอย่างหนึ่ง
@@ -794,7 +814,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
   }
 
   async function save() {
-    const { create, campaigns, deletes, agencyCreate, agencyDelete, assigns } = changes;
+    const { create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust } = changes;
     const named = create.filter((s) => s.assign).length + assigns.length;
     const ok = await confirm({
       title: `บันทึกแพลน ${monthLabel(month)}?`,
@@ -805,6 +825,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         deletes.length ? `ลบ ${deletes.length} slot ที่ยังว่าง` : "",
         agencyCreate.length || agencyDelete.length
           ? `แพลนในเว็บ (Agency / Shopee) +${agencyCreate.length} / ลบ ${agencyDelete.length} slot (เก็บในเว็บ ไม่ลงชีต)` : "",
+        agencyAdjust.length ? `เปลี่ยนสถานะ Agency ${agencyAdjust.length} วัน` : "",
       ].filter(Boolean).join(" · "),
       confirmText: "บันทึก",
     });
@@ -819,7 +840,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         update((d) => ({ ...d, del: [] }));
         if (res.kept) toast(`มี ${res.kept} slot ที่มีคนจองแล้ว ไม่ได้ลบ`, "error");
       }
-      if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length) {
+      if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length || agencyAdjust.length) {
         const res = await api<{ created: number; skipped: number; updated: number; assignSkipped: number; loanWarnings?: string[] }>("/api/plan", {
           create: create.map((s) => ({
             date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: s.campaign, mcId: s.assign?.id ?? null,
@@ -827,6 +848,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
           campaigns,
           agencyCreate: agencyCreate.map((s) => ({ agency: s.agency, date: s.date, platform: s.platform, start: s.start, end: s.end })),
           agencyDelete,
+          agencyAdjust,
           assigns,
         });
         if (!res.ok) throw new Error(res.message);
@@ -917,7 +939,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         {plan ? (
           <ExportMenu
             label="ส่งออก"
-            build={() => planBook(month, shownColumns, shownItems, mode)}
+            build={() => planBook(month, shownColumns, shownItems, mode, isAdjusted)}
             className={cn("bg-card", mode === "shopee" && "ml-auto")}
           />
         ) : null}
@@ -1037,7 +1059,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
               <p className="mb-2 text-xs text-muted-foreground">
                 {readOnly ? "ชี้ที่ช่องเพื่อดูรายละเอียด · กดวันที่ = ดู slot + Campaign ของวันนั้น" : mode === "shopee"
                   ? "แพลน Shopee (In house / Agency Infinite / MCN) เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · ช่วงเวลาเดียวกันเป็นของกลุ่มใดกลุ่มหนึ่ง กดช่องของอีกกลุ่ม = ย้ายมา · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้"
-                  : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต"}
+                  : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · กดป้ายสถานะของ Agency = สลับ Confirmed / Adjusted (ไฟล์ส่งออกแสดงตามนี้)"}
               </p>
               <TickView
                 month={month}
@@ -1050,6 +1072,11 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
                 isTicked={tickedNow}
                 onPaint={readOnly ? undefined : paintCells}
                 onOpenDay={mode === "tiktok" ? setOpenDay : undefined}
+                adjust={mode === "tiktok" ? {
+                  isOn: isAdjusted,
+                  changed: (agency, date) => changes.agencyAdjust.some((x) => x.agency === agency && x.date === date),
+                  onToggle: readOnly ? undefined : toggleAdjusted,
+                } : undefined}
               />
             </>
           ) : !ours.length ? (
@@ -1090,6 +1117,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
                   namedDraft.length ? `ลงชื่อ Mc ประจำ ${namedDraft.length} (${num(hrs(namedDraft))} ชม.)` : "",
                   changes.agencyCreate.length || changes.agencyDelete.length
                     ? `แพลนในเว็บ +${changes.agencyCreate.length} (${num(hrs(changes.agencyCreate))} ชม.)${changes.agencyDelete.length ? ` / ลบ ${changes.agencyDelete.length}` : ""}` : "",
+                  changes.agencyAdjust.length ? `เปลี่ยนสถานะ Agency ${changes.agencyAdjust.length} วัน` : "",
                 ].filter(Boolean).join(" · ")} — ยังไม่บันทึกจนกว่าจะกดบันทึก
               </span>
               {newClashes ? (
@@ -1236,8 +1264,34 @@ function cellAt(el: Element | null) {
   return { r: r === undefined ? null : Number(r), g: td ? Number(td.g) : null, i: td ? Number(td.i) : null };
 }
 
+/** ป้ายสถานะของ Agency ในวันนั้น กด = สลับ Confirmed / Adjusted (ไม่มี onToggle = ดูอย่างเดียว) เส้นประ = ยังไม่บันทึก */
+function AgencyStatusChip({ adjusted, draft, changed, label, onToggle }: {
+  adjusted: boolean; draft: boolean; changed: boolean; label: string; onToggle?: () => void;
+}) {
+  const status = agencyStatus(adjusted, draft);
+  const cls = cn(
+    "inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap",
+    status === "Adjusted" ? "border-destructive/40 bg-destructive/10 text-destructive"
+      : status === "Draft" ? "border-warning-border bg-warning text-warning-foreground" : "border-success/40 bg-success/10 text-success",
+    changed && "border-dashed border-current",
+  );
+  if (!onToggle) return <span className={cls}>{status}</span>;
+  return (
+    <button
+      type="button"
+      aria-pressed={adjusted}
+      aria-label={`${label}: ${status}`}
+      title={`${adjusted ? "กดเพื่อเอา Adjusted ออก" : "กดเพื่อตั้งเป็น Adjusted"}${changed ? " · ยังไม่บันทึก" : ""}`}
+      onClick={onToggle}
+      className={cn(cls, "outline-none hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring")}
+    >
+      {status}
+    </button>
+  );
+}
+
 /** ตารางติ๊ก: แถว = วันทั้งเดือน, คอลัมน์ = ช่อง x ช่วงเวลา · คลิกค้างแล้วลาก (เมาส์) = ติ๊กหลายช่องในกลุ่มเดียวกัน */
-function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn, isTicked, onPaint, onOpenDay }: {
+function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn, isTicked, onPaint, onOpenDay, adjust }: {
   month: string;
   columns: Column[];
   itemMap: Map<string, Item>;
@@ -1248,6 +1302,12 @@ function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn
   isTicked: (slot: SlotRef, agency: string | null) => boolean;
   onPaint?: (cells: SlotRef[], agency: string | null, off: boolean) => void; // ไม่ระบุ = ลากไม่ได้ (ดูอย่างเดียว)
   onOpenDay?: (d: string) => void; // ไม่ระบุ = กดวันที่ไม่ได้ (แพลน Shopee)
+  /** สถานะรายวันของ Agency ไม่ระบุ = ไม่มีคอลัมน์สถานะ (แพลน Shopee) */
+  adjust?: {
+    isOn: (agency: string, date: string) => boolean;
+    changed: (agency: string, date: string) => boolean;
+    onToggle?: (agency: string, date: string) => void; // ไม่ระบุ = ดูอย่างเดียว
+  };
 }) {
   const days = daysOf(month);
   const today = todayKey();
@@ -1350,6 +1410,8 @@ function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn
   }
 
   const colKey = (c: Column) => `${c.platform}|${c.agency ?? ""}`;
+  /** กลุ่มนี้มีคอลัมน์สถานะไหม */
+  const hasStatus = (c: Column) => !!adjust && !!c.agency;
   // กลุ่มของ Agency พื้นสีอ่อนแยกจากช่องหลัก
   const tint = (c: Column) => (c.agency ? "bg-p0/[0.06]" : "");
   // ช่วงหลังเที่ยงคืน (00:00–07:29) ยังนับเป็นวันไลฟ์เดิม แยกสีให้เห็น
@@ -1382,7 +1444,7 @@ function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn
                 && !x.deleting && !x.existing?.mc?.cancelled);
               const hours = groupHours(c);
               return (
-                <th key={colKey(c)} colSpan={c.times.length + 1} className="sticky top-0 z-20 h-8 border-b border-l bg-muted px-2 text-left whitespace-nowrap">
+                <th key={colKey(c)} colSpan={c.times.length + (hasStatus(c) ? 2 : 1)} className="sticky top-0 z-20 h-8 border-b border-l bg-muted px-2 text-left whitespace-nowrap">
                   <PlatformBadge name={c.platform} index={tagIndex(c.platform)} />
                   {c.agency ? (
                     <>
@@ -1417,7 +1479,9 @@ function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn
               <th key={`${colKey(c)}|sum`} className="sticky top-8 z-20 border-b bg-muted px-1.5 py-1 text-[11px] font-semibold whitespace-nowrap">
                 รวม<br /><span className="font-normal text-muted-foreground">ชม./วัน</span>
               </th>
-            )])}
+            ), ...(hasStatus(c) ? [
+              <th key={`${colKey(c)}|status`} className="sticky top-8 z-20 border-b bg-muted px-1.5 py-1 text-[11px] font-semibold whitespace-nowrap">สถานะ</th>,
+            ] : [])])}
           </tr>
         </thead>
         <tbody>
@@ -1472,7 +1536,19 @@ function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn
                   <td key={`${colKey(c)}|sum`} data-g={g} data-i={c.times.length - 1} className={cn("border-b px-1.5 py-1 text-right text-xs font-semibold tabular-nums", tint(c))}>
                     {groupHours(c, d) ? num(groupHours(c, d)) : <span className="font-normal text-muted-foreground/50">–</span>}
                   </td>
-                )])}
+                ), ...(adjust && c.agency ? [
+                  <td key={`${colKey(c)}|status`} data-g={g} data-i={c.times.length - 1} className={cn("border-b px-1.5 py-1 text-center", tint(c))}>
+                    {groupHours(c, d) ? (
+                      <AgencyStatusChip
+                        adjusted={adjust.isOn(c.agency, d)}
+                        draft={items.some((x) => x.date === d && x.platform === c.platform && x.agency === c.agency && !x.deleting && !x.agencyId)}
+                        changed={adjust.changed(c.agency, d)}
+                        label={`สถานะ ${ownerLabel(c.agency)} ${fmtDayNum(d)}`}
+                        onToggle={adjust.onToggle ? () => adjust.onToggle!(c.agency!, d) : undefined}
+                      />
+                    ) : <span className="text-xs text-muted-foreground/50">–</span>}
+                  </td>,
+                ] : [])])}
                 {onOpenDay ? (
                   <td className="border-b border-l px-2 py-1">
                     <button

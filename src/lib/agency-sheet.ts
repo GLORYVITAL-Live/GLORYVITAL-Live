@@ -33,8 +33,12 @@ export function agencyCampaign(campaigns: string[]) {
   return names.map((c) => SHORT[c] ?? c).join(", ") || "Bau";
 }
 
-/** campaign = ชื่อจาก agencyCampaign / draft = ยังไม่ได้บันทึก */
-export type AgencySheetSlot = { date: string; start: string; end: string; campaign: string; draft: boolean };
+/** ตั้ง Adjusted ไว้ = Adjusted / ยังไม่ได้บันทึก = Draft / นอกนั้น = Confirmed */
+export type AgencyStatus = "Confirmed" | "Adjusted" | "Draft";
+export const agencyStatus = (adjusted: boolean, draft: boolean): AgencyStatus => (adjusted ? "Adjusted" : draft ? "Draft" : "Confirmed");
+
+/** campaign = ชื่อจาก agencyCampaign / draft = ยังไม่ได้บันทึก / adjusted = วันนั้นตั้งเป็น Adjusted */
+export type AgencySheetSlot = { date: string; start: string; end: string; campaign: string; draft: boolean; adjusted: boolean };
 
 // วันไลฟ์ TikTok เริ่ม 07:30 หลังเที่ยงคืนยังนับเป็นวันเดิม
 const DAY_START = toMin("07:30");
@@ -48,8 +52,10 @@ const BAND: RowStyle = { bg: "000000", color: "FFFFFF", bold: true, align: "cent
 const BAND_TOTAL: RowStyle = { ...BAND, color: "FFFF00" };
 const ROW = box("FFFFFF");
 /** แถวที่ไลฟ์ข้ามเที่ยงคืน */
-const LATE = box("FFF2CC");
-const STATUS = { Confirmed: box("D4EDBC", { color: "11734B" }), Draft: box("FFE5A0", { color: "473821" }) };
+const LATE_BG = "FFF2CC";
+const STATUS: Record<AgencyStatus, RowStyle> = {
+  Confirmed: box("D4EDBC", { color: "11734B" }), Adjusted: box("FFCFC9", { color: "B10202" }), Draft: box("FFE5A0", { color: "473821" }),
+};
 
 export function agencySheet(name: string, month: string, slots: AgencySheetSlot[]): ExportSheet {
   const total = slots.reduce((m, x) => m + lenOf(x), 0);
@@ -62,10 +68,12 @@ export function agencySheet(name: string, month: string, slots: AgencySheetSlot[
   for (const d of [...new Set(slots.map((x) => x.date))].sort()) {
     for (const r of mergeRanges(slots.filter((x) => x.date === d), orderOf)) {
       const i = rows.length;
-      const status = r.slots.some((x) => x.draft) ? "Draft" : "Confirmed";
+      const status = agencyStatus(r.slots.some((x) => x.adjusted), r.slots.some((x) => x.draft));
       rows.push(["", dayEn(d), weekdayEn(d), clock(r.start), clock(r.end), hmText(r.min), { v: r.min / 60, f: "money" }, status, r.slots[0].campaign]);
       rowStyles[i] = ROW;
-      if (orderOf(r) + r.min > MIDNIGHT) for (let j = COL.day; j <= COL.total; j++) cellStyles[`${i}:${j}`] = LATE;
+      // ข้ามเที่ยงคืน = พื้นครีม / Adjusted = ตัวหนา
+      const late = orderOf(r) + r.min > MIDNIGHT, bold = status === "Adjusted";
+      if (late || bold) for (let j = COL.day; j <= COL.total; j++) cellStyles[`${i}:${j}`] = box(late ? LATE_BG : "FFFFFF", { bold });
       cellStyles[`${i}:${COL.status}`] = STATUS[status];
     }
   }
