@@ -9,6 +9,7 @@ import {
 import { boardsOf, type Board } from "@/lib/live-team";
 import type { Me, OwnerScope, Role } from "@/lib/types";
 import dynamic from "next/dynamic";
+import { BrandLogo } from "@/components/BrandLogo";
 import type { Go } from "@/components/HomeView";
 import { NotificationBell } from "@/components/Notifications";
 import { SlotBoard } from "@/components/SlotBoard";
@@ -289,10 +290,8 @@ function Shell({ me }: { me: Me | null }) {
     <div className={cn("mx-auto px-4", wide ? "max-w-[1200px]" : "max-w-[760px]", bottomNav && "pb-20 sm:pb-0")}>
       {/* มือถือ: ปุ่มหัวเว็บเล็กลง (36px) + ช่องไฟแคบลง ให้โลโก้กับปุ่มอยู่แถวเดียวกันได้ถึงจอ 360px */}
       <header className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 pt-[calc(14px+env(safe-area-inset-top))] pb-2 sm:gap-x-3">
-        <div className="flex min-w-0 items-baseline gap-2 whitespace-nowrap">
-          <span className="text-[15px] font-bold tracking-[.12em] sm:text-[17px] sm:tracking-[.14em]" aria-label="GLORY VITAL">
-            GL<span className="tracking-normal text-brand-glow">✦</span>RY VITAL
-          </span>
+        <div className="flex min-w-0 items-center gap-2 whitespace-nowrap">
+          <BrandLogo />
           <span className="hidden text-[13px] font-medium text-muted-foreground sm:inline">{mode?.sub ?? "Live booking"}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">

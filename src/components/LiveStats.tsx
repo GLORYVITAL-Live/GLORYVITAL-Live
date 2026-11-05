@@ -17,6 +17,7 @@ import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components
 import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
 import { CountUp } from "@/components/motion";
 import { CeoLive } from "@/components/CeoLive";
+import { DayTarget, TargetPanel } from "@/components/LiveTargets";
 import { McCostView } from "@/components/McCostView";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast,
@@ -138,7 +139,7 @@ export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boole
         ))}
       </TabsList>
       <TabsContent value="overview">
-        {months.length ? <Overview latest={months[0].month} dataMonths={dataMonths} version={version} /> : empty}
+        {months.length ? <Overview latest={months[0].month} dataMonths={dataMonths} version={version} readOnly={readOnly} /> : empty}
       </TabsContent>
       <TabsContent value="compare">
         {months.length ? <CompareView dataMonths={dataMonths} version={version} /> : empty}
@@ -261,7 +262,7 @@ function KpiGrid({ cur, compare }: { cur: Totals; compare: { totals: Totals; lab
 
 const OVERVIEW_KEY = "glory_live_overview_mode";
 
-function Overview({ latest, dataMonths, version }: { latest: string; dataMonths: string[]; version: number }) {
+function Overview({ latest, dataMonths, version, readOnly }: { latest: string; dataMonths: string[]; version: number; readOnly: boolean }) {
   const mode = useLocal(OVERVIEW_KEY) === "year" ? "year" : "month";
   return (
     <>
@@ -273,12 +274,12 @@ function Overview({ latest, dataMonths, version }: { latest: string; dataMonths:
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
-      {mode === "year" ? <YearOverview latest={latest} dataMonths={dataMonths} version={version} /> : <MonthOverview latest={latest} dataMonths={dataMonths} version={version} />}
+      {mode === "year" ? <YearOverview latest={latest} dataMonths={dataMonths} version={version} /> : <MonthOverview latest={latest} dataMonths={dataMonths} version={version} readOnly={readOnly} />}
     </>
   );
 }
 
-function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMonths: string[]; version: number }) {
+function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: string; dataMonths: string[]; version: number; readOnly: boolean }) {
   const [month, setMonth] = useState(latest);
   const [metric, setMetric] = useState<MetricKey>("gmv");
   const filter = useFilter();
@@ -322,6 +323,8 @@ function MonthOverview({ latest, dataMonths, version }: { latest: string; dataMo
           crew: await loadCrew(byMonth.get(month) ?? []),
         })} />
       </FilterBar>
+      {/* เป้าหมาย GMV + % achieve (ตั้งเป้าล่วงหน้าได้ แม้เดือนนี้ยังไม่มีข้อมูล) */}
+      <TargetPanel month={month} sessions={data} platform={filter.platform} account={filter.account} lastDay={lastDay} readOnly={readOnly} />
       {!cur.lives ? (
         <StateBox title={`ไม่มีข้อมูลไลฟ์ ${monthLabel(month)}`}>ลองเปลี่ยนเดือน / แพลตฟอร์ม หรืออัปโหลดไฟล์ของเดือนนี้</StateBox>
       ) : (
@@ -1271,11 +1274,11 @@ function DayCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMo
       </div>
       {a === today || (!single && b === today) ? <Notice>วันนี้ยังไม่จบวัน ตัวเลขนับเฉพาะไลฟ์ที่อัปโหลดแล้ว</Notice> : null}
       {single ? (
-        <PeriodCompare report="ดูรายวัน" cur={dayPeriod(a)} prev={null} unit="hour" dataMonths={dataMonths} version={version} fixHint="หรือเลือกวันอื่น" />
+        <PeriodCompare report="ดูรายวัน" cur={dayPeriod(a)} prev={null} unit="hour" dataMonths={dataMonths} version={version} fixHint="หรือเลือกวันอื่น" targetDay={a} />
       ) : a === b ? <StateBox title="เลือกวันที่ต่างกัน">เลือกวันในช่อง &ldquo;เทียบกับ&rdquo; หรือกดปุ่มลัดด้านบน</StateBox> : (
         <PeriodCompare
           report={`เทียบวัน (${kindOf(b)})`}
-          cur={dayPeriod(a)} prev={dayPeriod(b)} unit="hour" dataMonths={dataMonths} version={version} fixHint="หรือเลือกวันอื่น" />
+          cur={dayPeriod(a)} prev={dayPeriod(b)} unit="hour" dataMonths={dataMonths} version={version} fixHint="หรือเลือกวันอื่น" targetDay={a} />
       )}
     </>
   );
@@ -1493,7 +1496,7 @@ const lastMonthOf = (p: Period) => monthOf(new Date(Date.parse(p.to) - 1).toISOS
  *   unit = กราฟตามเวลาแบ่งเป็นรายวัน หรือรายเดือน (นับจากวันเริ่ม/เดือนแรกของแต่ละช่วง)
  *   prev = null: ดูช่วงเดียว ไม่เทียบ (เช่น ดูรายวัน) — ไม่มี % เปลี่ยน / ไฟล์ส่งออกไม่มีคอลัมน์เทียบ
  */
-export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, fixHint, given, initialFilter }: {
+export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, version, fixHint, given, initialFilter, targetDay }: {
   /** ชื่อรายงานในไฟล์ที่ส่งออก เช่น "เทียบเดือน (MoM)" / "Campaign on Campaign" */
   report: string;
   cur: Period;
@@ -1506,6 +1509,8 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
   given?: { cur: LiveSession[]; prev: LiveSession[] };
   /** แพลตฟอร์ม / บัญชีที่เลือกไว้ตอนเปิด (ไม่ใส่ = ทุกบัญชี) */
   initialFilter?: { platform?: Platform | ""; account?: string };
+  /** ดูรายวัน: วัน "YYYY-MM-DD" ของ cur = แสดง % achieve ของวันนั้น (ไม่ใส่ = ไม่แสดง) */
+  targetDay?: string;
 }) {
   const filter = useFilter(initialFilter);
   const [metric, setMetric] = useState<MetricKey>("gmv");
@@ -1597,6 +1602,7 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
           }, target)} />
         </div>
       </FilterBar>
+      {targetDay ? <DayTarget date={targetDay} sessions={curData} platform={filter.platform} account={filter.account} /> : null}
       {missing.length ? (
         <Notice variant="warning" icon title={`ยังไม่ได้อัปโหลดข้อมูลเดือน ${missing.join(", ")}`}>
           {haveText(dataMonths)} · อัปโหลดไฟล์ของเดือนนั้นที่แท็บ &ldquo;อัปโหลด&rdquo; {fixHint}

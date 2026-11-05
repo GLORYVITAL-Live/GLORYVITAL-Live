@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { BrandLogo } from "@/components/BrandLogo";
 import { CalendarSteps } from "@/components/CalendarGuide";
 import { AppProviders } from "@/components/shared";
 import { SITE_HOST } from "@/lib/site";
@@ -15,9 +16,7 @@ export default function GuidePage() {
     <AppProviders>
     <main className="mx-auto max-w-[640px] space-y-8 px-4 pt-[calc(24px+env(safe-area-inset-top))] pb-16">
       <header>
-        <Link href="/" className="text-[15px] font-bold tracking-[.12em]">
-          GL<span className="tracking-normal text-brand-glow">✦</span>RY VITAL
-        </Link>
+        <Link href="/" className="inline-block"><BrandLogo /></Link>
         <h1 className="mt-3 text-2xl font-bold">วิธีใช้</h1>
         <nav className="mt-2 flex flex-wrap gap-2 text-sm">
           <a href="#calendar" className="rounded-full border bg-card px-3 py-1.5 font-semibold">📅 แชร์ปฏิทิน</a>

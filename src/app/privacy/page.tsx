@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { BrandLogo } from "@/components/BrandLogo";
 
 // นโยบายความเป็นส่วนตัว (หน้าสาธารณะ ไม่ต้อง login) — ใช้เป็นลิงก์ในหน้า OAuth consent ของ Google Cloud
 export const metadata: Metadata = {
@@ -13,9 +14,7 @@ export default function PrivacyPage() {
   return (
     <main className="mx-auto max-w-[760px] space-y-8 px-4 py-10 text-sm leading-relaxed">
       <header>
-        <Link href="/" className="text-[15px] font-bold tracking-[.12em]">
-          GL<span className="tracking-normal text-brand-glow">✦</span>RY VITAL
-        </Link>
+        <Link href="/" className="inline-block"><BrandLogo /></Link>
         <h1 className="mt-4 text-2xl font-bold">นโยบายความเป็นส่วนตัว</h1>
         <p className="text-muted-foreground">Privacy Policy · ปรับปรุงล่าสุด 9 ตุลาคม 2026</p>
       </header>
