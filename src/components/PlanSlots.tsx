@@ -11,6 +11,7 @@ import {
 } from "@/components/shared";
 import { DatePicker, DateRangePicker, MonthPicker, TimePicker } from "@/components/date-picker";
 import { ExportMenu } from "@/components/ExportMenu";
+import { agencyCampaign, agencySheet, clock, dayEn, hmText, mergeRanges } from "@/lib/agency-sheet";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -172,21 +173,6 @@ function useDraft(month: string) {
 /** สีหัวกลุ่ม Shopee (เหมือนชีตที่ทีมใช้) */
 const SHOPEE_COLORS: Record<string, string> = { Infinite: "00FFFF", MCN: "FF9900", "In house": "FFFF00" };
 const SHOPEE_ORDER = ["Infinite", "MCN", "In house"];
-const MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const dayEn = (d: string) => `${Number(d.slice(8))} ${MONTHS_EN[Number(d.slice(5, 7)) - 1]}`;
-const clock = (t: string) => `${Number(t.slice(0, 2))}:${t.slice(3, 5)}`; // "08:00" -> "8:00"
-const hmText = (min: number) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
-
-/** slot ของวันเดียวกันที่ต่อกัน (จบ = เริ่มของถัดไป) รวมเป็นช่วงเดียว เช่น 08:00–11:00 + 11:00–13:00 = 08:00–13:00 */
-function mergedRanges(list: Item[]) {
-  const out: { start: string; end: string; min: number }[] = [];
-  for (const x of [...list].sort((a, b) => dayOrder(a.start, a.platform) - dayOrder(b.start, b.platform))) {
-    const last = out.at(-1);
-    if (last && last.end === x.start) { last.end = x.end; last.min += lenOf(x); }
-    else out.push({ start: x.start, end: x.end, min: lenOf(x) });
-  }
-  return out;
-}
 
 /**
  * ตาราง Shopee แบบส่งทีม: หัวตาราง (ดำ) > หัวกลุ่ม (สีของกลุ่ม + ชั่วโมงรวม) > วันละแถว (ช่วงที่ต่อกันรวมเป็นช่วงเดียว)
@@ -204,7 +190,7 @@ function shopeeTeamSheet(name: string, groups: { agency: string; items: Item[] }
     for (const d of dates) {
       // สลับสีทีละสัปดาห์ (ชมพู / ฟ้า) ให้อ่านง่าย
       const week = Math.floor((Number(d.slice(8)) - 1) / 7);
-      for (const r of mergedRanges(g.items.filter((x) => x.date === d))) {
+      for (const r of mergeRanges(g.items.filter((x) => x.date === d), (x) => dayOrder(x.start, x.platform))) {
         rowStyles[rows.length] = { bg: week % 2 ? "CFE2F3" : "EAD1DC" };
         rows.push([dayEn(d), clock(r.start), clock(r.end), hmText(r.min), { v: r.min / 60, f: "money" }]);
       }
@@ -311,10 +297,19 @@ function planBook(month: string, columns: Column[], items: Item[], mode: Mode = 
     stat("รวมทั้งหมด", live),
   ];
 
-  // แผ่นงานแยกของแต่ละช่อง / Agency (รายการ slot ของกลุ่มนั้น + แถวรวม)
+  /** Campaign ของแพลน Agency = ของ slot เราวันเดียวกันในช่องนั้น (ช่องนั้นไม่มี slot = ดูจากช่องอื่น) */
+  const agencyCampaignOf = (x: Item) => {
+    const sameDay = live.filter((y) => !y.agency && y.date === x.date);
+    const sameChannel = sameDay.filter((y) => y.platform === x.platform);
+    return agencyCampaign((sameChannel.length ? sameChannel : sameDay).map((y) => y.campaign));
+  };
+  // แผ่นงานแยกของแต่ละช่อง (รายการ slot + แถวรวม) / Agency (หน้าตาตารางที่ทีมใช้คุยกับ Agency)
   const perGroup = used.map((c) => {
     const mine = sorted.filter((x) => own(c, x));
-    return { name: c.agency ? `${c.platform === SHOPEE ? "Shopee " : ""}${ownerLabel(c.agency)}` : c.platform, rows: [listHead, ...mine.map(listRow), totalOf(mine)] };
+    if (!c.agency) return { name: c.platform, rows: [listHead, ...mine.map(listRow), totalOf(mine)] };
+    return agencySheet(`${c.platform === SHOPEE ? "Shopee " : ""}${ownerLabel(c.agency)}`, month, mine.map((x) => (
+      { date: x.date, start: x.start, end: x.end, campaign: agencyCampaignOf(x), draft: !x.agencyId }
+    )));
   });
 
   const base: ExportSheet[] = [
