@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   CheckIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CopyIcon, MinusIcon, PlusIcon, TagIcon, Trash2Icon, Undo2Icon, UserIcon,
   UserXIcon, WandSparklesIcon, XIcon,
@@ -44,6 +44,8 @@ type PlanData = {
 };
 /** agency = แพลนของ Agency (เช่น "TDH") ไม่ระบุ / null = slot ของเรา (ลงชีต) / mcId = ลงชื่อ Mc ประจำไว้เลย */
 type NewSlot = { date: string; platform: string; start: string; end: string; campaign: string; agency?: string | null; mcId?: number | null };
+/** ช่องติ๊ก 1 ช่อง (ช่อง + วัน + เวลา) */
+type SlotRef = { date: string; platform: string; start: string; end: string };
 /** ช่วงวันที่ตั้ง Campaign ไว้ (slot ที่ติ๊กเพิ่มทีหลังในช่วงนี้ได้ Campaign นี้อัตโนมัติ) platform = ALL = ทุกแพลตฟอร์ม */
 type CampaignRange = { from: string; to: string; platform: string; campaign: string };
 /**
@@ -592,27 +594,31 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     }
     update((d) => withMc(on ? d : withOn(d, slot, null), k, mcId));
   }
+  /** ลงชื่อ / เอาชื่อ Mc ประจำหลายช่อง (ช่องที่แก้ไม่ได้ข้าม นับไว้ใน kept) */
+  function paintMc(d: Draft, slots: SlotRef[], mcId: number, off: boolean) {
+    let kept = 0, changed = 0;
+    let next = d;
+    for (const s of slots) {
+      const k = keyOf(s);
+      const ex = existingMap.get(k);
+      if (off) {
+        if (mcOf(next, k) === mcId) { next = ex ? withMc(next, k, null) : withOff(next, k, null); changed++; }
+      } else if (mcOf(next, k) !== mcId) {
+        if ((ex?.mc && !ex.mc.free) || otherOwner(next, k, null, s.platform) !== undefined || mcBusy(next, mcId, s)) kept++;
+        else if (!isOn(next, k, null) && channelClash(next, s, null)) kept++; // ทับกับ Agency ในบัญชีเดียวกัน
+        else { next = withMc(isOn(next, k, null) ? next : withOn(next, s, null), k, mcId); changed++; }
+      }
+    }
+    return { next, kept, changed };
+  }
   /** หัวคอลัมน์ด้วย Mc ประจำ: ลงชื่อทุกวัน (ตั้งแต่วันนี้) ถ้าลงครบแล้ว = ยกเลิกทั้งหมด */
   function brushColumn(platform: string, t: { start: string; end: string }, mcId: number) {
     const today = todayKey();
     const slots = daysOf(month).filter((d) => d >= today).map((date) => ({ date, platform, start: t.start, end: t.end }));
     if (!slots.length) { toast("เดือนนี้ผ่านไปแล้ว", "error"); return; }
     const allOn = slots.every((s) => mcOf(draft, keyOf(s)) === mcId || existingMap.get(keyOf(s))?.mc?.personId === mcId);
-    let kept = 0;
-    let next = draft;
-    for (const s of slots) {
-      const k = keyOf(s);
-      const ex = existingMap.get(k);
-      if (allOn) {
-        if (mcOf(next, k) === mcId) next = ex ? withMc(next, k, null) : withOff(next, k, null);
-      } else if (mcOf(next, k) !== mcId) {
-        if ((ex?.mc && !ex.mc.free) || otherOwner(next, k, null, platform) !== undefined || mcBusy(next, mcId, s)) kept++;
-        else if (!isOn(next, k, null) && channelClash(next, s, null)) kept++; // ทับกับ Agency ในบัญชีเดียวกัน
-        else next = withMc(isOn(next, k, null) ? next : withOn(next, s, null), k, mcId);
-      }
-    }
-    const result = next;
-    update(() => result);
+    const { next, kept } = paintMc(draft, slots, mcId, allOn);
+    update(() => next);
     const name = `Mc ${regulars.find((m) => m.id === mcId)?.name ?? ""}`;
     toast(`${allOn ? `ยกเลิก ${name}` : `ลงชื่อ ${name}`} ${platformLabel(platform)} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
       + (kept ? ` (ข้าม ${kept} slot ที่มีคนจอง / เป็นของ Agency / เวลาทับ)` : ""));
@@ -644,6 +650,23 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     update((d) => withOn(d, slot, agency));
   }
 
+  /** ติ๊ก / เอาติ๊กออกหลายช่อง (ช่องที่แก้ไม่ได้ข้าม นับไว้ใน kept · ไม่ย้ายจากอีกฝั่งให้ทีละหลายช่อง) */
+  function paintTick(d: Draft, slots: SlotRef[], agency: string | null, off: boolean) {
+    let kept = 0, changed = 0;
+    let next = d;
+    for (const s of slots) {
+      const k = keyOf(s);
+      if (isOn(next, k, agency) !== off) continue; // เป็นแบบที่ต้องการอยู่แล้ว
+      if (off) {
+        if (locked(k, agency)) kept++;
+        else { next = withOff(next, k, agency); changed++; }
+      } else if (otherOwner(next, k, agency, s.platform) !== undefined) kept++; // เป็นของอีกฝั่งอยู่แล้ว
+      else if (channelClash(next, s, agency)) kept++; // ทับเวลากับอีกฝั่งในบัญชีเดียวกัน
+      else { next = withOn(next, s, agency); changed++; }
+    }
+    return { next, kept, changed };
+  }
+
   /** กดหัวคอลัมน์: ติ๊กเวลานี้ทุกวัน (ตั้งแต่วันนี้) ถ้าติ๊กครบแล้ว = เอาติ๊กออกทั้งหมด (slot ที่มีคนจอง / เป็นของอีกฝั่ง คงไว้) */
   function toggleColumn(platform: string, t: { start: string; end: string }, agency: string | null = null) {
     if (readOnly) { viewOnly(); return; }
@@ -652,23 +675,26 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     const slots = daysOf(month).filter((d) => d >= today).map((date) => ({ date, platform, start: t.start, end: t.end }));
     if (!slots.length) { toast("เดือนนี้ผ่านไปแล้ว", "error"); return; }
     const allOn = slots.every((s) => isOn(draft, keyOf(s), agency));
-    let kept = 0;
-    let next = draft;
-    for (const s of slots) {
-      const k = keyOf(s);
-      if (allOn) {
-        if (locked(k, agency)) kept++;
-        else next = withOff(next, k, agency);
-      } else if (!isOn(next, k, agency)) {
-        if (otherOwner(next, k, agency, platform) !== undefined) kept++; // เป็นของอีกฝั่งอยู่แล้ว ไม่ย้ายให้ทั้งคอลัมน์
-        else if (channelClash(next, s, agency)) kept++; // ทับเวลากับอีกฝั่งในบัญชีเดียวกัน
-        else next = withOn(next, s, agency);
-      }
-    }
-    const result = next;
-    update(() => result);
+    const { next, kept } = paintTick(draft, slots, agency, allOn);
+    update(() => next);
     toast(`${allOn ? "เอาติ๊กออก" : "ติ๊ก"} ${agency ? `${ownerLabel(agency)} ` : ""}${platformLabel(platform)} ${t.start}–${t.end} ตั้งแต่วันนี้ถึงสิ้นเดือน`
       + (kept ? ` (ข้าม ${kept} slot ที่มีคนจองแล้ว / เป็นของอีกฝั่ง / เวลาทับกับอีกฝั่ง)` : ""));
+  }
+
+  /** ช่องนี้ติ๊กอยู่ไหม (ติ๊กเป็น Mc ประจำ = ดูว่าลงชื่อ Mc คนนี้ในร่างแล้วหรือยัง) — ช่องแรกที่กดลากใช้ตัดสินว่าติ๊ก หรือเอาติ๊กออก */
+  function tickedNow(slot: SlotRef, agency: string | null) {
+    const k = keyOf(slot);
+    return !agency && brushId ? mcOf(draft, k) === brushId : isOn(draft, k, agency);
+  }
+  /** คลิกค้างแล้วลาก: ติ๊ก / เอาติ๊กออกหลายช่องของกลุ่มเดียวกัน (ข้ามวันที่ผ่านไปแล้ว + ช่องที่แก้ไม่ได้) เห็นผลในตารางอยู่แล้ว จึงแจ้งเฉพาะเมื่อมีช่องที่ข้าม */
+  function paintCells(cells: SlotRef[], agency: string | null, off: boolean) {
+    const today = todayKey();
+    const slots = cells.filter((s) => s.date >= today);
+    const { next, kept, changed } = !agency && brushId ? paintMc(draft, slots, brushId, off) : paintTick(draft, slots, agency, off);
+    if (changed) update(() => next);
+    const past = cells.length - slots.length;
+    const notes = [past ? `ข้าม ${past} ช่องของวันที่ผ่านไปแล้ว` : "", kept ? `ข้าม ${kept} ช่องที่มีคนจอง / เป็นของอีกฝั่ง / เวลาทับ` : ""].filter(Boolean);
+    if (notes.length) toast(`${off ? "เอาติ๊กออก" : "ติ๊ก"} ${changed} ช่อง (${notes.join(" · ")})`, changed ? undefined : "error");
   }
 
   // เพิ่ม slot ลงร่าง (ข้ามที่มีอยู่แล้ว / เวลาที่อีกฝั่งใช้อยู่ ถ้าเป็นของเดิมที่กดลบไว้ = ยกเลิกการลบ)
@@ -1015,16 +1041,19 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
             <>
               <p className="mb-2 text-xs text-muted-foreground">
                 {readOnly ? "ชี้ที่ช่องเพื่อดูรายละเอียด · กดวันที่ = ดู slot + Campaign ของวันนั้น" : mode === "shopee"
-                  ? "แพลน Shopee (In house / Agency Infinite / MCN) เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · ช่วงเวลาเดียวกันเป็นของกลุ่มใดกลุ่มหนึ่ง กดช่องของอีกกลุ่ม = ย้ายมา · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้"
-                  : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต"}
+                  ? "แพลน Shopee (In house / Agency Infinite / MCN) เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · ช่วงเวลาเดียวกันเป็นของกลุ่มใดกลุ่มหนึ่ง กดช่องของอีกกลุ่ม = ย้ายมา · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้"
+                  : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต"}
               </p>
               <TickView
                 month={month}
                 columns={shownColumns}
                 itemMap={shownMap}
                 tagIndex={tagIndex}
+                brush={brushId}
                 onToggle={toggleCell}
                 onColumn={toggleColumn}
+                isTicked={tickedNow}
+                onPaint={readOnly ? undefined : paintCells}
                 onOpenDay={mode === "tiktok" ? setOpenDay : undefined}
               />
             </>
@@ -1054,7 +1083,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
       ) : null}
 
       {changes.total && !readOnly ? (
-        <div className="slot-bar-open fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
+        <div data-plan-bar className="slot-bar-open fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
           <div className="mx-auto flex max-w-[1200px] items-center gap-2">
             <div className="min-w-0 flex-1 text-sm">
               <strong>ร่าง {monthLabel(month)}</strong>
@@ -1139,14 +1168,29 @@ function Legend({ tick }: { tick: boolean }) {
   );
 }
 
+type TickState = "none" | "other" | "del" | "have" | "new" | "assign" | "cancel" | "taken" | "noMc";
+
+/** หน้าตาช่องระหว่างลาก (ยังไม่ลงร่างจนกว่าจะปล่อยเมาส์): เปลี่ยนเฉพาะช่องที่จะเปลี่ยนจริง ช่องที่มีคนจอง / เป็นของอีกฝั่ง คงเดิม */
+function previewState(st: TickState, item: Item | undefined, preview: "on" | "off", brush: number | null): TickState {
+  if (preview === "on") {
+    if (brush) return st === "none" || st === "del" || st === "have" || st === "new" ? "assign" : st;
+    return st === "none" ? "new" : st === "del" ? "have" : st;
+  }
+  if (brush) return item?.assign?.id === brush ? (item.existing ? "have" : "none") : st;
+  if (st === "have") return "del";
+  if (st === "new") return "none";
+  return st === "assign" ? (item?.existing ? "del" : "none") : st;
+}
+
 /**
  * ช่องติ๊ก 1 slot ของคอลัมน์ (เจ้าของ = agency)
  *   slot เดียวกันที่เป็นของอีกฝั่ง (ของเรา / Agency) แสดงเป็นขีดจาง กด = ย้ายมาฝั่งนี้
  */
-function Tick({ item, other, agency, label, onClick }: {
-  item: Item | undefined; other: Item | undefined; agency: string | null; label: string; onClick: () => void;
+function Tick({ item, other, agency, label, preview, brush, onClick }: {
+  item: Item | undefined; other: Item | undefined; agency: string | null; label: string;
+  preview: "on" | "off" | null; brush: number | null; onClick: () => void;
 }) {
-  const st = !item || (item.deleting && other) ? (other ? "other" : "none")
+  const now: TickState = !item || (item.deleting && other) ? (other ? "other" : "none")
     : item.deleting ? "del"
       : item.agency ? (item.agencyId ? "have" : "new")
         : item.assign ? "assign"
@@ -1154,6 +1198,7 @@ function Tick({ item, other, agency, label, onClick }: {
           : item.existing.mc?.cancelled ? "cancel" : item.existing.mc?.name ? "taken"
             // Admin ลงแล้วแต่ยังไม่มี Mc = ยังต้องหา Mc (ลบไม่ได้เพราะมี Admin)
             : !canDelete(item.existing) ? "noMc" : "have";
+  const st = preview ? previewState(now, item, preview, brush) : now;
   return (
     <button
       type="button"
@@ -1183,19 +1228,132 @@ function Tick({ item, other, agency, label, onClick }: {
   );
 }
 
-/** ตารางติ๊ก: แถว = วันทั้งเดือน, คอลัมน์ = ช่อง x ช่วงเวลา */
-function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpenDay }: {
+/** ช่วงที่กำลังลาก: กลุ่ม g, แถววัน r0–r1, ช่วงเวลา i0–i1 · off = เอาติ๊กออก (ตามช่องแรกที่กด) */
+type DragRange = { g: number; r0: number; i0: number; r1: number; i1: number; off: boolean };
+const DRAG_ZONE = 40; // ลากเข้าใกล้ขอบตารางเท่านี้ (px) = เลื่อนตาราง
+const DRAG_SPEED = 16; // px ต่อเฟรมที่ชิดขอบสุด
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+const between = (v: number, a: number, b: number) => v >= Math.min(a, b) && v <= Math.max(a, b);
+/** แถววัน + กลุ่ม + ช่วงเวลาของตารางติ๊กที่ element นี้อยู่ (ไม่อยู่ในแถว / ช่อง = null) */
+function cellAt(el: Element | null) {
+  const r = el?.closest<HTMLElement>("tr[data-r]")?.dataset.r;
+  const td = el?.closest<HTMLElement>("td[data-g]")?.dataset;
+  return { r: r === undefined ? null : Number(r), g: td ? Number(td.g) : null, i: td ? Number(td.i) : null };
+}
+
+/** ตารางติ๊ก: แถว = วันทั้งเดือน, คอลัมน์ = ช่อง x ช่วงเวลา · คลิกค้างแล้วลาก (เมาส์) = ติ๊กหลายช่องในกลุ่มเดียวกัน */
+function TickView({ month, columns, itemMap, tagIndex, brush, onToggle, onColumn, isTicked, onPaint, onOpenDay }: {
   month: string;
   columns: Column[];
   itemMap: Map<string, Item>;
   tagIndex: (p: string) => number;
+  brush: number | null;
   onToggle: (date: string, platform: string, t: { start: string; end: string }, agency: string | null) => void;
   onColumn: (platform: string, t: { start: string; end: string }, agency: string | null) => void;
+  isTicked: (slot: SlotRef, agency: string | null) => boolean;
+  onPaint?: (cells: SlotRef[], agency: string | null, off: boolean) => void; // ไม่ระบุ = ลากไม่ได้ (ดูอย่างเดียว)
   onOpenDay?: (d: string) => void; // ไม่ระบุ = กดวันที่ไม่ได้ (แพลน Shopee)
 }) {
   const days = daysOf(month);
   const today = todayKey();
   const items = [...itemMap.values()];
+  const boxRef = useRef<HTMLDivElement>(null);
+  const dragged = useRef(false); // ลากแล้ว: ไม่นับ click ที่ตามมาตอนปล่อยเมาส์
+  const [drag, setDrag] = useState<DragRange | null>(null);
+
+  /** กดค้างที่ช่องติ๊ก: ยังไม่เริ่มลากจนกว่าจะออกจากช่องแรก (กดแล้วปล่อยในช่องเดิม = click ปกติ) ปล่อยเมาส์แล้วค่อยลงร่างทีเดียว */
+  function startDrag(e: ReactPointerEvent) {
+    dragged.current = false;
+    const box = boxRef.current;
+    const el = e.target instanceof Element ? e.target : null;
+    if (!onPaint || !box || e.pointerType !== "mouse" || e.button !== 0 || !el?.closest("[role=checkbox]")) return;
+    const { r: r0, g, i: i0 } = cellAt(el);
+    if (r0 === null || g === null || i0 === null) return;
+    const paint = onPaint;
+    const col = columns[g];
+    const agency = col.agency ?? null;
+    const off = isTicked({ date: days[r0], platform: col.platform, ...col.times[i0] }, agency);
+    let x = e.clientX, y = e.clientY, raf = 0, stopped = false;
+    let cur: DragRange | null = null;
+
+    // ส่วนที่เห็นแถววันจริง: ใต้หัวตาราง / ขวาของคอลัมน์วันที่ / เหนือแถบบันทึก
+    const edges = () => {
+      const rect = box.getBoundingClientRect();
+      const bar = document.querySelector("[data-plan-bar]")?.getBoundingClientRect().top ?? innerHeight;
+      return {
+        rect,
+        left: box.querySelector("tbody th")?.getBoundingClientRect().right ?? rect.left,
+        right: Math.min(rect.left + box.clientWidth, innerWidth),
+        top: Math.max(box.querySelector("thead")?.getBoundingClientRect().bottom ?? rect.top, 0),
+        bottom: Math.min(rect.top + box.clientHeight, innerHeight, bar),
+      };
+    };
+    // เมาส์ออกนอกตาราง / ข้ามไปกลุ่มอื่น = ยึดกับแถว / ช่วงเวลาที่ขอบ (ลากได้แค่กลุ่มเดียว ไม่ติ๊กข้ามช่องโดยไม่ตั้งใจ)
+    const track = () => {
+      const { left, right, top, bottom } = edges();
+      const p = cellAt(document.elementFromPoint(clamp(x, left + 1, right - 1), clamp(y, top + 1, bottom - 1)));
+      const was = { r: cur?.r1 ?? r0, i: cur?.i1 ?? i0 };
+      const r1 = p.r ?? was.r;
+      const i1 = p.g === null || p.i === null ? was.i : p.g === g ? p.i : p.g > g ? col.times.length - 1 : 0;
+      if (r1 === was.r && i1 === was.i) return;
+      if (!cur) { dragged.current = true; raf = requestAnimationFrame(scroll); }
+      cur = { g, r0, i0, r1, i1, off };
+      setDrag(cur);
+    };
+    // ใกล้ขอบ = เลื่อนตาราง (ตารางสุดแล้วแต่ยังโดนจอ / แถบบันทึกบังอยู่ = เลื่อนหน้าต่อ)
+    const scroll = () => {
+      const { rect, left, right, top, bottom } = edges();
+      const speed = (over: number) => Math.round(clamp(over / DRAG_ZONE, 0, 1) * DRAG_SPEED);
+      const dy = speed(y - (bottom - DRAG_ZONE)) - speed(top + DRAG_ZONE - y);
+      const dx = speed(x - (right - DRAG_ZONE)) - speed(left + DRAG_ZONE - x);
+      if (dx || dy) {
+        const before = box.scrollTop;
+        box.scrollBy(dx, dy);
+        if (dy && box.scrollTop === before && (dy > 0 ? rect.top + box.clientHeight > bottom : rect.top < 0)) window.scrollBy(0, dy);
+        track();
+      }
+      raf = requestAnimationFrame(scroll);
+    };
+    const finish = () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("keydown", esc);
+      setDrag(null);
+    };
+    const move = (ev: PointerEvent) => {
+      if (stopped) return;
+      x = ev.clientX; y = ev.clientY;
+      track();
+    };
+    const up = () => {
+      const range = cur;
+      finish();
+      if (range) {
+        const cells = days.flatMap((date, r) => (between(r, range.r0, range.r1)
+          ? col.times.filter((_, i) => between(i, range.i0, range.i1)).map((t) => ({ date, platform: col.platform, start: t.start, end: t.end })) : []));
+        paint(cells, agency, off);
+      }
+      setTimeout(() => { dragged.current = false; }); // หลัง click ที่ตามมาตอนปล่อยเมาส์
+    };
+    // Esc = ยกเลิกการลาก (click ตอนปล่อยเมาส์ยังไม่นับ)
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      cur = null; stopped = true;
+      cancelAnimationFrame(raf);
+      setDrag(null);
+    };
+    const cancel = () => { cur = null; finish(); dragged.current = false; };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", esc);
+  }
+
   const colKey = (c: Column) => `${c.platform}|${c.agency ?? ""}`;
   // กลุ่มของ Agency พื้นสีอ่อนแยกจากช่องหลัก
   const tint = (c: Column) => (c.agency ? "bg-p0/[0.06]" : "");
@@ -1213,7 +1371,12 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
     .filter((x) => x.platform === c.platform && x.agency === (c.agency ?? null) && (!d || x.date === d) && !x.deleting && !x.existing?.mc?.cancelled)
     .reduce((h, x) => h + lenOf(x) / 60, 0);
   return (
-    <div className="max-h-[78vh] overflow-auto rounded-xl border bg-card">
+    <div
+      ref={boxRef}
+      onPointerDown={startDrag}
+      onClickCapture={(e) => { if (dragged.current) { e.preventDefault(); e.stopPropagation(); } }}
+      className={cn("max-h-[78vh] overflow-auto rounded-xl border bg-card", drag && "select-none")}
+    >
       <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
         <thead>
           <tr>
@@ -1263,12 +1426,12 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
           </tr>
         </thead>
         <tbody>
-          {days.map((d) => {
+          {days.map((d, r) => {
             const wd = parseKey(d).getUTCDay();
             const weekend = wd === 0 || wd === 6;
             const camps = [...new Set(items.filter((x) => x.date === d && !x.deleting).map((x) => x.campaign).filter(Boolean))];
             return (
-              <tr key={d} className={cn(d < today && "opacity-55", weekend && "bg-muted/40")}>
+              <tr key={d} data-r={r} className={cn(d < today && "opacity-55", weekend && "bg-muted/40")}>
                 <th
                   scope="row"
                   className={cn(
@@ -1287,22 +1450,31 @@ function TickView({ month, columns, itemMap, tagIndex, onToggle, onColumn, onOpe
                     </button>
                   ) : <span className={cn("px-1", d === today && "text-primary")}>{fmtDayNum(d)}</span>}
                 </th>
-                {columns.flatMap((c) => [...c.times.map((t, i) => {
+                {columns.flatMap((c, g) => [...c.times.map((t, i) => {
                   const k = keyOf({ platform: c.platform, date: d, start: t.start, end: t.end });
                   const agency = c.agency ?? null;
+                  // ในกรอบที่กำลังลาก (วันที่ผ่านไปแล้วไม่นับ)
+                  const inDrag = !!drag && drag.g === g && between(r, drag.r0, drag.r1) && between(i, drag.i0, drag.i1) && d >= today;
                   return (
-                    <td key={`${colKey(c)}|${t.start}|${t.end}`} className={cn("border-b px-1 py-1 text-center", i === 0 && "border-l", tint(c), night(c, t) && "bg-p3/[0.06]")}>
+                    <td
+                      key={`${colKey(c)}|${t.start}|${t.end}`}
+                      data-g={g}
+                      data-i={i}
+                      className={cn("border-b px-1 py-1 text-center", i === 0 && "border-l", tint(c), night(c, t) && "bg-p3/[0.06]", inDrag && "bg-primary/10")}
+                    >
                       <Tick
                         item={itemMap.get(ownKey(k, agency))}
                         other={liveAt.get(k)?.find((x) => x.agency !== agency)}
                         agency={agency}
                         label={`${fmtDayNum(d)} ${c.agency ? `${ownerLabel(c.agency)} ` : ""}${platformLabel(c.platform)} ${t.start}–${t.end}`}
+                        preview={inDrag ? (drag.off ? "off" : "on") : null}
+                        brush={agency ? null : brush}
                         onClick={() => onToggle(d, c.platform, t, agency)}
                       />
                     </td>
                   );
                 }), (
-                  <td key={`${colKey(c)}|sum`} className={cn("border-b px-1.5 py-1 text-right text-xs font-semibold tabular-nums", tint(c))}>
+                  <td key={`${colKey(c)}|sum`} data-g={g} data-i={c.times.length - 1} className={cn("border-b px-1.5 py-1 text-right text-xs font-semibold tabular-nums", tint(c))}>
                     {groupHours(c, d) ? num(groupHours(c, d)) : <span className="font-normal text-muted-foreground/50">–</span>}
                   </td>
                 )])}
