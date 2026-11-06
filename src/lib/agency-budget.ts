@@ -1,5 +1,5 @@
-// งบของกลุ่มภายนอกในหน้า Plan Slot Live (ตาราง agency_rates · SQL 20261125000000_agency_rates)
-//   ตั้งเรทต่อชั่วโมงต่อกลุ่มต่อเดือน งบของเดือน = เรท × ชั่วโมงในแพลน — ฟังก์ชันล้วน ใช้ทั้งหน้าเว็บและเซิร์ฟเวอร์ (เทสได้)
+// งบของกลุ่มภายนอกในหน้า Cost (ตาราง agency_rates · SQL 20261125000000_agency_rates)
+//   ตั้งเรทต่อชั่วโมงต่อกลุ่มต่อเดือน งบของเดือน = เรท × ชั่วโมงในหน้า Plan Slot Live — ฟังก์ชันล้วน ใช้ทั้งหน้าเว็บและเซิร์ฟเวอร์ (เทสได้)
 
 import type { ExportSheet } from "@/lib/export";
 
@@ -7,6 +7,12 @@ const RATE_MAX = 1_000_000;
 
 /** In house เป็นทีมของเราเอง ไม่มีงบแบบกลุ่มภายนอก */
 export const hasBudget = (agency: string) => agency !== "In house";
+
+/** ชื่อกลุ่มที่รับจากหน้าเว็บ (ตัวอักษร / ตัวเลข / ช่องว่าง สั้นๆ) */
+export const cleanAgency = (v: unknown) => {
+  const t = String(v ?? "").trim().replace(/\s+/g, " ");
+  return /^[\p{L}\p{N} ._-]{1,30}$/u.test(t) ? t : null;
+};
 
 /** เรทที่บันทึกได้: ตัวเลขมากกว่า 0 และไม่สูงผิดปกติ */
 export const validRate = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0 && v <= RATE_MAX;

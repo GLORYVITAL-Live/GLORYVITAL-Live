@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
-  GraduationCapIcon, PackageIcon, PackageOpenIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
+  GraduationCapIcon, PackageIcon, PackageOpenIcon, ShoppingBagIcon, SunIcon, WalletIcon, type LucideIcon,
 } from "lucide-react";
 import { boardsOf, type Board } from "@/lib/live-team";
 import type { Me, OwnerScope, Role } from "@/lib/types";
@@ -21,6 +21,7 @@ import { AppProviders, IconButton, LoadingBlock, Notice, StateBox, useToast } fr
 const Loading = () => <LoadingBlock />;
 const Nothing = () => null;
 const CeoLive = dynamic(() => import("@/components/CeoLive").then((m) => m.CeoLive), { loading: Loading });
+const CostPage = dynamic(() => import("@/components/CostPage").then((m) => m.CostPage), { loading: Loading });
 const EquipmentPage = dynamic(() => import("@/components/EquipmentPage").then((m) => m.EquipmentPage), { loading: Loading });
 const HomeView = dynamic(() => import("@/components/HomeView").then((m) => m.HomeView), { loading: Loading });
 const LiveStats = dynamic(() => import("@/components/LiveStats").then((m) => m.LiveStats), { loading: Loading });
@@ -77,6 +78,11 @@ export const MODES = {
     hint: "ยอดไลฟ์ TikTok / Shopee จากไฟล์ Export เทียบเดือนก่อน (MoM) ปีก่อน (YoY) และเทียบแคมเปญกับช่วงเดียวกันของเดือนก่อน",
     rule: "",
   },
+  cost: {
+    sub: "Cost", title: "Cost", label: "Cost",
+    hint: "ค่าใช้จ่ายทีมไลฟ์ในหน้าเดียว: ค่าจ้าง Mc / Admin · ค่ารถ · งบ Agency เทียบ GMV แยกตามแพลตฟอร์มและกลุ่มที่ไลฟ์",
+    rule: "",
+  },
   equipment: {
     sub: "Equipment", title: "อุปกรณ์โปรดักชั่น", label: "อุปกรณ์",
     hint: "ทะเบียนอุปกรณ์ไลฟ์ / โปรดักชั่น: มีอะไรบ้าง อยู่ที่ไหน สถานะ ยี่ห้อ รุ่น Serial วันที่ซื้อ ราคา และรูป",
@@ -108,16 +114,16 @@ export const MODES = {
  * หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ / Plan Slot Live (Owner ที่ติ๊กสิทธิ์)
  *   + CEO Live (บัญชี Marketing — Owner ดูได้ที่แท็บ CEO Live ในหน้าสถิติไลฟ์) + เทรนนิ่ง (ทุกคน)
  */
-type Page = Role | "home" | "proof" | "stats" | "plan" | "ceo" | "equipment" | "training" | "borrow";
+type Page = Role | "home" | "proof" | "stats" | "cost" | "plan" | "ceo" | "equipment" | "training" | "borrow";
 /** ลำดับในเมนูเลือกหน้า */
-const PAGE_ORDER: Page[] = ["home", "owner", "stats", "ceo", "plan", "mc", "admin", "proof", "equipment", "borrow", "training"];
+const PAGE_ORDER: Page[] = ["home", "owner", "stats", "cost", "ceo", "plan", "mc", "admin", "proof", "equipment", "borrow", "training"];
 /** ชื่อสั้น + ไอคอนในแถบเมนู */
 const PAGE_SHORT: Record<Page, string> = {
-  home: "หน้าแรก", owner: "เจ้าของ", stats: "สถิติไลฟ์", ceo: "CEO Live", plan: "แพลน slot", mc: "Mc", admin: "Admin", proof: "หลักฐานไลฟ์", equipment: "อุปกรณ์",
+  home: "หน้าแรก", owner: "เจ้าของ", stats: "สถิติไลฟ์", cost: "Cost", ceo: "CEO Live", plan: "แพลน slot", mc: "Mc", admin: "Admin", proof: "หลักฐานไลฟ์", equipment: "อุปกรณ์",
   training: "เทรนนิ่ง", borrow: "ขอยืม",
 };
 const PAGE_ICON: Record<Page, LucideIcon> = {
-  home: HouseIcon, owner: BriefcaseIcon, stats: ChartColumnIcon, ceo: CrownIcon, plan: CalendarRangeIcon, mc: MicIcon, admin: HeadsetIcon, proof: CameraIcon, equipment: PackageIcon,
+  home: HouseIcon, owner: BriefcaseIcon, stats: ChartColumnIcon, cost: WalletIcon, ceo: CrownIcon, plan: CalendarRangeIcon, mc: MicIcon, admin: HeadsetIcon, proof: CameraIcon, equipment: PackageIcon,
   training: GraduationCapIcon, borrow: PackageOpenIcon,
 };
 
@@ -165,6 +171,8 @@ function Shell({ me }: { me: Me | null }) {
     ...(me && (me.admin || me.owner?.see.mc || me.owner?.see.proofs) ? ["proof" as const] : []),
     // Data analytics: Owner ที่ติ๊กสิทธิ์ (จัดการได้ หรือ ดูได้อย่างเดียว)
     ...(me?.owner?.see.analytics ? ["stats" as const] : []),
+    // Cost: Owner ที่เห็นตัวเลขเงินอย่างน้อยหนึ่งส่วน (จัดการ Mc / Admin / แพลนได้ · ดูอย่างเดียวไม่เห็นเงิน)
+    ...(me?.owner && (me.owner.mc || me.owner.admin || me.owner.plan) ? ["cost" as const] : []),
     // CEO Live: บัญชี Marketing (Owner ที่เข้าสถิติไลฟ์ได้ ดูที่แท็บ CEO Live ในหน้านั้นแทน)
     ...(me?.marketing && !me.owner?.see.analytics ? ["ceo" as const] : []),
     // Plan Slot Live: Owner ที่มีสิทธิ์นี้แต่ไม่มีหน้าเจ้าของ (คนอื่นใช้ที่หน้าเจ้าของ > ตาราง slot)
@@ -273,7 +281,7 @@ function Shell({ me }: { me: Me | null }) {
   const registered = pages.length > 0;
   const name = me && role ? displayName(me, role)
     : me && page === "proof" ? me.owner?.name || me.admin?.name || ""
-      : me && (page === "home" || page === "stats" || page === "plan") ? me.owner?.name || ""
+      : me && (page === "home" || page === "stats" || page === "cost" || page === "plan") ? me.owner?.name || ""
         : me && page === "ceo" ? me.marketing?.name || ""
           : me && page === "equipment" ? me.owner?.name || me.admin?.name || ""
             : me && page === "training" ? me.owner?.name || (me.mc ? `Mc ${me.mc.name}` : "") || me.admin?.name || me.marketing?.name || ""
@@ -417,7 +425,8 @@ function Shell({ me }: { me: Me | null }) {
       ) : null}
       {me && registered && page === "home" ? <HomeView go={goTo} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
-      {me && registered && page === "stats" ? <LiveStats readOnly={!me.owner?.analytics} cost={!!me.owner?.mc} /> : null}
+      {me && registered && page === "stats" ? <LiveStats readOnly={!me.owner?.analytics} /> : null}
+      {me && registered && page === "cost" ? <CostPage /> : null}
       {me && registered && page === "plan" ? <PlanSlots readOnly={!me.owner?.plan} /> : null}
       {me && registered && page === "ceo" ? <CeoLive /> : null}
       {me && registered && page === "equipment" ? <EquipmentPage /> : null}

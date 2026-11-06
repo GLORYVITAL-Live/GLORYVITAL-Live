@@ -1,22 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { BANDS } from "@/lib/campaign";
-import { fmtMonthShort, monthKey, money, num } from "@/lib/format";
+import { fmtMonthShort, money, num } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import type { CostCell, CostReport } from "@/lib/mc-cost-calc";
 import { cn } from "@/lib/utils";
 import { ChangeText } from "@/components/LiveCharts";
-import { MonthPicker } from "@/components/MonthPicker";
 import { CountUp } from "@/components/motion";
-import { IconButton, LoadError, LoadingBlock, StateBox, api } from "@/components/shared";
+import { LoadError, LoadingBlock, StateBox, api } from "@/components/shared";
 import { SortHead, sortRows, STICKY_CELL, STICKY_HEAD, type SortState } from "@/components/SortHead";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
- * สถิติไลฟ์ > ความคุ้มค่า Mc: ค่าจ้าง Mc เทียบยอดขายของคิวเดียวกัน (ไม่นับ Mc ประจำ) — src/lib/mc-cost-calc.ts
+ * หน้า Cost > ความคุ้มค่า Mc: ค่าจ้าง Mc เทียบยอดขายของคิวเดียวกัน (ไม่นับ Mc ประจำ) — src/lib/mc-cost-calc.ts
  *   แยกดูตาม ช่วงเวลา / ช่อง / Mc / แคมเปญ / แพลตฟอร์ม · เฉพาะคนที่เห็นค่าจ้าง Mc
  */
 
@@ -46,8 +44,7 @@ function groupBy(cells: CostCell[], dim: Dim): Row[] {
   return dim === "band" ? rows.sort((a, b) => BANDS.indexOf(a.key as never) - BANDS.indexOf(b.key as never)) : rows.sort((a, b) => b.cost - a.cost);
 }
 
-export function McCostView() {
-  const [month, setMonth] = useState(() => monthKey());
+export function McCostView({ month }: { month: string }) {
   const saved = useLocal(DIM_KEY);
   const dim: Dim = DIMS.some(([k]) => k === saved) ? (saved as Dim) : "band";
   const [sort, setSort] = useState<SortState>(null);
@@ -65,16 +62,9 @@ export function McCostView() {
     return () => { alive = false; };
   }, [month, attempt]);
 
-  const nav = (
-    <div className="my-2 flex items-center justify-between gap-3">
-      <IconButton label="เดือนก่อนหน้า" onClick={() => setMonth(monthKey(-1, month))}><ChevronLeftIcon /></IconButton>
-      <MonthPicker mode="single" value={{ from: month, to: month }} onChange={(r) => setMonth(r.from)} />
-      <IconButton label="เดือนถัดไป" onClick={() => setMonth(monthKey(1, month))}><ChevronRightIcon /></IconButton>
-    </div>
-  );
   const r = state.month === month ? state.report : undefined;
   if (!r) {
-    return <>{nav}{state.month === month && state.error ? <LoadError title="โหลดความคุ้มค่า Mc ไม่สำเร็จ" message={state.error} onRetry={() => setAttempt((n) => n + 1)} /> : <LoadingBlock />}</>;
+    return state.month === month && state.error ? <LoadError title="โหลดความคุ้มค่า Mc ไม่สำเร็จ" message={state.error} onRetry={() => setAttempt((n) => n + 1)} /> : <LoadingBlock />;
   }
 
   const total = r.cells.reduce((a, c) => ({ slots: a.slots + c.slots, hours: a.hours + c.hours, cost: a.cost + c.cost, gmv: a.gmv + c.gmv }), { slots: 0, hours: 0, cost: 0, gmv: 0 });
@@ -89,7 +79,7 @@ export function McCostView() {
     return x[k as "hours" | "cost" | "gmv"];
   });
   const kpis = [
-    { label: "ค่าจ้าง Mc", value: total.cost, format: baht, delta: <ChangeText cur={total.cost} prev={r.prev.cost} suffix={`vs ${prevLabel}`} neutral /> },
+    { label: "ค่าจ้าง Mc (คิวที่มียอด)", value: total.cost, format: baht, delta: <ChangeText cur={total.cost} prev={r.prev.cost} suffix={`vs ${prevLabel}`} neutral /> },
     { label: "GMV ของคิวเหล่านี้", value: total.gmv, format: baht, delta: <ChangeText cur={total.gmv} prev={r.prev.gmv} suffix={`vs ${prevLabel}`} /> },
     {
       label: "ค่าจ้างต่อยอดขาย", value: avg, format: (n: number) => pctText(n),
@@ -103,10 +93,9 @@ export function McCostView() {
 
   return (
     <>
-      {nav}
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
         ค่าจ้าง Mc (สูตรเดียวกับสรุปรายเดือน) เทียบยอดขายของคิวเดียวกัน · ไม่นับ Mc ประจำ{r.salaried ? ` (${r.salaried} คิว)` : ""}
-        {r.upTo ? ` · เดือนนี้ยังไม่จบ เทียบ ${prevLabel}` : ""}
+        {r.upTo ? ` · เดือนนี้ยังไม่จบ นับคิวถึงตอนนี้ เทียบ ${prevLabel}` : ""}
         <br />ยอดต่อคิว = GMV ที่กรอกใน slot ก่อน ไม่มีใช้ยอดจากไฟล์ Export แบ่งตามนาที (≈ ค่าประมาณ)
       </p>
       {r.unknown.slots ? (

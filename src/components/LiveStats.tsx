@@ -16,11 +16,10 @@ import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
-import { BarChart, ChangeText, Legend, LineChart, PairBars } from "@/components/LiveCharts";
+import { BarChart, ChangeText, Legend, LineChart, PairBars, TableView } from "@/components/LiveCharts";
 import { CountUp } from "@/components/motion";
 import { CeoLive } from "@/components/CeoLive";
 import { DayTarget, TargetPanel } from "@/components/LiveTargets";
-import { McCostView } from "@/components/McCostView";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast,
 } from "@/components/shared";
@@ -103,9 +102,9 @@ async function fetchCampaigns() {
 }
 
 /** หน้า Data analytics · readOnly = ดูได้อย่างเดียว (ไม่มีแท็บอัปโหลด / แก้แคมเปญไม่ได้ แต่ส่งออกได้) */
-export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boolean; cost?: boolean }) {
+export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
   const saved = useLocal(TAB_KEY);
-  const tab = saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) || (saved === "cost" && cost) ? saved : "overview";
+  const tab = saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) ? saved : "overview";
   const [months, setMonths] = useState<MonthRow[] | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [error, setError] = useState("");
@@ -123,9 +122,8 @@ export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boole
   if (error) return <LoadError title="โหลดสถิติไลฟ์ไม่สำเร็จ" message={error} onRetry={() => setAttempt((n) => n + 1)} />;
   if (!months || !campaigns) return <LoadingBlock />;
 
-  // ความคุ้มค่า Mc = ค่าจ้าง: เฉพาะ Owner ที่จัดการฝั่ง Mc ได้ (เห็นค่าจ้าง)
   const tabs = [
-    ["overview", "ภาพรวม / เทียบ"], ["campaign", "แคมเปญ"], ...(cost ? [["cost", "คุ้มค่า Mc"] as const] : []),
+    ["overview", "ภาพรวม / เทียบ"], ["campaign", "แคมเปญ"],
     ["ceo", "CEO Live"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const]),
   ] as const;
   const dataMonths = [...new Set(months.map((m) => m.month))];
@@ -146,7 +144,6 @@ export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boole
       <TabsContent value="campaign">
         <CampaignView campaigns={campaigns} dataMonths={dataMonths} version={version} readOnly={readOnly} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />
       </TabsContent>
-      {cost ? <TabsContent value="cost"><McCostView /></TabsContent> : null}
       {/* หน้าเดียวกับที่บัญชี Marketing เห็น */}
       <TabsContent value="ceo"><CeoLive key={version} /></TabsContent>
       {readOnly ? null : (
@@ -710,17 +707,6 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
 
       {cur.lives ? <AccountTable cur={curList} prev={prevList} prevLabel="ปีก่อน" /> : null}
     </>
-  );
-}
-
-function TableView({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Collapsible className="group/tv mt-2">
-      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 rounded text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50 pointer-coarse:py-2">
-        <ChevronDownIcon className="size-3.5 transition-transform group-data-[state=open]/tv:rotate-180" />{title}
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2">{children}</CollapsibleContent>
-    </Collapsible>
   );
 }
 

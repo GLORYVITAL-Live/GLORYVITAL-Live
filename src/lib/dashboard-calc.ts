@@ -16,7 +16,7 @@ const bkkDate = (ms: number) => new Date(ms + BKK).toISOString().slice(0, 10);
 const dayStart = (date: string) => Date.parse(`${date}T00:00:00+07:00`);
 
 /** เวลาเดียวกันของเดือนก่อน (เดือนก่อนสั้นกว่า = สิ้นเดือนนั้น) → [เวลาตัด, วันที่] */
-function sameTimePrevMonth(ms: number, prevLast: string): [number, string] {
+export function sameTimePrevMonth(ms: number, prevLast: string): [number, string] {
   const date = bkkDate(ms), lastDay = Number(prevLast.slice(8));
   if (Number(date.slice(8)) > lastDay) return [dayStart(prevLast) + DAY, prevLast];
   const prevDate = `${prevLast.slice(0, 8)}${date.slice(8)}`;

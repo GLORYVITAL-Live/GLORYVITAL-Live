@@ -1,7 +1,7 @@
 import { fail, ok, requireOwner } from "@/lib/api";
 import { mcCostReport } from "@/lib/mc-cost";
 
-// ความคุ้มค่า Mc (?month=YYYY-MM): ค่าจ้าง Mc เทียบยอดขายของคิวเดียวกัน — เฉพาะคนที่จัดการฝั่ง Mc ได้ (เห็นค่าจ้าง)
+// ความคุ้มค่า Mc ในหน้า Cost (?month=YYYY-MM): ค่าจ้าง Mc เทียบยอดขายของคิวเดียวกัน — เฉพาะคนที่จัดการฝั่ง Mc ได้ (เห็นค่าจ้าง)
 export const maxDuration = 60;
 
 export async function GET(request: Request) {

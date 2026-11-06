@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   CheckIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CopyIcon, MinusIcon, PlusIcon, TagIcon, Trash2Icon, Undo2Icon, UserIcon,
-  UserXIcon, WalletIcon, WandSparklesIcon, XIcon,
+  UserXIcon, WandSparklesIcon, XIcon,
 } from "lucide-react";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, PlatformBadge, StateBox, api,
@@ -11,7 +11,6 @@ import {
 } from "@/components/shared";
 import { DatePicker, DateRangePicker, MonthPicker, TimePicker } from "@/components/date-picker";
 import { ExportMenu } from "@/components/ExportMenu";
-import { budgetSheet, hasBudget, parseRate } from "@/lib/agency-budget";
 import { agencyCampaign, agencySheet, agencyStatus, clock, dayEn, hmText, mergeRanges } from "@/lib/agency-sheet";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { fmtDayLong, fmtDayMonth, fmtWeekShort, money, monthKey, monthLabel, num, parseKey, todayKey } from "@/lib/format";
+import { fmtDayLong, fmtDayMonth, fmtWeekShort, monthKey, monthLabel, num, parseKey, todayKey } from "@/lib/format";
 import { readLocal, useLocal, writeLocal } from "@/lib/hooks";
 import { canonicalCampaign, standardCampaigns } from "@/lib/campaign";
 import { platformLabel, platformRaw } from "@/lib/platform";
@@ -43,7 +42,6 @@ type PlanData = {
   month: string; slots: Existing[]; platforms: string[]; campaigns: string[];
   agencySlots: AgencySlot[]; agencyReady: boolean; // agencyReady = false: ยังไม่ได้รัน SQL ตาราง agency_slots
   agencyAdjusted: { agency: string; date: string }[]; // วันที่ตั้ง Adjusted ของแต่ละ Agency
-  agencyRates: { agency: string; rate: number }[]; // เรทต่อชั่วโมงเดือนนี้ของกลุ่มภายนอก (ดูอย่างเดียว = ไม่ได้ข้อมูลนี้)
   regulars?: { id: number; name: string }[]; // Mc ประจำ ที่เลือกลงชื่อตอนติ๊กได้
 };
 /** agency = แพลนของ Agency (เช่น "TDH") ไม่ระบุ / null = slot ของเรา (ลงชีต) / mcId = ลงชื่อ Mc ประจำไว้เลย */
@@ -55,11 +53,11 @@ type CampaignRange = { from: string; to: string; platform: string; campaign: str
 /**
  * ร่างของเดือน: slot ใหม่ (ของเรา + Agency) / Campaign ที่แก้ของ slot เดิม (ตาม key) / slot เดิมที่จะลบ (key)
  *   / ช่วง Campaign / แพลน Agency เดิมที่จะลบ (key ของ Agency) / ลงชื่อ Mc ใน slot เดิมที่ยังว่าง (key -> รหัส Mc)
- *   / สถานะ Adjusted ที่จะเปลี่ยน (adjustKey -> ค่าใหม่) / เรท Agency ที่พิมพ์ไว้ (ชื่อกลุ่ม -> ข้อความ)
+ *   / สถานะ Adjusted ที่จะเปลี่ยน (adjustKey -> ค่าใหม่)
  */
 type Draft = {
   add: NewSlot[]; campaign: Record<string, string>; del: string[]; ranges: CampaignRange[]; agencyDel: string[]; assign: Record<string, number>;
-  adjust: Record<string, boolean>; rate: Record<string, string>;
+  adjust: Record<string, boolean>;
 };
 /** กลุ่มคอลัมน์ติ๊ก: แพลตฟอร์ม (+ Agency ที่ไลฟ์ผ่านช่องนั้น) */
 type Column = { platform: string; agency?: string; times: { start: string; end: string }[] };
@@ -71,7 +69,7 @@ type Item = {
   assign: { id: number; name: string } | null;
 };
 
-const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agencyDel: [], assign: {}, adjust: {}, rate: {} };
+const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agencyDel: [], assign: {}, adjust: {} };
 const DRAFT_KEY = "glory_plan_draft_";
 const MONTH_KEY = "glory_plan_month";
 const VIEW_KEY = "glory_plan_view";
@@ -154,7 +152,6 @@ function parseDraft(raw: string | null): Draft | null {
       agencyDel: Array.isArray(v?.agencyDel) ? v.agencyDel : [],
       assign: v?.assign && typeof v.assign === "object" ? v.assign : {},
       adjust: v?.adjust && typeof v.adjust === "object" ? v.adjust : {},
-      rate: v?.rate && typeof v.rate === "object" ? v.rate : {},
     };
   } catch {
     return null;
@@ -220,7 +217,7 @@ const hoursCell = (h: number): Cell => (h ? { v: h, f: "dec" } : null);
  */
 function planBook(
   month: string, columns: Column[], items: Item[], mode: Mode,
-  isAdjusted: (agency: string, date: string) => boolean, rateOf: (agency: string) => number | null,
+  isAdjusted: (agency: string, date: string) => boolean,
 ): ExportBook {
   const days = daysOf(month);
   const live = items.filter((x) => !x.deleting && !x.existing?.mc?.cancelled);
@@ -324,15 +321,10 @@ function planBook(
     )));
   });
 
-  // งบของกลุ่มภายนอกอยู่แผ่นแยก ลบออกง่ายก่อนส่งไฟล์ให้ Agency (ไม่ใส่ในแผ่นตารางส่งทีม)
-  const budget = budgetSheet(columns.filter((c) => c.agency && hasBudget(c.agency)).map((c) => (
-    { label: ownerLabel(c.agency), channel: platformLabel(c.platform), rate: rateOf(c.agency!), hours: hoursOf(c) }
-  )));
   const base: ExportSheet[] = [
     { name: "ภาพรวม", rows: grid, header: 1 },
     { name: "สรุปรายช่อง", rows: byChannel },
     { name: "สรุปชั่วโมงต่อวัน", rows: summary },
-    ...(budget ? [budget] : []),
   ];
   if (mode === "shopee") {
     // Shopee: ตารางส่งทีมขึ้นก่อน (รวมทุกกลุ่ม + แยกกลุ่ม ไว้ส่งให้ Agency / MCN) แล้วตามด้วยสรุปแบบปกติ
@@ -413,9 +405,6 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
       return { ...d, adjust: on === adjustedSaved.has(k) ? rest : { ...rest, [k]: on } };
     });
   }
-  const rateSaved = useMemo(() => new Map((plan?.agencyRates ?? []).map((x) => [x.agency, x.rate])), [plan]);
-  /** เรทต่อชั่วโมงของกลุ่ม (รวมร่าง) null = ไม่ตั้ง / NaN = พิมพ์ผิด */
-  const rateOf = (agency: string) => (agency in draft.rate ? parseRate(draft.rate[agency]) : rateSaved.get(agency) ?? null);
 
   // รวม slot เดิม + ร่างใหม่ (ของเรา + แพลน Agency) เรียงตามชีต (วัน > แพลตฟอร์ม > เวลา) และหาเวลาที่ทับกันในแพลตฟอร์มเดียวกัน
   const items = useMemo<Item[]>(() => {
@@ -493,15 +482,11 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
       .map((x) => ({ slotId: x.existing!.mc!.id, personId: x.assign!.id }));
     const agencyAdjust = Object.entries(draft.adjust).filter(([k, on]) => on !== adjustedSaved.has(k))
       .map(([k, on]) => ({ agency: k.split("|")[0], date: k.split("|")[1], on }));
-    const typed = Object.entries(draft.rate).map(([agency, text]) => ({ agency, month, rate: parseRate(text) }));
-    const agencyRate = typed.filter((x) => !Number.isNaN(x.rate) && x.rate !== (rateSaved.get(x.agency) ?? null));
     return {
-      create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust, agencyRate,
-      /** เรทที่พิมพ์ผิด = บันทึกไม่ได้จนกว่าจะแก้ */
-      badRates: typed.filter((x) => Number.isNaN(x.rate)).length,
-      total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length + assigns.length + agencyAdjust.length + agencyRate.length,
+      create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust,
+      total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length + assigns.length + agencyAdjust.length,
     };
-  }, [items, ours, draft.adjust, adjustedSaved, draft.rate, rateSaved, month]);
+  }, [items, ours, draft.adjust, adjustedSaved]);
 
   // ---------- ติ๊ก ----------
   // ช่องเดียวกัน (แพลตฟอร์ม + วัน + เวลา) เป็นของเรา (agency = null) หรือของ Agency อย่างใดอย่างหนึ่ง
@@ -832,7 +817,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
   }
 
   async function save() {
-    const { create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust, agencyRate } = changes;
+    const { create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust } = changes;
     const named = create.filter((s) => s.assign).length + assigns.length;
     const ok = await confirm({
       title: `บันทึกแพลน ${monthLabel(month)}?`,
@@ -844,7 +829,6 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         agencyCreate.length || agencyDelete.length
           ? `แพลนในเว็บ (Agency / Shopee) +${agencyCreate.length} / ลบ ${agencyDelete.length} slot (เก็บในเว็บ ไม่ลงชีต)` : "",
         agencyAdjust.length ? `เปลี่ยนสถานะ Agency ${agencyAdjust.length} วัน` : "",
-        agencyRate.length ? `แก้เรท Agency ${agencyRate.length} กลุ่ม` : "",
       ].filter(Boolean).join(" · "),
       confirmText: "บันทึก",
     });
@@ -859,7 +843,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         update((d) => ({ ...d, del: [] }));
         if (res.kept) toast(`มี ${res.kept} slot ที่มีคนจองแล้ว ไม่ได้ลบ`, "error");
       }
-      if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length || agencyAdjust.length || agencyRate.length) {
+      if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length || agencyAdjust.length) {
         const res = await api<{ created: number; skipped: number; updated: number; assignSkipped: number; loanWarnings?: string[] }>("/api/plan", {
           create: create.map((s) => ({
             date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: s.campaign, mcId: s.assign?.id ?? null,
@@ -868,7 +852,6 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
           agencyCreate: agencyCreate.map((s) => ({ agency: s.agency, date: s.date, platform: s.platform, start: s.start, end: s.end })),
           agencyDelete,
           agencyAdjust,
-          agencyRate,
           assigns,
         });
         if (!res.ok) throw new Error(res.message);
@@ -912,8 +895,6 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
   const allHours = [...live, ...agencyLive].reduce((h, x) => h + lenOf(x) / 60, 0);
   /** ชั่วโมงรวมของรายการ slot */
   const hrs = (list: { start: string; end: string }[]) => list.reduce((h, x) => h + lenOf(x) / 60, 0);
-  /** กลุ่มภายนอกของโหมดนี้ที่ใส่งบได้ (TikTok: TDH / Shopee: Infinite, MCN) */
-  const budgetGroups = [...new Set(shownColumns.flatMap((c) => (c.agency && hasBudget(c.agency) ? [c.agency] : [])))];
   // ร่างที่ลงชื่อ Mc ประจำ (slot ใหม่ที่มีชื่อ + slot เดิมที่ลงชื่อ)
   const namedDraft = ours.filter((x) => x.assign && !x.deleting);
   // ชั่วโมง Mc ประจำเดือนนี้: ลงชีตแล้ว (ชื่ออยู่ใน slot แล้ว) / ในร่าง
@@ -961,7 +942,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
         {plan ? (
           <ExportMenu
             label="ส่งออก"
-            build={() => planBook(month, shownColumns, shownItems, mode, isAdjusted, rateOf)}
+            build={() => planBook(month, shownColumns, shownItems, mode, isAdjusted)}
             className={cn("bg-card", mode === "shopee" && "ml-auto")}
           />
         ) : null}
@@ -992,18 +973,6 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
               choices={campaignChoices}
               onApply={applyRange}
               onRemove={removeRange}
-            />
-          ) : null}
-          {!readOnly && budgetGroups.length ? (
-            <AgencyBudgetPanel
-              month={month}
-              groups={budgetGroups.map((agency) => ({
-                agency,
-                text: draft.rate[agency] ?? (rateSaved.has(agency) ? String(rateSaved.get(agency)) : ""),
-                rate: rateOf(agency),
-                hours: hrs(agencyLive.filter((x) => x.agency === agency)),
-              }))}
-              onChange={(agency, text) => update((d) => ({ ...d, rate: { ...d.rate, [agency]: text } }))}
             />
           ) : null}
           <datalist id="plan-campaigns">{campaignChoices.map((c) => <option key={c} value={c} />)}</datalist>
@@ -1152,12 +1121,8 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
                   changes.agencyCreate.length || changes.agencyDelete.length
                     ? `แพลนในเว็บ +${changes.agencyCreate.length} (${num(hrs(changes.agencyCreate))} ชม.)${changes.agencyDelete.length ? ` / ลบ ${changes.agencyDelete.length}` : ""}` : "",
                   changes.agencyAdjust.length ? `เปลี่ยนสถานะ Agency ${changes.agencyAdjust.length} วัน` : "",
-                  changes.agencyRate.length ? `แก้เรท Agency ${changes.agencyRate.length} กลุ่ม` : "",
                 ].filter(Boolean).join(" · ")} — ยังไม่บันทึกจนกว่าจะกดบันทึก
               </span>
-              {changes.badRates ? (
-                <span className="block text-xs font-semibold text-destructive">เรท Agency ที่พิมพ์ไม่ถูกต้อง แก้ตัวเลขก่อนถึงจะบันทึกได้</span>
-              ) : null}
               {newClashes ? (
                 <span className="block text-xs font-semibold text-destructive">
                   มี {newClashes} slot ใหม่ที่เวลาทับกับอีกฝั่งในบัญชีเดียวกัน (กรอบสีส้ม) เอาติ๊กออกก่อนถึงจะบันทึกได้
@@ -1165,7 +1130,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
               ) : null}
             </div>
             <Button variant="outline" size="lg" disabled={saving} onClick={clearDraft}>ล้างร่าง</Button>
-            <Button size="lg" disabled={saving || !!newClashes || !!changes.badRates} onClick={save}>
+            <Button size="lg" disabled={saving || !!newClashes} onClick={save}>
               {saving ? <><Spinner />กำลังบันทึก...</> : "บันทึก"}
             </Button>
           </div>
@@ -1965,47 +1930,6 @@ function RangeSummary({ month, items, tagIndex }: { month: string; items: Item[]
 }
 
 // ---------- Campaign ตามช่วงวัน ----------
-
-/** งบเดือนนี้ของกลุ่มภายนอก: ใส่เรทต่อชั่วโมง คูณกับชั่วโมงในแพลนให้ (รวมร่าง · ร่างก่อน บันทึกพร้อมแพลน) */
-function AgencyBudgetPanel({ month, groups, onChange }: {
-  month: string;
-  groups: { agency: string; text: string; rate: number | null; hours: number }[];
-  onChange: (agency: string, text: string) => void;
-}) {
-  const id = useId();
-  return (
-    <Card className="my-3 shadow-card">
-      <CardContent className="space-y-3 text-sm">
-        <strong className="flex items-center gap-1.5 text-base"><WalletIcon className="size-4 text-primary" />งบ Agency {monthLabel(month)}</strong>
-        {groups.map((g) => {
-          const bad = g.rate !== null && Number.isNaN(g.rate);
-          return (
-            <div key={g.agency} className="flex flex-wrap items-center gap-2">
-              <Label htmlFor={`${id}-${g.agency}`} className="w-32 font-semibold">{ownerLabel(g.agency)}</Label>
-              <Input
-                id={`${id}-${g.agency}`}
-                inputMode="decimal"
-                value={g.text}
-                onChange={(e) => onChange(g.agency, e.target.value)}
-                placeholder="เรทต่อชั่วโมง (บาท)"
-                aria-invalid={bad}
-                className="w-44"
-              />
-              <span className={cn("text-xs tabular-nums", bad ? "font-semibold text-destructive" : "text-muted-foreground")}>
-                {bad ? "ตัวเลขไม่ถูกต้อง"
-                  : !g.rate ? `${num(g.hours)} ชม. ในแพลน · ยังไม่ตั้งเรท`
-                    : <>฿{g.rate.toLocaleString("th-TH")}/ชม. × {num(g.hours)} ชม. = <strong className="text-foreground">฿{money(g.rate * g.hours)}</strong></>}
-              </span>
-            </div>
-          );
-        })}
-        <p className="text-xs text-muted-foreground">
-          ตั้งเรทแยกแต่ละเดือน · งบเปลี่ยนตามชั่วโมงที่ติ๊กในแพลน · เก็บในเว็บ ไม่ลงชีต · เห็นเฉพาะคนที่แก้แพลนได้ · ไฟล์ส่งออกมีแผ่น &quot;งบ Agency&quot; แยก ถ้าจะส่งไฟล์ทั้งเล่มให้ Agency ให้ลบแผ่นนี้ก่อน
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
 
 function CampaignPanel({ month, items, platforms, ranges, choices, onApply, onRemove }: {
   month: string;
