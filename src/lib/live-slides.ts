@@ -6,7 +6,9 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type PptxGenJS from "pptxgenjs";
 import { analyze } from "@/lib/live-insights";
 import { platformSeries, totalSeries } from "@/lib/live-lines";
+import type { ChannelSplit } from "@/lib/live-owners";
 import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Totals } from "@/lib/live-stats";
+import type { targetReport } from "@/lib/live-targets";
 
 export type CompareDeckInput = {
   report: string; // เช่น "Campaign on Campaign" / "เทียบเดือน (MoM)"
@@ -28,6 +30,17 @@ export type CompareDeckInput = {
   quarters?: { label: string; a: LiveSession[]; b: LiveSession[]; before: LiveSession[]; open: boolean }[];
   /** หน้าวิเคราะห์ใช้คู่นี้แทน (เช่น ยังไม่มีข้อมูลปีก่อน -> เดือนล่าสุดเทียบเดือนก่อน) */
   focus?: { aName: string; bName: string; a: LiveSession[]; b: LiveSession[] };
+  /**
+   * กราฟตามเวลาแยกแพลตฟอร์มแม้มีช่วงเทียบ เหมือนหน้ารายเดือนบนเว็บ
+   *   ช่วงเทียบใช้กับตัวเลขหลัก / ตาราง / วิเคราะห์ ส่วนกราฟรายวันเป็นแท่งซ้อน + เส้นแยกแพลตฟอร์ม (ไม่มีเส้นรวม)
+   */
+  platformTime?: boolean;
+  /** กราฟแท่งหลายเดือนย้อนหลัง (หน้ารายเดือน = 13 เดือน) */
+  months?: { short: string; a: LiveSession[] }[];
+  /** หน้าเป้าหมาย GMV (src/lib/live-targets.ts) · names = ชื่อช่องตาม key */
+  target?: { report: ReturnType<typeof targetReport>; lastDay: number; names: Map<string, string> };
+  /** หน้าแยกตามกลุ่มผู้ไลฟ์ (src/lib/live-owners.ts) */
+  owners?: ChannelSplit[];
 };
 
 // โทนแบรนด์ (ตรงกับเว็บ): ชมพู = ช่วงหลัก / ฟ้า = ช่วงเทียบ
@@ -434,6 +447,88 @@ function addPerHourSlide(pres: PptxGenJS, title: string, cards: PerHourCard[]) {
   });
 }
 
+/** หน้าเป้าหมาย GMV: % achieve เดือน / ถึงวันล่าสุด (แถบ + ทำได้ / เป้า) + ยอดที่เหลือต่อวัน + แยกช่อง */
+function addTargetSlide(pres: PptxGenJS, title: string, t: NonNullable<CompareDeckInput["target"]>) {
+  const { report: r, lastDay, names } = t;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  const pctOf = (v: number | null) => (v === null ? "-" : `${(v * 100).toFixed(1)}%`);
+  const baht = (v: number) => fmt("gmv", v);
+  const tiles = [
+    { label: `% Achieve เดือน${r.toDate ? " (เทียบเป้าทั้งเดือน)" : ""}`, pct: r.pct, target: r.monthly, note: "", color: C.muted },
+    ...(r.toDate ? [{
+      label: `% Achieve ถึงวันที่ ${lastDay}`, pct: r.toDate.pct, target: r.toDate.target,
+      note: r.toDate.gap >= 0 ? `เกินเป้าถึงวันนี้ ${baht(r.toDate.gap)}` : `ขาดจากเป้าถึงวันนี้ ${baht(-r.toDate.gap)}`,
+      color: r.toDate.gap >= 0 ? C.up : C.down,
+    }] : []),
+  ];
+  const gap = 0.35, w = (W - 2 * M - gap * (tiles.length - 1)) / tiles.length, y0 = 1.4, h = 2.25;
+  tiles.forEach((tile, i) => {
+    const x = M + i * (w + gap), inner = w - 0.6;
+    s.addShape(pres.ShapeType.roundRect, { x, y: y0, w, h, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
+    s.addText(tile.label, { x: x + 0.3, y: y0 + 0.15, w: inner, h: 0.35, fontSize: 13, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+    s.addText(pctOf(tile.pct), { x: x + 0.3, y: y0 + 0.5, w: inner, h: 0.65, fontSize: 32, bold: true, color: C.pink, fontFace: FONT, margin: 0, isTextBox: true });
+    s.addShape(pres.ShapeType.rect, { x: x + 0.3, y: y0 + 1.2, w: inner, h: 0.12, fill: { color: C.white }, line: { color: C.white } });
+    if (tile.pct) s.addShape(pres.ShapeType.rect, { x: x + 0.3, y: y0 + 1.2, w: Math.max(0.03, inner * Math.min(1, tile.pct)), h: 0.12, fill: { color: C.pink }, line: { color: C.pink } });
+    s.addText(`${baht(r.gmv)} / เป้า ${baht(tile.target)}`, { x: x + 0.3, y: y0 + 1.4, w: inner, h: 0.32, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+    if (tile.note) s.addText(tile.note, { x: x + 0.3, y: y0 + 1.72, w: inner, h: 0.32, fontSize: 13, bold: true, color: tile.color, fontFace: FONT, margin: 0, isTextBox: true });
+  });
+  if (r.perDayLeft !== null) {
+    s.addText(`เหลืออีก ${baht(r.remaining)} ใน ${r.daysLeft} วัน · เฉลี่ยวันละ ${baht(r.perDayLeft)}`, { x: M, y: 3.75, w: W - 2 * M, h: 0.35, fontSize: 14, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+  }
+  const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
+  const rows = r.accounts.slice(0, 6);
+  if (rows.length) {
+    s.addTable([
+      [head("ช่อง", "left"), head("เป้าเดือน"), head("ทำได้"), head("% Achieve"), ...(r.toDate ? [head(`ถึงวันที่ ${lastDay}`)] : [])],
+      ...rows.map((a): PptxGenJS.TableRow => [
+        { text: names.get(a.key) ?? a.key.split("|").slice(1).join("|"), options: { align: "left" } },
+        { text: baht(a.monthly), options: { align: "right" } },
+        { text: baht(a.gmv), options: { align: "right", bold: true } },
+        { text: pctOf(a.pct), options: { align: "right", bold: true } },
+        ...(r.toDate ? [{ text: pctOf(a.toDatePct), options: { align: "right" as const } }] : []),
+      ]),
+    ], {
+      x: M, y: 4.2, w: W - 2 * M, colW: r.toDate ? [4.533, 1.95, 1.95, 1.7, 2] : [5.133, 2.4, 2.4, 2.2], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.36,
+      border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
+    });
+  }
+}
+
+/** หน้าแยกตามกลุ่มผู้ไลฟ์: เทียบเวลาไลฟ์ในไฟล์กับเวลาในแพลน (เฉพาะช่องที่มีแพลนกลุ่ม) */
+function addOwnersSlide(pres: PptxGenJS, channels: ChannelSplit[]) {
+  if (!channels.length) return;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText("GMV แยกตามกลุ่มผู้ไลฟ์", { placeholder: "title" });
+  const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
+  const line = (label: string, lives: number, sec: number, gmv: number, share: string, top: boolean): PptxGenJS.TableRow => {
+    const base = top ? { bold: true, fill: { color: C.tint } } : {};
+    return [
+      { text: top ? label : `   ${label}`, options: { ...base, align: "left" } },
+      { text: lives.toLocaleString("th-TH"), options: { ...base, align: "right" } },
+      { text: (sec / 3600).toFixed(1), options: { ...base, align: "right" } },
+      { text: fmt("gmv", gmv), options: { ...base, align: "right", bold: true } },
+      { text: share, options: { ...base, align: "right" } },
+      { text: fmt("gmvPerHour", sec ? gmv / (sec / 3600) : null), options: { ...base, align: "right" } },
+    ];
+  };
+  const rows: PptxGenJS.TableRow[] = [
+    [head("กลุ่ม", "left"), head("ไลฟ์"), head("ชม."), head("GMV"), head("สัดส่วน"), head("GMV/ชม.")],
+    ...channels.flatMap((c) => [
+      line(c.label, c.lives, c.sec, c.gmv, "100%", true),
+      ...c.rows.map((r) => line(r.label, r.lives, r.sec, r.gmv, c.gmv ? `${((r.gmv / c.gmv) * 100).toFixed(1)}%` : "-", false)),
+    ]),
+  ];
+  s.addTable(rows, {
+    x: M, y: 1.45, w: W - 2 * M, colW: [4.533, 1.2, 1.2, 2.2, 1.4, 1.6], fontSize: 13, fontFace: FONT, color: C.text, rowH: Math.min(0.45, 4.8 / rows.length),
+    border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
+  });
+  const splitLives = channels.reduce((a, c) => a + c.splitLives, 0), splitGmv = channels.reduce((a, c) => a + c.splitGmv, 0);
+  s.addText(`เทียบเวลาไลฟ์ในไฟล์กับเวลาในหน้าแพลน${splitLives ? ` · มี ${splitLives} ไลฟ์คร่อมหลายกลุ่ม (รวม ${fmt("gmv", splitGmv)}) แบ่งยอดตามนาที เป็นตัวเลขประมาณ` : ""}`, {
+    x: M, y: 6.5, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+  });
+}
+
 function addTop5Slide(pres: PptxGenJS, lives: LiveSession[], name: string) {
   if (!lives.length) return;
   const s = pres.addSlide({ masterName: "CONTENT" });
@@ -535,6 +630,9 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     });
   }
 
+  // 2.2) เป้าหมาย GMV (หน้ารายเดือน)
+  if (o.target) addTargetSlide(pres, `เป้าหมาย GMV ${o.aName}`, o.target);
+
   // 2.5) ยอดต่อชั่วโมง: GMV / Viewers / Impressions ต่อชั่วโมงไลฟ์
   addPerHourSlide(pres, hasB ? `ยอดต่อชั่วโมง: ${o.aName} เทียบ ${o.bName}` : `ยอดต่อชั่วโมง: ${o.aName}`, PER_HOUR_KEYS.map((k) => {
     const va = val(ta, k), vb = val(tb, k), c = changeOf(va, vb);
@@ -634,22 +732,34 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     s.addText(`GMV ${o.timeName}`, { placeholder: "title" });
     const labels = o.time.map((t) => t.short);
     const box = { x: M, y: 1.4, w: W - 2 * M, h: 5.3 };
-    if (hasB) barChart(s, `GMV ${o.timeName}`, labels, o.time.map((t) => totalsOf(t.a).gmv), o.time.map((t) => totalsOf(t.b).gmv), box, o.time.length <= 12);
+    const byPeriod = hasB && !o.platformTime;
+    if (byPeriod) barChart(s, `GMV ${o.timeName}`, labels, o.time.map((t) => totalsOf(t.a).gmv), o.time.map((t) => totalsOf(t.b).gmv), box, o.time.length <= 12);
     else platformBars(pres, s, target, { title: `GMV ${o.timeName}`, labels, groups: o.time.map((t) => t.a), box, showValue: o.time.length <= 12 });
     if (labels.some((l) => l.endsWith("*"))) {
       s.addText("* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)", { x: M, y: 6.75, w: 6, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
     }
-    s.addNotes(hasB ? `${stepWordOf(o.timeName)}ที่ 1 ของ ${o.aName} เทียบกับ${stepWordOf(o.timeName)}ที่ 1 ของ ${o.bName} (ชื่อบนแกนเป็นของ ${o.aName})` : `${o.aName} แยกสีตามแพลตฟอร์ม`);
+    s.addNotes(byPeriod ? `${stepWordOf(o.timeName)}ที่ 1 ของ ${o.aName} เทียบกับ${stepWordOf(o.timeName)}ที่ 1 ของ ${o.bName} (ชื่อบนแกนเป็นของ ${o.aName})` : `${o.aName} แยกสีตามแพลตฟอร์ม`);
 
-    // 6.2) กราฟเส้นแนวโน้ม: เทียบ 2 ช่วง = เส้นละช่วง · ช่วงเดียว = แยกแพลตฟอร์ม + เส้นรวม (เหมือนเว็บ)
+    // 6.2) กราฟเส้นแนวโน้ม: เทียบ 2 ช่วง = เส้นละช่วง · ช่วงเดียว = แยกแพลตฟอร์ม + เส้นรวม · รายเดือน = แยกแพลตฟอร์ม (เหมือนเว็บ)
     for (const metric of ["gmv", "gmvPerHour"] as const) {
-      const series = hasB
+      const series = byPeriod
         ? [
           { name: o.aName, color: C.pink, values: totalSeries(o.time.map((t) => t.a), metric) },
           { name: o.bName, color: C.blue, values: totalSeries(o.time.map((t) => t.b), metric) },
         ]
-        : platformTrend(o.time.map((t) => t.a), metric, o.timeName !== "รายชั่วโมง");
+        : platformTrend(o.time.map((t) => t.a), metric, o.timeName !== "รายชั่วโมง" && !o.platformTime);
       addTrendSlide(pres, target, `${metricOf(metric).label} แนวโน้ม${o.timeName}`, labels, series);
+    }
+  }
+
+  // 6.3) กราฟแท่งหลายเดือนย้อนหลัง (หน้ารายเดือน = 13 เดือน)
+  if (o.months && o.months.length > 1) {
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    const title = `GMV รายเดือน (${o.months.length} เดือน)`;
+    s.addText(title, { placeholder: "title" });
+    platformBars(pres, s, target, { title, labels: o.months.map((m) => m.short), groups: o.months.map((m) => m.a), box: { x: M, y: 1.4, w: W - 2 * M, h: 5.25 }, showValue: true });
+    if (o.months.some((m) => m.short.endsWith("*"))) {
+      s.addText("* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)", { x: M, y: 6.7, w: 6, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
     }
   }
 
@@ -709,6 +819,9 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
       border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
     });
   }
+
+  // 7.5) แยกตามกลุ่มผู้ไลฟ์ (หน้ารายเดือน)
+  if (o.owners) addOwnersSlide(pres, o.owners);
 
   // 8) Top 5 ไลฟ์ของช่วงหลัก
   addTop5Slide(pres, o.a, o.aName);

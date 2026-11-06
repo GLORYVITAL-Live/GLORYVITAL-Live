@@ -13,6 +13,7 @@ import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, mul
 import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
 import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
+import { monthDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
@@ -339,14 +340,45 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
   const replay = `${month}|${filter.platform}|${filter.account}`;
   const monthSeries = platformLines(months13.map((m) => byMonth.get(m)!), metric);
 
+  // สไลด์: ครบเหมือนหน้าเว็บ (เป้า + รายวัน + 13 เดือน + กลุ่มผู้ไลฟ์) · โหลดเป้า / แพลนไม่ได้ = ไม่มีหน้านั้น สไลด์ส่วนอื่นยังออกได้
+  const buildSlides = async (target: "pptx" | "gslides") => {
+    const curList = byMonth.get(month)!;
+    const dayOf = (s: LiveSession) => bkkParts(s.startedAt).d;
+    const [targets, owners] = await Promise.all([
+      api<{ targets: LiveTarget[] }>(`/api/live-stats/targets?month=${month}`).then((r) => (r.ok ? r.targets : [])).catch(() => [] as LiveTarget[]),
+      api<{ spans: OwnerSpan[] }>(`/api/live-stats/owners?month=${month}`).then((r) => (r.ok ? r.spans : [])).catch(() => [] as OwnerSpan[]),
+    ]);
+    const scope = targetsInScope(targets, filter.platform, filter.account);
+    const names = new Map(accountsOf(data).map((a) => [a.key, accountLabel(a)]));
+    const prevName = `${shortMonth(prevKey)}${cutText}`;
+    return buildCompareDeck({
+      report: "รายเดือน", aName: monthLabel(month), bName: prevName, aRange: ongoing && lastDay ? `1–${lastDay} ${shortMonth(month)}` : monthLabel(month), bRange: prevName,
+      a: curList, b: prevList, timeName: "รายวัน",
+      time: monthDays(month).map((d) => {
+        const n = Number(d.slice(8));
+        return { short: String(n), a: curList.filter((s) => dayOf(s) === n), b: prevList.filter((s) => dayOf(s) === n) };
+      }),
+      filterText: filterText({ platform: filter.platform, account: filter.account, sessions: data }).join(" · "),
+      exportedAt: bkkStamp(new Date().toISOString()),
+      cover: { kicker: `รายเดือน${ongoing ? " (ยังไม่จบเดือน)" : ""}`, headline: monthLabel(month) },
+      platformTime: true,
+      months: months13.map((m) => ({ short: `${shortMonth(m)}${ongoing && m === month ? "*" : ""}`, a: byMonth.get(m)! })),
+      target: scope.length ? { report: targetReport(scope, list, month, lastDay), lastDay, names } : undefined,
+      owners: splitByOwner(curList, owners),
+    }, target);
+  };
+
   return (
     <>
       {nav}
       <FilterBar filter={filter} sessions={data}>
-        <ExportMenu size="sm" label="ส่งออก" build={async () => monthBook({
-          month, monthLabel, months13, byMonth, filter: { platform: filter.platform, account: filter.account, sessions: data },
-          crew: await loadCrew(byMonth.get(month) ?? []),
-        })} />
+        <div className="flex flex-wrap gap-2">
+          <ExportMenu size="sm" label="ส่งออก" build={async () => monthBook({
+            month, monthLabel, months13, byMonth, filter: { platform: filter.platform, account: filter.account, sessions: data },
+            crew: await loadCrew(byMonth.get(month) ?? []),
+          })} />
+          {cur.lives ? <SlidesMenu label="สไลด์" title={`GLORY รายเดือน ${monthLabel(month)}`} build={buildSlides} /> : null}
+        </div>
       </FilterBar>
       {/* เป้าหมาย GMV + % achieve (ตั้งเป้าล่วงหน้าได้ แม้เดือนนี้ยังไม่มีข้อมูล) */}
       <TargetPanel month={month} sessions={data} platform={filter.platform} account={filter.account} lastDay={lastDay} readOnly={readOnly} />

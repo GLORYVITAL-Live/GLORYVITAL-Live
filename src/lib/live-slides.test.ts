@@ -81,6 +81,55 @@ describe("ช่วงเดียว (ไม่เทียบ)", () => {
   });
 });
 
+describe("รายเดือน", () => {
+  const days = [1, 2, 3].map((d) => {
+    const dd = `2026-11-0${d}`, pp = `2026-10-0${d}`;
+    return {
+      short: String(d),
+      a: [live(dd, "09:00", 1000 * d), live(dd, "12:00", 500 * d, "Shopee")],
+      b: [live(pp, "09:00", 900 * d), live(pp, "12:00", 450 * d, "Shopee")],
+    };
+  });
+  const month: CompareDeckInput = {
+    report: "รายเดือน", aName: "พฤศจิกายน 2026", bName: "ต.ค. 1–3", aRange: "1–3 พ.ย.", bRange: "ต.ค. 1–3",
+    a: days.flatMap((t) => t.a), b: days.flatMap((t) => t.b), timeName: "รายวัน", time: days, filterText: "ทั้งหมด", exportedAt: "6 พ.ย. 2026",
+    platformTime: true,
+    months: [{ short: "ต.ค.", a: days.flatMap((t) => t.b) }, { short: "พ.ย.*", a: days.flatMap((t) => t.a) }],
+    target: {
+      lastDay: 3, names: new Map([["TikTok|1", "GLORY VITAL"]]),
+      report: {
+        monthly: 30000, gmv: 6000, pct: 0.2, toDate: { target: 3000, pct: 2, gap: 3000 }, remaining: 24000, daysLeft: 27, perDayLeft: 888, days: [],
+        accounts: [{ key: "TikTok|1", monthly: 30000, gmv: 6000, pct: 0.2, toDatePct: 2 }],
+      },
+    },
+    owners: [{
+      channel: "GLORY MALL", label: "GLORY VITAL", lives: 3, sec: 10800, gmv: 6000, splitLives: 1, splitGmv: 100,
+      rows: [{ owner: null, label: "ของเรา", lives: 2, sec: 7200, gmv: 4000, orders: 10 }, { owner: "TDH", label: "Agency TDH", lives: 1, sec: 3600, gmv: 2000, orders: 5 }],
+    }],
+  };
+  test("มีช่วงเทียบ แต่กราฟรายวันยังเป็นแท่งซ้อน + เส้นแยกแพลตฟอร์ม ไม่มีเส้นรวม (เหมือนเว็บ)", async () => {
+    const { charts } = await open(await buildCompareDeck(month));
+    expect(barCharts(charts).some((c) => c.includes('<c:grouping val="stacked"/>'))).toBe(true);
+    const lines = lineCharts(charts);
+    expect(lines).toHaveLength(2);
+    expect(seriesNames(lines[0])).toEqual(["TikTok", "Shopee"]);
+  });
+  test("มีครบ: เป้าหมาย / แท่ง 13 เดือน / กลุ่มผู้ไลฟ์ · ทั้ง PowerPoint และ Google Slides", async () => {
+    for (const target of ["pptx", "gslides"] as const) {
+      const { slides } = await open(await buildCompareDeck(month, target));
+      expect(titled(slides, "เป้าหมาย GMV พฤศจิกายน 2026")).toBe(true);
+      expect(titled(slides, "GMV รายเดือน (2 เดือน)")).toBe(true);
+      expect(titled(slides, "GMV แยกตามกลุ่มผู้ไลฟ์")).toBe(true);
+      expect(titled(slides, "Agency TDH")).toBe(true);
+    }
+  });
+  test("ไม่มีเป้า / ไม่มีแพลนกลุ่ม = ไม่มีหน้านั้น", async () => {
+    const { slides } = await open(await buildCompareDeck({ ...month, target: undefined, owners: [] }));
+    expect(titled(slides, "เป้าหมาย GMV")).toBe(false);
+    expect(titled(slides, "แยกตามกลุ่มผู้ไลฟ์")).toBe(false);
+  });
+});
+
 describe("เทียบหลายเดือน", () => {
   const keys = ["2026-09", "2026-10", "2026-11"];
   const byMonth = new Map(keys.map((k) => [k, [live(`${k}-05`, "09:00", 1000), live(`${k}-05`, "12:00", 500, "Shopee"), live(`${k}-06`, "09:00", 700)]]));
