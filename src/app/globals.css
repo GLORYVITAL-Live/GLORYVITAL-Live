@@ -165,10 +165,12 @@
 @keyframes bar-grow { from { transform: scaleY(0); } }
 .bar-fill { transform-origin: left; animation: bar-fill 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
 @keyframes bar-fill { from { transform: scaleX(0); } }
+.dot-pop { transform-box: fill-box; transform-origin: center; animation: dot-pop 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes dot-pop { from { opacity: 0; transform: scale(0.4); } }
 
 @media (prefers-reduced-motion: reduce) {
   .refresh-bar { animation: none; background: var(--brand-glow); opacity: 0.5; }
-  .bar-grow, .bar-fill { animation: none; }
+  .bar-grow, .bar-fill, .dot-pop { animation: none; }
 }
 
 /* แถบเลื่อนบางๆ สีเข้ากับธีม (เนื้อหาในหน้าต่าง) */

@@ -6,16 +6,17 @@ import {
   accountLabel, accountsOf, bkkIso, bkkLocal, bkkParts, filterSessions, fmtMetric, fromBkkLocal, METRICS, metricOf, monthOf, monthWindow, parseRows,
   previousWindow, readXlsx, totalsOf, type Campaign, type LiveSession, type MetricKey, type ParsedFile, type Platform, type Totals,
 } from "@/lib/live-stats";
-import { fmtMonthShort, monthKey, monthLabel } from "@/lib/format";
+import { fmtDayMonth, fmtMonthShort, fmtWeekShort, monthKey, monthLabel, parseKey } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
+import { hasStartTimes, liveDots, START_TICKS, startTickLabel, type DotAxis } from "@/lib/live-dots";
 import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
-import { BarChart, ChangeText, Legend, PairBars } from "@/components/LiveCharts";
+import { BarChart, ChangeText, DotChart, Legend, niceTicks, PairBars } from "@/components/LiveCharts";
 import { CountUp } from "@/components/motion";
 import { CeoLive } from "@/components/CeoLive";
 import { DayTarget, TargetPanel } from "@/components/LiveTargets";
@@ -217,12 +218,12 @@ function FilterBar({ filter, sessions, children }: { filter: ReturnType<typeof u
   );
 }
 
-function MetricSelect({ value, onChange }: { value: MetricKey; onChange: (k: MetricKey) => void }) {
+function MetricSelect({ value, onChange, omit }: { value: MetricKey; onChange: (k: MetricKey) => void; omit?: MetricKey[] }) {
   return (
     <Select value={value} onValueChange={(v) => onChange(v as MetricKey)}>
       <SelectTrigger aria-label="ตัวชี้วัดในกราฟ" className="h-8 min-w-36 rounded-full bg-card text-[13px]"><SelectValue /></SelectTrigger>
       <SelectContent position="popper">
-        {METRICS.map((m) => <SelectItem key={m.key} value={m.key}>{m.label}</SelectItem>)}
+        {METRICS.filter((m) => !omit?.includes(m.key)).map((m) => <SelectItem key={m.key} value={m.key}>{m.label}</SelectItem>)}
       </SelectContent>
     </Select>
   );
@@ -314,6 +315,8 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
   const cutText = ongoing && lastDay ? ` 1–${lastDay}` : "";
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
+  // เปลี่ยนเดือน / ตัวกรอง = กราฟแท่งโตขึ้นใหม่
+  const replay = `${month}|${filter.platform}|${filter.account}`;
 
   return (
     <>
@@ -340,6 +343,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
             { totals: yoy, label: `YoY vs ${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}${cutText}` },
           ]} />
           <Funnel cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} />
+          <DailySection month={month} sessions={byMonth.get(month)!} metric={metric} onMetric={setMetric} replay={replay} />
         </>
       )}
 
@@ -349,6 +353,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
           <MetricSelect value={metric} onChange={setMetric} />
         </div>
         <BarChart
+          key={`${metric}|${replay}`}
           label={`${def.label} รายเดือน`}
           categories={months13.map((m) => `${shortMonth(m)}${ongoing && m === month ? "*" : ""}`)}
           tooltipTitles={months13.map((m) => `${monthLabel(m)}${ongoing && m === month ? ` (ยังไม่จบเดือน ถึงวันที่ ${lastDay})` : ""}`)}
@@ -380,6 +385,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
         </TableView>
       </section>
 
+      {cur.lives ? <DotSection month={month} sessions={byMonth.get(month)!} replay={replay} /> : null}
       {cur.lives ? <OwnerTable month={month} sessions={byMonth.get(month)!} version={version} /> : null}
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
@@ -666,6 +672,143 @@ function TableView({ title, children }: { title: string; children: ReactNode }) 
   );
 }
 
+/** กราฟแท่งรายวันของเดือนนี้ (นับตามวันที่เริ่มไลฟ์) ใช้ตัวชี้วัดเดียวกับกราฟรายเดือน */
+function DailySection({ month, sessions, metric, onMetric, replay }: {
+  month: string; sessions: LiveSession[]; metric: MetricKey; onMetric: (k: MetricKey) => void; replay: string;
+}) {
+  const def = metricOf(metric);
+  const fmt = (v: number | null) => fmtMetric(def.kind, v);
+  const [y, m] = month.split("-").map(Number);
+  const days = Array.from({ length: new Date(Date.UTC(y, m, 0)).getUTCDate() }, (_, i) => i + 1);
+  const byDay = new Map<number, LiveSession[]>();
+  for (const s of sessions) {
+    const d = bkkParts(s.startedAt).d;
+    byDay.set(d, [...(byDay.get(d) ?? []), s]);
+  }
+  const value = (d: number) => {
+    const list = byDay.get(d);
+    return list ? def.value(totalsOf(list)) : null;
+  };
+  const title = (d: number) => {
+    const k = parseKey(`${month}-${String(d).padStart(2, "0")}`);
+    return `${fmtWeekShort.format(k)} ${fmtDayMonth.format(k)}`;
+  };
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold">{def.label} รายวัน</h2>
+        <MetricSelect value={metric} onChange={onMetric} />
+      </div>
+      <BarChart
+        key={`${metric}|${replay}`}
+        label={`${def.label} รายวัน ${monthLabel(month)}`}
+        categories={days.map(String)}
+        tooltipTitles={days.map(title)}
+        series={[{ name: def.label, color: CUR, values: days.map(value) }]}
+        format={fmt}
+        formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
+      />
+      <TableView title="ดูเป็นตาราง">
+        <Table>
+          <TableHeader><TableRow><TableHead>วันที่</TableHead><TableHead className="text-right">{def.label}</TableHead><TableHead className="text-right">ไลฟ์</TableHead></TableRow></TableHeader>
+          <TableBody>
+            {days.filter((d) => byDay.has(d)).map((d) => (
+              <TableRow key={d}>
+                <TableCell>{title(d)}</TableCell>
+                <TableCell className="text-right tabular-nums">{fmt(value(d))}</TableCell>
+                <TableCell className="text-right tabular-nums">{byDay.get(d)!.length}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableView>
+    </section>
+  );
+}
+
+/** สีของแพลตฟอร์มในกราฟจุด (ผูกกับแพลตฟอร์ม กรองแล้วสีไม่เปลี่ยน) */
+const DOT_SERIES = [{ platform: "TikTok", name: "TikTok", color: CUR }, { platform: "Shopee", name: "Shopee", color: PREV }];
+
+/** กราฟจุด 1 จุด = 1 ไลฟ์: ตัวชี้วัดของไลฟ์นั้นเทียบกับเวลาเริ่ม หรือความยาวไลฟ์ (src/lib/live-dots.ts) */
+function DotSection({ month, sessions, replay }: { month: string; sessions: LiveSession[]; replay: string }) {
+  const [metric, setMetric] = useState<MetricKey>("gmvPerHour");
+  const [picked, setPicked] = useState<DotAxis>("start");
+  const withTimes = hasStartTimes(month);
+  const axis: DotAxis = withTimes ? picked : "length";
+  const def = metricOf(metric);
+  const fmt = (v: number | null) => fmtMetric(def.kind, v);
+  const { dots, skipped } = liveDots(sessions, metric, axis);
+  const colorOf = (p: string) => DOT_SERIES.find((x) => x.platform === p)?.color ?? PREV;
+  const nameOf = (s: LiveSession) => accountLabel({ platform: s.platform, name: s.accountName || s.accountId });
+  // แกนความยาว: ยาวเท่าไลฟ์ที่ยาวที่สุด (เผื่อขอบ 5%) ไม่เว้นที่ว่างท้ายแกน
+  const longest = Math.max(0, ...dots.map((d) => d.x));
+  const xMax = axis === "start" ? 24 : longest * 1.05 || 1;
+  const xTicks = axis === "start"
+    ? START_TICKS.map((v) => ({ v, label: startTickLabel(v) }))
+    : niceTicks(longest).filter((v) => v <= xMax).map((v) => ({ v, label: `${v} ชม.` }));
+  const shown = DOT_SERIES.filter((x) => dots.some((d) => d.session.platform === x.platform));
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="font-bold">{def.label} ของแต่ละไลฟ์</h2>
+          <p className="text-xs text-muted-foreground">1 จุด = 1 ไลฟ์ · แกนนอน = {axis === "start" ? "เวลาเริ่มไลฟ์" : "ความยาวไลฟ์"}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {withTimes ? (
+            <ToggleGroup type="single" spacing={1} value={axis} onValueChange={(v) => { if (v) setPicked(v as DotAxis); }} aria-label="แกนนอนของกราฟจุด" className="rounded-full border bg-card p-1">
+              {[["start", "เวลาเริ่ม"], ["length", "ความยาว"]].map(([id, text]) => (
+                <ToggleGroupItem key={id} value={id} className="h-6 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          ) : null}
+          <MetricSelect value={metric} onChange={setMetric} omit={["lives"]} />
+        </div>
+      </div>
+      {dots.length ? (
+        <DotChart
+          key={`${metric}|${axis}|${replay}`}
+          label={`${def.label} ของแต่ละไลฟ์ ${monthLabel(month)}`}
+          dots={dots.map((d) => ({
+            x: d.x, y: d.y, color: colorOf(d.session.platform), title: nameOf(d.session),
+            rows: [
+              ["เริ่มไลฟ์", bkkDateTime.format(new Date(d.session.startedAt))],
+              ["ความยาว", `${fmtDuration(d.session.durationSec)} ชม.`],
+              [def.label, fmt(d.y)],
+              ...(metric === "gmv" ? [] : [["GMV", fmtMetric("baht", d.session.gmv)] as [string, string]]),
+            ],
+          }))}
+          xTicks={xTicks}
+          xMax={xMax}
+          formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
+        />
+      ) : <p className="py-8 text-center text-sm text-muted-foreground">ไลฟ์เดือนนี้ไม่มีค่า {def.label}</p>}
+      {shown.length > 1 ? <div className="mt-1"><Legend series={shown} dot /></div> : null}
+      {skipped ? <p className="mt-1 text-xs text-muted-foreground">ไม่แสดง {skipped} ไลฟ์ที่ไม่มีค่านี้ เช่น ไลฟ์ที่ยังไม่จบตอน Export (0 นาที)</p> : null}
+      {!withTimes ? <p className="mt-1 text-xs text-muted-foreground">ข้อมูลเดือนนี้นำเข้าจากชีตรายวัน ไม่มีเวลาเริ่มไลฟ์จริง จึงดูได้เฉพาะความยาวไลฟ์</p> : null}
+      {dots.length ? (
+        <TableView title="ดูเป็นตาราง">
+          <div className="max-h-72 overflow-auto">
+            <Table>
+              <TableHeader><TableRow><TableHead>บัญชี</TableHead><TableHead>เริ่มไลฟ์</TableHead><TableHead className="text-right">ความยาว</TableHead><TableHead className="text-right">{def.label}</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {[...dots].sort((a, b) => b.y - a.y).map((d) => (
+                  <TableRow key={`${d.session.platform}|${d.session.accountId}|${d.session.startedAt}`}>
+                    <TableCell>{nameOf(d.session)}</TableCell>
+                    <TableCell className="tabular-nums">{bkkDateTime.format(new Date(d.session.startedAt))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtDuration(d.session.durationSec)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmt(d.y)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </TableView>
+      ) : null}
+    </section>
+  );
+}
+
 /**
  * แยก GMV ตามกลุ่มผู้ไลฟ์: เทียบเวลาไลฟ์ในไฟล์กับแพลนหน้า Plan Slot Live (src/lib/live-owners.ts)
  *   เฉพาะช่องที่มีแพลนกลุ่มในเดือนนั้น (เดือนที่ยังไม่มีแพลน = ไม่แสดง)
@@ -716,7 +859,7 @@ function OwnerTable({ month, sessions, version }: { month: string; sessions: Liv
               </TableRow>,
               ...c.rows.map((r) => (
                 <TableRow key={`${c.channel}|${r.owner ?? ""}`}>
-                  <TableCell className="pl-5">
+                  <TableCell className="whitespace-normal pl-5 sm:whitespace-nowrap">
                     {r.label}
                     <span className="block text-xs text-muted-foreground tabular-nums sm:hidden">{r.lives} ไลฟ์ · {(r.sec / 3600).toFixed(1)} ชม. · {perHour(r.gmv, r.sec)}/ชม.</span>
                   </TableCell>
