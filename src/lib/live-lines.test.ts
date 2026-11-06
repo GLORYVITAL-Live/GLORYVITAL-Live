@@ -1,13 +1,42 @@
 // เทสเส้นรายวันของแต่ละแพลตฟอร์ม (bun test)
 import { describe, expect, test } from "bun:test";
-import { dailyByPlatform } from "@/lib/live-lines";
-import type { LiveSession } from "@/lib/live-stats";
+import { dailyByPlatform, isStackable, platformSeries } from "@/lib/live-lines";
+import { METRICS, metricOf, totalsOf, type LiveSession, type MetricKey } from "@/lib/live-stats";
 
 const live = (d: string, t: string, min: number, gmv: number, platform = "TikTok") => ({
   platform, accountId: "1", accountName: "", title: "", startedAt: new Date(Date.parse(`${d}T${t}:00+07:00`)).toISOString(), durationSec: min * 60,
   gmv, orders: 0, itemsSold: 0, customers: null, viewers: 0, views: null, engagedViewers: null, avgViewSec: null, comments: null, shares: null, likes: null,
   newFollowers: null, addToCart: null, impressions: null, clicks: null,
 }) as unknown as LiveSession;
+
+describe("แท่งซ้อนแยกแพลตฟอร์ม", () => {
+  const all = [
+    { ...live("2026-11-01", "09:00", 60, 1000), orders: 10, itemsSold: 12, viewers: 100, views: 200, impressions: 500, clicks: 50 } as LiveSession,
+    { ...live("2026-11-01", "17:00", 120, 3000), orders: 20, itemsSold: 25, viewers: 300, views: 400, impressions: 700, clicks: 70 } as LiveSession,
+    { ...live("2026-11-01", "06:00", 180, 5000, "Shopee"), orders: 40, itemsSold: 44, viewers: 900 } as LiveSession,
+  ];
+  test("ตัวชี้วัดที่ซ้อนได้: ส่วนของแต่ละแพลตฟอร์มรวมกัน = ยอดรวมจริงของทั้งกลุ่ม (ไม่งั้นความสูงแท่งโกหก)", () => {
+    const stackable = METRICS.map((m) => m.key).filter(isStackable);
+    expect(stackable.length).toBeGreaterThan(0);
+    for (const key of stackable) {
+      const sum = platformSeries([all], key).reduce((a, s) => a + (s.values[0] ?? 0), 0);
+      expect(sum).toBeCloseTo(metricOf(key).value(totalsOf(all)) as number);
+    }
+  });
+  test("ค่าต่อหน่วยซ้อนไม่ได้: บวกกันไม่เท่ายอดรวม", () => {
+    const perUnit: MetricKey[] = ["gmvPerHour", "viewersPerHour", "impressionsPerHour", "aov", "gmvPerViewer", "ctr", "co"];
+    for (const key of perUnit) expect(isStackable(key)).toBe(false);
+    const sum = platformSeries([all], "gmvPerHour").reduce((a, s) => a + (s.values[0] ?? 0), 0);
+    expect(sum).not.toBeCloseTo(metricOf("gmvPerHour").value(totalsOf(all)) as number);
+  });
+  test("ตัวชี้วัดทุกตัวถูกจัดเป็นซ้อนได้หรือซ้อนไม่ได้อย่างใดอย่างหนึ่งแบบตั้งใจ", () => {
+    expect(METRICS.map((m) => m.key).filter(isStackable).sort()).toEqual(["duration", "gmv", "impressions", "items", "lives", "orders", "viewers", "views"]);
+  });
+  test("กลุ่มที่ไม่มีไลฟ์ = null · แพลตฟอร์มที่ไม่มีเลยไม่แสดง", () => {
+    const res = platformSeries([[live("2026-11-01", "09:00", 60, 100)], []], "gmv");
+    expect(res).toEqual([{ platform: "TikTok", values: [100, null] }]);
+  });
+});
 
 describe("เส้นรายวัน", () => {
   test("มีทุกวันของเดือน: ก.พ. 28 วัน / พ.ย. 30 วัน", () => {

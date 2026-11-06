@@ -59,8 +59,10 @@ export function Legend({ series, line = false }: { series: Pick<Series, "name" |
 /**
  * กราฟแท่งแนวตั้ง 1–2 ชุด (ชุดที่ 2 = ช่วงเทียบ) ชี้ที่กลุ่มเพื่อดูตัวเลข
  *   highlight = ลำดับกลุ่มที่เน้น (ชุดเดียว: กลุ่มอื่นจางลง)
+ *   stacked = แท่งเดียวซ้อนทุกชุด (ใช้กับค่าที่บวกกันได้เท่านั้น) กล่องตัวเลขบอกสัดส่วน + ยอดรวม
+ *   compare = false: 2 ชุดไม่ใช่ช่วงที่เทียบกัน (เช่น TikTok / Shopee) กล่องตัวเลขไม่แสดง % ที่เปลี่ยน
  */
-export function BarChart({ categories, tooltipTitles, series, format, formatAxis, highlight, height = 220, label }: {
+export function BarChart({ categories, tooltipTitles, series, format, formatAxis, highlight, height = 220, label, stacked = false, compare = true }: {
   categories: string[];
   /** หัวข้อในกล่องตัวเลข (ไม่ใส่ = ใช้ชื่อแกน) */
   tooltipTitles?: string[];
@@ -70,11 +72,14 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
   highlight?: number;
   height?: number;
   label: string;
+  stacked?: boolean;
+  compare?: boolean;
 }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
   const n = categories.length;
-  const max = Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0)));
+  const totalAt = (i: number) => series.reduce((a, s) => a + (s.values[i] ?? 0), 0);
+  const max = stacked ? Math.max(0, ...categories.map((_, i) => totalAt(i))) : Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0)));
   const ticks = niceTicks(max);
   const top = ticks[ticks.length - 1] || 1;
 
@@ -82,7 +87,7 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
   const plotW = Math.max(0, width - pad.l - pad.r);
   const plotH = height - pad.t - pad.b;
   const groupW = n ? plotW / n : 0;
-  const k = series.length;
+  const k = stacked ? 1 : series.length;
   const gap = 2;
   const barW = Math.max(2, Math.min(28, (groupW * 0.72 - gap * (k - 1)) / k));
   const y = (v: number) => pad.t + plotH - (v / top) * plotH;
@@ -102,11 +107,30 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
           {categories.map((c, i) => {
             const gx = pad.l + i * groupW;
             const inner = barW * k + gap * (k - 1);
-            const dim = (hover !== null && hover !== i) || (hover === null && highlight !== undefined && k === 1 && highlight !== i);
+            // แท่งซ้อน: ไม่จางตาม highlight (สีแยกแพลตฟอร์มต้องอ่านออกทุกแท่ง) เน้นด้วยชื่อตัวหนาแทน
+            const dim = (hover !== null && hover !== i) || (hover === null && highlight !== undefined && k === 1 && !stacked && highlight !== i);
+            // ส่วนของแต่ละชุดในแท่งซ้อน (ล่าง -> บน) ส่วนบนสุดปลายมน คั่นด้วยช่องว่างสีพื้น 2px
+            let base = 0;
+            const parts = stacked ? series.flatMap((s) => {
+              const v = s.values[i] ?? 0;
+              const from = base;
+              base += v;
+              return v > 0 ? [{ name: s.name, color: s.color, top: y(from + v), bottom: y(from) }] : [];
+            }) : [];
             return (
               <g key={i}>
                 {hover === i ? <rect x={gx} y={pad.t} width={groupW} height={plotH} className="fill-muted" /> : null}
-                {series.map((s, j) => {
+                {stacked ? (
+                  <g className="bar-grow" opacity={dim ? 0.45 : 1} style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}>
+                    {parts.map((p, j) => {
+                      const bx = gx + (groupW - barW) / 2;
+                      const h = Math.max(1, p.bottom - p.top - (j > 0 ? gap : 0));
+                      return j === parts.length - 1
+                        ? <path key={p.name} d={barPath(bx, p.top, barW, h)} fill={p.color} />
+                        : <rect key={p.name} x={bx} y={p.top} width={barW} height={h} fill={p.color} />;
+                    })}
+                  </g>
+                ) : series.map((s, j) => {
                   const v = s.values[i];
                   if (v === null || v <= 0) return null;
                   const bx = gx + (groupW - inner) / 2 + j * (barW + gap);
@@ -119,7 +143,7 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
                   );
                 })}
                 {i % every === 0 ? (
-                  <text x={gx + groupW / 2} y={height - 8} textAnchor="middle" className={cn("fill-muted-foreground text-[11px]", highlight === i && "fill-foreground font-semibold")}>
+                  <text x={gx + groupW / 2} y={height - 8} textAnchor="middle" className={cn("fill-muted-foreground text-[11px]", highlight === i && "fill-foreground font-bold")}>
                     {c}
                   </text>
                 ) : null}
@@ -143,10 +167,18 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
               <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                 <span className="size-2 rounded-[2px]" style={{ background: s.color }} aria-hidden />{s.name}
               </span>
-              <span className="font-semibold tabular-nums">{format(s.values[hover])}</span>
+              <span className="tabular-nums">
+                <span className="font-semibold">{format(s.values[hover])}</span>
+                {stacked && series.length > 1 && totalAt(hover) ? <span className="text-muted-foreground"> · {(((s.values[hover] ?? 0) / totalAt(hover)) * 100).toFixed(0)}%</span> : null}
+              </span>
             </div>
           ))}
-          {k === 2 ? <ChangeText cur={series[0].values[hover]} prev={series[1].values[hover]} className="mt-1 block text-right" /> : null}
+          {stacked && series.length > 1 ? (
+            <div className="mt-1 flex items-center justify-between gap-3 border-t pt-1">
+              <span className="text-muted-foreground">รวม</span><span className="font-semibold tabular-nums">{format(totalAt(hover))}</span>
+            </div>
+          ) : null}
+          {k === 2 && compare ? <ChangeText cur={series[0].values[hover]} prev={series[1].values[hover]} className="mt-1 block text-right" /> : null}
         </div>
       ) : null}
     </div>

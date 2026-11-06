@@ -10,7 +10,7 @@ import { fmtDayMonth, fmtMonthShort, fmtWeekShort, monthKey, monthLabel, parseKe
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
-import { dailyByPlatform } from "@/lib/live-lines";
+import { dailyByPlatform, isStackable, platformSeries } from "@/lib/live-lines";
 import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { DatePicker } from "@/components/date-picker";
@@ -340,6 +340,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
   // เปลี่ยนเดือน / ตัวกรอง = กราฟแท่งโตขึ้นใหม่
   const replay = `${month}|${filter.platform}|${filter.account}`;
+  const monthSeries = platformLines(months13.map((m) => byMonth.get(m)!), metric);
 
   return (
     <>
@@ -375,29 +376,34 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
           <h2 className="font-bold">{def.label} รายเดือน (13 เดือน)</h2>
           <MetricSelect value={metric} onChange={setMetric} />
         </div>
-        <BarChart
-          key={`${metric}|${replay}`}
+        <PlatformBars
+          series={monthSeries} metric={metric} replay={replay}
           label={`${def.label} รายเดือน`}
           categories={months13.map((m) => `${shortMonth(m)}${ongoing && m === month ? "*" : ""}`)}
-          tooltipTitles={months13.map((m) => `${monthLabel(m)}${ongoing && m === month ? ` (ยังไม่จบเดือน ถึงวันที่ ${lastDay})` : ""}`)}
-          series={[{ name: def.label, color: CUR, values: months13.map((m) => (totals.get(m)!.lives ? def.value(totals.get(m)!) : null)) }]}
-          format={fmt}
-          formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
+          titles={months13.map((m) => `${monthLabel(m)}${ongoing && m === month ? ` (ยังไม่จบเดือน ถึงวันที่ ${lastDay})` : ""}`)}
           highlight={12}
         />
         {ongoing ? <p className="mt-1 text-xs text-muted-foreground">* {monthLabel(month)} ยังไม่จบเดือน (ข้อมูลถึงวันที่ {lastDay}) แท่งจึงยังต่ำกว่าเดือนเต็ม</p> : null}
         <TableView title="ดูเป็นตาราง">
           <Table>
-            <TableHeader><TableRow><TableHead>เดือน</TableHead><TableHead className="text-right">{def.label}</TableHead><TableHead className="text-right">MoM</TableHead><TableHead className="text-right">ไลฟ์</TableHead></TableRow></TableHeader>
+            <TableHeader>
+              <TableRow>
+                <TableHead>เดือน</TableHead><TableHead className="text-right">{def.label}</TableHead>
+                {monthSeries.length > 1 ? monthSeries.map((s) => <TableHead key={s.name} className="text-right">{s.name}</TableHead>) : null}
+                <TableHead className="text-right">MoM</TableHead><TableHead className="text-right">ไลฟ์</TableHead>
+              </TableRow>
+            </TableHeader>
             <TableBody>
               {months13.slice().reverse().map((m) => {
                 const t = totals.get(m)!;
+                const at = months13.indexOf(m);
                 const open = ongoing && m === month; // เดือนนี้ยังไม่จบ = เทียบเดือนก่อนถึงวันเดียวกัน
                 const before = open ? prev : totals.get(monthKey(-1, m)) ?? totalsOf([]);
                 return (
                   <TableRow key={m}>
                     <TableCell>{monthLabel(m)}{open ? <span className="text-xs text-muted-foreground"> (ถึงวันที่ {lastDay})</span> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{t.lives ? fmt(def.value(t)) : "-"}</TableCell>
+                    {monthSeries.length > 1 ? monthSeries.map((s) => <TableCell key={s.name} className="text-right tabular-nums">{fmt(s.values[at])}</TableCell>) : null}
                     <TableCell className="text-right">{t.lives ? <ChangeText cur={def.value(t)} prev={before.lives ? def.value(before) : null} /> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{t.lives}</TableCell>
                   </TableRow>
@@ -555,6 +561,8 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
   const series = [{ name: aName, color: CUR, values: curKeys.map(valOf) }];
   const hasPrev = prevKeys.some((k) => totalsAt(k).lives);
   if (hasPrev) series.push({ name: bName, color: PREV, values: prevKeys.map(valOf) });
+  // กราฟแท่งแยกแพลตฟอร์ม ส่วนเทียบปีก่อนอยู่ในกราฟเส้นและตาราง
+  const yearSeries = platformLines(curKeys.map((k) => byMonth.get(k) ?? []), metric);
 
   // ไตรมาสที่อยู่ในช่วง (บางไตรมาสอาจมีไม่ครบ 3 เดือน) + ไตรมาสก่อนหน้า (QoQ) + ปีก่อน (YoY)
   const quarterKeys = [...new Set(curKeys.map(quarterOf))];
@@ -613,22 +621,24 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
 
       <section className="my-4 rounded-2xl border bg-card p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-bold">{def.label} รายเดือน {aName}{hasPrev ? ` เทียบ ${bName}` : ""}</h2>
+          <h2 className="font-bold">{def.label} รายเดือน {aName}</h2>
           <MetricSelect value={metric} onChange={setMetric} />
         </div>
-        {hasPrev ? <div className="mb-2"><Legend series={series} /></div> : null}
-        <BarChart
-          key={`${metric}|${replay}`}
+        <PlatformBars
+          series={yearSeries} metric={metric} replay={replay}
           label={`${def.label} รายเดือน ${aName}`}
           categories={curKeys.map(shortMonth)}
-          tooltipTitles={curKeys.map((k, i) => (hasPrev ? `${monthLabel(k)} vs ${monthLabel(prevKeys[i])}` : monthLabel(k)))}
-          series={series}
-          format={fmt}
-          formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
+          titles={curKeys.map(monthLabel)}
         />
         <TableView title="ดูเป็นตาราง">
           <Table>
-            <TableHeader><TableRow><TableHead>เดือน</TableHead><TableHead className="text-right">{def.label}</TableHead><TableHead className="text-right">MoM</TableHead><TableHead className="text-right">ปีก่อน</TableHead><TableHead className="text-right">YoY</TableHead></TableRow></TableHeader>
+            <TableHeader>
+              <TableRow>
+                <TableHead>เดือน</TableHead><TableHead className="text-right">{def.label}</TableHead>
+                {yearSeries.length > 1 ? yearSeries.map((s) => <TableHead key={s.name} className="text-right">{s.name}</TableHead>) : null}
+                <TableHead className="text-right">MoM</TableHead><TableHead className="text-right">ปีก่อน</TableHead><TableHead className="text-right">YoY</TableHead>
+              </TableRow>
+            </TableHeader>
             <TableBody>
               {curKeys.map((k, i) => {
                 const show = valOf(k) !== null && k !== now; // เดือนนี้ยังไม่จบ ไม่แสดง %
@@ -636,6 +646,7 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
                   <TableRow key={k}>
                     <TableCell>{monthLabel(k)}{k === now ? <span className="text-xs text-muted-foreground"> (ยังไม่จบ)</span> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{fmt(valOf(k))}</TableCell>
+                    {yearSeries.length > 1 ? yearSeries.map((s) => <TableCell key={s.name} className="text-right tabular-nums">{fmt(s.values[i])}</TableCell>) : null}
                     <TableCell className="text-right">{show ? <ChangeText cur={valOf(k)} prev={valOf(monthKey(-1, k))} /> : null}</TableCell>
                     <TableCell className="text-right tabular-nums">{fmt(valOf(prevKeys[i]))}</TableCell>
                     <TableCell className="text-right">{show ? <ChangeText cur={valOf(k)} prev={valOf(prevKeys[i])} /> : null}</TableCell>
@@ -735,32 +746,37 @@ function DailySection({ month, sessions, metric, onMetric, replay }: {
     return list ? def.value(totalsOf(list)) : null;
   };
   const title = (d: number) => dayTitle(month, d);
+  const series = platformLines(days.map((d) => byDay.get(d) ?? []), metric);
   return (
     <section className="my-4 rounded-2xl border bg-card p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-bold">{def.label} รายวัน</h2>
         <MetricSelect value={metric} onChange={onMetric} />
       </div>
-      <BarChart
-        key={`${metric}|${replay}`}
+      <PlatformBars
+        series={series} metric={metric} replay={replay}
         label={`${def.label} รายวัน ${monthLabel(month)}`}
         categories={days.map(String)}
-        tooltipTitles={days.map(title)}
-        series={[{ name: def.label, color: CUR, values: days.map(value) }]}
-        format={fmt}
-        formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
+        titles={days.map(title)}
       />
       <TableView title="ดูเป็นตาราง">
         <Table>
-          <TableHeader><TableRow><TableHead>วันที่</TableHead><TableHead className="text-right">{def.label}</TableHead><TableHead className="text-right">ไลฟ์</TableHead></TableRow></TableHeader>
+          <TableHeader>
+            <TableRow>
+              <TableHead>วันที่</TableHead><TableHead className="text-right">{def.label}</TableHead>
+              {series.length > 1 ? series.map((s) => <TableHead key={s.name} className="text-right">{s.name}</TableHead>) : null}
+              <TableHead className="text-right">ไลฟ์</TableHead>
+            </TableRow>
+          </TableHeader>
           <TableBody>
-            {days.filter((d) => byDay.has(d)).map((d) => (
+            {days.map((d, i) => (byDay.has(d) ? (
               <TableRow key={d}>
                 <TableCell>{title(d)}</TableCell>
                 <TableCell className="text-right tabular-nums">{fmt(value(d))}</TableCell>
+                {series.length > 1 ? series.map((s) => <TableCell key={s.name} className="text-right tabular-nums">{fmt(s.values[i])}</TableCell>) : null}
                 <TableCell className="text-right tabular-nums">{byDay.get(d)!.length}</TableCell>
               </TableRow>
-            ))}
+            ) : null))}
           </TableBody>
         </Table>
       </TableView>
@@ -825,8 +841,38 @@ function TrendSection({ title, label, rowHead, categories, titles, series, metri
   );
 }
 
-/** สีของแพลตฟอร์มในกราฟเส้น (ผูกกับแพลตฟอร์ม กรองแล้วสีไม่เปลี่ยน) */
+/** สีของแพลตฟอร์มในกราฟ (ผูกกับแพลตฟอร์ม กรองแล้วสีไม่เปลี่ยน) */
 const PLATFORM_COLOR: Record<string, string> = { TikTok: CUR, Shopee: PREV };
+/** ค่าของแต่ละกลุ่มแยกแพลตฟอร์ม พร้อมชื่อ + สีสำหรับกราฟและตาราง */
+const platformLines = (groups: LiveSession[][], metric: MetricKey) =>
+  platformSeries(groups, metric).map((s) => ({ name: s.platform, color: PLATFORM_COLOR[s.platform], values: s.values }));
+
+/**
+ * กราฟแท่งแยกสีตามแพลตฟอร์ม: ค่าที่บวกกันได้ (GMV ออเดอร์ ชั่วโมง ...) = แท่งซ้อน ความสูงรวมคือยอดรวมจริง
+ *   ค่าต่อหน่วย (GMV/ชม. CO ...) บวกกันไม่ได้ = แท่งคู่ · ตัวกรองเหลือแพลตฟอร์มเดียว = แท่งสีเดียว ไม่มี Legend
+ */
+function PlatformBars({ series, metric, categories, titles, label, highlight, replay }: {
+  series: ReturnType<typeof platformLines>; metric: MetricKey; categories: string[]; titles: string[]; label: string; highlight?: number; replay: string;
+}) {
+  const def = metricOf(metric);
+  return (
+    <>
+      <BarChart
+        key={`${metric}|${replay}`}
+        label={label}
+        categories={categories}
+        tooltipTitles={titles}
+        series={series}
+        format={(v) => fmtMetric(def.kind, v)}
+        formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
+        highlight={highlight}
+        stacked={isStackable(metric)}
+        compare={false}
+      />
+      {series.length > 1 ? <div className="mt-1"><Legend series={series} /></div> : null}
+    </>
+  );
+}
 
 /** กราฟเส้นรายวันแยก TikTok / Shopee (src/lib/live-lines.ts) ตั้งต้นที่ GMV/ชม. เพราะยอดรวมรายวันมีกราฟแท่งแล้ว */
 function LineSection({ month, sessions, replay }: { month: string; sessions: LiveSession[]; replay: string }) {
@@ -1131,7 +1177,6 @@ function MultiMonthView({ dataMonths, version, days }: { dataMonths: string[]; v
   const gmvSum = complete.reduce((s, k) => s + (valueAt(k, "gmv") ?? 0), 0);
   const firstDone = complete[0], lastDone = complete[complete.length - 1];
   const def = metricOf(metric);
-  const fmtV = (v: number | null) => fmtMetric(def.kind, v);
   const chartBest = keys.indexOf(bestBy(metric) ?? "");
   const exportFilter = { platform: filter.platform, account: filter.account, sessions: data };
   const replay = `${range.from}|${range.to}|${filter.platform}|${filter.account}`;
@@ -1207,17 +1252,14 @@ function MultiMonthView({ dataMonths, version, days }: { dataMonths: string[]; v
           <h2 className="font-bold">{def.label} รายเดือน</h2>
           <MetricSelect value={metric} onChange={setMetric} />
         </div>
-        <BarChart
-          key={`${metric}|${replay}`}
+        <PlatformBars
+          series={platformLines(keys.map((k) => byMonth.get(k)!), metric)} metric={metric} replay={replay}
           label={`${def.label} รายเดือน`}
           categories={keys.map(short)}
-          tooltipTitles={keys.map(long)}
-          series={[{ name: def.label, color: CUR, values: keys.map((k) => valueAt(k, metric)) }]}
-          format={fmtV}
-          formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
+          titles={keys.map(long)}
           highlight={chartBest >= 0 ? chartBest : undefined}
         />
-        {chartBest >= 0 ? <p className="mt-1 text-xs text-muted-foreground">แท่งเข้ม = {days ? "ช่วง" : "เดือน"}ที่ {def.label} สูงสุด ({long(keys[chartBest])})</p> : null}
+        {chartBest >= 0 ? <p className="mt-1 text-xs text-muted-foreground">ชื่อตัวหนา = {days ? "ช่วง" : "เดือน"}ที่ {def.label} สูงสุด ({long(keys[chartBest])})</p> : null}
       </section>
 
       <TrendSection
@@ -1816,21 +1858,22 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
     a: cur.filter((s) => stepOf(s, pc.from) === i),
     b: pp ? prev.filter((s) => stepOf(s, pp.from) === i) : [],
   }));
-  let categories: string[], titles: string[], curVals: (number | null)[], prevVals: (number | null)[];
+  let categories: string[], titles: string[], curGroups: LiveSession[][], prevGroups: LiveSession[][];
   const val = (list: LiveSession[]) => (list.length ? def.value(totalsOf(list)) : null);
   if (byTime) {
     categories = timeGroups.map((g) => g.short);
     titles = timeGroups.map((g) => g.label);
-    curVals = timeGroups.map((g) => val(g.a));
-    prevVals = timeGroups.map((g) => val(g.b));
+    curGroups = timeGroups.map((g) => g.a);
+    prevGroups = timeGroups.map((g) => g.b);
   } else {
     const accounts = accountsOf([...cur, ...prev]);
     categories = accounts.map((a) => a.name);
     titles = accounts.map(accountLabel);
     const of = (list: LiveSession[], key: string) => list.filter((s) => `${s.platform}|${s.accountId}` === key);
-    curVals = accounts.map((a) => val(of(cur, a.key)));
-    prevVals = accounts.map((a) => val(of(prev, a.key)));
+    curGroups = accounts.map((a) => of(cur, a.key));
+    prevGroups = accounts.map((a) => of(prev, a.key));
   }
+  const curVals = curGroups.map(val), prevVals = prevGroups.map(val);
   const chartSeries = single ? [{ name: curName, color: CUR, values: curVals }]
     : [{ name: curName, color: CUR, values: curVals }, { name: prevName, color: PREV, values: prevVals }];
   const missing = [...new Set([...missingMonths(pc.from, pc.to, dataMonths), ...(pp ? missingMonths(pp.from, pp.to, dataMonths) : [])])];
@@ -1902,8 +1945,16 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
             </div>
             {single ? null : <Legend series={chartSeries} />}
             <div className="mt-2">
-              <BarChart key={`${metric}|${groupBy}|${replay}`} label={single ? `${def.label} ${curName}` : `${def.label} ${curName} เทียบ ${prevName}`} categories={categories} tooltipTitles={titles} series={chartSeries}
-                format={fmt} formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)} />
+              {/* ดูช่วงเดียว: แยกสีตามแพลตฟอร์ม · เทียบ 2 ช่วง: สีบอกช่วงเวลา จึงไม่ซ้อนแพลตฟอร์ม */}
+              {single ? (
+                <PlatformBars
+                  series={platformLines(curGroups, metric)} metric={metric} replay={`${groupBy}|${replay}`}
+                  label={`${def.label} ${curName}`} categories={categories} titles={titles}
+                />
+              ) : (
+                <BarChart key={`${metric}|${groupBy}|${replay}`} label={`${def.label} ${curName} เทียบ ${prevName}`} categories={categories} tooltipTitles={titles} series={chartSeries}
+                  format={fmt} formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)} />
+              )}
             </div>
             <TableView title="ดูเป็นตาราง">
               <Table>
