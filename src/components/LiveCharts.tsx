@@ -157,8 +157,9 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
  * กราฟเส้นแนวโน้ม 1 แกน · ชี้ / แตะตรงไหนก็ได้ เส้นตั้งจะจับวันที่ใกล้สุด แล้วแสดงค่าทุกเส้นของวันนั้น (ทุกค่าต้องมีตารางคู่กันด้วย)
  *   ค่าที่ไม่มี = เส้นขาด ไม่ลากข้าม · จุดเดี่ยวที่ไม่มีเพื่อนบ้านวาดเป็นจุดให้เห็น · หลายเส้น = ป้ายชื่อปลายเส้น (ปลายเส้นเบียดกัน = เหลือแค่ Legend)
  *   เส้นวาดจากซ้ายไปขวา (ลดการเคลื่อนไหว = ไม่ขยับ · globals.css .line-draw / .dot-pop)
+ *   compare = 2 เส้นเป็นช่วงที่เทียบกัน (กล่องตัวเลขแสดง % ที่เปลี่ยน)
  */
-export function LineChart({ categories, tooltipTitles, series, format, formatAxis, height = 260, label }: {
+export function LineChart({ categories, tooltipTitles, series, format, formatAxis, height = 260, label, compare = false }: {
   categories: string[];
   tooltipTitles?: string[];
   series: Pick<Series, "name" | "color" | "values">[];
@@ -166,13 +167,16 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
   formatAxis: (v: number) => string;
   height?: number;
   label: string;
+  compare?: boolean;
 }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
   const n = categories.length;
   const ticks = niceTicks(Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0))));
   const top = ticks[ticks.length - 1] || 1;
-  const pad = { l: 52, r: series.length > 1 ? 56 : 12, t: 10, b: 26 };
+  // ป้ายปลายเส้นเฉพาะชื่อสั้น (เช่น TikTok) ชื่อช่วงเวลายาวเกินที่ว่างข้างกราฟ ใช้ Legend แทน
+  const labelled = series.length > 1 && series.every((s) => s.name.length <= 8);
+  const pad = { l: 52, r: labelled ? 56 : 12, t: 10, b: 26 };
   const plotW = Math.max(0, width - pad.l - pad.r);
   const plotH = height - pad.t - pad.b;
   const x = (i: number) => pad.l + (n > 1 ? (i / (n - 1)) * plotW : plotW / 2);
@@ -199,7 +203,7 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
   const lastOf = (values: (number | null)[]) => values.reduce<number>((a, v, i) => (v === null ? a : i), -1);
   // ป้ายปลายเส้น: ปลายเส้นห่างกันไม่ถึง 14px = ป้ายทับกัน ไม่แสดง (Legend + กล่องตัวเลขบอกอยู่แล้ว)
   const ends = series.map((s) => ({ s, i: lastOf(s.values) }));
-  const endLabels = series.length > 1 && ends.every(({ s, i }, k) => ends.every((o, j) => j === k
+  const endLabels = labelled && ends.every(({ s, i }, k) => ends.every((o, j) => j === k
     || Math.abs(x(i) - x(o.i)) > 60 || Math.abs(y(s.values[i] ?? 0) - y(o.s.values[o.i] ?? 0)) >= 14));
 
   return (
@@ -247,6 +251,7 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
               <span className="font-semibold tabular-nums">{format(s.values[hover])}</span>
             </div>
           ))}
+          {compare && series.length === 2 ? <ChangeText cur={series[0].values[hover]} prev={series[1].values[hover]} className="mt-1 block text-right" /> : null}
         </div>
       ) : null}
     </div>

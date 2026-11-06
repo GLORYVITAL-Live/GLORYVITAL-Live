@@ -34,7 +34,7 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-// หน้าสถิติไลฟ์ (Owner): ภาพรวมรายเดือน MoM / YoY | เทียบแคมเปญ | CEO Live | อัปโหลดไฟล์ Export
+// หน้าสถิติไลฟ์ (Owner): ภาพรวม / เทียบช่วง (รายเดือน ทั้งปี วัน ช่วงวัน เดือน ไตรมาส หลายเดือน) | เทียบแคมเปญ | CEO Live | อัปโหลดไฟล์ Export
 
 type MonthRow = { month: string; platform: string; lives: number; gmv: number };
 
@@ -105,7 +105,7 @@ async function fetchCampaigns() {
 /** หน้า Data analytics · readOnly = ดูได้อย่างเดียว (ไม่มีแท็บอัปโหลด / แก้แคมเปญไม่ได้ แต่ส่งออกได้) */
 export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boolean; cost?: boolean }) {
   const saved = useLocal(TAB_KEY);
-  const tab = saved === "compare" || saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) || (saved === "cost" && cost) ? saved : "overview";
+  const tab = saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) || (saved === "cost" && cost) ? saved : "overview";
   const [months, setMonths] = useState<MonthRow[] | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [error, setError] = useState("");
@@ -125,7 +125,7 @@ export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boole
 
   // ความคุ้มค่า Mc = ค่าจ้าง: เฉพาะ Owner ที่จัดการฝั่ง Mc ได้ (เห็นค่าจ้าง)
   const tabs = [
-    ["overview", "ภาพรวม"], ["compare", "เทียบช่วง"], ["campaign", "แคมเปญ"], ...(cost ? [["cost", "คุ้มค่า Mc"] as const] : []),
+    ["overview", "ภาพรวม / เทียบ"], ["campaign", "แคมเปญ"], ...(cost ? [["cost", "คุ้มค่า Mc"] as const] : []),
     ["ceo", "CEO Live"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const]),
   ] as const;
   const dataMonths = [...new Set(months.map((m) => m.month))];
@@ -134,7 +134,7 @@ export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boole
     <Tabs value={tab} onValueChange={(v) => writeLocal(TAB_KEY, v)} className="gap-0 pb-10">
       <TabsList aria-label="เมนูสถิติไลฟ์" className="my-3 h-auto! w-full rounded-full border bg-card p-1">
         {tabs.map(([id, label]) => (
-          // มือถือ: แท็บ 6 อันต้องพอดีแถวเดียว (ระยะข้างแคบลง)
+          // มือถือ: แท็บทั้งหมดต้องพอดีแถวเดียว (ระยะข้างแคบลง)
           <TabsTrigger key={id} value={id} className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-tint! data-active:text-tint-foreground! max-sm:px-1 max-sm:text-[12.5px] sm:text-sm">
             {label}
           </TabsTrigger>
@@ -142,9 +142,6 @@ export function LiveStats({ readOnly = false, cost = false }: { readOnly?: boole
       </TabsList>
       <TabsContent value="overview">
         {months.length ? <Overview latest={months[0].month} dataMonths={dataMonths} version={version} readOnly={readOnly} /> : empty}
-      </TabsContent>
-      <TabsContent value="compare">
-        {months.length ? <CompareView dataMonths={dataMonths} version={version} /> : empty}
       </TabsContent>
       <TabsContent value="campaign">
         <CampaignView campaigns={campaigns} dataMonths={dataMonths} version={version} readOnly={readOnly} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />
@@ -264,19 +261,45 @@ function KpiGrid({ cur, compare }: { cur: Totals; compare: { totals: Totals; lab
 
 const OVERVIEW_KEY = "glory_live_overview_mode";
 
+/** โหมดของแท็บภาพรวม / เทียบ: ดูภาพรวม หรือเทียบ (cmp-month = เทียบเดือน แยกจาก month = ภาพรวมรายเดือน) */
+type OverviewMode = "month" | "year" | "day" | "range" | "cmp-month" | "quarter" | "multi";
+const VIEW_MODES: [OverviewMode, string][] = [["month", "รายเดือน"], ["year", "ทั้งปี"]];
+// [โหมด, ชื่อเต็ม, ชื่อสั้นบนมือถือ (5 ปุ่มชื่อเต็มยาวเกินกล่องบนจอ 375px)]
+const COMPARE_MODES: [OverviewMode, string, string][] = [
+  ["day", "วัน", "วัน"], ["range", "ช่วงวันที่", "ช่วงวัน"], ["cmp-month", "เดือน (MoM)", "เดือน"], ["quarter", "ไตรมาส (QoQ)", "ไตรมาส"], ["multi", "หลายเดือน", "หลายเดือน"],
+];
+const MODE_PILL = "rounded-full! text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!";
+
+/** ภาพรวม + เทียบช่วงอยู่หน้าเดียวกัน: เลือกโหมดจากแถบเดียว (จำโหมดล่าสุดไว้ในเครื่อง) */
 function Overview({ latest, dataMonths, version, readOnly }: { latest: string; dataMonths: string[]; version: number; readOnly: boolean }) {
-  const mode = useLocal(OVERVIEW_KEY) === "year" ? "year" : "month";
+  const saved = useLocal(OVERVIEW_KEY) as OverviewMode | null;
+  const mode: OverviewMode = saved && [...VIEW_MODES, ...COMPARE_MODES].some(([id]) => id === saved) ? saved : "month";
+  const pick = (v: string) => { if (v) writeLocal(OVERVIEW_KEY, v); };
+  const inGroup = (list: [OverviewMode, ...string[]][]) => (list.some(([id]) => id === mode) ? mode : "");
   return (
     <>
-      <ToggleGroup type="single" spacing={1} value={mode} onValueChange={(v) => { if (v) writeLocal(OVERVIEW_KEY, v); }}
-        aria-label="ดูภาพรวมแบบ" className="mb-1 rounded-full border bg-card p-1">
-        {[["month", "รายเดือน"], ["year", "ทั้งปี"]].map(([id, text]) => (
-          <ToggleGroupItem key={id} value={id} className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">
-            {text}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
-      {mode === "year" ? <YearOverview latest={latest} dataMonths={dataMonths} version={version} /> : <MonthOverview latest={latest} dataMonths={dataMonths} version={version} readOnly={readOnly} />}
+      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <ToggleGroup type="single" spacing={1} value={inGroup(VIEW_MODES)} onValueChange={pick} aria-label="ดูภาพรวมแบบ" className="rounded-full border bg-card p-1">
+          {VIEW_MODES.map(([id, text]) => <ToggleGroupItem key={id} value={id} className={cn(MODE_PILL, "px-4")}>{text}</ToggleGroupItem>)}
+        </ToggleGroup>
+        <div className="flex max-w-full min-w-0 items-center gap-2">
+          <span className="shrink-0 text-xs font-semibold text-muted-foreground">เทียบ</span>
+          <ToggleGroup type="single" spacing={1} value={inGroup(COMPARE_MODES)} onValueChange={pick} aria-label="เทียบเป็น" className="no-scrollbar max-w-full min-w-0 overflow-x-auto rounded-full border bg-card p-1">
+            {COMPARE_MODES.map(([id, text, short]) => (
+              <ToggleGroupItem key={id} value={id} className={cn(MODE_PILL, "px-2.5 sm:px-3")}>
+                <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{text}</span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
+      </div>
+      {mode === "year" ? <YearOverview latest={latest} dataMonths={dataMonths} version={version} />
+        : mode === "multi" ? <MultiMonthView dataMonths={dataMonths} version={version} />
+          : mode === "day" ? <DayCompare dataMonths={dataMonths} version={version} />
+            : mode === "range" ? <RangeCompare dataMonths={dataMonths} version={version} />
+              : mode === "cmp-month" ? <PairCompare kind="month" dataMonths={dataMonths} version={version} />
+                : mode === "quarter" ? <PairCompare kind="quarter" dataMonths={dataMonths} version={version} />
+                  : <MonthOverview latest={latest} dataMonths={dataMonths} version={version} readOnly={readOnly} />}
     </>
   );
 }
@@ -527,6 +550,7 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
 
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
+  const replay = `${range.from}|${range.to}|${filter.platform}|${filter.account}`;
   const valOf = (k: string) => { const t = totalsAt(k); return t.lives ? def.value(t) : null; };
   const series = [{ name: aName, color: CUR, values: curKeys.map(valOf) }];
   const hasPrev = prevKeys.some((k) => totalsAt(k).lives);
@@ -594,6 +618,7 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
         </div>
         {hasPrev ? <div className="mb-2"><Legend series={series} /></div> : null}
         <BarChart
+          key={`${metric}|${replay}`}
           label={`${def.label} รายเดือน ${aName}`}
           categories={curKeys.map(shortMonth)}
           tooltipTitles={curKeys.map((k, i) => (hasPrev ? `${monthLabel(k)} vs ${monthLabel(prevKeys[i])}` : monthLabel(k)))}
@@ -621,6 +646,20 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
           </Table>
         </TableView>
       </section>
+
+      <TrendSection
+        title={`${def.label} แนวโน้มรายเดือน ${aName}${hasPrev ? ` เทียบ ${bName}` : ""}`}
+        label={`แนวโน้ม ${def.label} รายเดือน ${aName}`}
+        rowHead="เดือน"
+        categories={curKeys.map(shortMonth)}
+        titles={curKeys.map((k, i) => (hasPrev ? `${monthLabel(k)} vs ${monthLabel(prevKeys[i])}` : monthLabel(k)))}
+        series={series}
+        metric={metric}
+        onMetric={setMetric}
+        replay={replay}
+        compare={hasPrev}
+        table={false}
+      />
 
       <section className="my-4">
         <h2 className="mb-2 text-lg font-bold">{def.label} รายไตรมาส</h2>
@@ -729,45 +768,53 @@ function DailySection({ month, sessions, metric, onMetric, replay }: {
   );
 }
 
-/** สีของแพลตฟอร์มในกราฟเส้น (ผูกกับแพลตฟอร์ม กรองแล้วสีไม่เปลี่ยน) */
-const PLATFORM_COLOR: Record<string, string> = { TikTok: CUR, Shopee: PREV };
-
-/** กราฟเส้นรายวันแยก TikTok / Shopee (src/lib/live-lines.ts) ตั้งต้นที่ GMV/ชม. เพราะยอดรวมรายวันมีกราฟแท่งแล้ว */
-function LineSection({ month, sessions, replay }: { month: string; sessions: LiveSession[]; replay: string }) {
-  const [metric, setMetric] = useState<MetricKey>("gmvPerHour");
+/**
+ * การ์ดกราฟเส้น + ตารางคู่กัน ใช้ร่วมกันทุกโหมด · เปลี่ยนเดือน / ตัวกรอง / ตัวชี้วัด (replay) = เส้นวาดใหม่
+ *   compare = 2 เส้นเป็นช่วงที่เทียบกัน (มีคอลัมน์ % ที่เปลี่ยน) · table = false เมื่อการ์ดอื่นมีตารางของตัวเลขชุดนี้แล้ว
+ */
+function TrendSection({ title, label, rowHead, categories, titles, series, metric, onMetric, replay, compare = false, table = true }: {
+  title: string; label: string; rowHead: string; categories: string[]; titles: string[];
+  series: { name: string; color: string; values: (number | null)[] }[];
+  metric: MetricKey; onMetric: (k: MetricKey) => void; replay: string; compare?: boolean; table?: boolean;
+}) {
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
-  const { days, series } = dailyByPlatform(sessions, month, metric);
-  const lines = series.map((s) => ({ name: s.platform, color: PLATFORM_COLOR[s.platform], values: s.values }));
+  const pair = compare && series.length === 2;
   return (
     <section className="my-4 rounded-2xl border bg-card p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-bold">{def.label} รายวัน {lines.length > 1 ? "แยกแพลตฟอร์ม" : lines[0]?.name ?? ""}</h2>
-        <MetricSelect value={metric} onChange={setMetric} />
+        <h2 className="font-bold">{title}</h2>
+        <MetricSelect value={metric} onChange={onMetric} />
       </div>
-      {lines.length ? (
+      {series.length ? (
         <LineChart
           key={`${metric}|${replay}`}
-          label={`${def.label} รายวัน ${monthLabel(month)}`}
-          categories={days.map(String)}
-          tooltipTitles={days.map((d) => dayTitle(month, d))}
-          series={lines}
+          label={label}
+          categories={categories}
+          tooltipTitles={titles}
+          series={series}
           format={fmt}
           formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
+          compare={compare}
         />
-      ) : <p className="py-8 text-center text-sm text-muted-foreground">ไลฟ์เดือนนี้ไม่มีค่า {def.label}</p>}
-      {lines.length > 1 ? <div className="mt-1"><Legend series={lines} line /></div> : null}
-      {lines.length ? (
+      ) : <p className="py-8 text-center text-sm text-muted-foreground">ไม่มีค่า {def.label} ในช่วงนี้</p>}
+      {series.length > 1 ? <div className="mt-1"><Legend series={series} line /></div> : null}
+      {series.length && table ? (
         <TableView title="ดูเป็นตาราง">
           <Table>
             <TableHeader>
-              <TableRow><TableHead>วันที่</TableHead>{lines.map((s) => <TableHead key={s.name} className="text-right">{s.name}</TableHead>)}</TableRow>
+              <TableRow>
+                <TableHead>{rowHead}</TableHead>
+                {series.map((s) => <TableHead key={s.name} className="text-right">{s.name}</TableHead>)}
+                {pair ? <TableHead className="text-right">เปลี่ยน</TableHead> : null}
+              </TableRow>
             </TableHeader>
             <TableBody>
-              {days.map((d, i) => (lines.some((s) => s.values[i] !== null) ? (
-                <TableRow key={d}>
-                  <TableCell>{dayTitle(month, d)}</TableCell>
-                  {lines.map((s) => <TableCell key={s.name} className="text-right tabular-nums">{fmt(s.values[i])}</TableCell>)}
+              {categories.map((c, i) => (series.some((s) => s.values[i] !== null) ? (
+                <TableRow key={c}>
+                  <TableCell>{titles[i]}</TableCell>
+                  {series.map((s) => <TableCell key={s.name} className="text-right tabular-nums">{fmt(s.values[i])}</TableCell>)}
+                  {pair ? <TableCell className="text-right"><ChangeText cur={series[0].values[i]} prev={series[1].values[i]} /></TableCell> : null}
                 </TableRow>
               ) : null))}
             </TableBody>
@@ -775,6 +822,30 @@ function LineSection({ month, sessions, replay }: { month: string; sessions: Liv
         </TableView>
       ) : null}
     </section>
+  );
+}
+
+/** สีของแพลตฟอร์มในกราฟเส้น (ผูกกับแพลตฟอร์ม กรองแล้วสีไม่เปลี่ยน) */
+const PLATFORM_COLOR: Record<string, string> = { TikTok: CUR, Shopee: PREV };
+
+/** กราฟเส้นรายวันแยก TikTok / Shopee (src/lib/live-lines.ts) ตั้งต้นที่ GMV/ชม. เพราะยอดรวมรายวันมีกราฟแท่งแล้ว */
+function LineSection({ month, sessions, replay }: { month: string; sessions: LiveSession[]; replay: string }) {
+  const [metric, setMetric] = useState<MetricKey>("gmvPerHour");
+  const def = metricOf(metric);
+  const { days, series } = dailyByPlatform(sessions, month, metric);
+  const lines = series.map((s) => ({ name: s.platform, color: PLATFORM_COLOR[s.platform], values: s.values }));
+  return (
+    <TrendSection
+      title={`${def.label} รายวัน ${lines.length > 1 ? "แยกแพลตฟอร์ม" : lines[0]?.name ?? ""}`}
+      label={`${def.label} รายวัน ${monthLabel(month)}`}
+      rowHead="วันที่"
+      categories={days.map(String)}
+      titles={days.map((d) => dayTitle(month, d))}
+      series={lines}
+      metric={metric}
+      onMetric={setMetric}
+      replay={replay}
+    />
   );
 }
 
@@ -977,9 +1048,7 @@ function dayRangeShort(a: string, b: string) {
  *   days = เทียบเฉพาะช่วงวันเดียวกันของแต่ละเดือน (เช่น 19–22 ก.ค. / ส.ค. / ก.ย. / ต.ค.) จากโหมด "ช่วงวันที่"
  *     ช่วงที่เลือกเป็นเดือนหลัก (ค่าเริ่มต้น) · ค่าเริ่มต้น = 3 เดือนก่อนหน้า ถึงเดือนของช่วงที่เลือก
  */
-function MultiMonthView({ toggle, dataMonths, version, days }: {
-  toggle: ReactNode; dataMonths: string[]; version: number; days?: { a: string; b: string };
-}) {
+function MultiMonthView({ dataMonths, version, days }: { dataMonths: string[]; version: number; days?: { a: string; b: string } }) {
   const sorted = dataMonths.slice().sort();
   const base = days ? days.a.slice(0, 7) : null;
   const last = base ?? (sorted.length ? sorted[sorted.length - 1] : monthKey());
@@ -1000,7 +1069,6 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
 
   const controls = (
     <div className="my-3 rounded-xl border bg-card p-3">
-      {toggle}
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-0 flex-1">
           <span className="mb-1 block text-xs text-muted-foreground">
@@ -1066,6 +1134,7 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
   const fmtV = (v: number | null) => fmtMetric(def.kind, v);
   const chartBest = keys.indexOf(bestBy(metric) ?? "");
   const exportFilter = { platform: filter.platform, account: filter.account, sessions: data };
+  const replay = `${range.from}|${range.to}|${filter.platform}|${filter.account}`;
 
   return (
     <>
@@ -1139,6 +1208,7 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
           <MetricSelect value={metric} onChange={setMetric} />
         </div>
         <BarChart
+          key={`${metric}|${replay}`}
           label={`${def.label} รายเดือน`}
           categories={keys.map(short)}
           tooltipTitles={keys.map(long)}
@@ -1150,10 +1220,23 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
         {chartBest >= 0 ? <p className="mt-1 text-xs text-muted-foreground">แท่งเข้ม = {days ? "ช่วง" : "เดือน"}ที่ {def.label} สูงสุด ({long(keys[chartBest])})</p> : null}
       </section>
 
+      <TrendSection
+        title={`${def.label} แนวโน้ม${days ? "ของแต่ละช่วง" : "รายเดือน"}`}
+        label={`แนวโน้ม ${def.label} ${rangeText}`}
+        rowHead={days ? "ช่วง" : "เดือน"}
+        categories={keys.map(short)}
+        titles={keys.map(long)}
+        series={[{ name: def.label, color: CUR, values: keys.map((k) => valueAt(k, metric)) }]}
+        metric={metric}
+        onMetric={setMetric}
+        replay={replay}
+        table={false}
+      />
+
       {days && nDays > 1 ? (
         <DailyByMonth
           keys={keys} focus={focus} labels={dayLabels} byDay={byDay} short={short} long={long}
-          metric={metric} onMetric={setMetric}
+          metric={metric} onMetric={setMetric} replay={replay}
         />
       ) : null}
 
@@ -1191,12 +1274,12 @@ function MultiMonthView({ toggle, dataMonths, version, days }: {
 const MONTH_COLORS = [PREV, "var(--p1)", "var(--p3)", "var(--p2)", "var(--p0)"];
 
 /**
- * รายวันของแต่ละเดือน (โหมดช่วงวันเดียวกันหลายเดือน): กราฟแท่งวันละกลุ่ม (เดือนละแท่ง) + ตาราง วัน × เดือน + ช่วงหลัก vs เดือนอื่น
+ * รายวันของแต่ละเดือน (โหมดช่วงวันเดียวกันหลายเดือน): กราฟแท่งวันละกลุ่ม (เดือนละแท่ง) + กราฟเส้นเดือนละเส้น + ตาราง วัน × เดือน + ช่วงหลัก vs เดือนอื่น
  *   ใช้ตัวชี้วัดเดียวกับกราฟรายเดือน (เปลี่ยนได้ที่นี่ด้วย)
  */
-function DailyByMonth({ keys, focus, labels, byDay, short, long, metric, onMetric }: {
+function DailyByMonth({ keys, focus, labels, byDay, short, long, metric, onMetric, replay }: {
   keys: string[]; focus: string; labels: string[]; byDay: Map<string, LiveSession[][]>;
-  short: (k: string) => string; long: (k: string) => string; metric: MetricKey; onMetric: (m: MetricKey) => void;
+  short: (k: string) => string; long: (k: string) => string; metric: MetricKey; onMetric: (m: MetricKey) => void; replay: string;
 }) {
   const def = metricOf(metric);
   const val = (list: LiveSession[] | undefined) => { const t = totalsOf(list ?? []); return t.lives ? def.value(t) : null; };
@@ -1204,17 +1287,21 @@ function DailyByMonth({ keys, focus, labels, byDay, short, long, metric, onMetri
   let c = 0;
   const colorOf = new Map(keys.map((k) => [k, k === focus ? CUR : MONTH_COLORS[c++ % MONTH_COLORS.length]]));
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
+  const series = keys.map((k) => ({ name: short(k), color: colorOf.get(k)!, values: byDay.get(k)!.map((d) => val(d)) }));
+  const categories = labels.map((l) => l.replace("วันที่ ", ""));
   return (
+    <>
     <section className="my-4 rounded-2xl border bg-card p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-bold">{def.label} รายวันของแต่ละเดือน</h2>
         <MetricSelect value={metric} onChange={onMetric} />
       </div>
       <BarChart
+        key={`${metric}|${replay}`}
         label={`${def.label} รายวันของแต่ละเดือน`}
-        categories={labels.map((l) => l.replace("วันที่ ", ""))}
+        categories={categories}
         tooltipTitles={labels}
-        series={keys.map((k) => ({ name: short(k), color: colorOf.get(k)!, values: byDay.get(k)!.map((d) => val(d)) }))}
+        series={series}
         format={fmt}
         formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
       />
@@ -1256,33 +1343,20 @@ function DailyByMonth({ keys, focus, labels, byDay, short, long, metric, onMetri
       </div>
       <p className="mt-1 text-xs text-muted-foreground">วันที่เดียวกันของแต่ละเดือน (เช่น วันที่ 19 ก.ค. / ส.ค. / ก.ย. / ต.ค.) · เดือนที่ไม่มีวันนั้น = วันสุดท้ายของเดือน</p>
     </section>
+    <TrendSection
+      title={`${def.label} แนวโน้มรายวันของแต่ละเดือน`}
+      label={`แนวโน้ม ${def.label} รายวันของแต่ละเดือน`}
+      rowHead="วัน"
+      categories={categories}
+      titles={labels}
+      series={series}
+      metric={metric}
+      onMetric={onMetric}
+      replay={replay}
+      table={false}
+    />
+    </>
   );
-}
-
-type CompareMode = PeriodKind | "day" | "range" | "multi";
-// [โหมด, ชื่อเต็ม, ชื่อสั้นบนมือถือ (5 ปุ่มชื่อเต็มยาวเกินกล่องบนจอ 375px)]
-const COMPARE_MODES: [CompareMode, string, string][] = [
-  ["day", "วัน", "วัน"], ["range", "ช่วงวันที่", "ช่วงวัน"], ["month", "เดือน (MoM)", "เดือน"], ["quarter", "ไตรมาส (QoQ)", "ไตรมาส"], ["multi", "หลายเดือน", "หลายเดือน"],
-];
-
-/** แท็บเทียบช่วง: วัน / เดือน / ไตรมาส (เทียบ 2 ช่วง) หรือ หลายเดือน (เดือนหลัก vs เดือนอื่นทีละเดือน) */
-function CompareView({ dataMonths, version }: { dataMonths: string[]; version: number }) {
-  const [mode, setMode] = useState<CompareMode>("month");
-  const toggle = (
-    <ToggleGroup type="single" spacing={1} value={mode} onValueChange={(v) => { if (v) setMode(v as CompareMode); }}
-      aria-label="เทียบเป็น" className="no-scrollbar mb-3 max-w-full overflow-x-auto rounded-full border bg-card p-1">
-      {COMPARE_MODES.map(([id, text, short]) => (
-        <ToggleGroupItem key={id} value={id} className="rounded-full! px-2.5 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground! sm:px-3">
-          <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{text}</span>
-        </ToggleGroupItem>
-      ))}
-    </ToggleGroup>
-  );
-  return mode === "multi"
-    ? <MultiMonthView toggle={toggle} dataMonths={dataMonths} version={version} />
-    : mode === "day" ? <DayCompare toggle={toggle} dataMonths={dataMonths} version={version} />
-      : mode === "range" ? <RangeCompare toggle={toggle} dataMonths={dataMonths} version={version} />
-        : <PairCompare kind={mode} toggle={toggle} dataMonths={dataMonths} version={version} />;
 }
 
 // ---------- เทียบช่วงวันที่ (เลือกวันเริ่ม–วันจบเอง) ----------
@@ -1307,7 +1381,7 @@ type RangeVs = "none" | "prev" | "month" | "months" | "custom";
  *   เทียบกับ: ไม่เทียบ / ช่วงก่อนหน้า (ยาวเท่ากัน ต่อกันพอดี) / ช่วงเดียวกันเดือนก่อน / เลือกช่วงเอง
  *     / หลายเดือน (ช่วงวันเดียวกันของแต่ละเดือน เช่น 19–22 ก.ค. ส.ค. ก.ย. ต.ค. — ตารางแบบแท็บหลายเดือน · ช่วงไม่เกิน 31 วัน)
  */
-function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMonths: string[]; version: number }) {
+function RangeCompare({ dataMonths, version }: { dataMonths: string[]; version: number }) {
   // ค่าเริ่มต้น: 7 วันล่าสุดถึงเมื่อวาน (เดือนนี้ยังไม่มีข้อมูล = 7 วันสุดท้ายของเดือนล่าสุดที่มีข้อมูล)
   const [init] = useState(() => {
     const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
@@ -1345,7 +1419,6 @@ function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; data
   return (
     <>
       <div className="my-3 rounded-xl border bg-card p-3">
-        {toggle}
         <div className="flex flex-wrap gap-3 sm:flex-nowrap">
           {picker(from, setFrom, "วันเริ่ม", "bg-viz-cur")}
           {picker(to, setTo, "วันจบ (รวมวันนี้)")}
@@ -1371,7 +1444,7 @@ function RangeCompare({ toggle, dataMonths, version }: { toggle: ReactNode; data
           : <StateBox title={`เลือกได้ไม่เกิน ${RANGE_MAX_DAYS} วันต่อช่วง`}>ช่วงยาวกว่านี้ ใช้แท็บ &ldquo;หลายเดือน&rdquo; หรือ &ldquo;ไตรมาส&rdquo; แทน</StateBox>
       ) : months ? (
         // เปลี่ยนวันเริ่ม / วันจบ = ตั้งช่วงเดือนใหม่ (นับจากเดือนของช่วงที่เลือก)
-        <MultiMonthView key={`${a}|${b}`} toggle={null} dataMonths={dataMonths} version={version} days={{ a, b }} />
+        <MultiMonthView key={`${a}|${b}`} dataMonths={dataMonths} version={version} days={{ a, b }} />
       )
         : prevRange && prevRange[0] === a && prevRange[1] === b ? <StateBox title="เลือกช่วงที่ต่างกัน">ช่วงที่เทียบต้องไม่ใช่ช่วงเดียวกัน</StateBox>
           : (
@@ -1407,7 +1480,7 @@ export function dayPeriod(k: string): Period {
  * เทียบรายวัน: วันหลัก vs วันที่เลือก (ค่าเริ่มต้น = เมื่อวาน vs วันก่อนหน้า หรือวันสุดท้ายของเดือนล่าสุดที่มีข้อมูล)
  *   ปุ่มลัด: วันก่อน (DoD) / วันเดียวกันสัปดาห์ก่อน (WoW) / วันเดียวกันเดือนก่อน · กราฟแบ่งรายชั่วโมงได้
  */
-function DayCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMonths: string[]; version: number }) {
+function DayCompare({ dataMonths, version }: { dataMonths: string[]; version: number }) {
   // คิดครั้งเดียวตอนเปิด: วันนี้ (เวลาไทย) และวันเริ่มต้น = เมื่อวาน (ถ้าเดือนนี้มีข้อมูล) ไม่งั้นวันสุดท้ายของเดือนล่าสุดที่มีข้อมูล
   const [init] = useState(() => {
     const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
@@ -1440,7 +1513,6 @@ function DayCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMo
   return (
     <>
       <div className="my-3 rounded-xl border bg-card p-3">
-        {toggle}
         <div className="flex flex-wrap gap-3 sm:flex-nowrap">
           {picker(a, setA, "วัน", "bg-viz-cur")}
           {single ? null : picker(b, setB, "เทียบกับ", "bg-viz-prev")}
@@ -1471,7 +1543,7 @@ function DayCompare({ toggle, dataMonths, version }: { toggle: ReactNode; dataMo
   );
 }
 
-function PairCompare({ kind, toggle, dataMonths, version }: { kind: PeriodKind; toggle: ReactNode; dataMonths: string[]; version: number }) {
+function PairCompare({ kind, dataMonths, version }: { kind: PeriodKind; dataMonths: string[]; version: number }) {
   const sorted = dataMonths.slice().sort();
   const k = PERIOD_KINDS[kind];
   const now = k.of(monthKey());
@@ -1500,7 +1572,6 @@ function PairCompare({ kind, toggle, dataMonths, version }: { kind: PeriodKind; 
   return (
     <>
       <div className="my-3 rounded-xl border bg-card p-3">
-        {toggle}
         <div className="flex flex-wrap gap-3 sm:flex-nowrap">
           {picker(a, setA, k.pick, "bg-viz-cur")}
           {picker(b, setB, "เทียบกับ", "bg-viz-prev")}
@@ -1663,7 +1734,8 @@ function CampaignCompare({ c, all, dataMonths, version }: { c: Campaign; all: Ca
         report="Campaign on Campaign"
         cur={cur}
         prev={prev}
-        unit="day"
+        // แคมเปญไม่เกิน 1 วัน: แบ่งรายชั่วโมง (รายวันจะเหลือจุดเดียว กราฟเส้นไม่มีอะไรให้ดู)
+        unit={Date.parse(cur.to) - Date.parse(cur.from) <= 86400_000 ? "hour" : "day"}
         dataMonths={dataMonths}
         version={version}
         fixHint="หรือกด “แก้ไข” เพื่อเปลี่ยนช่วงวัน / เทียบกับแคมเปญอื่น"
@@ -1721,6 +1793,7 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
   const allData = [...curData, ...prevData];
   const timeText = unit === "hour" ? "รายชั่วโมง" : unit === "day" ? "รายวัน" : "รายเดือน";
   const stepMs = unit === "hour" ? 3600_000 : 86400_000;
+  const replay = `${pc.from}|${pp?.from ?? ""}|${filter.platform}|${filter.account}`;
 
   // กลุ่มในกราฟ: แยกบัญชี หรือ ชั่วโมง/วัน/เดือนที่ 1, 2, ... นับจากต้นของแต่ละช่วง
   const steps = unit === "month"
@@ -1829,7 +1902,7 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
             </div>
             {single ? null : <Legend series={chartSeries} />}
             <div className="mt-2">
-              <BarChart label={single ? `${def.label} ${curName}` : `${def.label} ${curName} เทียบ ${prevName}`} categories={categories} tooltipTitles={titles} series={chartSeries}
+              <BarChart key={`${metric}|${groupBy}|${replay}`} label={single ? `${def.label} ${curName}` : `${def.label} ${curName} เทียบ ${prevName}`} categories={categories} tooltipTitles={titles} series={chartSeries}
                 format={fmt} formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)} />
             </div>
             <TableView title="ดูเป็นตาราง">
@@ -1858,6 +1931,24 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
               </Table>
             </TableView>
           </section>
+
+          {/* กราฟเส้นตามเวลาเสมอ (กราฟแท่งด้านบนสลับเป็นแยกบัญชีได้) ช่วงสั้นเกินจนมีจุดเดียว = ไม่มีเส้นให้ดู */}
+          {steps > 1 ? (
+            <TrendSection
+              title={`${def.label} แนวโน้ม${timeText}`}
+              label={single ? `แนวโน้ม ${def.label} ${curName}` : `แนวโน้ม ${def.label} ${curName} เทียบ ${prevName}`}
+              rowHead={unit === "hour" ? "ช่วงเวลา" : unit === "day" ? "วัน" : "เดือน"}
+              categories={timeGroups.map((g) => g.short)}
+              titles={timeGroups.map((g) => g.label)}
+              series={single
+                ? [{ name: curName, color: CUR, values: timeGroups.map((g) => val(g.a)) }]
+                : [{ name: curName, color: CUR, values: timeGroups.map((g) => val(g.a)) }, { name: prevName, color: PREV, values: timeGroups.map((g) => val(g.b)) }]}
+              metric={metric}
+              onMetric={setMetric}
+              replay={replay}
+              compare={!single}
+            />
+          ) : null}
 
           <SessionList title={`ไลฟ์ใน ${curName} (${cur.length})`} sessions={cur} />
           {single ? null : <SessionList title={`ไลฟ์ใน ${prevName} (${prev.length})`} sessions={prev} />}
