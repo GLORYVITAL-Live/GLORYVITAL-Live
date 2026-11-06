@@ -47,10 +47,12 @@ export function targetReport(targets: LiveTarget[], sales: Sale[], month: string
   const counted = sales.filter((s) => keys.has(targetKey(s)) && monthOf(s.startedAt) === month);
   const dates = monthDays(month);
   const dailies = targets.map((t) => ({ t, daily: dailyOf(t) }));
+  // ป้าย "ใส่เอง" = วันพิเศษของช่องที่เฉลี่ยวันอื่น · ช่องที่มีเป้าครบทุกวัน ไม่มีวันไหนเป็นวันพิเศษ
+  const special = targets.filter((t) => dates.some((d) => t.days[d] === undefined));
   const days = dates.map((date) => {
     const target = dailies.reduce((a, x) => a + (x.daily.get(date) ?? 0), 0);
     const gmv = counted.filter((s) => dayOf(s.startedAt) === date).reduce((a, s) => a + s.gmv, 0);
-    return { date, target, gmv, pct: achieveOf(gmv, target), manual: targets.some((t) => t.days[date] !== undefined) };
+    return { date, target, gmv, pct: achieveOf(gmv, target), manual: special.some((t) => t.days[date] !== undefined) };
   });
   const upTo = (date: string) => lastDay > 0 && Number(date.slice(8)) > lastDay;
   const monthly = targets.reduce((a, t) => a + t.monthly, 0);
@@ -76,6 +78,21 @@ export function targetReport(targets: LiveTarget[], sales: Sale[], month: string
 export const targetsInScope = (targets: LiveTarget[], platform: string, account: string) =>
   targets.filter((t) => (!platform || t.platform === platform) && (!account || targetKey(t) === account));
 
+/** ปรับเป้ารายวันตามสัดส่วนให้รวมเท่า total พอดี (ปัดเป็นบาทแบบสะสม) · ทุกวันเป็น 0 = เฉลี่ยเท่ากัน */
+export function scaleDays(days: Record<string, number>, total: number) {
+  const dates = Object.keys(days).sort();
+  const base = dates.reduce((a, d) => a + days[d], 0);
+  const out: Record<string, number> = {};
+  let run = 0, given = 0;
+  for (const d of dates) {
+    run += base ? days[d] : 1;
+    const upTo = Math.round((run / (base || dates.length)) * total);
+    out[d] = upTo - given;
+    given = upTo;
+  }
+  return out;
+}
+
 const money = (v: unknown) => Number(String(v ?? "").replace(/[,\s฿]/g, ""));
 
 /**
@@ -98,6 +115,7 @@ export function cleanTarget(month: unknown, name: string, monthlyRaw: unknown, d
   }
   const used = Object.values(days).reduce((a, v) => a + v, 0);
   if (!monthly && Object.keys(days).length) return { error: `${name}: ใส่เป้าเดือนก่อน ถึงจะใส่เป้ารายวันได้` };
+  if (Object.keys(days).length === valid.size && Math.abs(used - monthly) > 0.01) return { error: `${name}: ใส่เป้าครบทุกวันแล้ว ยอดรวมรายวันต้องเท่าเป้าเดือน` };
   if (used > monthly) return { error: `${name}: เป้ารายวันที่ใส่เองรวมกันเกินเป้าเดือน` };
   return { month, monthly, days };
 }

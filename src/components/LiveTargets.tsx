@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, PencilIcon, PlusIcon, TargetIcon, XIcon } from "lucide-react";
 import { accountLabel, accountsOf, filterSessions, fmtMetric, monthOf, type LiveSession, type Platform } from "@/lib/live-stats";
-import { cleanTarget, dailyOf, monthDays, targetKey, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
+import { cleanTarget, dailyOf, monthDays, scaleDays, targetKey, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
 import { fmtDayMonth, monthKey, monthLabel, parseKey } from "@/lib/format";
 import { CountUp } from "@/components/motion";
 import { AppDialog, DialogActions, DialogBody, IconButton, LoadingBlock, api, useToast } from "@/components/shared";
@@ -246,8 +246,14 @@ export function DayTarget({ date, sessions, platform, account }: { date: string;
 
 type Draft = { monthly: string; days: { date: string; value: string }[] };
 const amount = (s: string) => Number(s.replace(/[,\s฿]/g, ""));
+const sumDays = (days: Draft["days"]) => Math.round(days.reduce((s, x) => s + (amount(x.value) || 0), 0) * 100) / 100;
+/** ช่องที่มีเป้ารายวันมากกว่านี้ พับรายการไว้ตอนเปิดหน้าต่าง */
+const FOLD_AT = 5;
 
-/** ตั้งเป้าเดือนนี้: ใส่เป้าเดือนรายช่อง + เป้าเฉพาะวัน (เช่น 11.11) วันที่เหลือเฉลี่ยให้ */
+/**
+ * ตั้งเป้าเดือนนี้: ใส่เป้าเดือนรายช่อง + เป้าเฉพาะวัน (เช่น 11.11) วันที่เหลือเฉลี่ยให้
+ *   ใส่ครบทุกวันแล้ว: แก้รายวัน = เป้าเดือนตามยอดรวม · แก้เป้าเดือน = เตือน + ปุ่มปรับรายวันตามสัดส่วน
+ */
 function TargetDialog({ month, accounts, targets, onClose }: {
   month: string; accounts: { key: string; platform: string; label: string }[]; targets: LiveTarget[]; onClose: (saved: boolean) => void;
 }) {
@@ -260,8 +266,21 @@ function TargetDialog({ month, accounts, targets, onClose }: {
       days: t ? Object.entries(t.days).sort(([x], [y]) => x.localeCompare(y)).map(([date, v]) => ({ date, value: String(v) })) : [],
     }];
   })));
+  const [folded, setFolded] = useState<Record<string, boolean>>(() => Object.fromEntries(accounts.map((a) => {
+    const t = targets.find((x) => targetKey(x) === a.key);
+    return [a.key, Object.keys(t?.days ?? {}).length > FOLD_AT];
+  })));
   const allDays = monthDays(month);
   const patch = (key: string, next: Partial<Draft>) => setDrafts({ ...drafts, [key]: { ...drafts[key], ...next } });
+  const setDayValue = (key: string, i: number, value: string) => {
+    const days = drafts[key].days.map((y, j) => (j === i ? { ...y, value } : y));
+    patch(key, days.length === allDays.length ? { days, monthly: String(sumDays(days)) } : { days });
+  };
+  const fitDays = (key: string, monthly: number) => {
+    const total = Math.round(monthly);
+    const scaled = scaleDays(Object.fromEntries(drafts[key].days.map((x) => [x.date, amount(x.value) || 0])), total);
+    patch(key, { monthly: String(total), days: drafts[key].days.map((x) => ({ ...x, value: String(scaled[x.date]) })) });
+  };
 
   async function save() {
     const items = [];
@@ -294,7 +313,11 @@ function TargetDialog({ month, accounts, targets, onClose }: {
           const avg = monthly ? dailyOf({ month, monthly, days: manual }) : null;
           const restDay = allDays.find((x) => manual[x] === undefined);
           const used = new Set(d.days.map((x) => x.date));
-          const over = Object.values(manual).reduce((s, v) => s + v, 0) > monthly;
+          const sum = sumDays(d.days);
+          const over = sum > monthly;
+          const full = d.days.length === allDays.length;
+          const gap = full && monthly > 0 && Math.abs(monthly - sum) > 0.01;
+          const many = d.days.length > FOLD_AT;
           const inputId = `target-${a.key}`;
           return (
             <div key={a.key} className="rounded-xl border p-2.5">
@@ -305,32 +328,54 @@ function TargetDialog({ month, accounts, targets, onClose }: {
                   {over ? "เป้ารายวันที่ใส่เองรวมกันเกินเป้าเดือน" : `${baht(monthly)} · ${d.days.length ? "วันที่เหลือ" : ""}เฉลี่ยวันละ ${baht(avg.get(restDay) ?? 0)}`}
                 </span>
               ) : null}
-              {d.days.map((x, i) => (
-                <div key={x.date} className="mt-2 flex items-center gap-2">
-                  <Select
-                    value={x.date} disabled={saving}
-                    onValueChange={(v) => patch(a.key, { days: d.days.map((y, j) => (j === i ? { ...y, date: v } : y)) })}
-                  >
-                    <SelectTrigger aria-label="วัน" className="h-9 w-28 shrink-0"><SelectValue /></SelectTrigger>
-                    <SelectContent position="popper">
-                      {allDays.filter((o) => o === x.date || !used.has(o)).map((o) => <SelectItem key={o} value={o}>{dayText(o)}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Input
-                    inputMode="decimal" value={x.value} disabled={saving} placeholder="เป้าวันนี้ (บาท)" aria-label={`เป้าวันที่ ${dayText(x.date)}`}
-                    onChange={(e) => patch(a.key, { days: d.days.map((y, j) => (j === i ? { ...y, value: e.target.value } : y)) })}
-                  />
-                  <IconButton label={`ลบเป้าวันที่ ${dayText(x.date)}`} disabled={saving} onClick={() => patch(a.key, { days: d.days.filter((_, j) => j !== i) })}><XIcon /></IconButton>
-                </div>
-              ))}
-              {restDay ? (
-                <Button
-                  variant="link" size="xs" className="mt-1 h-auto px-0 font-semibold pointer-coarse:py-2" disabled={saving || !monthly}
-                  onClick={() => patch(a.key, { days: [...d.days, { date: restDay, value: "" }] })}
-                >
-                  <PlusIcon />เพิ่มเป้ารายวัน
+              {full && monthly ? (
+                <span className={cn("mt-1 block text-xs tabular-nums", gap ? "font-semibold text-destructive" : "text-muted-foreground")}>
+                  {gap ? `ยอดรวมรายวัน ${baht(sum)} ไม่เท่าเป้าเดือน ${baht(monthly)}` : `${baht(monthly)} · มีเป้าครบทุกวัน แก้รายวันแล้วเป้าเดือนจะตาม`}
+                </span>
+              ) : null}
+              {gap ? (
+                <Button variant="link" size="xs" className="mt-1 h-auto px-0 font-semibold pointer-coarse:py-2" disabled={saving} onClick={() => fitDays(a.key, monthly)}>
+                  ปรับรายวันตามสัดส่วนให้เท่าเป้าเดือน
                 </Button>
               ) : null}
+              <Collapsible className="group/days" open={!many || !folded[a.key]} onOpenChange={(open) => setFolded({ ...folded, [a.key]: !open })}>
+                {many ? (
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 rounded text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50 pointer-coarse:py-2">
+                      <ChevronDownIcon className="size-3.5 transition-transform group-data-[state=open]/days:rotate-180" />เป้ารายวัน {d.days.length} วัน
+                    </CollapsibleTrigger>
+                    <Button variant="link" size="xs" className="h-auto px-0 pointer-coarse:py-2" disabled={saving} onClick={() => patch(a.key, { days: [] })}>ล้างเป้ารายวัน</Button>
+                  </div>
+                ) : null}
+                <CollapsibleContent>
+                  {d.days.map((x, i) => (
+                    <div key={x.date} className="mt-2 flex items-center gap-2">
+                      <Select
+                        value={x.date} disabled={saving}
+                        onValueChange={(v) => patch(a.key, { days: d.days.map((y, j) => (j === i ? { ...y, date: v } : y)) })}
+                      >
+                        <SelectTrigger aria-label="วัน" className="h-9 w-28 shrink-0"><SelectValue /></SelectTrigger>
+                        <SelectContent position="popper">
+                          {allDays.filter((o) => o === x.date || !used.has(o)).map((o) => <SelectItem key={o} value={o}>{dayText(o)}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        inputMode="decimal" value={x.value} disabled={saving} placeholder="เป้าวันนี้ (บาท)" aria-label={`เป้าวันที่ ${dayText(x.date)}`}
+                        onChange={(e) => setDayValue(a.key, i, e.target.value)}
+                      />
+                      <IconButton label={`ลบเป้าวันที่ ${dayText(x.date)}`} disabled={saving} onClick={() => patch(a.key, { days: d.days.filter((_, j) => j !== i) })}><XIcon /></IconButton>
+                    </div>
+                  ))}
+                  {restDay ? (
+                    <Button
+                      variant="link" size="xs" className="mt-1 h-auto px-0 font-semibold pointer-coarse:py-2" disabled={saving || !monthly}
+                      onClick={() => patch(a.key, { days: [...d.days, { date: restDay, value: "" }] })}
+                    >
+                      <PlusIcon />เพิ่มเป้ารายวัน
+                    </Button>
+                  ) : null}
+                </CollapsibleContent>
+              </Collapsible>
             </div>
           );
         })}

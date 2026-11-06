@@ -1,8 +1,9 @@
 // เทสเป้า GMV + % achieve (bun test)
 import { describe, expect, test } from "bun:test";
-import { achieveOf, cleanTarget, dailyOf, monthDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
+import { achieveOf, cleanTarget, dailyOf, monthDays, scaleDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
 
 const target = (o: Partial<LiveTarget> = {}): LiveTarget => ({ platform: "TikTok", accountId: "a", month: "2026-11", monthly: 3_000_000, days: {}, ...o });
+const allDays = (v: number) => Object.fromEntries(monthDays("2026-11").map((d) => [d, v]));
 const sale = (date: string, gmv: number, accountId = "a", platform = "TikTok") => ({ platform, accountId, startedAt: `${date}T10:00:00+07:00`, gmv });
 
 describe("เป้ารายวัน", () => {
@@ -24,6 +25,17 @@ describe("เป้ารายวัน", () => {
   test("จำนวนวันในเดือน", () => {
     expect(monthDays("2026-02").length).toBe(28);
     expect(monthDays("2028-02").at(-1)).toBe("2028-02-29");
+  });
+  test("ปรับรายวันตามสัดส่วน: รวมเท่าเป้าเดือนพอดี วันที่สูงยังสูงกว่า", () => {
+    const s = scaleDays({ "2026-11-01": 100, "2026-11-02": 100, "2026-11-03": 200 }, 1_000);
+    expect(s).toEqual({ "2026-11-01": 250, "2026-11-02": 250, "2026-11-03": 500 });
+    const odd = scaleDays({ ...allDays(333), "2026-11-11": 5_000 }, 1_000_001);
+    expect(Object.values(odd).reduce((a, v) => a + v, 0)).toBe(1_000_001);
+    expect(Object.values(odd).every(Number.isInteger)).toBe(true);
+    expect(odd["2026-11-11"]).toBeGreaterThan(odd["2026-11-10"]);
+  });
+  test("ปรับรายวันตอนทุกวันเป็น 0 = เฉลี่ยเท่ากัน", () => {
+    expect(scaleDays({ "2026-11-01": 0, "2026-11-02": 0 }, 100)).toEqual({ "2026-11-01": 50, "2026-11-02": 50 });
   });
 });
 
@@ -66,6 +78,12 @@ describe("% achieve", () => {
     expect(d11.pct).toBeCloseTo(1);
     expect(r.accounts.map((a) => a.gmv)).toEqual([600_000, 500_000]);
   });
+  test("ช่องที่มีเป้าครบทุกวัน ไม่ขึ้นป้ายใส่เอง · ช่องอื่นในรายงานเดียวกันยังขึ้นตามเดิม", () => {
+    const full = target({ days: allDays(100_000) });
+    expect(targetReport([full], [], "2026-11").days.some((d) => d.manual)).toBe(false);
+    const r = targetReport([full, target({ platform: "Shopee", accountId: "s", days: { "2026-11-11": 500_000 } })], [], "2026-11");
+    expect(r.days.filter((d) => d.manual).map((d) => d.date)).toEqual(["2026-11-11"]);
+  });
   test("เวลาไทย: ไลฟ์ตี 1 นับเป็นวันนั้น (ไม่ใช่วันก่อนตาม UTC)", () => {
     const r = targetReport([target()], [{ platform: "TikTok", accountId: "a", startedAt: "2026-11-02T01:00:00+07:00", gmv: 77 }], "2026-11");
     expect(r.days[1].gmv).toBe(77);
@@ -90,5 +108,16 @@ describe("ตรวจข้อมูลที่กรอก", () => {
     expect(cleanTarget("2026-11", "ช่อง", "1000", { "2026-12-01": "1" })).toEqual({ error: "ช่อง: วันที่ 2026-12-01 ไม่อยู่ในเดือนนี้" });
     expect(cleanTarget("2026-11", "ช่อง", "", { "2026-11-01": "1" })).toEqual({ error: "ช่อง: ใส่เป้าเดือนก่อน ถึงจะใส่เป้ารายวันได้" });
     expect(cleanTarget("2026-11", "ช่อง", "100", { "2026-11-01": "101" })).toEqual({ error: "ช่อง: เป้ารายวันที่ใส่เองรวมกันเกินเป้าเดือน" });
+  });
+  test("ใส่ครบทุกวัน: ยอดรวมรายวันต้องเท่าเป้าเดือน (ขาดหรือเกินไม่ได้)", () => {
+    const error = "ช่อง: ใส่เป้าครบทุกวันแล้ว ยอดรวมรายวันต้องเท่าเป้าเดือน";
+    expect(cleanTarget("2026-11", "ช่อง", "3,000,001", allDays(100_000))).toEqual({ error });
+    expect(cleanTarget("2026-11", "ช่อง", "2,999,999", allDays(100_000))).toEqual({ error });
+    expect(cleanTarget("2026-11", "ช่อง", "3,000,000", allDays(100_000))).toEqual({ month: "2026-11", monthly: 3_000_000, days: allDays(100_000) });
+  });
+  test("ใส่ไม่ครบทุกวัน: รวมน้อยกว่าเป้าเดือนได้ (วันที่เหลือเฉลี่ยให้)", () => {
+    const most = allDays(100_000);
+    delete most["2026-11-30"];
+    expect("error" in cleanTarget("2026-11", "ช่อง", "3,000,001", most)).toBe(false);
   });
 });
