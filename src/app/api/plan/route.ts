@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { validBudget } from "@/lib/agency-budget";
 import { platformLabel, platformRaw } from "@/lib/platform";
 import { firstClash, ownerText, type PlanSpan } from "@/lib/plan-clash";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
@@ -13,10 +14,12 @@ import type { Me } from "@/lib/types";
 // หน้า Plan Slot Live: แพลน slot ทั้งเดือน แล้วเขียนลงชีตทั้งแท็บ "ลงตาราง Deal Mc" และ "ลงตาราง Admin เสริม"
 //   GET    ?month=YYYY-MM  slot ที่มีอยู่แล้วทั้งเดือน (จับคู่ Mc + Admin) + แพลตฟอร์ม / แคมเปญที่เคยใช้
 //   POST   { create: [{ date, platform, start, end, campaign }], campaigns: [{ mcId, campaign }],
-//            agencyCreate: [{ agency, date, platform, start, end }], agencyDelete: [id], agencyAdjust: [{ agency, date, on }] }
+//            agencyCreate: [{ agency, date, platform, start, end }], agencyDelete: [id], agencyAdjust: [{ agency, date, on }],
+//            agencyBudget: [{ agency, month, amount }] }
 //          สร้าง slot (ทั้งฝั่ง Mc + Admin ข้ามที่มีอยู่แล้ว) + แก้ Campaign ของ slot เดิม
 //          + แพลนของ Agency (ตาราง agency_slots ไว้ดูภาพรวม / สรุปชั่วโมง ไม่เขียนลงชีต)
 //          + สถานะ Adjusted รายวันของ Agency (ตาราง agency_adjusted)
+//          + งบรายเดือนของกลุ่มภายนอก (ตาราง agency_budgets · amount null = ล้างงบ · GET ส่งให้เฉพาะคนที่แก้แพลนได้)
 //   DELETE { slots: [{ mcId?, adminId? }] }  ลบ slot ที่ยังว่าง (ไม่มีคน + ไม่มี event ในปฏิทิน)
 // สิทธิ์: Owner ที่ติ๊ก "Plan Slot Live" เท่านั้น (เขียนได้ทั้งสองแท็บ)
 // slot ของแท็บ "ลงตาราง MC Shopee" (mc_slots.sheet_tab = 'shopee') ไม่อยู่ในหน้านี้ — แพลน Shopee ยังเป็นแพลนในเว็บ (agency_slots)
@@ -26,6 +29,7 @@ export const maxDuration = 60;
 type Table = "mc_slots" | "admin_slots";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_CREATE = 1500;
 const MAX_DELETE = 500;
 
@@ -80,7 +84,7 @@ export async function GET(request: Request) {
   const since = new Date(Date.now() - 180 * 86400_000).toISOString().slice(0, 10);
 
   try {
-    const [mc, admin, recent, regulars, adjusted] = await Promise.all([
+    const [mc, admin, recent, regulars, adjusted, budgets] = await Promise.all([
       all<SlotRow & { mc_id: number | null; campaign: string }>((a, b) => db.from("mc_slots")
         .select(`${cols}, mc_id, campaign, person:staff!mc_id(name)`).eq("sheet_tab", "mc").gte("live_date", first).lte("live_date", last).order("id").range(a, b)),
       all<SlotRow & { admin_id: number | null; needs_extra_admin: boolean }>((a, b) => db.from("admin_slots")
@@ -92,6 +96,10 @@ export async function GET(request: Request) {
         .select("id, name").eq("role", "mc").eq("is_salaried", true).order("name").range(a, b)),
       all<{ agency: string; live_date: string }>((a, b) => db.from("agency_adjusted")
         .select("agency, live_date").gte("live_date", first).lte("live_date", last).order("live_date").order("agency").range(a, b)),
+      // งบเป็นตัวเลขค่าใช้จ่าย: คนที่ดูแพลนได้อย่างเดียวไม่เห็น
+      r.me.owner?.plan
+        ? all<{ agency: string; amount: number }>((a, b) => db.from("agency_budgets").select("agency, amount").eq("month", month).order("agency").range(a, b))
+        : [],
     ]);
 
     // แพลนของ Agency (ยังไม่มีตาราง = ยังใช้ไม่ได้ ส่วนอื่นของหน้าใช้ได้ตามปกติ)
@@ -150,6 +158,7 @@ export async function GET(request: Request) {
       })),
       agencyReady,
       agencyAdjusted: adjusted.map((x) => ({ agency: x.agency, date: x.live_date })),
+      agencyBudgets: budgets.map((x) => ({ agency: x.agency, amount: Number(x.amount) })),
       regulars: regulars.map((x) => ({ id: x.id, name: x.name })),
     });
   } catch (err) {
@@ -200,15 +209,22 @@ export async function POST(request: Request) {
     if (!agency || !DATE_RE.test(String(x?.date ?? "")) || typeof x?.on !== "boolean") return fail("ข้อมูลสถานะ Adjusted ไม่ถูกต้อง");
     agencyAdjust.push({ agency, date: x.date, on: x.on });
   }
+  // งบรายเดือนของกลุ่มภายนอก: amount null = ล้างงบ
+  const agencyBudget: { agency: string; month: string; amount: number | null }[] = [];
+  for (const x of Array.isArray(body?.agencyBudget) ? body.agencyBudget : []) {
+    const agency = cleanAgency(x?.agency);
+    if (!agency || !MONTH_RE.test(String(x?.month ?? "")) || (x?.amount !== null && !validBudget(x?.amount))) return fail("ข้อมูลงบ Agency ไม่ถูกต้อง");
+    agencyBudget.push({ agency, month: x.month, amount: x.amount });
+  }
   // ลงชื่อ Mc ใน slot เดิมที่ยังว่าง { slotId (mc_slots), personId (staff) }
   const assigns: { slotId: number; personId: number }[] = [];
   for (const x of Array.isArray(body?.assigns) ? body.assigns : []) {
     if (!Number.isInteger(x?.slotId) || !Number.isInteger(x?.personId)) return fail("ข้อมูลลงชื่อ Mc ไม่ถูกต้อง");
     assigns.push({ slotId: x.slotId, personId: x.personId });
   }
-  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length && !agencyAdjust.length && !assigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
+  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length && !agencyAdjust.length && !agencyBudget.length && !assigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
   if (assigns.length > MAX_CREATE) return fail(`ลงชื่อ Mc ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
-  if (agencyCreate.length > MAX_CREATE || agencyDelete.length > MAX_CREATE || agencyAdjust.length > MAX_CREATE) return fail(`แก้แพลนของ Agency ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
+  if (agencyCreate.length > MAX_CREATE || agencyDelete.length > MAX_CREATE || agencyAdjust.length > MAX_CREATE || agencyBudget.length > MAX_CREATE) return fail(`แก้แพลนของ Agency ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (create.length > MAX_CREATE) return fail(`สร้างได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (campaigns.length > MAX_CREATE) return fail(`แก้ Campaign ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
 
@@ -353,6 +369,18 @@ export async function POST(request: Request) {
     for (const agency of new Set(adjustOff.map((x) => x.agency))) {
       const { error } = await db.from("agency_adjusted").delete().eq("agency", agency)
         .in("live_date", adjustOff.filter((x) => x.agency === agency).map((x) => x.date));
+      if (error) throw new Error(error.message);
+    }
+
+    // งบ Agency: มีตัวเลข = ตั้ง / null = ล้าง
+    const budgetSet = agencyBudget.filter((x) => x.amount !== null)
+      .map((x) => ({ ...x, updated_by: r.me.email, updated_at: new Date().toISOString() }));
+    if (budgetSet.length) {
+      const { error } = await db.from("agency_budgets").upsert(budgetSet, { onConflict: "agency,month" });
+      if (error) throw new Error(error.message);
+    }
+    for (const x of agencyBudget.filter((b) => b.amount === null)) {
+      const { error } = await db.from("agency_budgets").delete().eq("agency", x.agency).eq("month", x.month);
       if (error) throw new Error(error.message);
     }
 
