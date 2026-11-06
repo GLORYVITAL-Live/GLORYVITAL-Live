@@ -25,7 +25,7 @@ export function platformSeries(groups: LiveSession[][], metric: MetricKey) {
 /** ค่ารวมทุกแพลตฟอร์มของแต่ละกลุ่ม (คิดจากยอดรวม ไม่ใช่เอาค่าแต่ละแพลตฟอร์มมาบวก) · CO รวมสองแพลตฟอร์มไม่มีค่า = null ทั้งหมด */
 export const totalSeries = (groups: LiveSession[][], metric: MetricKey) => groups.map((list) => valueOf(list, metric));
 
-/** ค่าทุกวันของเดือนแยกแพลตฟอร์ม (วันที่ไม่มีค่า = null เส้นขาด ไม่ลากข้าม) */
+/** ค่าทุกวันของเดือนแยกแพลตฟอร์ม (วันที่ไม่มีค่า = null กราฟลากเส้นข้าม แล้วมีจุดบอกตรงที่มีค่าจริง) */
 export function dailyByPlatform(sessions: LiveSession[], month: string, metric: MetricKey) {
   const [y, m] = month.split("-").map(Number);
   const days = Array.from({ length: new Date(Date.UTC(y, m, 0)).getUTCDate() }, (_, i) => i + 1);

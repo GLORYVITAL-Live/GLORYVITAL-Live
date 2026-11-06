@@ -5,6 +5,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type PptxGenJS from "pptxgenjs";
 import { analyze } from "@/lib/live-insights";
+import { platformSeries, totalSeries } from "@/lib/live-lines";
 import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Totals } from "@/lib/live-stats";
 
 export type CompareDeckInput = {
@@ -92,6 +93,19 @@ function niceTicks(max: number) {
   return Array.from({ length: Math.ceil(max / step) + 1 }, (_, i) => i * step);
 }
 
+/** ตำนานของกราฟที่วาดด้วยรูปทรง: กว้างตามชื่อ (ชื่อช่วงยาว เช่น "พฤหัสบดี 5 พ.ย. 2026" ไม่ตัดบรรทัด) · line = ขีดแทนสี่เหลี่ยม */
+function shapeLegend(pres: PptxGenJS, s: PptxGenJS.Slide, box: { x: number; y: number; w: number }, series: { name: string; color: string }[], line = false) {
+  const nameW = (name: string) => Math.min(3.6, 0.1 * name.length + 0.25);
+  const total = series.reduce((a, sr) => a + 0.34 + nameW(sr.name), 0);
+  let lx = box.x + Math.max(0, (box.w - total) / 2);
+  for (const sr of series) {
+    if (line) s.addShape(pres.ShapeType.line, { x: lx, y: box.y + 0.16, w: 0.24, h: 0, line: { color: sr.color, width: 2.25 } });
+    else s.addShape(pres.ShapeType.rect, { x: lx + 0.08, y: box.y + 0.08, w: 0.16, h: 0.16, fill: { color: sr.color }, line: { color: sr.color } });
+    s.addText(sr.name, { x: lx + 0.3, y: box.y, w: nameW(sr.name), h: 0.32, fontSize: 12, color: C.text, valign: "middle", fontFace: FONT, margin: 0, isTextBox: true, wrap: false });
+    lx += 0.34 + nameW(sr.name);
+  }
+}
+
 /** กราฟแท่งวาดด้วยรูปทรง (คมชัดทุกขนาด แปลงเป็น Google Slides ได้ตรงทุกจุด) */
 function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
   labels: string[];
@@ -100,19 +114,16 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
   showValue: boolean;
   /** ชุดที่เน้น (ตัวเลขตัวหนา) ไม่ใส่ = ชุดแรก */
   emphasis?: number;
+  /** แท่งซ้อน: ความสูงรวม = ยอดรวม ตัวเลขบนแท่งเป็นยอดรวม */
+  stacked?: boolean;
 }) {
   const { x, y, w, h } = o.box;
   const em = o.emphasis ?? 0;
   const text = (t: string, opts: PptxGenJS.TextPropsOptions) => s.addText(t, { fontFace: FONT, margin: 0, isTextBox: true, ...opts });
-  // ตำนานด้านบน
-  let lx = x + w / 2 - o.series.length * 0.8;
-  for (const sr of o.series) {
-    s.addShape(pres.ShapeType.rect, { x: lx, y: y + 0.08, w: 0.16, h: 0.16, fill: { color: sr.color }, line: { color: sr.color } });
-    text(sr.name, { x: lx + 0.22, y: y, w: 1.3, h: 0.32, fontSize: 12, color: C.text, valign: "middle" });
-    lx += 1.6;
-  }
+  shapeLegend(pres, s, { x, y, w }, o.series);
   // เผื่อที่ด้านบน 25% ให้ตัวเลขบนแท่ง + % ที่เปลี่ยน ไม่ชนขอบ
-  const max = Math.max(0, ...o.series.flatMap((sr) => sr.values));
+  const totalAt = (i: number) => o.series.reduce((a, sr) => a + (sr.values[i] ?? 0), 0);
+  const max = o.stacked ? Math.max(0, ...o.labels.map((_, i) => totalAt(i))) : Math.max(0, ...o.series.flatMap((sr) => sr.values));
   const ticks = niceTicks(max * 1.25);
   const top = ticks[ticks.length - 1] || 1;
   const px = x + 0.85, pw = w - 0.9, py = y + 0.5, ph = h - 0.5 - 0.45;
@@ -121,7 +132,7 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
     s.addShape(pres.ShapeType.line, { x: px, y: yOf(t), w: pw, h: 0, line: { color: t ? C.grid : C.muted, width: t ? 0.75 : 1 } });
     text(compact(t), { x: x, y: yOf(t) - 0.13, w: 0.78, h: 0.26, fontSize: 11, color: C.muted, align: "right", valign: "middle" });
   }
-  const n = o.labels.length, k = o.series.length;
+  const n = o.labels.length, k = o.stacked ? 1 : o.series.length;
   const gw = pw / Math.max(1, n);
   const bw = Math.min(1.0, (gw * 0.76) / k);
   const every = Math.max(1, Math.ceil(n / Math.floor(pw / 0.55)));
@@ -129,6 +140,17 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
   const valueSize = bw >= 0.95 ? 14 : bw >= 0.75 ? 12 : bw >= 0.55 ? 10 : 9;
   o.labels.forEach((label, i) => {
     const gx = px + i * gw + (gw - bw * k) / 2;
+    if (i % every === 0) text(label, { x: px + i * gw, y: py + ph + 0.08, w: gw, h: 0.32, fontSize: n > 12 ? 10 : 12, color: C.text, align: "center", valign: "top", fit: "shrink" });
+    if (o.stacked) {
+      let base = 0;
+      for (const sr of o.series) {
+        const v = sr.values[i] ?? 0;
+        if (v > 0) s.addShape(pres.ShapeType.rect, { x: gx, y: yOf(base + v), w: bw - 0.03, h: (v / top) * ph, fill: { color: sr.color }, line: { color: sr.color, width: 0 } });
+        base += v;
+      }
+      if (o.showValue && base > 0) text(compact(base), { x: gx - 0.15, y: yOf(base) - 0.3, w: bw + 0.27, h: 0.28, fontSize: valueSize, bold: true, color: C.text, align: "center", valign: "bottom" });
+      return;
+    }
     let peak = 0;
     o.series.forEach((sr, j) => {
       const v = sr.values[i] ?? 0;
@@ -152,7 +174,115 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
         color: pctColor(c), align: "center", valign: "bottom",
       });
     }
+  });
+}
+
+type ChartTarget = "pptx" | "gslides";
+type ChartBox = { x: number; y: number; w: number; h: number };
+type LineSeries = { name: string; color: string; values: (number | null)[] };
+
+/** สีตามแพลตฟอร์ม (เหมือนเว็บ) */
+const PLATFORM_COLOR: Record<string, string> = { TikTok: C.pink, Shopee: C.blue };
+/** GMV / ค่าต่างๆ ของแต่ละกลุ่มแยกแพลตฟอร์ม พร้อมสี */
+const platformLines = (groups: LiveSession[][], metric: MetricKey): LineSeries[] =>
+  platformSeries(groups, metric).map((x) => ({ name: x.platform, color: PLATFORM_COLOR[x.platform], values: x.values }));
+/**
+ * เส้นแนวโน้มช่วงเดียว: แยกแพลตฟอร์ม + เส้นรวม เหมือนหน้าเว็บ (src/components/LiveStats.tsx trendLines)
+ *   เหลือแพลตฟอร์มเดียว = เส้นรวมคือเส้นเดียวกัน · ค่าที่รวมไม่ได้ (CO) ไม่มีเส้นรวม · รายชั่วโมงไม่มีเส้นรวม (แต่ละชั่วโมงมักมีแพลตฟอร์มเดียว)
+ */
+function platformTrend(groups: LiveSession[][], metric: MetricKey, withTotal: boolean): LineSeries[] {
+  const lines = platformLines(groups, metric);
+  const total = totalSeries(groups, metric);
+  return withTotal && lines.length > 1 && total.some((v) => v !== null) ? [...lines, { name: "รวม", color: C.text, values: total }] : lines;
+}
+
+/**
+ * กราฟเส้น: ลากเชื่อมทุกจุดที่มีค่า ข้ามช่วงที่ไม่มีค่า (เหมือนเว็บ) จุด = ค่าจริง
+ *   PowerPoint = กราฟจริงแก้ตัวเลขได้ / Google Slides = วาดด้วยรูปทรง (Google แปลงกราฟจริงเป็นรูปเบลอ)
+ */
+function lineChart(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, o: { title: string; labels: string[]; series: LineSeries[]; box: ChartBox }) {
+  const points = o.series.reduce((a, sr) => a + sr.values.filter((v) => v !== null).length, 0);
+  // จุดไม่เยอะ = ใส่ตัวเลขได้ไม่รก
+  const showValue = points <= 16;
+  if (target === "pptx") {
+    s.addChart(pres.ChartType.line, o.series.map((sr) => ({ name: sr.name, labels: o.labels, values: sr.values as number[] })), {
+      ...o.box, chartColors: o.series.map((sr) => sr.color), lineSize: 2.25, lineDataSymbol: "circle", lineDataSymbolSize: 7, displayBlanksAs: "span",
+      showLegend: o.series.length > 1, legendPos: "t", legendFontSize: 12, legendFontFace: FONT, legendColor: C.text, showTitle: false, altText: o.title,
+      showValue, dataLabelPosition: "t", dataLabelFormatCode: COMPACT, dataLabelFontSize: 11, dataLabelFontFace: FONT, dataLabelColor: C.text,
+      valAxisMinVal: 0, valAxisLabelFormatCode: COMPACT, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
+      catAxisLabelFontSize: 11, catAxisLabelFontFace: FONT, catAxisLabelColor: C.text, valGridLine: { color: C.grid, size: 0.75 }, catGridLine: { style: "none" },
+    });
+    return;
+  }
+  const { x, y, w, h } = o.box;
+  const text = (t: string, opts: PptxGenJS.TextPropsOptions) => s.addText(t, { fontFace: FONT, margin: 0, isTextBox: true, ...opts });
+  if (o.series.length > 1) shapeLegend(pres, s, { x, y, w }, o.series, true);
+  const max = Math.max(0, ...o.series.flatMap((sr) => sr.values.map((v) => v ?? 0)));
+  const ticks = niceTicks(max * 1.15);
+  const top = ticks[ticks.length - 1] || 1;
+  const px = x + 0.85, pw = w - 0.9, py = y + 0.5, ph = h - 0.5 - 0.45;
+  const n = o.labels.length, gw = pw / Math.max(1, n);
+  const xOf = (i: number) => px + (i + 0.5) * gw, yOf = (v: number) => py + ph - (v / top) * ph;
+  for (const t of ticks) {
+    s.addShape(pres.ShapeType.line, { x: px, y: yOf(t), w: pw, h: 0, line: { color: t ? C.grid : C.muted, width: t ? 0.75 : 1 } });
+    text(compact(t), { x, y: yOf(t) - 0.13, w: 0.78, h: 0.26, fontSize: 11, color: C.muted, align: "right", valign: "middle" });
+  }
+  const every = Math.max(1, Math.ceil(n / Math.floor(pw / 0.55)));
+  o.labels.forEach((label, i) => {
     if (i % every === 0) text(label, { x: px + i * gw, y: py + ph + 0.08, w: gw, h: 0.32, fontSize: n > 12 ? 10 : 12, color: C.text, align: "center", valign: "top", fit: "shrink" });
+  });
+  // วาดจากเส้นท้าย เส้นแรกอยู่บนสุด (เส้นรวมไม่บังสีแพลตฟอร์ม เหมือนเว็บ)
+  for (const sr of [...o.series].reverse()) {
+    const pts = sr.values.flatMap((v, i) => (v === null ? [] : [{ i, v }]));
+    pts.slice(1).forEach((b, k) => {
+      const a = pts[k], y1 = yOf(a.v), y2 = yOf(b.v);
+      s.addShape(pres.ShapeType.line, { x: xOf(a.i), y: Math.min(y1, y2), w: xOf(b.i) - xOf(a.i), h: Math.abs(y2 - y1), flipV: y2 < y1, line: { color: sr.color, width: 2.25 } });
+    });
+    for (const p of pts) {
+      s.addShape(pres.ShapeType.ellipse, { x: xOf(p.i) - 0.05, y: yOf(p.v) - 0.05, w: 0.1, h: 0.1, fill: { color: sr.color }, line: { color: C.white, width: 0.75 } });
+      if (showValue) text(compact(p.v), { x: xOf(p.i) - 0.5, y: yOf(p.v) - 0.34, w: 1, h: 0.26, fontSize: 11, color: C.text, align: "center", valign: "bottom" });
+    }
+  }
+}
+
+/** หน้ากราฟเส้นเต็มหน้า · มีช่วงที่ไม่มีค่า = บอกไว้ว่าเส้นตรงนั้นลากข้าม */
+function addTrendSlide(pres: PptxGenJS, target: ChartTarget, title: string, labels: string[], series: LineSeries[]) {
+  if (!series.some((sr) => sr.values.some((v) => v !== null))) return;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  lineChart(pres, s, target, { title, labels, series, box: { x: M, y: 1.4, w: W - 2 * M, h: 5.2 } });
+  const gap = series.some((sr) => {
+    const on = sr.values.flatMap((v, i) => (v === null ? [] : [i]));
+    return on.length > 1 && on[on.length - 1] - on[0] + 1 > on.length;
+  });
+  const star = labels.some((l) => l.endsWith("*"));
+  const note = [gap ? "จุด = มีข้อมูลจริง · ช่วงที่ไม่มีไลฟ์เส้นจะลากเชื่อมข้ามไป" : "", star ? "* ยังไม่จบเดือน" : ""].filter(Boolean).join(" · ");
+  if (note) s.addText(note, { x: M, y: 6.65, w: 9, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+}
+
+/**
+ * กราฟแท่งแยกสีตามแพลตฟอร์ม (เหมือนเว็บ): หลายแพลตฟอร์ม = แท่งซ้อน ความสูงรวมคือยอดรวม · แพลตฟอร์มเดียว = สีของแพลตฟอร์มนั้น
+ *   PowerPoint = กราฟจริง (ตัวเลขอยู่กลางแต่ละส่วน) / Google Slides = วาดด้วยรูปทรง (ตัวเลขเป็นยอดรวมบนแท่ง)
+ */
+function platformBars(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, o: { title: string; labels: string[]; groups: LiveSession[][]; box: ChartBox; showValue: boolean }) {
+  const series = platformLines(o.groups, "gmv");
+  if (!series.length) return;
+  const stacked = series.length > 1;
+  if (target === "gslides") {
+    shapeBars(pres, s, { labels: o.labels, series: series.map((sr) => ({ ...sr, values: sr.values.map((v) => v ?? 0) })), box: o.box, showValue: o.showValue, stacked: true });
+    return;
+  }
+  const valueSize = o.labels.length <= 4 ? 14 : o.labels.length <= 8 ? 12 : 10;
+  // กลุ่มที่ไม่มียอด = ช่องว่าง ไม่ใช่ 0 (ไม่งั้นมีป้าย ฿0 ซ้อนบนแท่ง เช่น บัญชี TikTok ในชุด Shopee)
+  s.addChart(pres.ChartType.bar, series.map((sr) => ({ name: sr.name, labels: o.labels, values: sr.values.map((v) => v || null) as number[] })), {
+    ...o.box, barDir: "col", barGrouping: stacked ? "stacked" : "clustered", barGapWidthPct: 60, chartColors: series.map((sr) => sr.color),
+    showLegend: stacked, legendPos: "t", legendFontSize: 12, legendFontFace: FONT, legendColor: C.text, showTitle: false, altText: o.title,
+    // แท่งซ้อนใส่ป้ายนอกแท่งไม่ได้ (PowerPoint ฟ้องไฟล์เสีย)
+    showValue: o.showValue, dataLabelPosition: stacked ? "ctr" : "outEnd", dataLabelFormatCode: COMPACT, dataLabelFontSize: valueSize,
+    dataLabelFontBold: true, dataLabelFontFace: FONT, dataLabelColor: stacked ? C.white : C.text,
+    valAxisMinVal: 0, valAxisLabelFormatCode: COMPACT, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
+    catAxisLabelFontSize: 11, catAxisLabelFontFace: FONT, catAxisLabelColor: C.text,
+    valGridLine: { color: C.grid, size: 0.75 }, catGridLine: { style: "none" },
   });
 }
 
@@ -480,8 +610,10 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     const s = pres.addSlide({ masterName: "CONTENT" });
     s.addText("GMV แยกตามบัญชี", { placeholder: "title" });
     const gmvOf = (list: LiveSession[], key: string) => totalsOf(list.filter((x) => keyOf(x) === key)).gmv;
-    barChart(s, "GMV แยกตามบัญชี", accounts.map((a) => a.name), accounts.map((a) => gmvOf(o.a, a.key)), accounts.map((a) => gmvOf(o.b, a.key)),
-      { x: M, y: 1.4, w: 8.6, h: 5.3 });
+    const box = { x: M, y: 1.4, w: 8.6, h: 5.3 };
+    // เทียบ 2 ช่วง: สีบอกช่วงเวลา · ช่วงเดียว: สีบอกแพลตฟอร์ม (เหมือนเว็บ)
+    if (hasB) barChart(s, "GMV แยกตามบัญชี", accounts.map((a) => a.name), accounts.map((a) => gmvOf(o.a, a.key)), accounts.map((a) => gmvOf(o.b, a.key)), box);
+    else platformBars(pres, s, target, { title: "GMV แยกตามบัญชี", labels: accounts.map((a) => a.name), groups: accounts.map((a) => o.a.filter((x) => keyOf(x) === a.key)), box, showValue: true });
     const rows = accounts
       .map((a) => ({ a, cur: gmvOf(o.a, a.key), prev: gmvOf(o.b, a.key) }))
       .sort((x, y) => y.cur - x.cur);
@@ -501,12 +633,24 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     const s = pres.addSlide({ masterName: "CONTENT" });
     s.addText(`GMV ${o.timeName}`, { placeholder: "title" });
     const labels = o.time.map((t) => t.short);
-    barChart(s, `GMV ${o.timeName}`, labels, o.time.map((t) => totalsOf(t.a).gmv), o.time.map((t) => totalsOf(t.b).gmv),
-      { x: M, y: 1.4, w: W - 2 * M, h: 5.3 }, o.time.length <= 12);
+    const box = { x: M, y: 1.4, w: W - 2 * M, h: 5.3 };
+    if (hasB) barChart(s, `GMV ${o.timeName}`, labels, o.time.map((t) => totalsOf(t.a).gmv), o.time.map((t) => totalsOf(t.b).gmv), box, o.time.length <= 12);
+    else platformBars(pres, s, target, { title: `GMV ${o.timeName}`, labels, groups: o.time.map((t) => t.a), box, showValue: o.time.length <= 12 });
     if (labels.some((l) => l.endsWith("*"))) {
       s.addText("* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)", { x: M, y: 6.75, w: 6, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
     }
-    s.addNotes(`${stepWordOf(o.timeName)}ที่ 1 ของ ${o.aName} เทียบกับ${stepWordOf(o.timeName)}ที่ 1 ของ ${o.bName} (ชื่อบนแกนเป็นของ ${o.aName})`);
+    s.addNotes(hasB ? `${stepWordOf(o.timeName)}ที่ 1 ของ ${o.aName} เทียบกับ${stepWordOf(o.timeName)}ที่ 1 ของ ${o.bName} (ชื่อบนแกนเป็นของ ${o.aName})` : `${o.aName} แยกสีตามแพลตฟอร์ม`);
+
+    // 6.2) กราฟเส้นแนวโน้ม: เทียบ 2 ช่วง = เส้นละช่วง · ช่วงเดียว = แยกแพลตฟอร์ม + เส้นรวม (เหมือนเว็บ)
+    for (const metric of ["gmv", "gmvPerHour"] as const) {
+      const series = hasB
+        ? [
+          { name: o.aName, color: C.pink, values: totalSeries(o.time.map((t) => t.a), metric) },
+          { name: o.bName, color: C.blue, values: totalSeries(o.time.map((t) => t.b), metric) },
+        ]
+        : platformTrend(o.time.map((t) => t.a), metric, o.timeName !== "รายชั่วโมง");
+      addTrendSlide(pres, target, `${metricOf(metric).label} แนวโน้ม${o.timeName}`, labels, series);
+    }
   }
 
   // 6.5) รายไตรมาส (ภาพรวมทั้งปี): กราฟ GMV ต่อไตรมาส + QoQ ใต้กราฟ
@@ -514,7 +658,9 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     const s = pres.addSlide({ masterName: "CONTENT" });
     s.addText("GMV รายไตรมาส", { placeholder: "title" });
     const qs = o.quarters;
-    barChart(s, "GMV รายไตรมาส", qs.map((q) => q.label), qs.map((q) => totalsOf(q.a).gmv), qs.map((q) => totalsOf(q.b).gmv), { x: M, y: 1.4, w: W - 2 * M, h: 4.7 });
+    const box = { x: M, y: 1.4, w: W - 2 * M, h: 4.7 };
+    if (hasB) barChart(s, "GMV รายไตรมาส", qs.map((q) => q.label), qs.map((q) => totalsOf(q.a).gmv), qs.map((q) => totalsOf(q.b).gmv), box);
+    else platformBars(pres, s, target, { title: "GMV รายไตรมาส", labels: qs.map((q) => q.label), groups: qs.map((q) => q.a), box, showValue: true });
     // QoQ = เทียบไตรมาสก่อนหน้า (ไตรมาสที่ยังไม่จบไม่คิด %)
     const qoq = qs.map((q) => {
       const c = q.open ? null : changeOf(q.a.length ? totalsOf(q.a).gmv : null, q.before.length ? totalsOf(q.before).gmv : null);
@@ -581,7 +727,7 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
       { text: "สิ่งที่ควรทำต่อ", options: { bold: true, color: C.pinkOnDark, breakLine: true, paraSpaceBefore: 10 } },
       ...next.map((t, i) => ({ text: t, options: { bullet: { type: "number" as const }, breakLine: i < next.length - 1 } })),
     ], { x: M, y: 1.7, w: W - 2 * M, h: 4.8, fontSize: 17, color: C.white, fontFace: FONT, margin: 0, valign: "top", paraSpaceAfter: 10, fit: "shrink", isTextBox: true });
-    s.addText(`${o.report}: ${o.aName} (${o.aRange}) vs ${o.bName} (${o.bRange}) · ${o.filterText}`,
+    s.addText(`${o.report}: ${o.aName} (${o.aRange})${hasB ? ` vs ${o.bName} (${o.bRange})` : ""} · ${o.filterText}`,
       { x: M, y: H - 0.9, w: W - 2 * M, h: 0.4, fontSize: 11, color: C.mutedOnDark, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
   }
 
@@ -600,6 +746,8 @@ export type MultiDeckInput = {
   now: string; // เดือนปัจจุบัน (ยังไม่จบ = ไม่นับเป็นเดือนสูงสุด/ต่ำสุด)
   filterText: string;
   exportedAt: string;
+  /** โหมดช่วงวันเดียวกันหลายเดือน: รายวันของแต่ละเดือน (labels = "วันที่ 19" · byDay = เดือน -> ไลฟ์ของแต่ละวัน) */
+  daily?: { labels: string[]; byDay: Map<string, LiveSession[][]> };
 };
 
 /** ลำดับตัวชี้วัดของตารางเทียบหลายเดือน (เหมือนหน้าเว็บ / ไฟล์ส่งออก) */
@@ -615,7 +763,7 @@ function deltaText(kind: (typeof METRICS)[number]["kind"], a: number | null, b: 
 }
 
 /**
- * สไลด์เทียบหลายเดือน: ปก / ตารางเทียบ (ทุกแพลตฟอร์ม + แยก TikTok / Shopee) / กราฟ GMV รายเดือน / ตารางบัญชี / วิเคราะห์ / สรุป
+ * สไลด์เทียบหลายเดือน: ปก / ตารางเทียบ (ทุกแพลตฟอร์ม + แยก TikTok / Shopee) / กราฟแท่ง + กราฟเส้นรายเดือน (+ รายวันของแต่ละเดือน) / ตารางบัญชี / วิเคราะห์ / สรุป
  *   ตาราง = ค่าทุกเดือน + เดือนหลัก vs เดือนอื่นทีละเดือน (แบบตารางที่ทีมใช้)
  */
 export async function buildMultiDeck(o: MultiDeckInput, target: "pptx" | "gslides" = "pptx"): Promise<Blob> {
@@ -778,23 +926,47 @@ export async function buildMultiDeck(o: MultiDeckInput, target: "pptx" | "gslide
   {
     const s = pres.addSlide({ masterName: "CONTENT" });
     s.addText("GMV รายเดือน", { placeholder: "title" });
-    const labels = o.keys.map(o.label), values = o.keys.map((k) => valueAt(k, "gmv") ?? 0);
-    if (target === "pptx") {
-      s.addChart(pres.ChartType.bar, [{ name: "GMV", labels, values }], {
-        x: M, y: 1.4, w: W - 2 * M, h: 4.9, barDir: "col", barGapWidthPct: 60, chartColors: [C.pink, C.pink], showLegend: false, showTitle: false, altText: "GMV รายเดือน",
-        showValue: true, dataLabelPosition: "outEnd", dataLabelFormatCode: COMPACT, dataLabelFontSize: o.keys.length <= 6 ? 14 : 11, dataLabelFontBold: true, dataLabelFontFace: FONT, dataLabelColor: C.text,
-        valAxisMinVal: 0, valAxisLabelFormatCode: COMPACT, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
-        catAxisLabelFontSize: 12, catAxisLabelFontFace: FONT, catAxisLabelColor: C.text, valGridLine: { color: C.grid, size: 0.75 }, catGridLine: { style: "none" },
-      });
-    } else {
-      shapeBars(pres, s, { labels, series: [{ name: "GMV", color: C.pink, values }], box: { x: M, y: 1.4, w: W - 2 * M, h: 4.9 }, showValue: true });
-    }
+    platformBars(pres, s, target, { title: "GMV รายเดือน", labels: o.keys.map(o.label), groups: o.keys.map(list), box: { x: M, y: 1.4, w: W - 2 * M, h: 4.9 }, showValue: true });
     const mom = o.keys.slice(1).map((k, i) => {
       const d = deltaText("baht", valueAt(k, "gmv"), valueAt(o.keys[i], "gmv"));
       return [{ text: `${o.label(k)} vs ${o.label(o.keys[i])}  `, options: { color: C.muted } }, { text: `${d.text}      `, options: { bold: true, color: d.color } }];
     }).flat();
     s.addText([{ text: "MoM:  ", options: { bold: true, color: C.text } }, ...mom], { x: M, y: 6.35, w: W - 2 * M, h: 0.4, fontSize: 13, fontFace: FONT, margin: 0, valign: "middle", fit: "shrink", isTextBox: true });
     s.addNotes(best ? `เดือนที่ GMV สูงสุด: ${o.longLabel(best)} ${fmt("gmv", valueAt(best, "gmv"))}` : "");
+  }
+
+  // 6.2) กราฟเส้นแนวโน้มรายเดือน: แยกแพลตฟอร์ม + เส้นรวม (เหมือนเว็บ) · มีเดือนเดียวไม่มีเส้นให้ดู
+  if (o.keys.length > 1) {
+    for (const metric of ["gmv", "gmvPerHour"] as const) {
+      addTrendSlide(pres, target, `${metricOf(metric).label} แนวโน้มรายเดือน`, o.keys.map(o.label), platformTrend(o.keys.map(list), metric, true));
+    }
+  }
+
+  // 6.3) รายวันของแต่ละเดือน (โหมดช่วงวันเดียวกันหลายเดือน): แท่งวันละกลุ่ม + เส้นเดือนละเส้น
+  if (o.daily && o.daily.labels.length > 1) {
+    const { byDay } = o.daily;
+    const dayLabels = o.daily.labels.map((l) => l.replace("วันที่ ", ""));
+    const blues = ["B7D3F6", "86B6EF", "5598E7"].slice(-others.length);
+    const colorOf = (k: string) => (k === o.focus ? C.pink : blues[others.indexOf(k)] ?? C.blue);
+    const days = (k: string) => byDay.get(k) ?? [];
+    const lines = (metric: MetricKey) => o.keys.map((k) => ({ name: o.label(k), color: colorOf(k), values: totalSeries(days(k), metric) }));
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText("GMV รายวันของแต่ละเดือน", { placeholder: "title" });
+    const box = { x: M, y: 1.4, w: W - 2 * M, h: 5.3 };
+    const bars = lines("gmv").map((x) => ({ ...x, values: x.values.map((v) => v ?? 0) }));
+    if (target === "pptx") {
+      s.addChart(pres.ChartType.bar, bars.map((x) => ({ name: x.name, labels: dayLabels, values: x.values })), {
+        ...box, barDir: "col", barGrouping: "clustered", barGapWidthPct: 50, chartColors: bars.map((x) => x.color),
+        showLegend: true, legendPos: "t", legendFontSize: 12, legendFontFace: FONT, legendColor: C.text, showTitle: false, altText: "GMV รายวันของแต่ละเดือน",
+        showValue: dayLabels.length <= 7, dataLabelPosition: "outEnd", dataLabelFormatCode: COMPACT, dataLabelFontSize: 10, dataLabelFontFace: FONT, dataLabelColor: C.text,
+        valAxisMinVal: 0, valAxisLabelFormatCode: COMPACT, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
+        catAxisLabelFontSize: 11, catAxisLabelFontFace: FONT, catAxisLabelColor: C.text, valGridLine: { color: C.grid, size: 0.75 }, catGridLine: { style: "none" },
+      });
+    } else {
+      shapeBars(pres, s, { labels: dayLabels, series: bars, box, showValue: dayLabels.length <= 7, emphasis: o.keys.indexOf(o.focus) });
+    }
+    addTrendSlide(pres, target, "GMV แนวโน้มรายวันของแต่ละเดือน", dayLabels, lines("gmv"));
+    addTrendSlide(pres, target, "GMV / ชม. แนวโน้มรายวันของแต่ละเดือน", dayLabels, lines("gmvPerHour"));
   }
 
   // 7) สรุปแยกตามบัญชี: GMV ทุกเดือน + เดือนหลัก vs เดือนอื่น + ไลฟ์ / GMV ต่อชม. / CO ของเดือนหลัก (ไม่เกิน 4 เดือน)

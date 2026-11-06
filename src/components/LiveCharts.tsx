@@ -234,17 +234,11 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
     // วันที่ไม่มีค่าเลย (เช่น วันที่ยังไม่ถึง) ไม่ต้องแสดงกล่องตัวเลข
     setHover(series.some((s) => s.values[i] !== null) ? i : null);
   };
-  /** เส้นต่อเนื่องเป็นช่วงๆ (ขาดตรงที่ไม่มีค่า) */
-  const pathOf = (values: (number | null)[]) => {
-    const parts: string[] = [];
-    let open = false;
-    values.forEach((v, i) => {
-      if (v === null) { open = false; return; }
-      parts.push(`${open ? "L" : "M"}${x(i)},${y(v)}`);
-      open = true;
-    });
-    return parts.join("");
-  };
+  /** เส้นเชื่อมทุกจุดที่มีค่า ลากข้ามช่วงที่ไม่มีค่า (เช่น ชั่วโมงที่ไม่มีไลฟ์) · ก่อนจุดแรก / หลังจุดสุดท้ายไม่ลาก */
+  const pathOf = (values: (number | null)[]) => values
+    .flatMap((v, i) => (v === null ? [] : [`${x(i)},${y(v)}`]))
+    .map((p, k) => `${k ? "L" : "M"}${p}`)
+    .join("");
   const lastOf = (values: (number | null)[]) => values.reduce<number>((a, v, i) => (v === null ? a : i), -1);
   const painted = [...series].reverse();
   // ป้ายปลายเส้น: ปลายเส้นห่างกันไม่ถึง 14px = ป้ายทับกัน ไม่แสดง (Legend + กล่องตัวเลขบอกอยู่แล้ว)
@@ -274,9 +268,10 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
             <path key={s.name} d={pathOf(s.values)} pathLength={1} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="line-draw" />
           ))}
           {painted.flatMap((s) => s.values.map((v, i) => {
-            const alone = v !== null && (s.values[i - 1] ?? null) === null && (s.values[i + 1] ?? null) === null;
-            const end = i === lastOf(s.values);
-            if (v === null || (!alone && !end && hover !== i)) return null;
+            // จุด = ค่าจริงที่ติดกับช่วงที่ไม่มีค่า (ให้เห็นว่าเส้นตรงนั้นลากข้าม) + จุดท้ายเส้น · ช่วงที่มีค่าติดกันไม่ต้องมีจุด
+            const first = s.values.findIndex((c) => c !== null) === i;
+            const gapAfter = (s.values[i + 1] ?? null) === null, gapBefore = !first && (s.values[i - 1] ?? null) === null;
+            if (v === null || (!gapAfter && !gapBefore && hover !== i)) return null;
             return <circle key={`${s.name}|${i}`} cx={x(i)} cy={y(v)} r={hover === i ? 5 : 4} fill={s.color} stroke="var(--card)" strokeWidth={2} className={hover === i ? undefined : "dot-pop"} />;
           }))}
           {endLabels ? ends.map(({ s, i }) => (i < 0 ? null : (
@@ -298,7 +293,7 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
               <span className="font-semibold tabular-nums">{format(s.values[hover])}</span>
             </div>
           ))}
-          {compare && series.length === 2 ? <ChangeText cur={series[0].values[hover]} prev={series[1].values[hover]} className="mt-1 block text-right" /> : null}
+          {compare && series.length === 2 ? <ChangeText cur={series[0].values[hover]} prev={series[1].values[hover]} className="mt-1 flex justify-end" /> : null}
         </div>
       ) : null}
     </div>

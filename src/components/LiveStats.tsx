@@ -1192,6 +1192,7 @@ function MultiMonthView({ dataMonths, version, days }: { dataMonths: string[]; v
           <SlidesMenu label="สไลด์" title={`GLORY เทียบหลายเดือน ${rangeText}`} build={(target) => buildMultiDeck({
             rangeText, keys, focus, label: short, longLabel: long, byMonth, now,
             filterText: filterText(exportFilter).join(" · "), exportedAt: bkkStamp(new Date().toISOString()),
+            ...(days && nDays > 1 ? { daily: { labels: dayLabels, byDay } } : {}),
           }, target)} />
         </div>
       </FilterBar>
