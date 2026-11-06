@@ -212,7 +212,8 @@ export function CostPage() {
         <AgencyRates key={`${month}|${attempt}`} report={report} onSaved={() => setAttempt((n) => n + 1)} />
       ) : null}
 
-      {see.mc ? (
+      {/* มี GMV จากไฟล์ Export: ต้องเห็นค่าจ้าง Mc และดูสถิติไลฟ์ได้ทั้งคู่ */}
+      {see.mc && see.gmv ? (
         <Collapsible open={mcOpen} onOpenChange={(v) => writeLocal(MC_OPEN_KEY, v ? "1" : "0")} className="group/mc my-4 rounded-2xl border bg-card p-3">
           <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between gap-2 rounded text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
             <span>
