@@ -14,8 +14,14 @@ import { cn } from "@/lib/utils";
 //   ข้อมูลจาก /api/notifications (โหลดใหม่ทุก 1 นาทีตอนเปิดหน้าอยู่ + ตอนกลับมาที่แอป) · เด้ง = /api/push + public/sw.js
 
 type Item = { id: number; kind: string; title: string; body: string; page: string | null; at: string; read: boolean };
-/** asking = รอคนกด "อนุญาต" ที่ป๊อปอัปของเบราว์เซอร์ · enabling / disabling = กำลังเปิด / ปิด */
-type PushState = "checking" | "unsupported" | "ios-install" | "denied" | "off" | "on" | "asking" | "enabling" | "disabling";
+/**
+ * asking = รอคนกด "อนุญาต" ที่ป๊อปอัปของเบราว์เซอร์ · enabling / disabling = กำลังเปิด / ปิด
+ *   dev = localhost สมัครไม่ได้ · dev-stale = เครื่องนี้เคยสมัครจาก localhost ค้างไว้ (กดปิดเพื่อล้างออก)
+ */
+type PushState = "checking" | "unsupported" | "ios-install" | "denied" | "off" | "on" | "asking" | "enabling" | "disabling" | "dev" | "dev-stale";
+
+/** localhost ใช้ฐานข้อมูลเดียวกับเว็บจริงแต่กุญแจแจ้งเตือนคนละชุด: เครื่องที่สมัครจากที่นี่เว็บจริงส่งหาไม่ได้ (/api/push ไม่รับด้วย) */
+const LOCAL_DEV = process.env.NODE_ENV !== "production";
 
 /** รอได้ไม่เกินกี่วินาที (กันปุ่มค้างถ้าเบราว์เซอร์ไม่ตอบ) */
 function withTimeout<T>(p: Promise<T>, sec: number, message: string) {
@@ -97,6 +103,7 @@ function usePush() {
         const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
         const sub = await reg.pushManager.getSubscription();
         if (!alive) return;
+        if (LOCAL_DEV) return setState(sub ? "dev-stale" : "dev");
         if (Notification.permission === "denied") return setState("denied");
         if (sub && Notification.permission === "granted") {
           // สมัครไว้กับกุญแจเก่า (เช่น ย้ายเว็บ / เปลี่ยนกุญแจ) = ยกเลิก แล้วสมัครใหม่ให้เอง (อนุญาตไว้แล้ว)
@@ -216,10 +223,10 @@ export function NotificationBell({ onGo }: { onGo: (page: string) => void }) {
         await api("/api/push", { endpoint: sub.endpoint }, "DELETE");
         await sub.unsubscribe();
       }
-      setPush("off");
+      setPush(LOCAL_DEV ? "dev" : "off");
       toast("ปิดแจ้งเตือนบนเครื่องนี้แล้ว");
     } catch {
-      setPush("on");
+      setPush(LOCAL_DEV ? "dev-stale" : "on");
       toast("ปิดแจ้งเตือนไม่สำเร็จ ลองใหม่อีกครั้ง", "error");
     }
   }
@@ -301,6 +308,15 @@ function PushControl({ state, onEnable, onDisable, onTest, compact }: {
     );
   }
   const box = (children: React.ReactNode) => <div className="rounded-lg bg-muted/60 p-2.5 text-xs leading-relaxed">{children}</div>;
+  if (state === "dev") return box(<>localhost ไม่รับแจ้งเตือนเด้ง เพราะใช้กุญแจคนละชุดกับเว็บจริง เปิดแจ้งเตือนได้ที่เว็บจริง</>);
+  if (state === "dev-stale") {
+    return box(
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1">เครื่องนี้เคยเปิดแจ้งเตือนจาก <b>localhost</b> ไว้ เว็บจริงส่งหาไม่ได้ กดปิดเพื่อล้างออก</span>
+        <Button size="sm" variant="outline" onClick={onDisable}>ปิดแจ้งเตือน</Button>
+      </div>,
+    );
+  }
   if (state === "asking") {
     return box(<>
       <b className="text-primary">กด &quot;อนุญาต&quot; ที่ป๊อปอัปของเบราว์เซอร์</b> (มุมซ้ายบน ใต้แถบที่อยู่เว็บ) — ถ้าไม่เห็นป๊อปอัป ให้กดไอคอน 🔔 / แม่กุญแจ ในแถบที่อยู่เว็บ แล้วเลือกอนุญาตการแจ้งเตือน

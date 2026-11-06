@@ -7,7 +7,10 @@ import { createAdminClient } from "@/lib/supabase/server";
 //   POST { subscription }              เปิดแจ้งเตือนบนเครื่องนี้ (จำเครื่องไว้กับอีเมลที่ login)
 //   POST { action: "test" }            ส่งแจ้งเตือนทดสอบหาตัวเอง
 //   DELETE { endpoint }                ปิดแจ้งเตือนบนเครื่องนี้
+// localhost (next dev) ใช้ฐานข้อมูลเดียวกับเว็บจริงแต่กุญแจแจ้งเตือนคนละชุด: เครื่องที่สมัครจากที่นี่เว็บจริงส่งหาไม่ได้ (FCM 403 ทุกครั้ง)
+//   จึงไม่รับ POST · DELETE ยังใช้ได้ ไว้ล้างเครื่องที่สมัครค้างไว้
 
+const LOCAL_DEV = process.env.NODE_ENV !== "production";
 const SQL = "ต้องรัน SQL 20261028000000_notifications ใน Supabase ก่อน";
 const dbFail = (msg: string) => fail(/push_subscriptions|notifications/.test(msg) ? SQL : msg, 500);
 
@@ -20,6 +23,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
+  if (LOCAL_DEV) return fail("localhost เปิด / ทดสอบแจ้งเตือนเด้งไม่ได้ เพราะใช้กุญแจคนละชุดกับเว็บจริง");
   const body = await request.json().catch(() => null);
   const db = createAdminClient();
 
