@@ -325,16 +325,47 @@ const CLAIM_WIDTHS = [12, 14, 14, 14, 10, 10, 12, 10, 12, 12, 13, 16, 26];
 /** ความกว้างคอลัมน์ไฟล์เบิก (มีคอลัมน์ค่ารถ = แทรกก่อน Total) */
 const claimWidths = (travelCol: boolean) => (travelCol ? [...CLAIM_WIDTHS.slice(0, 10), 10, ...CLAIM_WIDTHS.slice(10)] : CLAIM_WIDTHS);
 
-function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
+/**
+ * กลุ่มในไฟล์ของฝ่ายบัญชี: Mc Shopee / Mc TikTok / Admin เสริม (Admin มีแต่ TikTok)
+ *   Mc ที่ไลฟ์ทั้งสองแพลตฟอร์มอยู่ทั้งกลุ่ม Shopee และ TikTok (แยกยอด + ค่าตัว/ชม. ของแต่ละแพลตฟอร์ม)
+ */
+const ACCOUNT_GROUPS: { type: Type; keep: (d: OwnerDetail) => boolean; fee: string; item: string; detail: string; bg: string }[] = [
+  { type: "Mc", keep: (d) => !!d.shopee, fee: "MC LIVESTREAM Shopee Fee", item: "MC LIVESTREAM Shopee-", detail: "MC LIVESTREAMING Shopee", bg: "FF9900" },
+  { type: "Mc", keep: (d) => !d.shopee, fee: "MC LIVESTREAM Tiktok Fee", item: "MC LIVESTREAM Tiktok-", detail: "MC LIVESTREAMING Tiktok", bg: "000000" },
+  { type: "Admin", keep: () => true, fee: "ADMIN LIVESTREAM Tiktok Fee", item: "ADMIN LIVESTREAM Tiktok-", detail: "Adminเสริม Tiktok", bg: "000000" },
+];
+
+/**
+ * คิวรายคนทีละกลุ่ม แบบหน้า Details ของฝ่ายบัญชี: หัวเรื่อง / คิวรายคน / Grand Total / Duration / Total Cost
+ *   คืน มีคอลัมน์ค่ารถไหม (ไม่มีคนเลย = null)
+ */
+function detailBlocks(out: SheetParts, data: OwnerSummary, list: typeof ACCOUNT_GROUPS) {
   const { first, last } = monthSpan(data.month);
-  const items = data.details.filter((d) => d.type === type && !d.cancelled);
-  const shopee = items.some((d) => d.shopee), tiktok = items.some((d) => !d.shopee);
-  const where = shopee && tiktok ? "Tiktok / Shopee" : shopee ? "Shopee" : "Tiktok";
+  const dm = (d: string) => `${Number(d.slice(8))} ${MONTHS_EN[Number(d.slice(5, 7)) - 1]}`;
+  let found = false, travelCol = false;
+  for (const g of list) {
+    const start = out.rows.length;
+    if (start) out.rows.push([], []);
+    const title = `สรุปรายละเอียดชั่วโมงทำงาน ${g.detail} รอบ ${dmy(first)} - ${dmy(last)}`;
+    const res = claimRows(out, data, g.type, g.keep, title, g.bg, "Grand Total");
+    if (!res) { out.rows.length = start; continue; }
+    found = true;
+    travelCol ||= res.travelCol;
+    // ใต้คอลัมน์ Total (มีคอลัมน์ค่ารถ = เลื่อนไป 1 ช่อง)
+    const pad = Array<Cell>(res.travelCol ? 11 : 10).fill("");
+    out.rows.push([...pad, `Duration : ${dm(first)} - ${dm(last)}`]);
+    out.rowStyles[out.rows.length] = { bg: "F3F3F3", bold: true };
+    out.rows.push([...pad, "Total Cost", { v: res.grand, f: "money" }]);
+  }
+  return found ? { travelCol } : null;
+}
+
+/** แผ่นรายคนของไฟล์เบิก: แยกบล็อกตามแพลตฟอร์มแบบหน้า Details (Mc = Shopee แล้วตามด้วย TikTok) */
+function claimSheet(data: OwnerSummary, type: Type): ExportSheet | null {
   const out: SheetParts = { rows: [], rowStyles: {}, cellStyles: {} };
-  const title = `สรุปรายละเอียดชั่วโมงทำงาน ${type === "Mc" ? "MC" : "ADMIN"} LIVESTREAMING ${where} รอบ ${dmy(first)} - ${dmy(last)}`;
-  const res = claimRows(out, data, type, () => true, title, "000000", `รวม ${type} ทั้งหมด`);
+  const res = detailBlocks(out, data, ACCOUNT_GROUPS.filter((g) => g.type === type));
   if (!res) return null;
-  return { name: `รายคน ${type}`, ...out, header: 1, colWidths: claimWidths(res.travelCol) };
+  return { name: `รายคน ${type}`, ...out, header: -1, colWidths: claimWidths(res.travelCol) };
 }
 
 /** ตารางคุม Advance Payment ประจำเดือน: วันละแถว จ่าย = ค่าตัว Mc + Admin ของวันนั้น / WHT 3% / ก่อน VAT = จ่าย - WHT */
@@ -401,15 +432,6 @@ function claimBook(data: OwnerSummary, requester: string): ExportBook {
 
 // ---------- สรุปรายการเบิก: รูปแบบไฟล์ของฝ่ายบัญชี ("รอบเบิกจ่าย" + "Details รอบเบิกจ่าย") ----------
 
-/**
- * กลุ่มในไฟล์ของฝ่ายบัญชี: Mc Shopee / Mc TikTok / Admin เสริม (Admin มีแต่ TikTok)
- *   Mc ที่ไลฟ์ทั้งสองแพลตฟอร์มอยู่ทั้งกลุ่ม Shopee และ TikTok (แยกยอด + ค่าตัว/ชม. ของแต่ละแพลตฟอร์ม)
- */
-const ACCOUNT_GROUPS: { type: Type; keep: (d: OwnerDetail) => boolean; fee: string; item: string; detail: string; bg: string }[] = [
-  { type: "Mc", keep: (d) => !!d.shopee, fee: "MC LIVESTREAM Shopee Fee", item: "MC LIVESTREAM Shopee-", detail: "MC LIVESTREAMING Shopee", bg: "F6B26B" },
-  { type: "Mc", keep: (d) => !d.shopee, fee: "MC LIVESTREAM Tiktok Fee", item: "MC LIVESTREAM Tiktok-", detail: "MC LIVESTREAMING Tiktok", bg: "000000" },
-  { type: "Admin", keep: () => true, fee: "ADMIN LIVESTREAM Tiktok Fee", item: "ADMIN LIVESTREAM Tiktok-", detail: "Adminเสริม Tiktok", bg: "000000" },
-];
 /** หัก ณ ที่จ่าย 3% เฉพาะยอดจ่ายครั้งละ 1,000 บาทขึ้นไป (ต่ำกว่านั้นไม่หัก — แบบเดียวกับไฟล์ของฝ่ายบัญชี) */
 const WHT_MIN = 1000;
 const whtOf = (net: number) => (net >= WHT_MIN ? Math.round(net * 0.03 * 100) / 100 : 0);
@@ -468,19 +490,7 @@ function accountBook(data: OwnerSummary): ExportBook {
 
   // แผ่นรายละเอียด (คิวรายคนทีละกลุ่ม)
   const det: SheetParts = { rows: [], rowStyles: {}, cellStyles: {} };
-  const dm = (d: string) => `${Number(d.slice(8))} ${MONTHS_EN[Number(d.slice(5, 7)) - 1]}`;
-  for (const g of list) {
-    const start = det.rows.length;
-    if (start) det.rows.push([], []);
-    const title = `สรุปรายละเอียดชั่วโมงทำงาน ${g.detail} รอบ ${dmy(first)} - ${dmy(last)}`;
-    const res = claimRows(det, data, g.type, g.keep, title, g.bg, "Grand Total");
-    if (!res) { det.rows.length = start; continue; }
-    // ใต้คอลัมน์ Total (มีคอลัมน์ค่ารถ = เลื่อนไป 1 ช่อง)
-    const pad = Array<Cell>(res.travelCol ? 11 : 10).fill("");
-    det.rows.push([...pad, `Duration : ${dm(first)} - ${dm(last)}`]);
-    det.rowStyles[det.rows.length] = { bg: "F3F3F3", bold: true };
-    det.rows.push([...pad, "Total Cost", { v: res.grand, f: "money" }]);
-  }
+  detailBlocks(det, data, list);
 
   return {
     title: `GLORY สรุปรายการเบิก ${monthLabel(data.month)}`,
