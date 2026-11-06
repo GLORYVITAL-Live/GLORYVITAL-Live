@@ -10,7 +10,7 @@ import { fmtDayMonth, fmtMonthShort, fmtWeekShort, monthKey, monthLabel, parseKe
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
-import { dailyByPlatform, isStackable, platformSeries } from "@/lib/live-lines";
+import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
 import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { DatePicker } from "@/components/date-picker";
@@ -558,11 +558,13 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
   const replay = `${range.from}|${range.to}|${filter.platform}|${filter.account}`;
   const valOf = (k: string) => { const t = totalsAt(k); return t.lives ? def.value(t) : null; };
-  const series = [{ name: aName, color: CUR, values: curKeys.map(valOf) }];
   const hasPrev = prevKeys.some((k) => totalsAt(k).lives);
-  if (hasPrev) series.push({ name: bName, color: PREV, values: prevKeys.map(valOf) });
-  // กราฟแท่งแยกแพลตฟอร์ม ส่วนเทียบปีก่อนอยู่ในกราฟเส้นและตาราง
-  const yearSeries = platformLines(curKeys.map((k) => byMonth.get(k) ?? []), metric);
+  const curGroups = curKeys.map((k) => byMonth.get(k) ?? []);
+  // กราฟแท่งแยกแพลตฟอร์ม · กราฟเส้นแยกแพลตฟอร์มด้วย เว้นแต่มีข้อมูลปีก่อน จะเป็นเส้นเทียบปีแทน (2 ปี × แพลตฟอร์ม = เส้นเยอะจนอ่านไม่ออก)
+  const yearSeries = platformLines(curGroups, metric);
+  const series = hasPrev
+    ? [{ name: aName, color: CUR, values: curKeys.map(valOf) }, { name: bName, color: PREV, values: prevKeys.map(valOf) }]
+    : trendLines(curGroups, metric);
 
   // ไตรมาสที่อยู่ในช่วง (บางไตรมาสอาจมีไม่ครบ 3 เดือน) + ไตรมาสก่อนหน้า (QoQ) + ปีก่อน (YoY)
   const quarterKeys = [...new Set(curKeys.map(quarterOf))];
@@ -846,6 +848,15 @@ const PLATFORM_COLOR: Record<string, string> = { TikTok: CUR, Shopee: PREV };
 /** ค่าของแต่ละกลุ่มแยกแพลตฟอร์ม พร้อมชื่อ + สีสำหรับกราฟและตาราง */
 const platformLines = (groups: LiveSession[][], metric: MetricKey) =>
   platformSeries(groups, metric).map((s) => ({ name: s.platform, color: PLATFORM_COLOR[s.platform], values: s.values }));
+/**
+ * กราฟเส้นแนวโน้ม: แยกแพลตฟอร์ม + เส้นรวมสีตัวอักษร (สีเทาแยกจากชมพู TikTok ไม่ออกสำหรับคนตาบอดสีแดง)
+ *   เหลือแพลตฟอร์มเดียว = เส้นรวมคือเส้นเดียวกัน ไม่ต้องมี · ค่าที่รวมไม่ได้ (CO) = ไม่มีเส้นรวม
+ */
+const trendLines = (groups: LiveSession[][], metric: MetricKey) => {
+  const lines: { name: string; color: string; values: (number | null)[] }[] = platformLines(groups, metric);
+  const total = totalSeries(groups, metric);
+  return lines.length > 1 && total.some((v) => v !== null) ? [...lines, { name: "รวม", color: "var(--foreground)", values: total }] : lines;
+};
 
 /**
  * กราฟแท่งแยกสีตามแพลตฟอร์ม: ค่าที่บวกกันได้ (GMV ออเดอร์ ชั่วโมง ...) = แท่งซ้อน ความสูงรวมคือยอดรวมจริง
@@ -1268,7 +1279,7 @@ function MultiMonthView({ dataMonths, version, days }: { dataMonths: string[]; v
         rowHead={days ? "ช่วง" : "เดือน"}
         categories={keys.map(short)}
         titles={keys.map(long)}
-        series={[{ name: def.label, color: CUR, values: keys.map((k) => valueAt(k, metric)) }]}
+        series={trendLines(keys.map((k) => byMonth.get(k)!), metric)}
         metric={metric}
         onMetric={setMetric}
         replay={replay}
@@ -1991,8 +2002,9 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
               rowHead={unit === "hour" ? "ช่วงเวลา" : unit === "day" ? "วัน" : "เดือน"}
               categories={timeGroups.map((g) => g.short)}
               titles={timeGroups.map((g) => g.label)}
+              // รายชั่วโมง: ไลฟ์แต่ละชั่วโมงมักมีแพลตฟอร์มเดียว เส้นรวมจึงแค่ลากเชื่อมจุดของคนละแพลตฟอร์ม ไม่แสดง
               series={single
-                ? [{ name: curName, color: CUR, values: timeGroups.map((g) => val(g.a)) }]
+                ? (unit === "hour" ? platformLines : trendLines)(timeGroups.map((g) => g.a), metric)
                 : [{ name: curName, color: CUR, values: timeGroups.map((g) => val(g.a)) }, { name: prevName, color: PREV, values: timeGroups.map((g) => val(g.b)) }]}
               metric={metric}
               onMetric={setMetric}

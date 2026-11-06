@@ -233,6 +233,7 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
     return parts.join("");
   };
   const lastOf = (values: (number | null)[]) => values.reduce<number>((a, v, i) => (v === null ? a : i), -1);
+  const painted = [...series].reverse();
   // ป้ายปลายเส้น: ปลายเส้นห่างกันไม่ถึง 14px = ป้ายทับกัน ไม่แสดง (Legend + กล่องตัวเลขบอกอยู่แล้ว)
   const ends = series.map((s) => ({ s, i: lastOf(s.values) }));
   const endLabels = labelled && ends.every(({ s, i }, k) => ends.every((o, j) => j === k
@@ -255,10 +256,11 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
             <text key={i} x={x(i)} y={height - 8} textAnchor="middle" className="fill-muted-foreground text-[11px] tabular-nums">{c}</text>
           ) : null))}
           {hover !== null ? <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={pad.t + plotH} className="stroke-muted-foreground/50" strokeWidth={1} /> : null}
-          {series.map((s) => (
+          {/* วาดจากเส้นท้าย เส้นแรกอยู่บนสุด: จุดที่ค่ารวมเท่าค่าแพลตฟอร์ม เส้นรวม (ท้ายสุด) จะไม่บังสีแพลตฟอร์ม */}
+          {painted.map((s) => (
             <path key={s.name} d={pathOf(s.values)} pathLength={1} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="line-draw" />
           ))}
-          {series.flatMap((s) => s.values.map((v, i) => {
+          {painted.flatMap((s) => s.values.map((v, i) => {
             const alone = v !== null && (s.values[i - 1] ?? null) === null && (s.values[i + 1] ?? null) === null;
             const end = i === lastOf(s.values);
             if (v === null || (!alone && !end && hover !== i)) return null;

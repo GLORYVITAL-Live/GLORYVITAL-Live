@@ -1,6 +1,6 @@
 // เทสเส้นรายวันของแต่ละแพลตฟอร์ม (bun test)
 import { describe, expect, test } from "bun:test";
-import { dailyByPlatform, isStackable, platformSeries } from "@/lib/live-lines";
+import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
 import { METRICS, metricOf, totalsOf, type LiveSession, type MetricKey } from "@/lib/live-stats";
 
 const live = (d: string, t: string, min: number, gmv: number, platform = "TikTok") => ({
@@ -35,6 +35,24 @@ describe("แท่งซ้อนแยกแพลตฟอร์ม", () => {
   test("กลุ่มที่ไม่มีไลฟ์ = null · แพลตฟอร์มที่ไม่มีเลยไม่แสดง", () => {
     const res = platformSeries([[live("2026-11-01", "09:00", 60, 100)], []], "gmv");
     expect(res).toEqual([{ platform: "TikTok", values: [100, null] }]);
+  });
+});
+
+describe("เส้นรวม", () => {
+  const tiktok = live("2026-11-01", "09:00", 60, 1000), shopee = live("2026-11-01", "06:00", 180, 5000, "Shopee");
+  test("ค่าที่บวกกันได้ = ผลบวกของแต่ละแพลตฟอร์ม", () => {
+    expect(totalSeries([[tiktok, shopee]], "gmv")).toEqual([6000]);
+  });
+  test("ค่าต่อหน่วยคิดจากยอดรวม ไม่ใช่เอาค่าแต่ละแพลตฟอร์มมาบวก", () => {
+    expect(totalSeries([[tiktok, shopee]], "gmvPerHour")).toEqual([1500]); // 6,000 ÷ 4 ชม. ไม่ใช่ 1,000 + 1,667
+  });
+  test("กลุ่มที่ไม่มีไลฟ์ = null", () => {
+    expect(totalSeries([[tiktok], []], "gmv")).toEqual([1000, null]);
+  });
+  test("CO รวมสองแพลตฟอร์มไม่มีค่า แต่ละแพลตฟอร์มยังมีค่าของตัวเอง", () => {
+    const a = { ...tiktok, orders: 5, clicks: 50 } as LiveSession, b = { ...shopee, orders: 9, viewers: 90 } as LiveSession;
+    expect(totalSeries([[a, b]], "co")).toEqual([null]);
+    expect(platformSeries([[a, b]], "co").map((s) => s.values[0])).toEqual([0.1, 0.1]);
   });
 });
 
