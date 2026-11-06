@@ -28,7 +28,7 @@ function useWidth() {
 }
 
 /** ค่าสูงสุดของแกนแบบปัดเลขสวย + เส้นแบ่ง 4 ช่อง */
-export function niceTicks(max: number) {
+function niceTicks(max: number) {
   if (max <= 0) return [0, 1];
   const raw = max / 4;
   const mag = 10 ** Math.floor(Math.log10(raw));
@@ -42,13 +42,13 @@ function barPath(x: number, y: number, w: number, h: number) {
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
 
-/** dot = กราฟจุด (สัญลักษณ์กลมตามจุดในกราฟ) */
-export function Legend({ series, dot = false }: { series: Pick<Series, "name" | "color">[]; dot?: boolean }) {
+/** line = กราฟเส้น (สัญลักษณ์เป็นเส้นตามเส้นในกราฟ) */
+export function Legend({ series, line = false }: { series: Pick<Series, "name" | "color">[]; line?: boolean }) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
       {series.map((s) => (
         <span key={s.name} className="inline-flex items-center gap-1.5">
-          <span className={cn("size-2.5", dot ? "rounded-full" : "rounded-[3px]")} style={{ background: s.color }} aria-hidden />
+          <span className={line ? "h-0.5 w-3.5 rounded-full" : "size-2.5 rounded-[3px]"} style={{ background: s.color }} aria-hidden />
           {s.name}
         </span>
       ))}
@@ -153,44 +153,54 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
   );
 }
 
-export type Dot = { x: number; y: number; color: string; title: string; rows: [string, string][] };
-/** ระยะที่นับว่าชี้โดนจุด (px): จุดเล็ก ไม่ต้องเล็งตรงกลาง ใช้จุดที่ใกล้เมาส์ / นิ้วที่สุด */
-const DOT_HIT_PX = 24;
-
 /**
- * กราฟจุด 1 จุด = 1 รายการ · ชี้ / แตะใกล้จุดเพื่อดูตัวเลข (ทุกค่าต้องมีตารางคู่กันด้วย)
- *   จุดทยอยขึ้นจากซ้าย (ลดการเคลื่อนไหว = ไม่ขยับ · globals.css .dot-pop) เส้นรอบสีพื้นกันจุดทับกันจนแยกไม่ออก
+ * กราฟเส้นแนวโน้ม 1 แกน · ชี้ / แตะตรงไหนก็ได้ เส้นตั้งจะจับวันที่ใกล้สุด แล้วแสดงค่าทุกเส้นของวันนั้น (ทุกค่าต้องมีตารางคู่กันด้วย)
+ *   ค่าที่ไม่มี = เส้นขาด ไม่ลากข้าม · จุดเดี่ยวที่ไม่มีเพื่อนบ้านวาดเป็นจุดให้เห็น · หลายเส้น = ป้ายชื่อปลายเส้น (ปลายเส้นเบียดกัน = เหลือแค่ Legend)
+ *   เส้นวาดจากซ้ายไปขวา (ลดการเคลื่อนไหว = ไม่ขยับ · globals.css .line-draw / .dot-pop)
  */
-export function DotChart({ dots, xTicks, xMax, formatAxis, height = 280, label }: {
-  dots: Dot[];
-  xTicks: { v: number; label: string }[];
-  xMax: number;
+export function LineChart({ categories, tooltipTitles, series, format, formatAxis, height = 260, label }: {
+  categories: string[];
+  tooltipTitles?: string[];
+  series: Pick<Series, "name" | "color" | "values">[];
+  format: (v: number | null) => string;
   formatAxis: (v: number) => string;
   height?: number;
   label: string;
 }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
-  const ticks = niceTicks(Math.max(0, ...dots.map((d) => d.y)));
+  const n = categories.length;
+  const ticks = niceTicks(Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0))));
   const top = ticks[ticks.length - 1] || 1;
-  const pad = { l: 52, r: 12, t: 10, b: 26 };
+  const pad = { l: 52, r: series.length > 1 ? 56 : 12, t: 10, b: 26 };
   const plotW = Math.max(0, width - pad.l - pad.r);
   const plotH = height - pad.t - pad.b;
-  const px = (v: number) => pad.l + (xMax ? (v / xMax) * plotW : 0);
-  const py = (v: number) => pad.t + plotH - (v / top) * plotH;
-  // ป้ายแกนล่างเบียดกัน = แสดงเว้นช่อง
-  const every = Math.max(1, Math.ceil(xTicks.length / Math.max(1, Math.floor(plotW / 52))));
+  const x = (i: number) => pad.l + (n > 1 ? (i / (n - 1)) * plotW : plotW / 2);
+  const y = (v: number) => pad.t + plotH - (v / top) * plotH;
+  const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(plotW / 44))));
 
   const pick = (e: ReactPointerEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    let best: number | null = null, dist = DOT_HIT_PX ** 2;
-    dots.forEach((d, i) => {
-      const k = (px(d.x) - (e.clientX - r.left)) ** 2 + (py(d.y) - (e.clientY - r.top)) ** 2;
-      if (k < dist) { dist = k; best = i; }
-    });
-    setHover(best);
+    const px = e.clientX - e.currentTarget.getBoundingClientRect().left;
+    const i = Math.min(n - 1, Math.max(0, n > 1 ? Math.round(((px - pad.l) / plotW) * (n - 1)) : 0));
+    // วันที่ไม่มีค่าเลย (เช่น วันที่ยังไม่ถึง) ไม่ต้องแสดงกล่องตัวเลข
+    setHover(series.some((s) => s.values[i] !== null) ? i : null);
   };
-  const shown = hover !== null ? dots[hover] : null;
+  /** เส้นต่อเนื่องเป็นช่วงๆ (ขาดตรงที่ไม่มีค่า) */
+  const pathOf = (values: (number | null)[]) => {
+    const parts: string[] = [];
+    let open = false;
+    values.forEach((v, i) => {
+      if (v === null) { open = false; return; }
+      parts.push(`${open ? "L" : "M"}${x(i)},${y(v)}`);
+      open = true;
+    });
+    return parts.join("");
+  };
+  const lastOf = (values: (number | null)[]) => values.reduce<number>((a, v, i) => (v === null ? a : i), -1);
+  // ป้ายปลายเส้น: ปลายเส้นห่างกันไม่ถึง 14px = ป้ายทับกัน ไม่แสดง (Legend + กล่องตัวเลขบอกอยู่แล้ว)
+  const ends = series.map((s) => ({ s, i: lastOf(s.values) }));
+  const endLabels = series.length > 1 && ends.every(({ s, i }, k) => ends.every((o, j) => j === k
+    || Math.abs(x(i) - x(o.i)) > 60 || Math.abs(y(s.values[i] ?? 0) - y(o.s.values[o.i] ?? 0)) >= 14));
 
   return (
     <div ref={ref} className="relative w-full select-none">
@@ -201,36 +211,40 @@ export function DotChart({ dots, xTicks, xMax, formatAxis, height = 280, label }
         >
           {ticks.map((t) => (
             <g key={t}>
-              <line x1={pad.l} x2={width - pad.r} y1={py(t)} y2={py(t)} className={t === 0 ? "stroke-muted-foreground/40" : "stroke-border"} strokeWidth={1} />
-              <text x={pad.l - 6} y={py(t)} dy="0.32em" textAnchor="end" className="fill-muted-foreground text-[11px] tabular-nums">{formatAxis(t)}</text>
+              <line x1={pad.l} x2={width - pad.r} y1={y(t)} y2={y(t)} className={t === 0 ? "stroke-muted-foreground/40" : "stroke-border"} strokeWidth={1} />
+              <text x={pad.l - 6} y={y(t)} dy="0.32em" textAnchor="end" className="fill-muted-foreground text-[11px] tabular-nums">{formatAxis(t)}</text>
             </g>
           ))}
-          {xTicks.map((t, i) => (i % every === 0 ? (
-            <text key={t.v} x={px(t.v)} y={height - 8} textAnchor="middle" className="fill-muted-foreground text-[11px] tabular-nums">{t.label}</text>
+          {categories.map((c, i) => (i % every === 0 ? (
+            <text key={i} x={x(i)} y={height - 8} textAnchor="middle" className="fill-muted-foreground text-[11px] tabular-nums">{c}</text>
           ) : null))}
-          {dots.map((d, i) => (
-            <circle
-              key={i} cx={px(d.x)} cy={py(d.y)} r={5} fill={d.color} stroke="var(--card)" strokeWidth={2}
-              className="dot-pop" style={{ animationDelay: `${Math.min(i * 4, 320)}ms` }}
-            />
+          {hover !== null ? <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={pad.t + plotH} className="stroke-muted-foreground/50" strokeWidth={1} /> : null}
+          {series.map((s) => (
+            <path key={s.name} d={pathOf(s.values)} pathLength={1} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="line-draw" />
           ))}
-          {shown ? <circle cx={px(shown.x)} cy={py(shown.y)} r={7} fill={shown.color} stroke="var(--card)" strokeWidth={2} /> : null}
+          {series.flatMap((s) => s.values.map((v, i) => {
+            const alone = v !== null && (s.values[i - 1] ?? null) === null && (s.values[i + 1] ?? null) === null;
+            const end = i === lastOf(s.values);
+            if (v === null || (!alone && !end && hover !== i)) return null;
+            return <circle key={`${s.name}|${i}`} cx={x(i)} cy={y(v)} r={hover === i ? 5 : 4} fill={s.color} stroke="var(--card)" strokeWidth={2} className={hover === i ? undefined : "dot-pop"} />;
+          }))}
+          {endLabels ? ends.map(({ s, i }) => (i < 0 ? null : (
+            <text key={s.name} x={x(i) + 8} y={y(s.values[i]!)} dy="0.32em" className="fill-foreground text-[11px] font-semibold">{s.name}</text>
+          ))) : null}
         </svg>
       ) : <div style={{ height }} />}
-      {shown ? (
+      {hover !== null && width > 0 ? (
         <div
-          className="pointer-events-none absolute z-10 min-w-44 rounded-lg border bg-popover px-2.5 py-2 text-xs shadow-card"
-          style={{
-            top: Math.max(0, Math.min(py(shown.y) - 16, height - 120)),
-            ...(px(shown.x) > width / 2 ? { right: width - px(shown.x) + 12 } : { left: px(shown.x) + 12 }),
-          }}
+          className="pointer-events-none absolute top-1 z-10 min-w-36 rounded-lg border bg-popover px-2.5 py-2 text-xs shadow-card"
+          style={x(hover) > width / 2 ? { right: width - x(hover) + 10 } : { left: x(hover) + 10 }}
         >
-          <div className="mb-1 flex items-center gap-1.5 font-semibold">
-            <span className="h-0.5 w-3 shrink-0 rounded-full" style={{ background: shown.color }} aria-hidden />{shown.title}
-          </div>
-          {shown.rows.map(([k, v]) => (
-            <div key={k} className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">{k}</span><span className="font-semibold tabular-nums">{v}</span>
+          <div className="mb-1 font-semibold">{tooltipTitles?.[hover] ?? categories[hover]}</div>
+          {series.map((s) => (
+            <div key={s.name} className="flex items-center justify-between gap-3">
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <span className="h-0.5 w-3 rounded-full" style={{ background: s.color }} aria-hidden />{s.name}
+              </span>
+              <span className="font-semibold tabular-nums">{format(s.values[hover])}</span>
             </div>
           ))}
         </div>
