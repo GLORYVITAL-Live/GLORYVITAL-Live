@@ -2,8 +2,11 @@
 //   ทีมเรา = ค่าจ้าง Mc / Admin + ค่ารถ (สูตรเดียวกับสรุปรายเดือน src/lib/owner-pay.ts)
 //   กลุ่มภายนอก = เรทต่อชั่วโมง × ชั่วโมงในแพลน (src/lib/agency-budget.ts)
 //   GMV = ไฟล์ Export แยกตามเวลาในแพลน (src/lib/live-owners.ts) · ไม่รวมเงินเดือน Mc / Admin ประจำ (ระบบไม่มีตัวเลขนี้)
+//   ตัวเลขจากชีตของทีม (src/lib/cost-sheet.ts) ลำดับ: Actual ในชีต > ระบบ > Forecast ในชีต
+//     เดือนเก่าระบบคิดด้วยเรทปัจจุบัน + มีคิวที่ยังไม่ตั้งค่าจ้าง จึงไม่ตรงยอดจริง · Forecast เป็นยอดทั้งเดือน ใช้กับเดือนที่จบแล้วเท่านั้น
 
 import { budgetSheet, hasBudget } from "@/lib/agency-budget";
+import type { CostSheetEntry, CostSheetKind } from "@/lib/cost-sheet";
 import type { ExportBook, ExportSheet } from "@/lib/export";
 import type { LiveSession } from "@/lib/live-stats";
 import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
@@ -24,12 +27,16 @@ export type CostPlanSlot = { agency: string; platform: string; date: string; sta
 export type CostRow = {
   app: CostApp; owner: string | null; label: string;
   mc: number; admin: number; travel: number; agency: number;
-  /** กลุ่มภายนอก: เรท (ไม่ตั้ง = null) + ชั่วโมงในแพลนทั้งเดือน */
+  /** กลุ่มภายนอก: เรท (ไม่ตั้ง = null) + ชั่วโมง (ในแพลนทั้งเดือน / ตามชีต) */
   rate: number | null; planHours: number;
   full: number;
   gmv: number | null;
+  /** ตัวเลขที่มาจากชีต: sheet = Actual / forecast = ประมาณการ · ไม่มี = ระบบคิดเอง */
+  sources: Partial<Record<CostSheetKind, "sheet" | "forecast">>;
+  /** ส่วนของยอดนี้ที่เป็น Forecast */
+  forecast: number;
 };
-export type CostTotals = { mc: number; admin: number; travel: number; agency: number; cost: number; full: number; gmv: number | null };
+export type CostTotals = { mc: number; admin: number; travel: number; agency: number; cost: number; full: number; gmv: number | null; forecast: number };
 export type CostReport = {
   month: string; prevMonth: string;
   /** เดือนที่ยังไม่จบ: จุดตัด (ms) · เดือนที่จบแล้ว = null */
@@ -40,8 +47,10 @@ export type CostReport = {
   salaried: number; unrated: number;
   /** กลุ่มภายนอกของเดือนนี้ (ช่องใส่เรท) · ไม่มีสิทธิ์ = ว่าง */
   agencies: { agency: string; label: string; rate: number | null; hours: number }[];
+  /** ชีตของทีม: ready = ตั้งลิงก์แล้ว · error = อ่านไม่ได้ (ใช้ตัวเลขระบบแทน) */
+  sheet: { ready: boolean; error: string | null };
 };
-export type CostPoint = CostTotals & { month: string; open: boolean };
+export type CostPoint = CostTotals & { month: string; open: boolean; rows: CostRow[] };
 
 const DAY = 86400_000;
 const appOf = (p: string): CostApp => (isShopeePlatform(p) ? "Shopee" : "TikTok");
@@ -49,6 +58,13 @@ const detailApp = (d: OwnerDetail): CostApp => (d.shopee || isShopeePlatform(d.p
 const startedAtMs = (s: { startedAt: string }) => Date.parse(s.startedAt);
 
 export const rowCost = (r: Pick<CostRow, "mc" | "admin" | "travel" | "agency">) => r.mc + r.admin + r.travel + r.agency;
+/** ลำดับแถว: TikTok ก่อน Shopee · ทีมเราก่อน แล้วกลุ่มภายนอก ไม่อยู่ในแพลนไว้ท้าย */
+const rankOf = (r: CostRow) => (r.app === "TikTok" ? 0 : 10) + (r.owner === "In house" || (!r.owner && r.app === "TikTok") ? 0 : r.owner ? 1 : 2);
+/** ที่มาของตัวเลขในแถว: ชีต / ประมาณการ / ระบบ */
+export const rowSource = (r: Pick<CostRow, "sources">) => {
+  const list = Object.values(r.sources);
+  return list.includes("forecast") ? "ประมาณการ (Forecast)" : list.length ? "ยอดจริงจากชีต" : "";
+};
 
 /** จุดตัดของเดือน: จบแล้ว = ทั้งเดือน · ยังไม่จบ = ไลฟ์ล่าสุดในไฟล์ Export ให้ Cost กับ GMV นับถึงเวลาเดียวกัน (ไม่มีไฟล์ = ตอนนี้) */
 export function costCut(now: number, last: string, sessions: { startedAt: string }[] | null) {
@@ -56,7 +72,9 @@ export function costCut(now: number, last: string, sessions: { startedAt: string
   return sessions?.length ? Math.min(now, Math.max(...sessions.map(startedAtMs))) : now;
 }
 
-export function costRows({ summary, plan, rates, sessions, spans, cut, see }: {
+export function costRows({ summary, plan, rates, sessions, spans, cut, see, sheet }: {
+  /** ยอดของเดือนนี้จากชีตของทีม · ไม่ส่ง = ใช้ตัวเลขระบบอย่างเดียว */
+  sheet?: CostSheetEntry[] | null;
   summary: PayData & { details: OwnerDetail[] };
   /** แพลนของกลุ่มในเดือนนี้ */
   plan: CostPlanSlot[];
@@ -69,13 +87,16 @@ export function costRows({ summary, plan, rates, sessions, spans, cut, see }: {
   see: CostSee;
 }) {
   const rows = new Map<string, CostRow>();
+  /** ยอดทั้งเดือนแยกตามชนิด (ตัวเลขจากชีตแทนที่ทีละชนิด) รวมเป็น full ตอนท้าย */
+  const fulls = new Map<CostRow, Record<CostSheetKind, number>>();
   const rowOf = (app: CostApp, owner: string | null) => {
     const k = `${app}|${owner ?? ""}`;
     const r = rows.get(k) ?? {
       app, owner, label: owner || app === "TikTok" ? ownerText(owner) : "ไม่อยู่ในแพลน",
-      mc: 0, admin: 0, travel: 0, agency: 0, rate: null, planHours: 0, full: 0, gmv: null,
+      mc: 0, admin: 0, travel: 0, agency: 0, rate: null, planHours: 0, full: 0, gmv: null, sources: {}, forecast: 0,
     };
     rows.set(k, r);
+    if (!fulls.has(r)) fulls.set(r, { mc: 0, admin: 0, travel: 0, agency: 0 });
     return r;
   };
 
@@ -84,10 +105,10 @@ export function costRows({ summary, plan, rates, sessions, spans, cut, see }: {
   for (const d of summary.details) {
     if (d.cancelled || (d.type === "Mc" ? !see.mc : !see.admin)) continue;
     const app = detailApp(d), r = rowOf(app, app === "TikTok" ? null : "In house");
-    const pay = payOfItems(summary, d.type, [d]);
-    r.full += pay;
+    const pay = payOfItems(summary, d.type, [d]), travel = travelOf(d), full = fulls.get(r)!;
+    if (d.type === "Mc") full.mc += pay; else full.admin += pay - travel;
+    full.travel += travel;
     if (d.startMs > cut) continue;
-    const travel = travelOf(d);
     if (d.type === "Mc") r.mc += pay; else r.admin += pay - travel;
     r.travel += travel;
     if (salariedOf(summary, d.type, d.name)) salaried++;
@@ -102,10 +123,49 @@ export function costRows({ summary, plan, rates, sessions, spans, cut, see }: {
       const rate = rates.get(s.agency) ?? 0, hours = spanLen(s) / 60;
       r.rate = rate || null;
       r.planHours += hours;
-      r.full += rate * hours;
+      fulls.get(r)!.agency += rate * hours;
       if (spanMs(s).startMs <= cut) r.agency += rate * hours;
     }
   }
+
+  // ชีตของทีม: Actual > ระบบ > Forecast (ดูหัวไฟล์)
+  const closed = cut === Infinity;
+  const seen = (e: CostSheetEntry) => (e.kind === "mc" ? see.mc : e.kind === "agency" ? see.agency : see.admin);
+  const entries = (sheet ?? []).filter(seen);
+  for (const e of entries) {
+    const current = rows.get(`${e.app}|${e.owner ?? ""}`);
+    if (e.actual || (closed && e.forecast && !current?.[e.kind])) {
+      const amount = (e.actual ?? e.forecast)!, r = rowOf(e.app, e.owner);
+      r[e.kind] = amount;
+      fulls.get(r)![e.kind] = amount;
+      r.sources[e.kind] = e.actual ? "sheet" : "forecast";
+      if (!e.actual) r.forecast += amount;
+      if (e.kind === "agency") {
+        const hours = (e.actual ? e.actualHours : e.forecastHours) ?? 0;
+        r.planHours = hours;
+        r.rate = hours ? amount / hours : null;
+      }
+    } else if (!closed && e.forecast && !(current && fulls.get(current)![e.kind])) {
+      // เดือนที่ยังไม่จบและระบบไม่มีแผนของกลุ่มนี้: ลงเฉพาะยอดทั้งเดือน ไม่ปนกับยอดถึงวันนี้
+      const r = rowOf(e.app, e.owner);
+      fulls.get(r)![e.kind] = e.forecast;
+      r.sources[e.kind] = "forecast";
+      if (e.kind === "agency" && e.forecastHours) {
+        r.planHours = e.forecastHours;
+        r.rate = e.forecast / e.forecastHours;
+      }
+    }
+  }
+  const actualOf = (kind: CostSheetKind) => entries.some((e) => e.app === "TikTok" && e.kind === kind && e.actual);
+  // Admin ใช้ยอดจริงจากชีตแล้ว: ค่ารถที่ระบบคิดเองไม่นับซ้ำ (เอาตามแถวค่าเดินทางในชีต)
+  const ours = rows.get("TikTok|");
+  if (ours && actualOf("admin") && !actualOf("travel")) {
+    ours.travel = 0;
+    fulls.get(ours)!.travel = 0;
+  }
+  // ใช้ยอดจริงทั้ง Mc และ Admin แล้ว: คิวที่ยังไม่ตั้งค่าจ้างในระบบไม่มีผลกับตัวเลข
+  if (actualOf("mc") && actualOf("admin")) unrated = 0;
+  for (const [r, f] of fulls) r.full = f.mc + f.admin + f.travel + f.agency;
 
   // GMV: ตามเวลาในแพลน · ส่วนที่เหลือ TikTok = ของเรา / Shopee = ไม่อยู่ในแพลน
   const lives = sessions?.filter((s) => startedAtMs(s) <= cut) ?? [];
@@ -125,12 +185,10 @@ export function costRows({ summary, plan, rates, sessions, spans, cut, see }: {
     for (const app of ["TikTok", "Shopee"] as const) if (rest[app] >= 0.5) rowOf(app, null).gmv = rest[app];
   }
 
-  // TikTok ก่อน Shopee · ทีมเราก่อน แล้วกลุ่มภายนอก ไม่อยู่ในแพลนไว้ท้าย
-  const rank = (r: CostRow) => (r.app === "TikTok" ? 0 : 10) + (r.owner === "In house" || (!r.owner && r.app === "TikTok") ? 0 : r.owner ? 1 : 2);
   return {
     rows: [...rows.values()]
       .filter((r) => rowCost(r) || r.full || r.planHours || r.gmv)
-      .sort((a, b) => rank(a) - rank(b) || b.full - a.full || a.label.localeCompare(b.label)),
+      .sort((a, b) => rankOf(a) - rankOf(b) || b.full - a.full || a.label.localeCompare(b.label)),
     salaried, unrated,
   };
 }
@@ -142,7 +200,21 @@ export function costTotals(rows: CostRow[]): CostTotals {
     mc: sum((r) => r.mc), admin: sum((r) => r.admin), travel: sum((r) => r.travel), agency: sum((r) => r.agency),
     cost: sum(rowCost), full: sum((r) => r.full),
     gmv: rows.some((r) => r.gmv !== null) ? sum((r) => r.gmv ?? 0) : null,
+    forecast: sum((r) => r.forecast),
   };
+}
+
+/** รวมหลายเดือนต่อกลุ่ม (ตารางทั้งปี) เรียงเหมือนในเดือน · ชั่วโมง / เรทไม่รวม เพราะแต่ละเดือนต่างที่มากัน */
+export function yearRows(points: CostPoint[]): CostRow[] {
+  const out = new Map<string, CostRow>();
+  for (const r of points.flatMap((p) => p.rows)) {
+    const k = `${r.app}|${r.owner ?? ""}`;
+    const y = out.get(k) ?? { ...r, mc: 0, admin: 0, travel: 0, agency: 0, full: 0, gmv: null, forecast: 0, rate: null, planHours: 0, sources: {} };
+    y.mc += r.mc; y.admin += r.admin; y.travel += r.travel; y.agency += r.agency; y.full += r.full; y.forecast += r.forecast;
+    if (r.gmv !== null) y.gmv = (y.gmv ?? 0) + r.gmv;
+    out.set(k, y);
+  }
+  return [...out.values()].sort((a, b) => rankOf(a) - rankOf(b) || b.full - a.full || a.label.localeCompare(b.label));
 }
 
 /** Cost ต่อ GMV · ไม่มี GMV = null */
@@ -154,19 +226,20 @@ const pct = (v: number | null) => ({ v, f: "pct" as const });
 /** ไฟล์ส่งออกหน้า Cost: สรุปตามกลุ่ม + งบ Agency + แนวโน้มรายเดือน */
 export function costBook(report: CostReport, trend: CostPoint[] | null): ExportBook {
   const open = report.upTo !== null;
-  const line = (app: string, label: string, r: Pick<CostRow, "mc" | "admin" | "travel" | "agency" | "full" | "gmv">) => [
+  const line = (app: string, label: string, r: Pick<CostRow, "mc" | "admin" | "travel" | "agency" | "full" | "gmv">, source = "") => [
     app, label, money(r.mc), money(r.admin), money(r.travel), money(r.agency), money(rowCost(r)), money(r.gmv), pct(costRatio(rowCost(r), r.gmv)),
-    ...(open ? [money(r.full)] : []),
+    ...(open ? [money(r.full)] : []), source,
   ];
-  const budget = budgetSheet(report.rows.filter((r) => r.owner && hasBudget(r.owner)).map((r) => (
+  // งบจากเรทในเว็บเท่านั้น (แถวที่มาจากชีตเรทคำนวณกลับจากยอด ไม่ใช่เรทที่ตั้งไว้)
+  const budget = budgetSheet(report.rows.filter((r) => r.owner && hasBudget(r.owner) && !r.sources.agency).map((r) => (
     { label: r.label, channel: r.app, rate: r.rate, hours: r.planHours }
   )));
   const sheets: ExportSheet[] = [
     {
       name: "Cost",
       rows: [
-        ["แพลตฟอร์ม", "กลุ่ม", "Mc", "Admin", "ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", ...(open ? ["ทั้งเดือนตามแผน"] : [])],
-        ...report.rows.map((r) => line(r.app, r.label, r)),
+        ["แพลตฟอร์ม", "กลุ่ม", "Mc", "Admin", "ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", ...(open ? ["ทั้งเดือนตามแผน"] : []), "ที่มา"],
+        ...report.rows.map((r) => line(r.app, r.label, r, rowSource(r) || "ระบบ")),
         line("รวม", "", report.totals),
       ],
     },
@@ -174,9 +247,9 @@ export function costBook(report: CostReport, trend: CostPoint[] | null): ExportB
     ...(trend?.length ? [{
       name: "แนวโน้มรายเดือน",
       rows: [
-        ["เดือน", "Mc", "Admin + ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", "หมายเหตุ"],
+        ["เดือน", "Mc", "Admin + ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", "ในจำนวนนี้เป็นประมาณการ", "หมายเหตุ"],
         ...trend.map((p) => [
-          p.month, money(p.mc), money(p.admin + p.travel), money(p.agency), money(p.cost), money(p.gmv), pct(costRatio(p.cost, p.gmv)), p.open ? "ยังไม่จบเดือน" : "",
+          p.month, money(p.mc), money(p.admin + p.travel), money(p.agency), money(p.cost), money(p.gmv), pct(costRatio(p.cost, p.gmv)), money(p.forecast || null), p.open ? "ยังไม่จบเดือน" : "",
         ]),
       ],
     }] : []),

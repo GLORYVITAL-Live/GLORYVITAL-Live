@@ -1,6 +1,6 @@
 // เทสหน้า Cost (bun test): ตัวเลขเดียวกับสรุปรายเดือน · จุดตัด · งบกลุ่มภายนอก · GMV ตามเวลาในแพลน · สิทธิ์
 import { describe, expect, test } from "bun:test";
-import { costBook, costCut, costRatio, costRows, costTotals, rowCost, type CostReport, type CostSee } from "@/lib/cost-calc";
+import { costBook, costCut, costRatio, costRows, costTotals, rowCost, yearRows, type CostReport, type CostSee } from "@/lib/cost-calc";
 import { ownerSpanOf } from "@/lib/live-owners";
 import type { LiveSession } from "@/lib/live-stats";
 import { payOfItems } from "@/lib/owner-pay";
@@ -133,6 +133,71 @@ describe("สิทธิ์", () => {
   });
 });
 
+describe("ตัวเลขจากชีตของทีม", () => {
+  const entry = (app: "TikTok" | "Shopee", owner: string | null, kind: "mc" | "admin" | "travel" | "agency", actual: number | null, forecast: number | null, actualHours: number | null = null, forecastHours: number | null = null) =>
+    ({ app, owner, kind, actual, forecast, actualHours, forecastHours });
+  const mc = detail("Mc", "Mc เอ", "2026-11-01", 2), mcLater = detail("Mc", "Mc เอ", "2026-11-20", 3);
+  const find = (rows: ReturnType<typeof run>["rows"], owner: string | null, app = "TikTok") => rows.find((r) => r.owner === owner && r.app === app)!;
+
+  test("Actual ชนะตัวเลขระบบ แม้ไม่เท่ากัน", () => {
+    const { rows } = run({ summary: summaryOf([mc]), cut: Infinity, sheet: [entry("TikTok", null, "mc", 999, 800)] });
+    expect(find(rows, null)).toMatchObject({ mc: 999, full: 999, sources: { mc: "sheet" }, forecast: 0 });
+  });
+  test("ไม่มี Actual แต่ระบบมีตัวเลข = ใช้ระบบ ไม่ใช้ Forecast", () => {
+    const { rows } = run({ summary: summaryOf([mc]), cut: Infinity, sheet: [entry("TikTok", null, "mc", null, 800)] });
+    expect(find(rows, null)).toMatchObject({ mc: 200, sources: {}, forecast: 0 });
+  });
+  test("ไม่มีทั้ง Actual และระบบ (เดือนจบแล้ว) = ใช้ Forecast ติดป้าย นับแยกไว้", () => {
+    const { rows } = run({ cut: Infinity, sheet: [entry("TikTok", "TDH", "agency", null, 2000, 6, 10)] });
+    expect(find(rows, "TDH")).toMatchObject({ agency: 2000, full: 2000, sources: { agency: "forecast" }, forecast: 2000, rate: 200, planHours: 10 });
+    expect(costTotals(rows).forecast).toBe(2000);
+  });
+  test("กลุ่มที่ระบบไม่มีเลย สร้างแถวให้จาก Actual พร้อมเรทจากชั่วโมง", () => {
+    const { rows } = run({ cut: Infinity, sheet: [entry("Shopee", "Infinite", "agency", 1000, 900, 4, 3), entry("Shopee", "In house", "mc", 500, null)] });
+    expect(find(rows, "Infinite", "Shopee")).toMatchObject({ agency: 1000, rate: 250, planHours: 4, sources: { agency: "sheet" } });
+    expect(find(rows, "In house", "Shopee")).toMatchObject({ mc: 500 });
+  });
+  test("เดือนที่ยังไม่จบ: Forecast เป็นยอดทั้งเดือน ไม่ปนยอดถึงวันนี้ ลงเฉพาะช่องทั้งเดือน", () => {
+    const { rows } = run({ sheet: [entry("Shopee", "In house", "mc", null, 5000)] });
+    expect(find(rows, "In house", "Shopee")).toMatchObject({ mc: 0, full: 5000, forecast: 0 });
+    expect(costTotals(rows).cost).toBe(0);
+  });
+  test("เดือนที่ยังไม่จบ: แผนในระบบชนะ Forecast", () => {
+    const { rows } = run({ summary: summaryOf([mc, mcLater]), sheet: [entry("TikTok", null, "mc", null, 9000)] });
+    expect(find(rows, null)).toMatchObject({ mc: 200, full: 500 });
+  });
+  test("Actual ของ Admin แทนยอดระบบ · ค่ารถที่ระบบคิดไม่นับซ้ำ เว้นแต่ชีตกรอกค่าเดินทาง", () => {
+    const admin = detail("Admin", "แอน", "2026-11-01", 4, { travel: 80 });
+    const blank = run({ summary: summaryOf([admin]), cut: Infinity, sheet: [entry("TikTok", null, "admin", 700, null)] }).rows;
+    expect(find(blank, null)).toMatchObject({ admin: 700, travel: 0 });
+    const filled = run({ summary: summaryOf([admin]), cut: Infinity, sheet: [entry("TikTok", null, "admin", 700, null), entry("TikTok", null, "travel", 60, null)] }).rows;
+    expect(find(filled, null)).toMatchObject({ admin: 700, travel: 60 });
+    expect(rowCost(find(filled, null))).toBe(760);
+  });
+  test("ใช้ยอดจริงทั้ง Mc และ Admin = ไม่เตือนคิวที่ยังไม่ตั้งค่าจ้าง", () => {
+    const summary = summaryOf([detail("Mc", "Mc ใหม่", "2026-11-02", 2)]);
+    expect(run({ summary, cut: Infinity }).unrated).toBe(1);
+    expect(run({ summary, cut: Infinity, sheet: [entry("TikTok", null, "mc", 100, null), entry("TikTok", null, "admin", 50, null)] }).unrated).toBe(0);
+  });
+  test("สิทธิ์: ไม่เห็นงบ = ไม่เห็นแถวกลุ่มภายนอกจากชีต · ไม่เห็น Admin = ไม่เห็นยอด Admin / ค่าเดินทาง", () => {
+    const sheet = [entry("TikTok", "TDH", "agency", 1000, null), entry("TikTok", null, "admin", 700, null), entry("TikTok", null, "travel", 60, null), entry("TikTok", null, "mc", 300, null)];
+    const { rows } = run({ cut: Infinity, sheet, see: { ...ALL, agency: false, admin: false } });
+    expect(rows.map((r) => r.label)).toEqual(["ของเรา"]);
+    expect(rows[0]).toMatchObject({ mc: 300, admin: 0, travel: 0 });
+  });
+  test("ไม่มียอดเลย ไม่สร้างแถวเปล่า", () => {
+    expect(run({ cut: Infinity, sheet: [entry("Shopee", "Vis Shopee", "agency", null, null, 21, null)] }).rows).toEqual([]);
+  });
+  test("รวมทั้งปีต่อกลุ่ม: เดือนละที่มา รวมเงิน + ประมาณการ เรียงเหมือนเดิม", () => {
+    const a = run({ cut: Infinity, sheet: [entry("TikTok", "TDH", "agency", 1000, null, 4, null), entry("TikTok", null, "mc", 300, null)] }).rows;
+    const b = run({ cut: Infinity, sheet: [entry("TikTok", "TDH", "agency", null, 2000, null, 10), entry("TikTok", null, "mc", 400, null)] }).rows;
+    const year = yearRows([{ ...costTotals(a), month: "2026-01", open: false, rows: a }, { ...costTotals(b), month: "2026-02", open: false, rows: b }]);
+    expect(year.map((r) => r.label)).toEqual(["ของเรา", "Agency TDH"]);
+    expect(year[0].mc).toBe(700);
+    expect(year[1]).toMatchObject({ agency: 3000, forecast: 2000 });
+  });
+});
+
 describe("จุดตัด", () => {
   const now = at("2026-11-06", "16:00");
   test("เดือนที่จบแล้ว = ทั้งเดือน", () => {
@@ -159,7 +224,7 @@ describe("ยอดรวม + ไฟล์ส่งออก", () => {
     expect(costRatio(100, 0)).toBeNull();
   });
   const report = (upTo: number | null): CostReport => ({
-    month: "2026-11", prevMonth: "2026-10", upTo, see: ALL, rows, totals, prev: totals, salaried: 0, unrated: 0, agencies: [],
+    month: "2026-11", prevMonth: "2026-10", upTo, see: ALL, rows, totals, prev: totals, salaried: 0, unrated: 0, agencies: [], sheet: { ready: false, error: null },
   });
   test("แผ่น Cost + งบ Agency เฉพาะกลุ่มที่ตั้งเรท · เดือนจบแล้วไม่มีคอลัมน์ทั้งเดือน", () => {
     const book = costBook(report(null), null);
@@ -168,7 +233,7 @@ describe("ยอดรวม + ไฟล์ส่งออก", () => {
     expect(book.sheets[1].rows.map((r) => r[0])).toEqual(["กลุ่ม", "Agency TDH", "รวม"]);
   });
   test("เดือนที่ยังไม่จบมีคอลัมน์ทั้งเดือน · มีแนวโน้ม = มีแผ่นแนวโน้ม", () => {
-    const book = costBook(report(CUT), [{ ...totals, month: "2026-11", open: true }]);
+    const book = costBook(report(CUT), [{ ...totals, month: "2026-11", open: true, rows }]);
     expect(book.sheets[0].rows[0]).toContain("ทั้งเดือนตามแผน");
     expect(book.sheets.map((s) => s.name)).toContain("แนวโน้มรายเดือน");
   });

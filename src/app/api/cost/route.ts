@@ -4,7 +4,7 @@ import { costReport, costTrend } from "@/lib/cost";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // หน้า Cost: ค่าใช้จ่ายของทีมไลฟ์
-//   GET  ?month=YYYY-MM -> { report } · ?trend=1 -> { trend } ยอดย้อนหลัง (แยกคำขอ หน้าแรกของ Cost จะได้ไม่ต้องรอ)
+//   GET  ?month=YYYY-MM -> { report } · ?trend=YYYY -> { trend } ยอดรายเดือนทั้งปี (แยกคำขอ หน้าแรกของ Cost จะได้ไม่ต้องรอ)
 //   POST { month, rates: [{ agency, rate }] } เรทต่อชั่วโมงของกลุ่มภายนอก (ตาราง agency_rates · rate null = ล้างเรท)
 // สิทธิ์: เห็นเฉพาะส่วนที่จัดการได้ ค่าจ้าง Mc / ค่าจ้าง Admin + ค่ารถ / งบกลุ่มภายนอก (Plan Slot Live) · GMV ต้องดูสถิติไลฟ์ได้
 
@@ -20,7 +20,8 @@ export async function GET(request: Request) {
   if (!see.mc && !see.admin && !see.agency) return fail("บัญชีนี้ไม่มีสิทธิ์ดูหน้า Cost", 403);
   const params = new URL(request.url).searchParams;
   try {
-    if (params.has("trend")) return ok({ trend: await costTrend(see) });
+    const year = params.get("trend");
+    if (year !== null) return /^\d{4}$/.test(year) ? ok({ trend: await costTrend(year, see) }) : fail("ปีไม่ถูกต้อง");
     return ok({ report: await costReport(params.get("month"), see) });
   } catch (err) {
     return fail((err as { message?: string }).message ?? "โหลดหน้า Cost ไม่สำเร็จ", 500);
