@@ -10,6 +10,7 @@ import { fmtMonthShort, monthKey, monthLabel } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
+import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
@@ -379,6 +380,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
         </TableView>
       </section>
 
+      {cur.lives ? <OwnerTable month={month} sessions={byMonth.get(month)!} version={version} /> : null}
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
   );
@@ -661,6 +663,79 @@ function TableView({ title, children }: { title: string; children: ReactNode }) 
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-2">{children}</CollapsibleContent>
     </Collapsible>
+  );
+}
+
+/**
+ * แยก GMV ตามกลุ่มผู้ไลฟ์: เทียบเวลาไลฟ์ในไฟล์กับแพลนหน้า Plan Slot Live (src/lib/live-owners.ts)
+ *   เฉพาะช่องที่มีแพลนกลุ่มในเดือนนั้น (เดือนที่ยังไม่มีแพลน = ไม่แสดง)
+ */
+function OwnerTable({ month, sessions, version }: { month: string; sessions: LiveSession[]; version: number }) {
+  const key = `${month}|${version}`;
+  const [state, setState] = useState<{ key: string; spans?: OwnerSpan[]; error?: string }>({ key: "" });
+  useEffect(() => {
+    let alive = true;
+    api<{ spans: OwnerSpan[] }>(`/api/live-stats/owners?month=${month}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) setState({ key, spans: res.spans });
+      })
+      .catch((err) => { if (alive) setState({ key, error: (err as Error).message }); });
+    return () => { alive = false; };
+  }, [key, month]);
+  if (state.key !== key) return null;
+  if (state.error) return <Notice variant="warning">โหลดแพลนของกลุ่มไม่สำเร็จ จึงยังแยก GMV ตามกลุ่มไม่ได้: {state.error}</Notice>;
+  const channels = splitByOwner(sessions, state.spans ?? []);
+  if (!channels.length) return null;
+  const splitLives = channels.reduce((a, c) => a + c.splitLives, 0), splitGmv = channels.reduce((a, c) => a + c.splitGmv, 0);
+  const perHour = (gmv: number, sec: number) => fmtMetric("baht", sec ? gmv / (sec / 3600) : null);
+  const pct = (gmv: number, total: number) => (total ? `${((gmv / total) * 100).toFixed(1)}%` : "-");
+  return (
+    <section className="my-4">
+      <h2 className="mb-2 text-lg font-bold">แยกตามกลุ่มผู้ไลฟ์</h2>
+      <div className="overflow-x-auto rounded-xl border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>กลุ่ม</TableHead><TableHead className="hidden text-right sm:table-cell">ไลฟ์</TableHead><TableHead className="hidden text-right sm:table-cell">ชม.</TableHead>
+              <TableHead className="text-right">GMV</TableHead><TableHead className="text-right max-sm:pr-3">สัดส่วน</TableHead><TableHead className="hidden text-right sm:table-cell">GMV/ชม.</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {channels.flatMap((c) => [
+              <TableRow key={c.channel} className="bg-muted/50 font-semibold hover:bg-muted/50">
+                <TableCell>
+                  {c.label}
+                  <span className="block text-xs font-normal text-muted-foreground tabular-nums sm:hidden">{c.lives} ไลฟ์ · {(c.sec / 3600).toFixed(1)} ชม.</span>
+                </TableCell>
+                <TableCell className="hidden text-right tabular-nums sm:table-cell">{c.lives}</TableCell>
+                <TableCell className="hidden text-right tabular-nums sm:table-cell">{(c.sec / 3600).toFixed(1)}</TableCell>
+                <TableCell className="text-right tabular-nums">{fmtMetric("baht", c.gmv)}</TableCell>
+                <TableCell className="text-right tabular-nums max-sm:pr-3">100%</TableCell>
+                <TableCell className="hidden text-right tabular-nums sm:table-cell">{perHour(c.gmv, c.sec)}</TableCell>
+              </TableRow>,
+              ...c.rows.map((r) => (
+                <TableRow key={`${c.channel}|${r.owner ?? ""}`}>
+                  <TableCell className="pl-5">
+                    {r.label}
+                    <span className="block text-xs text-muted-foreground tabular-nums sm:hidden">{r.lives} ไลฟ์ · {(r.sec / 3600).toFixed(1)} ชม. · {perHour(r.gmv, r.sec)}/ชม.</span>
+                  </TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">{r.lives}</TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">{(r.sec / 3600).toFixed(1)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtMetric("baht", r.gmv)}</TableCell>
+                  <TableCell className="text-right tabular-nums max-sm:pr-3">{pct(r.gmv, c.gmv)}</TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">{perHour(r.gmv, r.sec)}</TableCell>
+                </TableRow>
+              )),
+            ])}
+          </TableBody>
+        </Table>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        เทียบเวลาไลฟ์ในไฟล์กับเวลาในหน้าแพลน แก้แพลนแล้วตัวเลขเปลี่ยนตาม · ยอดด้านบนยังรวมทุกกลุ่ม
+        {splitLives ? ` · มี ${splitLives} ไลฟ์คร่อมหลายกลุ่ม (รวม ${fmtMetric("baht", splitGmv)}) แบ่งยอดตามนาที เป็นตัวเลขประมาณ` : ""}
+      </p>
+    </section>
   );
 }
 

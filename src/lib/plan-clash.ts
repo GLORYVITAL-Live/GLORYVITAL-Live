@@ -6,11 +6,17 @@
 export type PlanSpan = { date: string; platform: string; start: string; end: string; owner?: string | null };
 
 const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+/** นาทีที่วันไลฟ์เริ่ม (TikTok 07:30 / Shopee 06:00) */
 const dayStart = (platform: string) => (platform.trim().toLowerCase() === "shopee" ? 6 * 60 : 7 * 60 + 30);
 /** นาทีนับจากต้นวันไลฟ์ (TikTok 07:30 / Shopee 06:00) */
 export const dayOrder = (start: string, platform: string) => (toMin(start) - dayStart(platform) + 1440) % 1440;
 /** ความยาว (นาที) ข้ามเที่ยงคืนได้ */
 export const spanLen = (s: { start: string; end: string }) => (toMin(s.end) - toMin(s.start) + 1440) % 1440;
+/** slot ในแพลน -> ช่วงเวลาจริง (ms เวลาไทย): เวลาหลังเที่ยงคืนนับเป็นวันไลฟ์เดิม จึงเป็นเช้าของวันถัดไปตามปฏิทิน */
+export function spanMs(s: { date: string; platform: string; start: string; end: string }) {
+  const startMs = Date.parse(`${s.date}T00:00:00+07:00`) + (dayStart(s.platform) + dayOrder(s.start, s.platform)) * 60_000;
+  return { startMs, endMs: startMs + spanLen(s) * 60_000 };
+}
 
 /** สอง slot ในช่องเดียวกันวันเดียวกันเวลาทับกัน (slot เดียวกันของเจ้าของเดียวกัน = ไม่นับ) */
 export function clashes(a: PlanSpan, b: PlanSpan) {

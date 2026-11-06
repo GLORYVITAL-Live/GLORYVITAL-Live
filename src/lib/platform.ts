@@ -18,6 +18,15 @@ export const platformRaw = (p: string) => RAWS[String(p ?? "").trim().toLowerCas
 /** ช่อง Shopee (slot ที่สร้างในเว็บด้วยช่องนี้ = คิวของหน้าจอง Shopee ลงแท็บ "ลงตาราง MC Shopee") */
 export const isShopeePlatform = (p: string) => String(p ?? "").trim().toLowerCase() === "shopee";
 
+/** บัญชีในไฟล์ Export -> ชื่อช่องใน slot */
+const SLOT_PLATFORM_OF_ACCOUNT: Record<string, string> = {
+  "TikTok|7126874351866037275": "GLORY MALL",
+  "TikTok|7081240278438429722": "Skin Expert",
+  "TikTok|6723716820899365890": "Cherry Glory",
+};
+export const slotPlatformOf = (platform: string, accountId: string) =>
+  platform === "Shopee" ? "Shopee" : SLOT_PLATFORM_OF_ACCOUNT[`${platform}|${accountId}`] ?? null;
+
 /**
  * แปลงชื่อช่องในข้อมูลที่ส่งให้หน้าเว็บ: ข้อความที่เป็นชื่อช่องทั้งข้อความเท่านั้น (ไม่แตะรหัสที่มีชื่อช่องปนอยู่ เช่น "GLORY MALL|2026-10-01|...")
  *   ใช้กับข้อมูลอ่านอย่างเดียว (หน้าเว็บไม่ส่งชื่อช่องกลับมาบันทึก)

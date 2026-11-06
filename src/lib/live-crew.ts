@@ -3,6 +3,7 @@ import { slotPlatformOf } from "@/lib/campaign-data";
 import { fetchAll } from "@/lib/data";
 import { platformLabel } from "@/lib/platform";
 import { crewKey, type LiveCrew } from "@/lib/live-stats";
+import { spanMs } from "@/lib/plan-clash";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -25,8 +26,6 @@ const MIN_OVERLAP_MS = 10 * 60_000;
 const hm = (t: string) => t.slice(0, 5);
 const bkkDate = (ms: number) => new Date(ms + 7 * 3600_000).toISOString().slice(0, 10);
 const slotKey = (r: SlotRow) => `${r.platform.trim().toLowerCase()}|${Date.parse(r.starts_at)}|${Date.parse(r.ends_at)}`;
-/** วัน + เวลา (ไทย) -> ms เวลาจบก่อนเวลาเริ่ม = ข้ามเที่ยงคืน (นับเป็นวันไลฟ์เดิม) */
-const bkkMs = (date: string, t: string) => Date.parse(`${date}T${hm(t)}:00+07:00`);
 /** ชื่อกลุ่มแพลนในเว็บ (เหมือนหน้า Plan Slot Live) */
 const agencyLabel = (a: string) => (a === "In house" || a === "MCN" ? a : `Agency ${a}`);
 
@@ -75,9 +74,7 @@ export async function liveCrew(fromMs: number, toMs: number): Promise<Record<str
     });
   }
   for (const r of agencyRows) {
-    const startMs = bkkMs(r.live_date, r.start_time);
-    let endMs = bkkMs(r.live_date, r.end_time);
-    if (endMs <= startMs) endMs += 86400_000;
+    const { startMs, endMs } = spanMs({ date: r.live_date, platform: r.platform, start: hm(r.start_time), end: hm(r.end_time) });
     push(r.platform, { startMs, endMs, start: hm(r.start_time), end: hm(r.end_time), mc: agencyLabel(r.agency), admin: null, campaign: "" });
   }
 

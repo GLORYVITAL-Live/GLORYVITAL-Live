@@ -1,5 +1,6 @@
 import "server-only";
 import { assignCampaigns, bandOf, isStandby, type Band, type CampInfo } from "@/lib/campaign";
+import { slotPlatformOf } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays } from "@/lib/window";
 
@@ -18,14 +19,7 @@ const TRAILING_DAYS = 120;
 /** กลุ่มที่มี slot น้อยกว่านี้ไม่ใช้เป็นเกณฑ์ (ใช้กลุ่มกว้างกว่าแทน) */
 const MIN_CELL = 6;
 
-/** บัญชีในไฟล์ Export -> ชื่อช่องใน slot */
-const SLOT_PLATFORM_OF_ACCOUNT: Record<string, string> = {
-  "TikTok|7126874351866037275": "GLORY MALL",
-  "TikTok|7081240278438429722": "Skin Expert",
-  "TikTok|6723716820899365890": "Cherry Glory",
-};
-export const slotPlatformOf = (platform: string, accountId: string) =>
-  platform === "Shopee" ? "Shopee" : SLOT_PLATFORM_OF_ACCOUNT[`${platform}|${accountId}`] ?? null;
+export { slotPlatformOf };
 
 export type CtxSlot = {
   id: number;
