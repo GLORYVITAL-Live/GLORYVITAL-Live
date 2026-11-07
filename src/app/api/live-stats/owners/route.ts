@@ -4,12 +4,15 @@ import { ownerSpanOf } from "@/lib/live-owners";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // แพลนของกลุ่ม (Agency TDH / Shopee In house / Infinite / MCN) ไว้แยกยอดไลฟ์ในหน้าสถิติไลฟ์ (src/lib/live-owners.ts)
-//   GET ?month=YYYY-MM -> { spans: [{ channel, owner, startMs, endMs }] } รวมคืนก่อนต้นเดือน (ไลฟ์หลังเที่ยงคืนของวันที่ 1 นับเป็นแพลนของวันก่อน)
+//   GET ?month=YYYY-MM หรือ ?from=YYYY-MM&to=YYYY-MM -> { spans: [{ channel, owner, startMs, endMs }] }
+//       รวมคืนก่อนต้นเดือน (ไลฟ์หลังเที่ยงคืนของวันที่ 1 นับเป็นแพลนของวันก่อน)
 
 export async function GET(request: Request) {
   const r = await requireAnalytics("บัญชีนี้ไม่มีสิทธิ์ดูสถิติไลฟ์", "read");
   if ("res" in r) return r.res;
-  const { first, last } = monthRange(new URL(request.url).searchParams.get("month"));
+  const sp = new URL(request.url).searchParams;
+  const { first } = monthRange(sp.get("from") ?? sp.get("month"));
+  const { last } = monthRange(sp.get("to") ?? sp.get("month"));
   const dayBefore = new Date(Date.parse(`${first}T00:00:00Z`) - 86400_000).toISOString().slice(0, 10);
   const db = createAdminClient();
   try {

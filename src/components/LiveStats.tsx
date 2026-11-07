@@ -444,7 +444,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       </section>
 
       {cur.lives ? <LineSection month={month} sessions={byMonth.get(month)!} replay={replay} /> : null}
-      {cur.lives ? <OwnerTable month={month} sessions={byMonth.get(month)!} version={version} /> : null}
+      {cur.lives ? <OwnerTable query={`month=${month}`} sessions={byMonth.get(month)!} version={version} /> : null}
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
   );
@@ -703,6 +703,8 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
         table={false}
       />
 
+      {cur.lives ? <OwnerTable query={`from=${range.from}&to=${range.to}`} sessions={curList} version={version} /> : null}
+
       <section className="my-4">
         <h2 className="mb-2 text-lg font-bold">{def.label} รายไตรมาส</h2>
         <div className="overflow-x-auto rounded-xl border bg-card">
@@ -925,27 +927,31 @@ function LineSection({ month, sessions, replay }: { month: string; sessions: Liv
 }
 
 /**
- * แยก GMV ตามกลุ่มผู้ไลฟ์: เทียบเวลาไลฟ์ในไฟล์กับแพลนหน้า Plan Slot Live (src/lib/live-owners.ts)
- *   เฉพาะช่องที่มีแพลนกลุ่มในเดือนนั้น (เดือนที่ยังไม่มีแพลน = ไม่แสดง)
+ * แยก GMV ตามกลุ่มผู้ไลฟ์: กลุ่มที่บันทึกไว้กับไลฟ์ / เทียบเวลาไลฟ์ในไฟล์กับแพลนหน้า Plan Slot Live (src/lib/live-owners.ts)
+ *   query = เดือนเดียว (month=) หรือช่วงเดือน (from= &to=) · เดือนที่ไม่มีข้อมูลกลุ่มของช่องนั้น = ไม่นับ
  */
-function OwnerTable({ month, sessions, version }: { month: string; sessions: LiveSession[]; version: number }) {
-  const key = `${month}|${version}`;
+function OwnerTable({ query, sessions, version }: { query: string; sessions: LiveSession[]; version: number }) {
+  const key = `${query}|${version}`;
   const [state, setState] = useState<{ key: string; spans?: OwnerSpan[]; error?: string }>({ key: "" });
   useEffect(() => {
     let alive = true;
-    api<{ spans: OwnerSpan[] }>(`/api/live-stats/owners?month=${month}`)
+    api<{ spans: OwnerSpan[] }>(`/api/live-stats/owners?${query}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.message);
         if (alive) setState({ key, spans: res.spans });
       })
       .catch((err) => { if (alive) setState({ key, error: (err as Error).message }); });
     return () => { alive = false; };
-  }, [key, month]);
+  }, [key, query]);
   if (state.key !== key) return null;
   if (state.error) return <Notice variant="warning">โหลดแพลนของกลุ่มไม่สำเร็จ จึงยังแยก GMV ตามกลุ่มไม่ได้: {state.error}</Notice>;
   const channels = splitByOwner(sessions, state.spans ?? []);
   if (!channels.length) return null;
   const splitLives = channels.reduce((a, c) => a + c.splitLives, 0), splitGmv = channels.reduce((a, c) => a + c.splitGmv, 0);
+  const fixed = sessions.filter((s) => s.liveOwner).length, counted = channels.reduce((a, c) => a + c.lives, 0);
+  const howText = !fixed ? "เทียบเวลาไลฟ์ในไฟล์กับเวลาในหน้าแพลน แก้แพลนแล้วตัวเลขเปลี่ยนตาม"
+    : fixed === counted ? "ใช้กลุ่มที่ยืนยันไว้กับแต่ละไลฟ์ แก้แพลนแล้วตัวเลขไม่เปลี่ยน"
+    : "เดือนก่อนมีแพลนในเว็บใช้กลุ่มที่ยืนยันไว้กับแต่ละไลฟ์ · เดือนที่มีแพลนเทียบเวลาไลฟ์กับหน้าแพลน · เดือนที่ไม่มีข้อมูลกลุ่มไม่นับ";
   const perHour = (gmv: number, sec: number) => fmtMetric("baht", sec ? gmv / (sec / 3600) : null);
   const pct = (gmv: number, total: number) => (total ? `${((gmv / total) * 100).toFixed(1)}%` : "-");
   return (
@@ -990,7 +996,7 @@ function OwnerTable({ month, sessions, version }: { month: string; sessions: Liv
         </Table>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        เทียบเวลาไลฟ์ในไฟล์กับเวลาในหน้าแพลน แก้แพลนแล้วตัวเลขเปลี่ยนตาม · ยอดด้านบนยังรวมทุกกลุ่ม
+        {howText} · ยอดด้านบนยังรวมทุกกลุ่ม
         {splitLives ? ` · มี ${splitLives} ไลฟ์คร่อมหลายกลุ่ม (รวม ${fmtMetric("baht", splitGmv)}) แบ่งยอดตามนาที เป็นตัวเลขประมาณ` : ""}
       </p>
     </section>

@@ -1,8 +1,9 @@
 // แยกยอดไลฟ์จากไฟล์ Export ตามกลุ่มที่ไลฟ์ โดยเทียบเวลาไลฟ์กับแพลนในหน้า Plan Slot Live — ฟังก์ชันล้วน (เทสได้ ใช้ทั้งเซิร์ฟเวอร์และหน้าเว็บ)
 //   ดูเฉพาะช่องที่มีแพลนกลุ่มในเดือนนั้น: TikTok (เช่น GLORY VITAL) นอกเวลา Agency = ของเรา · Shopee (In house / Infinite / MCN) นอกแพลน = ไม่อยู่ในแพลน
+//   ไลฟ์ที่บันทึกกลุ่มไว้แล้ว (live_sessions.live_owner) ใช้ค่านั้นทั้งไลฟ์ ไม่ดูแพลน: เดือนก่อนมีแพลนในเว็บ / ไลฟ์ที่ไม่มีเวลาเริ่มจริง
 //   ไลฟ์ที่คร่อมหลายกลุ่ม = แบ่งยอดตามนาที (ประมาณ) · ซ้อนกันไม่ถึง 10 นาทีไม่นับ (คาบเกี่ยวรอยต่อ เช่น เปิดไลฟ์ก่อนเวลา 4 นาที)
 
-import type { LiveSession } from "@/lib/live-stats";
+import { monthOf, type LiveSession } from "@/lib/live-stats";
 import { isShopeePlatform, platformLabel, slotPlatformOf } from "@/lib/platform";
 import { ownerText, spanMs } from "@/lib/plan-clash";
 
@@ -14,6 +15,9 @@ export type ChannelSplit = {
   /** ไลฟ์ที่คร่อมหลายกลุ่ม (ยอดส่วนนี้เป็นตัวเลขประมาณ) */
   splitLives: number; splitGmv: number;
 };
+
+/** ค่า live_owner ของไลฟ์ทีมเรา (แยกจาก null ที่แปลว่ายังไม่ได้บันทึก ให้เทียบเวลากับแพลน) */
+export const LIVE_OWNER_OURS = "ours";
 
 const MIN_OVERLAP_MS = 10 * 60_000;
 const channelKey = (c: string) => c.trim().toLowerCase();
@@ -47,19 +51,29 @@ export function ownerShares(startMs: number, sec: number, spans: OwnerSpan[]): {
   return kept.map(([owner, ms]) => ({ owner, share: ms / total }));
 }
 
-/** แยกยอดตามกลุ่ม เฉพาะช่องที่มีแพลนกลุ่ม (TikTok ก่อน Shopee · ในช่องเรียง GMV มากไปน้อย ไม่อยู่ในแพลนไว้ท้าย) */
+/**
+ * แยกยอดตามกลุ่ม เฉพาะไลฟ์ที่บันทึกกลุ่มไว้ / อยู่ในเดือนที่ช่องนั้นมีแพลนกลุ่ม (TikTok ก่อน Shopee · ในช่องเรียง GMV มากไปน้อย ไม่อยู่ในแพลนไว้ท้าย)
+ *   ดูหลายเดือน: เดือนที่ช่องยังไม่มีแพลนไม่นับ (ไม่ใช่ "นอกแพลน" แค่ยังไม่ได้ลงแพลน)
+ */
 export function splitByOwner(sessions: LiveSession[], spans: OwnerSpan[]): ChannelSplit[] {
   const planned = new Map<string, OwnerSpan[]>();
-  for (const x of spans) planned.set(channelKey(x.channel), [...(planned.get(channelKey(x.channel)) ?? []), x]);
+  const planMonths = new Set<string>();
+  for (const x of spans) {
+    planned.set(channelKey(x.channel), [...(planned.get(channelKey(x.channel)) ?? []), x]);
+    planMonths.add(`${channelKey(x.channel)}|${monthOf(new Date(x.startMs).toISOString())}`);
+  }
   const out = new Map<string, ChannelSplit>();
   for (const s of sessions) {
     const channel = slotPlatformOf(s.platform, s.accountId);
-    const plan = channel ? planned.get(channelKey(channel)) : undefined;
-    if (!channel || !plan) continue;
+    if (!channel) continue;
+    const plan = planMonths.has(`${channelKey(channel)}|${monthOf(s.startedAt)}`) ? planned.get(channelKey(channel)) : undefined;
+    if (!plan && !s.liveOwner) continue;
     const c = out.get(channel) ?? { channel, label: platformLabel(channel), lives: 0, sec: 0, gmv: 0, rows: [], splitLives: 0, splitGmv: 0 };
     out.set(channel, c);
     c.lives++; c.sec += s.durationSec; c.gmv += s.gmv;
-    const shares = ownerShares(Date.parse(s.startedAt), s.durationSec, plan);
+    const shares = s.liveOwner
+      ? [{ owner: s.liveOwner === LIVE_OWNER_OURS ? null : s.liveOwner, share: 1 }]
+      : ownerShares(Date.parse(s.startedAt), s.durationSec, plan!);
     if (shares.length > 1) { c.splitLives++; c.splitGmv += s.gmv; }
     for (const { owner, share } of shares) {
       let row = c.rows.find((r) => r.owner === owner);

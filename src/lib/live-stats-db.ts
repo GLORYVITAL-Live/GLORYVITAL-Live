@@ -31,19 +31,23 @@ export const sessionFromRow = (r: Row): LiveSession => ({
   addToCart: n(r.add_to_cart),
   impressions: n(r.impressions),
   clicks: n(r.clicks),
+  liveOwner: (r.live_owner as string | null | undefined) ?? null,
 });
 
 /** ไลฟ์ที่เริ่มในช่วง [from, to) เรียงตามเวลาเริ่ม (Supabase ส่งได้ครั้งละ 1,000 แถว ดึงต่อจนครบ) */
 export async function loadSessions(from: string, to: string): Promise<LiveSession[]> {
   const db = createAdminClient();
   const rows: Row[] = [];
+  let cols = `${COLS}, live_owner`;
   for (let page = 0; ; page++) {
-    const { data, error } = await db.from("live_sessions").select(COLS)
+    const { data, error } = await db.from("live_sessions").select(cols)
       .gte("started_at", from).lt("started_at", to)
       .order("started_at").order("id")
       .range(page * 1000, page * 1000 + 999);
+    // ยังไม่ได้รัน SQL 20261127000000_live_owner = อ่านแบบเดิม (แยกกลุ่มจากแพลนอย่างเดียว)
+    if (error && cols !== COLS && /live_owner/.test(error.message)) { cols = COLS; page--; continue; }
     if (error) throw new Error(error.message);
-    rows.push(...(data ?? []));
+    rows.push(...((data ?? []) as unknown as Row[]));
     if (!data || data.length < 1000) break;
   }
   return rows.map(sessionFromRow);

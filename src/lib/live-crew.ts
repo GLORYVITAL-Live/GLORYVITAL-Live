@@ -2,8 +2,9 @@ import "server-only";
 import { slotPlatformOf } from "@/lib/campaign-data";
 import { fetchAll } from "@/lib/data";
 import { platformLabel } from "@/lib/platform";
+import { LIVE_OWNER_OURS } from "@/lib/live-owners";
 import { crewKey, type LiveCrew } from "@/lib/live-stats";
-import { spanMs } from "@/lib/plan-clash";
+import { ownerText, spanMs } from "@/lib/plan-clash";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -45,7 +46,7 @@ export async function liveCrew(fromMs: number, toMs: number): Promise<Record<str
   const from = new Date(fromMs).toISOString(), to = new Date(toMs).toISOString();
   // slot เผื่อวันก่อน / หลัง: ไลฟ์ข้ามเที่ยงคืน และ slot หลังเที่ยงคืนที่นับเป็นวันก่อน
   const dayFrom = bkkDate(fromMs - 86400_000), dayTo = bkkDate(toMs + 86400_000);
-  const [sessions, mcRows, adminRows, agencyRows] = await Promise.all([
+  const [sessions, mcRows, adminRows, agencyRows, ownerRows] = await Promise.all([
     fetchAll<{ platform: string; account_id: string; started_at: string; duration_sec: number }>((a, b) =>
       db.from("live_sessions").select("platform, account_id, started_at, duration_sec")
         .gte("started_at", from).lt("started_at", to).order("id").range(a, b) as never),
@@ -59,7 +60,13 @@ export async function liveCrew(fromMs: number, toMs: number): Promise<Record<str
     fetchAll<AgencyRow>((a, b) =>
       db.from("agency_slots").select("agency, platform, live_date, start_time, end_time")
         .gte("live_date", dayFrom).lte("live_date", dayTo).order("id").range(a, b) as never).catch(() => [] as AgencyRow[]),
+    // กลุ่มภายนอกที่บันทึกไว้กับไลฟ์ (ยังไม่ได้รัน SQL 20261127000000_live_owner = ไม่มี)
+    fetchAll<{ platform: string; account_id: string; started_at: string; live_owner: string }>((a, b) =>
+      db.from("live_sessions").select("platform, account_id, started_at, live_owner")
+        .not("live_owner", "is", null).neq("live_owner", LIVE_OWNER_OURS)
+        .gte("started_at", from).lt("started_at", to).order("id").range(a, b) as never).catch(() => []),
   ]);
+  const fixedOwners = new Map(ownerRows.map((s) => [crewKey({ platform: s.platform, accountId: String(s.account_id), startedAt: s.started_at }), s.live_owner]));
 
   const admins = new Map(adminRows.map((r) => [slotKey(r), r.person?.name ?? ""]));
   const byPlatform = new Map<string, Hit[]>();
@@ -82,6 +89,8 @@ export async function liveCrew(fromMs: number, toMs: number): Promise<Record<str
   for (const s of sessions) {
     const key = crewKey({ platform: s.platform, accountId: String(s.account_id), startedAt: s.started_at });
     const empty = (note: string): LiveCrew => ({ mc: "", admin: "", campaign: "", slots: "", note });
+    const fixed = fixedOwners.get(key);
+    if (fixed) { out[key] = { mc: ownerText(fixed), admin: "", campaign: "", slots: "", note: "กลุ่มที่บันทึกไว้กับไลฟ์" }; continue; }
     const s0 = Date.parse(s.started_at), s1 = s0 + Number(s.duration_sec) * 1000;
     const local = new Date(s0 + 7 * 3600_000);
     if (local.getUTCHours() === 0 && local.getUTCMinutes() < 10) { out[key] = empty("ไม่มีเวลาเริ่มจริง (นำเข้าจากชีตรายวัน)"); continue; }

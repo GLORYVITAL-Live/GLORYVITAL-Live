@@ -1,6 +1,6 @@
 // เทสแยกยอดไลฟ์ตามกลุ่มจากเวลาในแพลน (bun test)
 import { describe, expect, test } from "bun:test";
-import { ownerShares, ownerSpanOf, splitByOwner } from "@/lib/live-owners";
+import { LIVE_OWNER_OURS, ownerShares, ownerSpanOf, splitByOwner } from "@/lib/live-owners";
 import type { LiveSession } from "@/lib/live-stats";
 
 const VITAL = "7126874351866037275", SKIN = "7081240278438429722";
@@ -84,5 +84,33 @@ describe("แยกยอดตามกลุ่ม", () => {
   test("เรียง TikTok ก่อน Shopee", () => {
     const res = splitByOwner([sp("2026-11-01", "07:00", 60, 500000), tt("2026-11-03", "19:30", 240, 100)], spans);
     expect(res.map((c) => c.channel)).toEqual(["GLORY MALL", "Shopee"]);
+  });
+  test("เดือนที่ช่องยังไม่มีแพลน ไม่นับเป็นนอกแพลน (ดูหลายเดือน)", () => {
+    const [c] = splitByOwner([sp("2026-10-15", "07:00", 60, 9000), sp("2026-11-01", "07:00", 60, 500)], spans);
+    expect(c).toMatchObject({ channel: "Shopee", lives: 1, gmv: 500 });
+    expect(c.rows.map((r) => r.label)).toEqual(["MCN"]);
+  });
+});
+
+describe("ไลฟ์ที่บันทึกกลุ่มไว้แล้ว", () => {
+  const owned = (t: LiveSession, liveOwner: string): LiveSession => ({ ...t, liveOwner });
+  const spans = [plan("TDH", "GLORY MALL", "2026-11-03", "19:30", "23:30")];
+  test("ไม่มีแพลนทั้งเดือนก็แยกได้ · เวลาเริ่มไม่จริง (00:0x) ไม่มีผล", () => {
+    const [c] = splitByOwner([owned(tt("2026-06-10", "00:00", 240, 37000, 5), "TDH"), owned(tt("2026-06-10", "00:01", 120, 30000, 3), LIVE_OWNER_OURS)], []);
+    expect(c).toMatchObject({ channel: "GLORY MALL", lives: 2, gmv: 67000, splitLives: 0 });
+    expect(c.rows.map((r) => [r.owner, r.label, r.gmv, r.sec])).toEqual([["TDH", "Agency TDH", 37000, 14400], [null, "ของเรา", 30000, 7200]]);
+  });
+  test("ค่าที่บันทึกชนะแพลน: อยู่ในเวลา TDH แต่ยืนยันว่าเป็นของเรา", () => {
+    const [c] = splitByOwner([owned(tt("2026-11-03", "19:30", 240, 78000), LIVE_OWNER_OURS)], spans);
+    expect(c.rows.map((r) => [r.label, r.gmv])).toEqual([["ของเรา", 78000]]);
+  });
+  test("กลุ่มอื่น (MCN) แสดงชื่อกลุ่ม", () => {
+    const [c] = splitByOwner([owned(tt("2026-04-13", "00:00", 240, 50000), "MCN")], []);
+    expect(c.rows.map((r) => r.label)).toEqual(["MCN"]);
+  });
+  test("ยังไม่ได้บันทึก = เทียบแพลนตามเดิม · รวมหลายเดือนได้", () => {
+    const [c] = splitByOwner([owned(tt("2026-10-20", "19:30", 240, 1000), "TDH"), tt("2026-11-03", "19:30", 240, 2000), tt("2026-11-03", "09:30", 240, 4000)], spans);
+    expect(c).toMatchObject({ lives: 3, gmv: 7000 });
+    expect(c.rows.map((r) => [r.label, r.gmv])).toEqual([["ของเรา", 4000], ["Agency TDH", 3000]]);
   });
 });

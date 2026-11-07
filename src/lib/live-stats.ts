@@ -41,6 +41,8 @@ export type LiveSession = {
   impressions: number | null;
   clicks: number | null;
   raw?: Record<string, string>;
+  /** กลุ่มผู้ไลฟ์ที่ยืนยันแล้ว ("ours" / ชื่อกลุ่ม) ไม่มี = เทียบเวลากับแพลน (src/lib/live-owners.ts) · แก้ที่ฐานข้อมูลเท่านั้น ไฟล์ Export ไม่ทับ */
+  liveOwner?: string | null;
 };
 
 /** auto = อ่านจากชื่อ Campaign ใน slot (Plan Slot Live / ชีต) แก้/ลบในหน้านี้ไม่ได้ (id ติดลบ) */
