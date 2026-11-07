@@ -11,7 +11,7 @@ import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
 import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
-import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
+import { ownerTrend, splitByOwner, type ChannelTrend, type OwnerSpan } from "@/lib/live-owners";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { monthDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
 import { DatePicker } from "@/components/date-picker";
@@ -444,7 +444,15 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       </section>
 
       {cur.lives ? <LineSection month={month} sessions={byMonth.get(month)!} replay={replay} /> : null}
-      {cur.lives ? <OwnerTable query={`month=${month}`} sessions={byMonth.get(month)!} version={version} /> : null}
+      {cur.lives ? (
+        <OwnerTable
+          query={`month=${month}`} sessions={byMonth.get(month)!} version={version} period="รายวัน" rowHead="วันที่" replay={replay}
+          buckets={monthDays(month).map((d) => {
+            const n = Number(d.slice(8));
+            return { short: String(n), title: dayTitle(month, n), list: byMonth.get(month)!.filter((s) => bkkParts(s.startedAt).d === n) };
+          })}
+        />
+      ) : null}
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
   );
@@ -703,7 +711,12 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
         table={false}
       />
 
-      {cur.lives ? <OwnerTable query={`from=${range.from}&to=${range.to}`} sessions={curList} version={version} /> : null}
+      {cur.lives ? (
+        <OwnerTable
+          query={`from=${range.from}&to=${range.to}`} sessions={curList} version={version} period="รายเดือน" rowHead="เดือน" replay={replay}
+          buckets={curKeys.map((k) => ({ short: shortMonth(k), title: monthLabel(k), list: byMonth.get(k) ?? [] }))}
+        />
+      ) : null}
 
       <section className="my-4">
         <h2 className="mb-2 text-lg font-bold">{def.label} รายไตรมาส</h2>
@@ -929,8 +942,11 @@ function LineSection({ month, sessions, replay }: { month: string; sessions: Liv
 /**
  * แยก GMV ตามกลุ่มผู้ไลฟ์: กลุ่มที่บันทึกไว้กับไลฟ์ / เทียบเวลาไลฟ์ในไฟล์กับแพลนหน้า Plan Slot Live (src/lib/live-owners.ts)
  *   query = เดือนเดียว (month=) หรือช่วงเดือน (from= &to=) · เดือนที่ไม่มีข้อมูลกลุ่มของช่องนั้น = ไม่นับ
+ *   buckets = ช่วงของกราฟ (รายวัน / รายเดือน): แท่งซ้อน GMV + เส้น GMV/ชม. แยกกลุ่ม ต่อช่อง
  */
-function OwnerTable({ query, sessions, version }: { query: string; sessions: LiveSession[]; version: number }) {
+function OwnerTable({ query, sessions, version, buckets, period, rowHead, replay }: {
+  query: string; sessions: LiveSession[]; version: number; buckets: OwnerBucket[]; period: string; rowHead: string; replay: string;
+}) {
   const key = `${query}|${version}`;
   const [state, setState] = useState<{ key: string; spans?: OwnerSpan[]; error?: string }>({ key: "" });
   useEffect(() => {
@@ -999,7 +1015,95 @@ function OwnerTable({ query, sessions, version }: { query: string; sessions: Liv
         {howText} · ยอดด้านบนยังรวมทุกกลุ่ม
         {splitLives ? ` · มี ${splitLives} ไลฟ์คร่อมหลายกลุ่ม (รวม ${fmtMetric("baht", splitGmv)}) แบ่งยอดตามนาที เป็นตัวเลขประมาณ` : ""}
       </p>
+      {ownerTrend(buckets.map((b) => b.list), state.spans ?? []).map((c) => (
+        <OwnerCharts key={c.channel} trend={c} buckets={buckets} period={period} rowHead={rowHead} replay={replay} />
+      ))}
     </section>
+  );
+}
+
+type OwnerBucket = { short: string; title: string; list: LiveSession[] };
+
+/**
+ * สีกลุ่ม ผูกกับกลุ่ม (กรองแล้วสีไม่เปลี่ยน): ทีมเรา / Agency ใช้สีเดียวกับหน้า Cost ไม่ใช้ชมพูที่เป็นสี TikTok ในหน้านี้ · นอกแพลน = เทา
+ *   ชุดสีผ่านการตรวจแยกสี (คนตาบอดสี) ทั้งโหมดสว่าง / มืด
+ */
+const ownerColor = (channel: string, owner: string | null) => {
+  if (!owner) return channel.trim().toLowerCase() === "shopee" ? "var(--muted-foreground)" : "var(--cost-mc)";
+  const fixed: Record<string, string> = { "In house": "var(--cost-mc)", TDH: "var(--cost-agency)", MCN: "var(--cost-admin)", Infinite: "var(--viz-prev)" };
+  return fixed[owner] ?? "var(--muted-foreground)";
+};
+
+/** กราฟของช่องหนึ่ง: GMV แท่งซ้อนแยกกลุ่ม (ความสูงรวม = ยอดรวมจริง) + GMV/ชม. กราฟเส้นแยกกลุ่ม (บวกกันไม่ได้ จึงแยกกราฟ ไม่ใช้สองแกน) */
+function OwnerCharts({ trend, buckets, period, rowHead, replay }: { trend: ChannelTrend; buckets: OwnerBucket[]; period: string; rowHead: string; replay: string }) {
+  const categories = buckets.map((b) => b.short), titles = buckets.map((b) => b.title);
+  const lines = (pick: (o: ChannelTrend["owners"][number]) => (number | null)[]) =>
+    trend.owners.map((o) => ({ name: o.label, color: ownerColor(trend.channel, o.owner), values: pick(o) }));
+  const gmv = lines((o) => o.gmv), rate = lines((o) => o.perHour);
+  const baht = (v: number | null) => fmtMetric("baht", v), axis = (v: number) => fmtMetric("baht", v, true);
+  const hrs = (v: number | null) => (v === null ? "-" : v.toFixed(1));
+  const hasRow = (i: number) => trend.owners.some((o) => o.gmv[i] !== null);
+  const totalAt = (i: number) => trend.owners.reduce((a, o) => a + (o.gmv[i] ?? 0), 0);
+  const many = trend.owners.length > 1;
+  return (
+    <>
+      <div className="my-3 rounded-2xl border bg-card p-3">
+        <h3 className="mb-2 font-bold">GMV {period} แยกกลุ่ม · {trend.label}</h3>
+        <BarChart
+          key={`gmv|${trend.channel}|${replay}`} label={`GMV ${period} แยกกลุ่มผู้ไลฟ์ ${trend.label}`} categories={categories} tooltipTitles={titles}
+          series={gmv} format={baht} formatAxis={axis} stacked compare={false}
+        />
+        {many ? <div className="mt-1"><Legend series={gmv} /></div> : null}
+        <TableView title="ดูเป็นตาราง">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{rowHead}</TableHead>
+                {trend.owners.map((o) => <TableHead key={o.label} className="text-right">{o.label}</TableHead>)}
+                {many ? <TableHead className="text-right">รวม</TableHead> : null}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {categories.map((c, i) => (hasRow(i) ? (
+                <TableRow key={c}>
+                  <TableCell>{titles[i]}</TableCell>
+                  {trend.owners.map((o) => <TableCell key={o.label} className="text-right tabular-nums">{baht(o.gmv[i])}</TableCell>)}
+                  {many ? <TableCell className="text-right font-semibold tabular-nums">{baht(totalAt(i))}</TableCell> : null}
+                </TableRow>
+              ) : null))}
+            </TableBody>
+          </Table>
+        </TableView>
+      </div>
+      <div className="my-3 rounded-2xl border bg-card p-3">
+        <h3 className="mb-2 font-bold">GMV/ชม. {period} แยกกลุ่ม · {trend.label}</h3>
+        <LineChart
+          key={`rate|${trend.channel}|${replay}`} label={`GMV ต่อชั่วโมง ${period} แยกกลุ่มผู้ไลฟ์ ${trend.label}`} categories={categories} tooltipTitles={titles}
+          series={rate} format={baht} formatAxis={axis}
+        />
+        {many ? <div className="mt-1"><Legend series={rate} line /></div> : null}
+        <TableView title="ดูเป็นตาราง">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{rowHead}</TableHead>
+                {trend.owners.map((o) => <TableHead key={o.label} className="text-right">GMV/ชม. {o.label}</TableHead>)}
+                {trend.owners.map((o) => <TableHead key={o.label} className="text-right">ชม. {o.label}</TableHead>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {categories.map((c, i) => (hasRow(i) ? (
+                <TableRow key={c}>
+                  <TableCell>{titles[i]}</TableCell>
+                  {trend.owners.map((o) => <TableCell key={o.label} className="text-right tabular-nums">{baht(o.perHour[i])}</TableCell>)}
+                  {trend.owners.map((o) => <TableCell key={o.label} className="text-right tabular-nums">{hrs(o.hours[i])}</TableCell>)}
+                </TableRow>
+              ) : null))}
+            </TableBody>
+          </Table>
+        </TableView>
+      </div>
+    </>
   );
 }
 

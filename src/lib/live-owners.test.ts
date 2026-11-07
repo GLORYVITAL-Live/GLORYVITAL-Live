@@ -1,6 +1,6 @@
 // เทสแยกยอดไลฟ์ตามกลุ่มจากเวลาในแพลน (bun test)
 import { describe, expect, test } from "bun:test";
-import { LIVE_OWNER_OURS, ownerShares, ownerSpanOf, splitByOwner } from "@/lib/live-owners";
+import { LIVE_OWNER_OURS, ownerShares, ownerSpanOf, ownerTrend, splitByOwner } from "@/lib/live-owners";
 import type { LiveSession } from "@/lib/live-stats";
 
 const VITAL = "7126874351866037275", SKIN = "7081240278438429722";
@@ -89,6 +89,34 @@ describe("แยกยอดตามกลุ่ม", () => {
     const [c] = splitByOwner([sp("2026-10-15", "07:00", 60, 9000), sp("2026-11-01", "07:00", 60, 500)], spans);
     expect(c).toMatchObject({ channel: "Shopee", lives: 1, gmv: 500 });
     expect(c.rows.map((r) => r.label)).toEqual(["MCN"]);
+  });
+});
+
+describe("แยกกลุ่มทีละช่วงสำหรับกราฟ", () => {
+  const owned = (t: LiveSession, liveOwner: string): LiveSession => ({ ...t, liveOwner });
+  const oct = [owned(tt("2026-10-15", "09:30", 600, 60000), LIVE_OWNER_OURS), owned(tt("2026-10-16", "19:30", 240, 40000), "TDH")];
+  const sep = [owned(tt("2026-09-15", "09:30", 120, 10000), LIVE_OWNER_OURS)];
+  test("GMV / ชม. / GMV ต่อชม. ต่อช่วง · ช่วงที่กลุ่มไม่มีไลฟ์ = null · ไม่มีไลฟ์ทั้งช่วงก็ยังเรียงตามช่วง", () => {
+    const [c] = ownerTrend([sep, oct, []], []);
+    expect(c).toMatchObject({ channel: "GLORY MALL", label: "GLORY VITAL" });
+    expect(c.owners.map((o) => o.label)).toEqual(["ของเรา", "Agency TDH"]);
+    expect(c.owners[0]).toMatchObject({ gmv: [10000, 60000, null], hours: [2, 10, null], perHour: [5000, 6000, null] });
+    expect(c.owners[1]).toMatchObject({ gmv: [null, 40000, null], hours: [null, 4, null], perHour: [null, 10000, null] });
+  });
+  test("ลำดับกลุ่มคงที่ ไม่เปลี่ยนตามยอด (ทีมเราล่างสุด)", () => {
+    const small = [owned(tt("2026-10-15", "09:30", 60, 1), LIVE_OWNER_OURS), owned(tt("2026-10-16", "19:30", 60, 999), "TDH"), owned(tt("2026-10-17", "19:30", 60, 5000), "MCN")];
+    expect(ownerTrend([small], [])[0].owners.map((o) => o.owner)).toEqual([null, "TDH", "MCN"]);
+  });
+  test("Shopee: นอกแพลนอยู่บนสุด · TikTok มาก่อน Shopee · ยอดรวมต่อช่วงเท่า splitByOwner", () => {
+    const spans = [plan("MCN", "Shopee", "2026-11-01", "06:00", "14:00")];
+    const list = [sp("2026-11-01", "07:00", 60, 500), sp("2026-11-01", "20:00", 60, 700), owned(tt("2026-11-02", "09:30", 60, 100), LIVE_OWNER_OURS)];
+    const res = ownerTrend([list], spans);
+    expect(res.map((c) => c.channel)).toEqual(["GLORY MALL", "Shopee"]);
+    expect(res[1].owners.map((o) => [o.label, o.gmv[0]])).toEqual([["MCN", 500], ["ไม่อยู่ในแพลน", 700]]);
+  });
+  test("ไลฟ์ 0 นาที: มี GMV แต่ไม่มี GMV/ชม.", () => {
+    const [c] = ownerTrend([[owned(tt("2026-10-15", "09:30", 0, 500), "TDH")]], []);
+    expect(c.owners[0]).toMatchObject({ gmv: [500], hours: [0], perHour: [null] });
   });
 });
 

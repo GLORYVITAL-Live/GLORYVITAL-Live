@@ -88,3 +88,38 @@ export function splitByOwner(sessions: LiveSession[], spans: OwnerSpan[]): Chann
   for (const c of out.values()) c.rows.sort((a, b) => Number(last(c, a)) - Number(last(c, b)) || b.gmv - a.gmv);
   return [...out.values()].sort((a, b) => Number(isShopeePlatform(a.channel)) - Number(isShopeePlatform(b.channel)) || b.gmv - a.gmv);
 }
+
+/** ค่าของกลุ่มหนึ่งในแต่ละช่วง (วัน / เดือน) ช่วงที่กลุ่มนี้ไม่มีไลฟ์ = null · hours รวมนาทีของไลฟ์คร่อมกลุ่มตามส่วนที่แบ่ง */
+export type OwnerTrend = { owner: string | null; label: string; gmv: (number | null)[]; hours: (number | null)[]; perHour: (number | null)[] };
+export type ChannelTrend = { channel: string; label: string; owners: OwnerTrend[] };
+
+/** ลำดับกลุ่มในกราฟ คงที่ไม่ตามยอด (แท่งซ้อนเทียบกันข้ามช่วงได้): ทีมเราล่างสุด · นอกแพลนบนสุด */
+const ownerRank = (channel: string, owner: string | null) => {
+  if (!owner) return isShopeePlatform(channel) ? 9 : 0;
+  const i = ["In house", "TDH", "MCN", "Infinite"].indexOf(owner);
+  return i < 0 ? 8 : i;
+};
+
+/** แยกยอดตามกลุ่มทีละช่วง (ใช้กฎเดียวกับ splitByOwner) สำหรับกราฟแท่งซ้อน GMV + กราฟเส้น GMV/ชม. */
+export function ownerTrend(groups: LiveSession[][], spans: OwnerSpan[]): ChannelTrend[] {
+  const out = new Map<string, ChannelTrend>();
+  const blank = () => groups.map(() => null as number | null);
+  groups.forEach((list, i) => {
+    for (const c of splitByOwner(list, spans)) {
+      const ch = out.get(c.channel) ?? { channel: c.channel, label: c.label, owners: [] };
+      out.set(c.channel, ch);
+      for (const r of c.rows) {
+        let o = ch.owners.find((x) => x.owner === r.owner);
+        if (!o) {
+          o = { owner: r.owner, label: r.label, gmv: blank(), hours: blank(), perHour: blank() };
+          ch.owners.push(o);
+        }
+        o.gmv[i] = r.gmv;
+        o.hours[i] = r.sec / 3600;
+        o.perHour[i] = r.sec > 0 ? r.gmv / (r.sec / 3600) : null;
+      }
+    }
+  });
+  for (const c of out.values()) c.owners.sort((a, b) => ownerRank(c.channel, a.owner) - ownerRank(c.channel, b.owner));
+  return [...out.values()].sort((a, b) => Number(isShopeePlatform(a.channel)) - Number(isShopeePlatform(b.channel)) || a.label.localeCompare(b.label));
+}

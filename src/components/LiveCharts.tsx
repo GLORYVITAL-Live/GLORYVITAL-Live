@@ -175,7 +175,8 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
             : { left: pad.l + (hover + 1) * groupW + 6 }}
         >
           <div className="mb-1 font-semibold">{tooltipTitles?.[hover] ?? categories[hover]}</div>
-          {series.map((s) => (
+          {/* แท่งซ้อน: ชุดที่ไม่มีค่าในกลุ่มนี้ไม่ต้องแสดง (เช่น MCN ที่ไลฟ์แค่บางเดือน) */}
+          {(stacked ? series.filter((s) => s.values[hover] !== null) : series).map((s) => (
             <div key={s.name} className="flex items-center justify-between gap-3">
               <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                 <span className="size-2 rounded-[2px]" style={{ background: s.color }} aria-hidden />{s.name}
