@@ -17,7 +17,7 @@ const KEEP = 12;
 /** ตาราง -> คอลัมน์ที่ใช้เรียงตอนอ่านทีละ 1000 แถว */
 const TABLES: Record<string, string> = {
   staff: "id", settings: "id", mc_slots: "id", admin_slots: "id", agency_slots: "id", agency_adjusted: "live_date", agency_rates: "month", booking_logs: "id",
-  live_proofs: "id", live_proof_slots: "mc_slot_id", live_sessions: "id", live_campaigns: "id", live_targets: "month", ceo_sessions: "id",
+  live_proofs: "id", live_proof_slots: "mc_slot_id", live_sessions: "id", live_campaigns: "id", live_targets: "month", live_day_tags: "day", ceo_sessions: "id",
   pay_docs: "email", pay_periods: "id", equipment: "id",
   // ใบ 50 ทวิ (การจับคู่ที่ Owner ทำไว้) + เอกสารยืนยันการรับเงิน (ไฟล์อยู่ใน Drive แล้ว เก็บแค่ข้อมูล)
   tawi_docs: "id", pay_receipts: "id", receipt_files: "id",

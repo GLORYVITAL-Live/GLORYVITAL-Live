@@ -11,6 +11,7 @@ import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
 import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
+import { DAY_KINDS, dayKindLabel, dayKindStats, liveDay, tagKey, type DayTag } from "@/lib/live-days";
 import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop, type HeatCell } from "@/lib/live-heat";
 import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
 import { ownerText } from "@/lib/plan-clash";
@@ -311,6 +312,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
   const months13 = useMemo(() => Array.from({ length: 13 }, (_, i) => monthKey(i - 12, month)), [month]);
   const { data, error, retry } = useSessions(monthWindow(months13[0]).from, monthWindow(month).to, version);
   const owners = useOwnerSpans(`from=${months13[0]}&to=${month}`, version);
+  const dayTags = useDayTags(`month=${month}`, version);
   const [monthSplit, setMonthSplit] = useState<Split>("platform");
 
   const nav = (
@@ -409,7 +411,10 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
             { totals: yoy, label: `YoY vs ${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}${cutText}` },
           ]} />
           <Funnel cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} />
-          <DailySection month={month} sessions={byMonth.get(month)!} metric={metric} onMetric={setMetric} replay={replay} spans={owners.spans} />
+          <DailySection
+            month={month} sessions={byMonth.get(month)!} metric={metric} onMetric={setMetric} replay={replay} spans={owners.spans}
+            tagText={(d) => dayTagText(dayTags.tags, `${month}-${String(d).padStart(2, "0")}`, filter.platform)}
+          />
         </>
       )}
 
@@ -465,6 +470,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
 
       {cur.lives ? <LineSection month={month} sessions={byMonth.get(month)!} replay={replay} spans={owners.spans} /> : null}
       {cur.lives ? <HeatSection title={`ช่วงเวลาไหนขายดี ${monthLabel(month)}`} sessions={byMonth.get(month)!} spans={owners.spans} /> : null}
+      {cur.lives ? <DayKindSection title={`วันปกติ vs วันแคมเปญ ${monthLabel(month)}`} sessions={byMonth.get(month)!} tags={dayTags.tags} ready={dayTags.ready} replay={replay} /> : null}
       {cur.lives ? <OwnerTable owners={owners} sessions={byMonth.get(month)!} /> : null}
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
@@ -573,6 +579,7 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
   const loadFrom = monthKey(-12, range.from);
   const { data, error, retry } = useSessions(monthWindow(loadFrom).from, monthWindow(range.to).to, version);
   const owners = useOwnerSpans(`from=${range.from}&to=${range.to}`, version);
+  const dayTags = useDayTags(`from=${range.from}&to=${range.to}`, version);
   const [yearSplit, setYearSplit] = useState<Split>("platform");
   const shift =(by: number) => setRange({ from: monthKey(by, range.from), to: monthKey(by, range.to) });
 
@@ -741,6 +748,7 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
       />
 
       {cur.lives ? <HeatSection title={`ช่วงเวลาไหนขายดี ${aName}`} sessions={curList} spans={owners.spans} /> : null}
+      {cur.lives ? <DayKindSection title={`วันปกติ vs วันแคมเปญ ${aName}`} sessions={curList} tags={dayTags.tags} ready={dayTags.ready} replay={replay} /> : null}
 
       {cur.lives ? <OwnerTable owners={owners} sessions={curList} /> : null}
 
@@ -790,8 +798,10 @@ function dayTitle(month: string, d: number) {
 }
 
 /** กราฟแท่งรายวันของเดือนนี้ (นับตามวันที่เริ่มไลฟ์) ใช้ตัวชี้วัดเดียวกับกราฟรายเดือน · แท็บแยก Agency (spans = แพลนของกลุ่ม) */
-function DailySection({ month, sessions, metric, onMetric, replay, spans }: {
+function DailySection({ month, sessions, metric, onMetric, replay, spans, tagText }: {
   month: string; sessions: LiveSession[]; metric: MetricKey; onMetric: (k: MetricKey) => void; replay: string; spans?: OwnerSpan[];
+  /** ป้ายวัน (วันแคมเปญ ...) ต่อท้ายชื่อวันในกล่องตัวเลข / ตาราง */
+  tagText?: (day: number) => string;
 }) {
   const [split, setSplit] = useState<Split>("platform");
   const def = metricOf(metric);
@@ -807,7 +817,7 @@ function DailySection({ month, sessions, metric, onMetric, replay, spans }: {
     const list = byDay.get(d);
     return list ? def.value(totalsOf(list)) : null;
   };
-  const title = (d: number) => dayTitle(month, d);
+  const title = (d: number) => { const tag = tagText?.(d); return tag ? `${dayTitle(month, d)} · ${tag}` : dayTitle(month, d); };
   const groups = days.map((d) => byDay.get(d) ?? []);
   const series = platformLines(groups, metric);
   const agency = spans ? agencyTrend(groups, spans) : null;
@@ -1153,6 +1163,122 @@ function useOwnerSpans(query: string | null, version: number) {
     return () => { alive = false; };
   }, [key, query]);
   return key && state.key === key ? { spans: state.spans, error: state.error } : {};
+}
+
+/** ป้ายวันต่อแพลตฟอร์มจากชีตของทีม (key = tagKey) · ready false = ยังไม่ได้รัน SQL 20261128000000_live_day_tags */
+function useDayTags(query: string, version: number) {
+  const key = `${query}|${version}`;
+  const [state, setState] = useState<{ key: string; tags?: Map<string, DayTag>; ready?: boolean }>({ key: "" });
+  useEffect(() => {
+    let alive = true;
+    api<{ ready: boolean; tags: DayTag[] }>(`/api/live-stats/day-tags?${query}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) setState({ key, ready: res.ready, tags: new Map(res.tags.map((t) => [tagKey(t.platform, t.day), t])) });
+      })
+      .catch(() => { if (alive) setState({ key, tags: new Map() }); }); // โหลดไม่ได้ = ไม่มีป้าย (ส่วนอื่นยังใช้ได้)
+    return () => { alive = false; };
+  }, [key, query]);
+  const cur = state.key === key ? state : null;
+  return { tags: cur?.tags, ready: cur?.ready };
+}
+
+/** ข้อความป้ายของวัน (ไม่ใช่วันปกติ) เช่น "TikTok PayDay Campaign · Shopee PAYDAY" · platform = ตัวกรอง ("" = ทุกแพลตฟอร์ม) */
+const dayTagText = (tags: Map<string, DayTag> | undefined, day: string, platform: Platform | "") =>
+  (["TikTok", "Shopee"] as Platform[]).filter((p) => !platform || p === platform).flatMap((p) => {
+    const t = tags?.get(tagKey(p, day));
+    return t && t.kind !== "bau" ? [`${platform ? "" : `${p} `}${t.label || dayKindLabel(t.kind)}`] : [];
+  }).join(" · ");
+
+/**
+ * วันปกติ vs วันแคมเปญ: GMV ต่อวัน / GMV ต่อชม. ของแต่ละชนิดวัน เทียบวันปกติ แยก TikTok / Shopee (src/lib/live-days.ts)
+ *   ป้ายต่อแพลตฟอร์มจากชีตของทีม · วันที่ยังไม่มีป้ายไม่นับ (บอกจำนวนไลฟ์ไว้)
+ */
+function DayKindSection({ title, sessions, tags, ready, replay }: { title: string; sessions: LiveSession[]; tags?: Map<string, DayTag>; ready?: boolean; replay: string }) {
+  const [metric, setMetric] = useState<"perDay" | "perHour">("perDay");
+  if (ready === false) return <Notice className="my-4">ยังเทียบวันปกติกับวันแคมเปญไม่ได้ ต้องรัน SQL 20261128000000_live_day_tags ใน Supabase ก่อน</Notice>;
+  if (!tags) return null;
+  const per = (["TikTok", "Shopee"] as Platform[]).map((p) => ({ p, ...dayKindStats(sessions, tags, p) })).filter((x) => x.stats.length);
+  if (!per.length) return null;
+  const kinds = DAY_KINDS.filter((k) => per.some((x) => x.stats.some((s) => s.kind === k.kind)));
+  const pick = (s: { perDay: number | null; perHour: number | null } | undefined) => (s ? (metric === "perDay" ? s.perDay : s.perHour) : null);
+  const series = per.map((x) => ({ name: x.p, color: PLATFORM_COLOR[x.p], values: kinds.map((k) => pick(x.stats.find((s) => s.kind === k.kind))) }));
+  const baht = (v: number | null) => fmtMetric("baht", v);
+  const times = (v: number | null, base: number | null) => (v === null || !base ? "-" : `×${(v / base).toFixed(2)}`);
+  const untagged = per.reduce((a, x) => a + x.untagged, 0);
+  // วันที่มีป้าย (ไม่ใช่วันปกติ) และมีไลฟ์ ไว้ดูทีละวัน
+  const days = [...new Set(sessions.map((s) => `${s.platform}|${liveDay(s)}`))].sort((a, b) => a.slice(-10).localeCompare(b.slice(-10)) || a.localeCompare(b))
+    .flatMap((k) => { const t = tags.get(k); return t && t.kind !== "bau" ? [{ t, gmv: sessions.filter((s) => `${s.platform}|${liveDay(s)}` === k).reduce((a, s) => a + s.gmv, 0) }] : []; });
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold">{title}</h2>
+        <ToggleGroup type="single" spacing={1} value={metric} onValueChange={(v) => { if (v) setMetric(v as "perDay" | "perHour"); }} aria-label="ค่าที่เทียบ" className="rounded-full border bg-card p-0.5">
+          {[["perDay", "GMV ต่อวัน"], ["perHour", "GMV/ชม."]].map(([id, text]) => (
+            <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </div>
+      <BarChart
+        key={`${metric}|${replay}`} label={`${metric === "perDay" ? "GMV ต่อวัน" : "GMV ต่อชั่วโมง"} แยกชนิดวัน`} categories={kinds.map((k) => k.label.replace(/ \(.*\)$/, ""))} tooltipTitles={kinds.map((k) => k.label)}
+        series={series} format={baht} formatAxis={(v) => fmtMetric("baht", v, true)} compare={false}
+      />
+      {series.length > 1 ? <div className="mt-1"><Legend series={series} /></div> : null}
+      <div className={cn("mt-3 grid gap-3", per.length > 1 && "lg:grid-cols-2")}>
+        {per.map((x) => {
+          const bau = x.stats.find((s) => s.kind === "bau");
+          return (
+            <div key={x.p} className="overflow-x-auto rounded-xl border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{x.p}</TableHead><TableHead className="text-right">วัน</TableHead>
+                    <TableHead className="text-right">GMV/วัน</TableHead><TableHead className="text-right">เทียบวันปกติ</TableHead>
+                    <TableHead className="text-right">GMV/ชม.</TableHead><TableHead className="text-right">เทียบวันปกติ</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {x.stats.map((s) => (
+                    <TableRow key={s.kind}>
+                      <TableCell className="whitespace-nowrap">{dayKindLabel(s.kind)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{s.days}</TableCell>
+                      <TableCell className="text-right tabular-nums">{baht(s.perDay)}</TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">{s.kind === "bau" ? "-" : times(s.perDay, bau?.perDay ?? null)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{baht(s.perHour)}</TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">{s.kind === "bau" ? "-" : times(s.perHour, bau?.perHour ?? null)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        ป้ายวันจากชีตของทีม (Shopee = remark แท็บ GLORY Shopee · TikTok = หมายเหตุ แท็บ GLORY TIKTOK) · วัน = วันที่มีไลฟ์ นับตามเวลาเริ่มไลฟ์
+        {untagged ? ` · ${untagged.toLocaleString("th-TH")} ไลฟ์อยู่ในวันที่ยังไม่มีป้าย จึงไม่นับ` : ""}
+      </p>
+      {days.length ? (
+        <TableView title={`ดูทีละวัน (${days.length} วันที่มีป้าย)`}>
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead>วันที่</TableHead><TableHead>แพลตฟอร์ม</TableHead><TableHead>ป้าย</TableHead><TableHead className="text-right">GMV</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {days.map(({ t, gmv }) => (
+                <TableRow key={`${t.platform}|${t.day}`}>
+                  <TableCell className="whitespace-nowrap">{dayTitle(t.day.slice(0, 7), Number(t.day.slice(8)))}</TableCell>
+                  <TableCell>{t.platform}</TableCell>
+                  <TableCell>{t.label || dayKindLabel(t.kind)} <span className="text-xs text-muted-foreground">({dayKindLabel(t.kind)})</span></TableCell>
+                  <TableCell className="text-right tabular-nums">{baht(gmv)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableView>
+      ) : null}
+    </section>
+  );
 }
 
 /** ช่วงเดือนที่ครอบทุกช่วงในรายการ -> query ของ useOwnerSpans */
