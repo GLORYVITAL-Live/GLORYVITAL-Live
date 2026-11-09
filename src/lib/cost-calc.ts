@@ -21,7 +21,7 @@ export type CostSee = { mc: boolean; admin: boolean; agency: boolean; gmv: boole
 export type CostPlanSlot = { agency: string; platform: string; date: string; start: string; end: string };
 
 /**
- * แถวของกลุ่มหนึ่ง · owner null = TikTok: ของเรา / Shopee: ไลฟ์ที่ไม่อยู่ในแพลน
+ * แถวของกลุ่มหนึ่ง · owner null = TikTok ของเรา · Shopee ทีมเรา = owner "In house"
  *   ตัวเลขนับถึงจุดตัด · full = ทั้งเดือน (รวมคิวที่จองไว้ + แพลนที่ยังไม่ถึงเวลา)
  */
 export type CostRow = {
@@ -58,7 +58,7 @@ const detailApp = (d: OwnerDetail): CostApp => (d.shopee || isShopeePlatform(d.p
 const startedAtMs = (s: { startedAt: string }) => Date.parse(s.startedAt);
 
 export const rowCost = (r: Pick<CostRow, "mc" | "admin" | "travel" | "agency">) => r.mc + r.admin + r.travel + r.agency;
-/** ลำดับแถว: TikTok ก่อน Shopee · ทีมเราก่อน แล้วกลุ่มภายนอก ไม่อยู่ในแพลนไว้ท้าย */
+/** ลำดับแถว: TikTok ก่อน Shopee · ทีมเรา (TikTok ของเรา / Shopee In house) ก่อน แล้วกลุ่มภายนอก */
 const rankOf = (r: CostRow) => (r.app === "TikTok" ? 0 : 10) + (r.owner === "In house" || (!r.owner && r.app === "TikTok") ? 0 : r.owner ? 1 : 2);
 /** ที่มาของตัวเลขในแถว: ชีต / ประมาณการ / ระบบ */
 export const rowSource = (r: Pick<CostRow, "sources">) => {
@@ -92,7 +92,7 @@ export function costRows({ summary, plan, rates, sessions, spans, cut, see, shee
   const rowOf = (app: CostApp, owner: string | null) => {
     const k = `${app}|${owner ?? ""}`;
     const r = rows.get(k) ?? {
-      app, owner, label: owner || app === "TikTok" ? ownerText(owner) : "ไม่อยู่ในแพลน",
+      app, owner, label: ownerText(owner),
       mc: 0, admin: 0, travel: 0, agency: 0, rate: null, planHours: 0, full: 0, gmv: null, sources: {}, forecast: 0,
     };
     rows.set(k, r);
@@ -167,14 +167,14 @@ export function costRows({ summary, plan, rates, sessions, spans, cut, see, shee
   if (actualOf("mc") && actualOf("admin")) unrated = 0;
   for (const [r, f] of fulls) r.full = f.mc + f.admin + f.travel + f.agency;
 
-  // GMV: ตามเวลาในแพลน · ส่วนที่เหลือ TikTok = ของเรา / Shopee = ไม่อยู่ในแพลน
+  // GMV: ตามเวลาในแพลน · ส่วนที่ไม่ใช่ Agency = ทีมเรา: TikTok = ของเรา / Shopee = In house (ผู้ใช้ยืนยัน 2026-11-09)
   const lives = sessions?.filter((s) => startedAtMs(s) <= cut) ?? [];
   if (lives.length) {
     const rest: Record<CostApp, number> = { TikTok: 0, Shopee: 0 };
     for (const s of lives) rest[s.platform === "Shopee" ? "Shopee" : "TikTok"] += s.gmv;
     for (const c of splitByOwner(lives, spans)) {
       for (const x of c.rows) {
-        if (!x.owner) continue;
+        if (!x.owner || x.owner === "In house") continue;
         const app = appOf(c.channel);
         rest[app] -= x.gmv;
         if (hasBudget(x.owner) && !see.agency) continue;
@@ -182,7 +182,7 @@ export function costRows({ summary, plan, rates, sessions, spans, cut, see, shee
         r.gmv = (r.gmv ?? 0) + x.gmv;
       }
     }
-    for (const app of ["TikTok", "Shopee"] as const) if (rest[app] >= 0.5) rowOf(app, null).gmv = rest[app];
+    for (const app of ["TikTok", "Shopee"] as const) if (rest[app] >= 0.5) rowOf(app, app === "TikTok" ? null : "In house").gmv = rest[app];
   }
 
   return {

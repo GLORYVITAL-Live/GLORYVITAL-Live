@@ -96,13 +96,17 @@ describe("GMV", () => {
     expect(rows.find((r) => r.owner === "TDH")?.gmv).toBeCloseTo(700);
     expect(rows.find((r) => !r.owner)?.gmv).toBeCloseTo(350);
   });
-  test("Shopee: นอกแพลน = แถวไม่อยู่ในแพลน อยู่ท้ายสุด", () => {
+  test("Shopee: ไม่ใช่ Agency = In house (ทั้งในแพลน In house และนอกแพลน) ไม่มีแถวไม่อยู่ในแพลน", () => {
+    const inHouse = plan("In house", "2026-11-01", "06:00", "10:00", "Shopee");
     const { rows } = run({
-      plan: [infinite], spans: [spanRow(infinite)], rates: new Map([["Infinite", 900]]),
-      sessions: [live("2026-11-01", "10:30", 500, "Shopee", "x"), live("2026-11-01", "15:00", 200, "Shopee", "x")],
+      plan: [infinite, inHouse], spans: [spanRow(infinite), spanRow(inHouse)], rates: new Map([["Infinite", 900]]),
+      sessions: [live("2026-11-01", "10:30", 500, "Shopee", "x"), live("2026-11-01", "15:00", 200, "Shopee", "x"), live("2026-11-01", "07:00", 100, "Shopee", "x")],
     });
-    expect(rows.map((r) => r.label)).toEqual(["Agency Infinite", "ไม่อยู่ในแพลน"]);
-    expect(rows[1].gmv).toBeCloseTo(200);
+    expect(rows.map((r) => [r.label, r.gmv])).toEqual([["In house", 300], ["Agency Infinite", 500]]);
+  });
+  test("Shopee เดือนที่ยังไม่มีแพลนกลุ่ม: ยอดทั้งหมด = In house", () => {
+    const { rows } = run({ sessions: [live("2026-11-01", "15:00", 200, "Shopee", "x")] });
+    expect(rows.map((r) => [r.app, r.label, r.gmv])).toEqual([["Shopee", "In house", 200]]);
   });
   test("ไลฟ์หลังจุดตัดไม่นับ", () => {
     const { rows } = run({ sessions: [live("2026-11-01", "09:00", 100), live("2026-11-20", "09:00", 900)] });

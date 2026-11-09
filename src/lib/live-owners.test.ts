@@ -1,6 +1,6 @@
 // เทสแยกยอดไลฟ์ตามกลุ่มจากเวลาในแพลน (bun test)
 import { describe, expect, test } from "bun:test";
-import { LIVE_OWNER_OURS, ownerShares, ownerSpanOf, ownerTrend, splitByOwner } from "@/lib/live-owners";
+import { AGENCY_OURS, agencyTrend, LIVE_OWNER_OURS, mergePlatforms, ownerShares, ownerSpanOf, splitByOwner } from "@/lib/live-owners";
 import type { LiveSession } from "@/lib/live-stats";
 
 const VITAL = "7126874351866037275", SKIN = "7081240278438429722";
@@ -51,6 +51,11 @@ describe("ไลฟ์ของกลุ่มไหน", () => {
     expect(ownerShares(bkk("2026-11-03", "20:00"), 0, tdh)).toEqual([{ owner: "TDH", share: 1 }]);
     expect(ownerShares(bkk("2026-11-03", "10:00"), 0, tdh)).toEqual([{ owner: null, share: 1 }]);
   });
+  test("ไลฟ์ 0 นาที เปิดก่อนเวลาแพลนไม่เกิน 10 นาที = กลุ่มของแพลนนั้น · ใกล้หมดแพลนสุดท้ายยังเป็นกลุ่มเดิม", () => {
+    expect(ownerShares(bkk("2026-11-03", "19:29"), 0, tdh)).toEqual([{ owner: "TDH", share: 1 }]);
+    expect(ownerShares(bkk("2026-11-03", "19:15"), 0, tdh)).toEqual([{ owner: null, share: 1 }]);
+    expect(ownerShares(bkk("2026-11-03", "23:25"), 0, tdh)).toEqual([{ owner: "TDH", share: 1 }]);
+  });
   test("ไลฟ์สั้นกว่า 20 นาที: นับกลุ่มที่ซ้อนเกินครึ่ง", () => {
     expect(ownerShares(bkk("2026-11-03", "19:25"), 15 * 60, tdh)).toEqual([{ owner: "TDH", share: 1 }]);
   });
@@ -68,13 +73,18 @@ describe("แยกยอดตามกลุ่ม", () => {
     expect(c).toMatchObject({ channel: "GLORY MALL", label: "GLORY VITAL", lives: 2, sec: 480 * 60, gmv: 143000, splitLives: 0 });
     expect(c.rows.map((r) => [r.label, r.gmv, r.orders, r.lives])).toEqual([["Agency TDH", 78000, 20, 1], ["ของเรา", 65000, 10, 1]]);
   });
-  test("Shopee: ไลฟ์คร่อมสองกลุ่มแบ่งตามนาที นอกแพลนไว้ท้าย และยอดรวมเท่าเดิม", () => {
+  test("Shopee: ไลฟ์คร่อมสองกลุ่มแบ่งตามนาที · นอกแพลน = In house · ยอดรวมเท่าเดิม", () => {
     const [c] = splitByOwner([sp("2026-11-01", "10:00", 480, 100000), sp("2026-11-02", "06:00", 480, 30000), sp("2026-11-03", "06:00", 60, 5000)], spans);
-    expect(c.rows.map((r) => [r.label, r.gmv])).toEqual([["MCN", 50000], ["Agency Infinite", 50000], ["In house", 30000], ["ไม่อยู่ในแพลน", 5000]]);
+    expect(c.rows.map((r) => [r.label, r.gmv])).toEqual([["MCN", 50000], ["Agency Infinite", 50000], ["In house", 35000]]);
     expect(c).toMatchObject({ lives: 3, splitLives: 1, splitGmv: 100000 });
     expect(c.rows.reduce((a, r) => a + r.gmv, 0)).toBe(c.gmv);
     expect(c.rows.reduce((a, r) => a + r.sec, 0)).toBe(c.sec);
     expect(c.rows.find((r) => r.label === "MCN")!.lives).toBe(1);
+  });
+  test("Shopee: คร่อมแพลน In house กับนอกแพลน = In house กลุ่มเดียว ไม่นับเป็นไลฟ์คร่อมกลุ่ม", () => {
+    const [c] = splitByOwner([sp("2026-11-02", "12:00", 240, 8000)], spans);
+    expect(c.rows.map((r) => [r.label, r.gmv, r.lives])).toEqual([["In house", 8000, 1]]);
+    expect(c.splitLives).toBe(0);
   });
   test("ช่องที่ไม่มีแพลนกลุ่มไม่แสดง / ไม่มีแพลนเลย = ว่าง", () => {
     expect(splitByOwner([live("TikTok", SKIN, "2026-11-03", "09:30", 120, 1000)], spans)).toEqual([]);
@@ -92,31 +102,56 @@ describe("แยกยอดตามกลุ่ม", () => {
   });
 });
 
-describe("แยกกลุ่มทีละช่วงสำหรับกราฟ", () => {
+describe("แยก Agency ทีละช่วงสำหรับกราฟ (แท่ง TikTok | แท่ง Shopee)", () => {
   const owned = (t: LiveSession, liveOwner: string): LiveSession => ({ ...t, liveOwner });
   const oct = [owned(tt("2026-10-15", "09:30", 600, 60000), LIVE_OWNER_OURS), owned(tt("2026-10-16", "19:30", 240, 40000), "TDH")];
   const sep = [owned(tt("2026-09-15", "09:30", 120, 10000), LIVE_OWNER_OURS)];
   test("GMV / ชม. / GMV ต่อชม. ต่อช่วง · ช่วงที่กลุ่มไม่มีไลฟ์ = null · ไม่มีไลฟ์ทั้งช่วงก็ยังเรียงตามช่วง", () => {
-    const [c] = ownerTrend([sep, oct, []], []);
-    expect(c).toMatchObject({ channel: "GLORY MALL", label: "GLORY VITAL" });
-    expect(c.owners.map((o) => o.label)).toEqual(["ของเรา", "Agency TDH"]);
-    expect(c.owners[0]).toMatchObject({ gmv: [10000, 60000, null], hours: [2, 10, null], perHour: [5000, 6000, null] });
-    expect(c.owners[1]).toMatchObject({ gmv: [null, 40000, null], hours: [null, 4, null], perHour: [null, 10000, null] });
+    const res = agencyTrend([sep, oct, []], []);
+    expect(res.map((a) => [a.platform, a.key, a.label])).toEqual([["TikTok", AGENCY_OURS, "ของเรา"], ["TikTok", "TDH", "Agency TDH"]]);
+    expect(res[0]).toMatchObject({ gmv: [10000, 60000, null], hours: [2, 10, null], perHour: [5000, 6000, null] });
+    expect(res[1]).toMatchObject({ gmv: [null, 40000, null], hours: [null, 4, null], perHour: [null, 10000, null] });
   });
-  test("ลำดับกลุ่มคงที่ ไม่เปลี่ยนตามยอด (ทีมเราล่างสุด)", () => {
-    const small = [owned(tt("2026-10-15", "09:30", 60, 1), LIVE_OWNER_OURS), owned(tt("2026-10-16", "19:30", 60, 999), "TDH"), owned(tt("2026-10-17", "19:30", 60, 5000), "MCN")];
-    expect(ownerTrend([small], [])[0].owners.map((o) => o.owner)).toEqual([null, "TDH", "MCN"]);
+  describe("สองแพลตฟอร์ม", () => {
+    const spans = [
+      plan("MCN", "Shopee", "2026-11-01", "06:00", "10:00"), plan("In house", "Shopee", "2026-11-01", "10:00", "14:00"),
+      plan("Infinite", "Shopee", "2026-11-01", "14:00", "18:00"),
+    ];
+    const list = [
+      owned(tt("2026-11-01", "09:30", 60, 100), LIVE_OWNER_OURS), owned(tt("2026-11-01", "19:30", 60, 200), "TDH"), owned(tt("2026-11-01", "21:30", 60, 300), "MCN"),
+      sp("2026-11-01", "06:00", 240, 1000), sp("2026-11-01", "10:00", 240, 2000), sp("2026-11-01", "14:00", 240, 3000), sp("2026-11-01", "20:00", 60, 4000),
+      live("TikTok", SKIN, "2026-11-01", "12:00", 60, 5000),
+    ];
+    test("แยกแท่งตามแพลตฟอร์ม TikTok ก่อน · ในแท่งเรียงคงที่ ทีมเราล่างสุด · ยอดต่อแท่งเท่ายอดจริงของแพลตฟอร์ม", () => {
+      const res = agencyTrend([list], spans);
+      // ไม่ใช่ Agency = ทีมเรา: TikTok ของเรา = 100 + Skin Expert 5000 · Shopee In house = แพลน In house 2000 + นอกแพลน 4000
+      expect(res.map((a) => [a.platform, a.label, a.gmv[0]])).toEqual([
+        ["TikTok", "ของเรา", 5100], ["TikTok", "Agency TDH", 200], ["TikTok", "MCN", 300],
+        ["Shopee", "In house", 6000], ["Shopee", "MCN", 1000], ["Shopee", "Agency Infinite", 3000],
+      ]);
+      expect(res.find((a) => a.label === "In house")!.key).toBe(AGENCY_OURS);
+      for (const p of ["TikTok", "Shopee"]) {
+        expect(res.filter((a) => a.platform === p).reduce((a, x) => a + x.gmv[0]!, 0)).toBe(list.filter((s) => s.platform === p).reduce((a, s) => a + s.gmv, 0));
+      }
+    });
+    test("รวมแพลตฟอร์มสำหรับกราฟเส้น: ของเรา + In house / MCN สองแพลตฟอร์ม = เส้นเดียว · GMV/ชม. คิดจากผลรวม", () => {
+      const res = mergePlatforms(agencyTrend([list], spans));
+      expect(res.map((a) => [a.label, a.gmv[0]])).toEqual([["ของเรา", 11100], ["Agency TDH", 200], ["MCN", 1300], ["Agency Infinite", 3000]]);
+      expect(res.find((a) => a.label === "MCN")).toMatchObject({ hours: [5], perHour: [260] });
+    });
   });
-  test("Shopee: นอกแพลนอยู่บนสุด · TikTok มาก่อน Shopee · ยอดรวมต่อช่วงเท่า splitByOwner", () => {
-    const spans = [plan("MCN", "Shopee", "2026-11-01", "06:00", "14:00")];
-    const list = [sp("2026-11-01", "07:00", 60, 500), sp("2026-11-01", "20:00", 60, 700), owned(tt("2026-11-02", "09:30", 60, 100), LIVE_OWNER_OURS)];
-    const res = ownerTrend([list], spans);
-    expect(res.map((c) => c.channel)).toEqual(["GLORY MALL", "Shopee"]);
-    expect(res[1].owners.map((o) => [o.label, o.gmv[0]])).toEqual([["MCN", 500], ["ไม่อยู่ในแพลน", 700]]);
+  test("Shopee เดือนที่ไม่มีข้อมูลกลุ่มเลย (เช่น ก่อน พ.ย.) = In house ทั้งหมด (ยอดรวมยังครบ)", () => {
+    const res = agencyTrend([[sp("2026-10-15", "07:00", 60, 9000)], []], []);
+    expect(res).toEqual([{ platform: "Shopee", key: AGENCY_OURS, label: "In house", gmv: [9000, null], hours: [1, null], perHour: [9000, null] }]);
+  });
+  test("TikTok ช่องที่ไม่มีแพลนกลุ่ม (Cherry, Skin Expert, บัญชีอื่น) = ของเรา", () => {
+    const CHERRY = "6723716820899365890";
+    const res = agencyTrend([[live("TikTok", CHERRY, "2026-11-01", "19:29", 240, 14015), live("TikTok", SKIN, "2026-11-02", "09:28", 240, 23143), live("TikTok", "ไม่รู้จัก", "2026-11-02", "10:00", 60, 50)]], []);
+    expect(res.map((a) => [a.key, a.label, a.gmv[0]])).toEqual([[AGENCY_OURS, "ของเรา", 37208]]);
   });
   test("ไลฟ์ 0 นาที: มี GMV แต่ไม่มี GMV/ชม.", () => {
-    const [c] = ownerTrend([[owned(tt("2026-10-15", "09:30", 0, 500), "TDH")]], []);
-    expect(c.owners[0]).toMatchObject({ gmv: [500], hours: [0], perHour: [null] });
+    const [a] = agencyTrend([[owned(tt("2026-10-15", "09:30", 0, 500), "TDH")]], []);
+    expect(a).toMatchObject({ gmv: [500], hours: [0], perHour: [null] });
   });
 });
 

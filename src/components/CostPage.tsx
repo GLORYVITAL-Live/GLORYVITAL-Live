@@ -122,8 +122,6 @@ export function CostPage() {
 
   const noRate = report.rows.filter((r) => r.owner && r.owner !== "In house" && !r.rate && !r.sources.agency);
   const groups = (["TikTok", "Shopee"] as CostApp[]).map((app) => ({ app, rows: report.rows.filter((r) => r.app === app) })).filter((g) => g.rows.length);
-  // ยอดขายไม่อยู่ในแพลน แต่ไม่มี Cost ของ Shopee เลย = อัตราส่วนรวมต่ำกว่าจริง
-  const shopeeNoCost = report.rows.some((r) => !r.owner && r.app === "Shopee") && !costTotals(report.rows.filter((r) => r.app === "Shopee")).cost;
   // มี Cost ของกลุ่มแต่แยก GMV ไม่ได้ (เดือนที่ยังไม่มีแพลนกลุ่ม)
   const noGroupGmv = see.gmv && report.rows.some((r) => r.owner && rowCost(r) && r.gmv === null);
 
@@ -215,7 +213,6 @@ export function CostPage() {
             ตัวเลขที่ระบบคำนวณ: ค่าจ้าง Mc / Admin สูตรเดียวกับสรุปรายเดือน · งบ Agency = เรท × ชั่วโมงในแพลน ไม่ใช่ยอดที่จ่ายจริง
             {see.gmv ? " · GMV แยกตามเวลาในแพลน ไลฟ์ที่คร่อมหลายกลุ่มแบ่งตามนาที (≈ ประมาณ)" : ""}
             {noGroupGmv ? <><br />เดือนนี้ยังไม่มีแพลนกลุ่ม จึงแยก GMV รายกลุ่มไม่ได้ ดู Cost/GMV ที่บรรทัด TikTok / Shopee แทน</> : null}
-            {shopeeNoCost ? <><br />ยอด &ldquo;ไม่อยู่ในแพลน&rdquo; ไม่มี Cost ในระบบ Cost/GMV รวมจึงต่ำกว่าจริง</> : null}
             <br />ไม่รวมเงินเดือน Mc / Admin ประจำ เพราะระบบไม่มีตัวเลขนี้{report.salaried ? ` (${report.salaried.toLocaleString("th-TH")} คิว)` : ""}
             {report.unrated ? <span className="font-semibold text-warning-foreground"> · มี {report.unrated.toLocaleString("th-TH")} คิวที่ยังไม่ได้ตั้งค่าจ้าง จึงยังไม่อยู่ในยอด</span> : null}
           </p>

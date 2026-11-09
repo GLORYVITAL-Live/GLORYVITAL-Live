@@ -20,8 +20,11 @@ export function TableView({ title, children }: { title: string; children: ReactN
   );
 }
 
-/** faded = แท่งที่ยังไม่ใช่ตัวเลขจริง (เช่น คิวที่จองไว้ข้างหน้า) วาดสีจางของชุดเดียวกัน — ใส่ใน Legend ด้วย fadedColor() */
-export type Series = { name: string; color: string; values: (number | null)[]; faded?: boolean[] };
+/**
+ * faded = แท่งที่ยังไม่ใช่ตัวเลขจริง (เช่น คิวที่จองไว้ข้างหน้า) วาดสีจางของชุดเดียวกัน — ใส่ใน Legend ด้วย fadedColor()
+ * stack = ชื่อกองของแท่งซ้อน (เช่น TikTok / Shopee): หลายกอง = วางแท่งซ้อนคู่กันในแต่ละกลุ่ม
+ */
+export type Series = { name: string; color: string; values: (number | null)[]; faded?: boolean[]; stack?: string };
 
 /** สีจางของชุด (แท่งที่ faded + จุดใน Legend ใช้สีเดียวกัน) */
 export const fadedColor = (color: string) => `color-mix(in srgb, ${color} 38%, transparent)`;
@@ -73,6 +76,7 @@ export function Legend({ series, line = false }: { series: Pick<Series, "name" |
  * กราฟแท่งแนวตั้ง 1–2 ชุด (ชุดที่ 2 = ช่วงเทียบ) ชี้ที่กลุ่มเพื่อดูตัวเลข
  *   highlight = ลำดับกลุ่มที่เน้น (ชุดเดียว: กลุ่มอื่นจางลง)
  *   stacked = แท่งเดียวซ้อนทุกชุด (ใช้กับค่าที่บวกกันได้เท่านั้น) กล่องตัวเลขบอกสัดส่วน + ยอดรวม
+ *     ชุดมี stack หลายค่า = แท่งซ้อนวางคู่กัน (ตามลำดับที่เจอ) แต่ละแท่งซ้อนเฉพาะชุดของกองตัวเอง กล่องตัวเลขแยกกอง + ยอดต่อกอง
  *   compare = false: 2 ชุดไม่ใช่ช่วงที่เทียบกัน (เช่น TikTok / Shopee) กล่องตัวเลขไม่แสดง % ที่เปลี่ยน
  */
 export function BarChart({ categories, tooltipTitles, series, format, formatAxis, highlight, height = 220, label, stacked = false, compare = true }: {
@@ -92,7 +96,12 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
   const [hover, setHover] = useState<number | null>(null);
   const n = categories.length;
   const totalAt = (i: number) => series.reduce((a, s) => a + (s.values[i] ?? 0), 0);
-  const max = stacked ? Math.max(0, ...categories.map((_, i) => totalAt(i))) : Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0)));
+  const stacks = stacked ? [...new Set(series.map((s) => s.stack ?? ""))] : [];
+  const inStack = (st: string) => series.filter((s) => (s.stack ?? "") === st);
+  const stackTotal = (st: string, i: number) => inStack(st).reduce((a, s) => a + (s.values[i] ?? 0), 0);
+  const max = stacked
+    ? Math.max(0, ...categories.flatMap((_, i) => stacks.map((st) => stackTotal(st, i))))
+    : Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0)));
   const ticks = niceTicks(max);
   const top = ticks[ticks.length - 1] || 1;
 
@@ -100,12 +109,25 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
   const plotW = Math.max(0, width - pad.l - pad.r);
   const plotH = height - pad.t - pad.b;
   const groupW = n ? plotW / n : 0;
-  const k = stacked ? 1 : series.length;
+  const k = stacked ? Math.max(1, stacks.length) : series.length;
   const gap = 2;
-  const barW = Math.max(2, Math.min(28, (groupW * 0.72 - gap * (k - 1)) / k));
+  // แท่งคู่: ใช้ที่ในกลุ่มมากขึ้น (กราฟรายวันบนมือถือแท่งจะได้ไม่บางเกิน)
+  const barW = Math.max(2, Math.min(28, (groupW * (k > 1 ? 0.84 : 0.72) - gap * (k - 1)) / k));
   const y = (v: number) => pad.t + plotH - (v / top) * plotH;
   // ป้ายแกนล่างเบียดกัน = แสดงเว้นช่อง
   const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(plotW / 44))));
+  /** แถวในกล่องตัวเลข · total > 0 = แสดง % ของยอดนั้นด้วย */
+  const tooltipRow = (s: Series, total: number, key: string) => (
+    <div key={key} className="flex items-center justify-between gap-3">
+      <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+        <span className="size-2 rounded-[2px]" style={{ background: s.color }} aria-hidden />{s.name}
+      </span>
+      <span className="tabular-nums">
+        <span className="font-semibold">{format(s.values[hover ?? 0])}</span>
+        {total ? <span className="text-muted-foreground"> · {(((s.values[hover ?? 0] ?? 0) / total) * 100).toFixed(0)}%</span> : null}
+      </span>
+    </div>
+  );
 
   return (
     <div ref={ref} className="relative w-full select-none" onMouseLeave={() => setHover(null)}>
@@ -123,27 +145,32 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
             // แท่งซ้อน: ไม่จางตาม highlight (สีแยกแพลตฟอร์มต้องอ่านออกทุกแท่ง) เน้นด้วยชื่อตัวหนาแทน
             const dim = (hover !== null && hover !== i) || (hover === null && highlight !== undefined && k === 1 && !stacked && highlight !== i);
             // ส่วนของแต่ละชุดในแท่งซ้อน (ล่าง -> บน) ส่วนบนสุดปลายมน คั่นด้วยช่องว่างสีพื้น 2px
-            let base = 0;
-            const parts = stacked ? series.flatMap((s) => {
-              const v = s.values[i] ?? 0;
-              const from = base;
-              base += v;
-              return v > 0 ? [{ name: s.name, color: s.color, top: y(from + v), bottom: y(from) }] : [];
-            }) : [];
+            const partsOf = (list: Series[]) => {
+              let base = 0;
+              return list.flatMap((s) => {
+                const v = s.values[i] ?? 0;
+                const from = base;
+                base += v;
+                return v > 0 ? [{ name: s.name, color: s.color, top: y(from + v), bottom: y(from) }] : [];
+              });
+            };
             return (
               <g key={i}>
                 {hover === i ? <rect x={gx} y={pad.t} width={groupW} height={plotH} className="fill-muted" /> : null}
-                {stacked ? (
-                  <g className="bar-grow" opacity={dim ? 0.45 : 1} style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}>
-                    {parts.map((p, j) => {
-                      const bx = gx + (groupW - barW) / 2;
-                      const h = Math.max(1, p.bottom - p.top - (j > 0 ? gap : 0));
-                      return j === parts.length - 1
-                        ? <path key={p.name} d={barPath(bx, p.top, barW, h)} fill={p.color} />
-                        : <rect key={p.name} x={bx} y={p.top} width={barW} height={h} fill={p.color} />;
-                    })}
-                  </g>
-                ) : series.map((s, j) => {
+                {stacked ? stacks.map((st, si) => {
+                  const parts = partsOf(inStack(st));
+                  const bx = gx + (groupW - inner) / 2 + si * (barW + gap);
+                  return (
+                    <g key={st} className="bar-grow" opacity={dim ? 0.45 : 1} style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}>
+                      {parts.map((p, j) => {
+                        const h = Math.max(1, p.bottom - p.top - (j > 0 ? gap : 0));
+                        return j === parts.length - 1
+                          ? <path key={p.name} d={barPath(bx, p.top, barW, h)} fill={p.color} />
+                          : <rect key={p.name} x={bx} y={p.top} width={barW} height={h} fill={p.color} />;
+                      })}
+                    </g>
+                  );
+                }) : series.map((s, j) => {
                   const v = s.values[i];
                   if (v === null || v <= 0) return null;
                   const bx = gx + (groupW - inner) / 2 + j * (barW + gap);
@@ -175,18 +202,19 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
             : { left: pad.l + (hover + 1) * groupW + 6 }}
         >
           <div className="mb-1 font-semibold">{tooltipTitles?.[hover] ?? categories[hover]}</div>
+          {stacks.length > 1 ? stacks.map((st) => {
+            // แท่งซ้อนหลายกอง: หัวข้อกอง + ยอดกอง แล้วชุดในกอง (% ของกอง)
+            const list = inStack(st).filter((s) => s.values[hover] !== null);
+            return list.length ? (
+              <div key={st} className="mt-1 first:mt-0">
+                <div className="flex items-center justify-between gap-3 font-semibold">
+                  <span>{st}</span><span className="tabular-nums">{format(stackTotal(st, hover))}</span>
+                </div>
+                {list.map((s) => tooltipRow(s, stackTotal(st, hover), `${st}|${s.name}`))}
+              </div>
+            ) : null;
+          }) : (stacked ? series.filter((s) => s.values[hover] !== null) : series).map((s) => tooltipRow(s, stacked && series.length > 1 ? totalAt(hover) : 0, s.name))}
           {/* แท่งซ้อน: ชุดที่ไม่มีค่าในกลุ่มนี้ไม่ต้องแสดง (เช่น MCN ที่ไลฟ์แค่บางเดือน) */}
-          {(stacked ? series.filter((s) => s.values[hover] !== null) : series).map((s) => (
-            <div key={s.name} className="flex items-center justify-between gap-3">
-              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <span className="size-2 rounded-[2px]" style={{ background: s.color }} aria-hidden />{s.name}
-              </span>
-              <span className="tabular-nums">
-                <span className="font-semibold">{format(s.values[hover])}</span>
-                {stacked && series.length > 1 && totalAt(hover) ? <span className="text-muted-foreground"> · {(((s.values[hover] ?? 0) / totalAt(hover)) * 100).toFixed(0)}%</span> : null}
-              </span>
-            </div>
-          ))}
           {stacked && series.length > 1 ? (
             <div className="mt-1 flex items-center justify-between gap-3 border-t pt-1">
               <span className="text-muted-foreground">รวม</span><span className="font-semibold tabular-nums">{format(totalAt(hover))}</span>

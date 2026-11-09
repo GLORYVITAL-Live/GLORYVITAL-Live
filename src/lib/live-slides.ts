@@ -6,7 +6,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type PptxGenJS from "pptxgenjs";
 import { analyze } from "@/lib/live-insights";
 import { platformSeries, totalSeries } from "@/lib/live-lines";
-import type { ChannelSplit } from "@/lib/live-owners";
+import { mergePlatforms, type AgencyTrend, type ChannelSplit } from "@/lib/live-owners";
 import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Totals } from "@/lib/live-stats";
 import type { targetReport } from "@/lib/live-targets";
 
@@ -41,7 +41,12 @@ export type CompareDeckInput = {
   target?: { report: ReturnType<typeof targetReport>; lastDay: number; names: Map<string, string> };
   /** หน้าแยกตามกลุ่มผู้ไลฟ์ (src/lib/live-owners.ts) */
   owners?: ChannelSplit[];
+  /** หน้า GMV แยก Agency (แท่งคู่ TikTok | Shopee ซ้อนตามกลุ่ม เหมือนแท็บ "แยก Agency" บนเว็บ) */
+  agency?: AgencyChart[];
 };
+
+/** กราฟแยก Agency 1 หน้า · lineTitle = เพิ่มหน้ากราฟเส้น GMV/ชม. เส้นละกลุ่ม */
+export type AgencyChart = { title: string; labels: string[]; trend: AgencyTrend[]; lineTitle?: string };
 
 // โทนแบรนด์ (ตรงกับเว็บ): ชมพู = ช่วงหลัก / ฟ้า = ช่วงเทียบ
 const C = {
@@ -529,6 +534,93 @@ function addOwnersSlide(pres: PptxGenJS, channels: ChannelSplit[]) {
   });
 }
 
+/** สีกลุ่ม (เหมือนเว็บ: ทีมเรา / Agency ใช้สีเดียวกับหน้า Cost · กลุ่มที่ยังไม่มีสี = เทา) */
+const AGENCY_HEX: Record<string, string> = { ours: "EB6834", TDH: "6250D6", MCN: "1BAF7A", Infinite: C.blue };
+const agencyHex = (key: string) => AGENCY_HEX[key] ?? C.muted;
+
+/**
+ * หน้า GMV แยก Agency: แท่งคู่ TikTok | Shopee แต่ละแท่งซ้อนตามกลุ่ม + ตาราง GMV รวมของแต่ละกลุ่มในช่วงนี้ (ขวา)
+ *   วาดด้วยรูปทรงทั้ง PowerPoint และ Google Slides (กราฟจริงของ PowerPoint ทำแท่งคู่ที่ซ้อนในกราฟเดียวไม่ได้)
+ *   ไม่มีไลฟ์เลย = ไม่มีหน้านี้ · lineTitle = ต่อด้วยหน้ากราฟเส้น GMV/ชม. (รวมแพลตฟอร์ม เหมือนเว็บ)
+ */
+function addAgencySlides(pres: PptxGenJS, target: ChartTarget, charts: AgencyChart[] | undefined) {
+  for (const c of charts ?? []) {
+    if (!c.trend.some((t) => t.gmv.some((v) => v !== null))) continue;
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText(c.title, { placeholder: "title" });
+    const text = (t: string, opts: PptxGenJS.TextPropsOptions) => s.addText(t, { fontFace: FONT, margin: 0, isTextBox: true, ...opts });
+    const platforms = [...new Set(c.trend.map((t) => t.platform))];
+    const stacks = platforms.map((p) => c.trend.filter((t) => t.platform === p));
+    // ตำนานแยกตามแท่ง: บอกว่าแท่งซ้าย / ขวาคือแพลตฟอร์มไหน
+    stacks.forEach((st, i) => {
+      const y = 1.3 + i * 0.36;
+      text(`${platforms[i]}${platforms.length > 1 ? (i === 0 ? " (แท่งซ้าย)" : " (แท่งขวา)") : ""}`, { x: M, y, w: 1.9, h: 0.32, fontSize: 12, bold: true, color: C.text, valign: "middle" });
+      shapeLegend(pres, s, { x: M + 1.9, y, w: 0 }, st.map((t) => ({ name: t.label, color: agencyHex(t.key) })));
+    });
+
+    // กราฟ (ซ้าย)
+    const x = M, y = 1.4 + platforms.length * 0.36, w = 8.4, h = 6.35 - y;
+    const n = c.labels.length, k = stacks.length;
+    const totalOf = (st: AgencyTrend[], i: number) => st.reduce((a, t) => a + (t.gmv[i] ?? 0), 0);
+    const showValue = n <= 6;
+    const ticks = niceTicks(Math.max(0, ...c.labels.flatMap((_, i) => stacks.map((st) => totalOf(st, i)))) * (showValue ? 1.15 : 1.02));
+    const top = ticks[ticks.length - 1] || 1;
+    const px = x + 0.85, pw = w - 0.9, ph = h - 0.45;
+    const yOf = (v: number) => y + ph - (v / top) * ph;
+    for (const t of ticks) {
+      s.addShape(pres.ShapeType.line, { x: px, y: yOf(t), w: pw, h: 0, line: { color: t ? C.grid : C.muted, width: t ? 0.75 : 1 } });
+      text(compact(t), { x, y: yOf(t) - 0.13, w: 0.78, h: 0.26, fontSize: 11, color: C.muted, align: "right", valign: "middle" });
+    }
+    const gw = pw / Math.max(1, n), bw = Math.min(0.9, (gw * 0.8) / k);
+    const every = Math.max(1, Math.ceil(n / Math.floor(pw / 0.55)));
+    const valueSize = bw >= 0.75 ? 12 : bw >= 0.55 ? 10 : 9;
+    c.labels.forEach((label, i) => {
+      const gx = px + i * gw + (gw - bw * k) / 2;
+      if (i % every === 0) text(label, { x: px + i * gw, y: y + ph + 0.08, w: gw, h: 0.32, fontSize: n > 12 ? 10 : 12, color: C.text, align: "center", valign: "top", fit: "shrink" });
+      stacks.forEach((st, j) => {
+        let base = 0;
+        for (const t of st) {
+          const v = t.gmv[i] ?? 0;
+          const color = agencyHex(t.key);
+          if (v > 0) s.addShape(pres.ShapeType.rect, { x: gx + j * bw, y: yOf(base + v), w: bw - 0.03, h: (v / top) * ph, fill: { color }, line: { color, width: 0 } });
+          base += v;
+        }
+        if (showValue && base > 0) text(compact(base), { x: gx + j * bw - 0.15, y: yOf(base) - 0.3, w: bw + 0.27, h: 0.28, fontSize: valueSize, bold: true, color: C.text, align: "center", valign: "bottom" });
+      });
+    });
+
+    // ตาราง GMV รวมทั้งช่วงของแต่ละกลุ่ม (ขวา) · สัดส่วน = ของแพลตฟอร์มนั้น
+    const sum = (t: AgencyTrend) => t.gmv.reduce<number>((a, v) => a + (v ?? 0), 0);
+    const head = (t: string, align: "left" | "right" = "right") => ({ text: t, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
+    const rows: PptxGenJS.TableRow[] = [[head("กลุ่ม", "left"), head("GMV"), head("สัดส่วน")]];
+    stacks.forEach((st, i) => {
+      const total = st.reduce((a, t) => a + sum(t), 0);
+      const band = { bold: true, fill: { color: C.tint } };
+      rows.push([{ text: platforms[i], options: { ...band, align: "left" } }, { text: fmt("gmv", total), options: { ...band, align: "right" } }, { text: "100%", options: { ...band, align: "right" } }]);
+      for (const t of st) {
+        rows.push([
+          { text: `■ ${t.label}`, options: { align: "left", color: agencyHex(t.key) } },
+          { text: fmt("gmv", sum(t)), options: { align: "right" } },
+          { text: total ? `${((sum(t) / total) * 100).toFixed(1)}%` : "-", options: { align: "right" } },
+        ]);
+      }
+    });
+    s.addTable(rows, {
+      x: M + 8.7, y: 1.4, w: W - 2 * M - 8.7, colW: [1.53, 1.2, 0.8], fontSize: 11, fontFace: FONT, color: C.text, rowH: Math.min(0.4, 4.9 / rows.length),
+      border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.06, 0, 0.06],
+    });
+    const note = [
+      "ไลฟ์ที่ไม่ใช่ Agency = ทีมเรา: TikTok = ของเรา (รวม Cherry, Skin Expert) · Shopee = In house",
+      c.labels.some((l) => l.endsWith("*")) ? "* ยังไม่จบเดือน" : "",
+    ].filter(Boolean).join(" · ");
+    if (note) text(note, { x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fit: "shrink" });
+
+    if (c.lineTitle) {
+      addTrendSlide(pres, target, c.lineTitle, c.labels, mergePlatforms(c.trend).map((t) => ({ name: t.label, color: agencyHex(t.key), values: t.perHour })));
+    }
+  }
+}
+
 function addTop5Slide(pres: PptxGenJS, lives: LiveSession[], name: string) {
   if (!lives.length) return;
   const s = pres.addSlide({ masterName: "CONTENT" });
@@ -820,8 +912,9 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     });
   }
 
-  // 7.5) แยกตามกลุ่มผู้ไลฟ์ (หน้ารายเดือน)
+  // 7.5) แยกตามกลุ่มผู้ไลฟ์ (หน้ารายเดือน) + กราฟแยก Agency
   if (o.owners) addOwnersSlide(pres, o.owners);
+  addAgencySlides(pres, target, o.agency);
 
   // 8) Top 5 ไลฟ์ของช่วงหลัก
   addTop5Slide(pres, o.a, o.aName);
@@ -861,6 +954,8 @@ export type MultiDeckInput = {
   exportedAt: string;
   /** โหมดช่วงวันเดียวกันหลายเดือน: รายวันของแต่ละเดือน (labels = "วันที่ 19" · byDay = เดือน -> ไลฟ์ของแต่ละวัน) */
   daily?: { labels: string[]; byDay: Map<string, LiveSession[][]> };
+  /** หน้า GMV แยก Agency (เหมือนแท็บ "แยก Agency" บนเว็บ) */
+  agency?: AgencyChart[];
 };
 
 /** ลำดับตัวชี้วัดของตารางเทียบหลายเดือน (เหมือนหน้าเว็บ / ไฟล์ส่งออก) */
@@ -1081,6 +1176,9 @@ export async function buildMultiDeck(o: MultiDeckInput, target: "pptx" | "gslide
     addTrendSlide(pres, target, "GMV แนวโน้มรายวันของแต่ละเดือน", dayLabels, lines("gmv"));
     addTrendSlide(pres, target, "GMV / ชม. แนวโน้มรายวันของแต่ละเดือน", dayLabels, lines("gmvPerHour"));
   }
+
+  // 6.5) GMV แยก Agency (แท่งคู่ TikTok | Shopee ซ้อนตามกลุ่ม) + GMV/ชม. เส้นละกลุ่ม
+  addAgencySlides(pres, target, o.agency);
 
   // 7) สรุปแยกตามบัญชี: GMV ทุกเดือน + เดือนหลัก vs เดือนอื่น + ไลฟ์ / GMV ต่อชม. / CO ของเดือนหลัก (ไม่เกิน 4 เดือน)
   if (accounts.length) {

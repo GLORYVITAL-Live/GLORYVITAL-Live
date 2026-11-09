@@ -29,6 +29,6 @@ export function clashes(a: PlanSpan, b: PlanSpan) {
 /** slot ที่ทับกับ span (ไม่มี = null) */
 export const firstClash = (span: PlanSpan, others: PlanSpan[]) => others.find((o) => clashes(span, o)) ?? null;
 
-/** ชื่อเจ้าของในข้อความ (ของเรา / Agency TDH / In house / MCN) */
+/** ชื่อเจ้าของในข้อความ (ของเรา / Agency TDH / In house / MCN / Vis (KOL) ที่ไลฟ์ Shopee บางสล็อตตามชีตของทีม) */
 export const ownerText = (owner: string | null | undefined) =>
-  !owner ? "ของเรา" : owner === "In house" || owner === "MCN" ? owner : `Agency ${owner}`;
+  !owner ? "ของเรา" : owner === "In house" || owner === "MCN" ? owner : owner === "Vis" ? "Vis (KOL)" : `Agency ${owner}`;

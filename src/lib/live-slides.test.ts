@@ -1,7 +1,8 @@
 // เทสไฟล์สไลด์ (bun test): ต้องมีกราฟแท่ง + กราฟเส้นครบ ทั้ง PowerPoint (กราฟจริง) และ Google Slides (วาดด้วยรูปทรง)
 import { describe, expect, test } from "bun:test";
 import { strFromU8, unzipSync } from "fflate";
-import { buildCompareDeck, buildMultiDeck, type CompareDeckInput } from "@/lib/live-slides";
+import { AGENCY_OURS, type AgencyTrend } from "@/lib/live-owners";
+import { buildCompareDeck, buildMultiDeck, type AgencyChart, type CompareDeckInput } from "@/lib/live-slides";
 import type { LiveSession } from "@/lib/live-stats";
 
 const live = (d: string, t: string, gmv: number, platform = "TikTok", min = 60) => ({
@@ -127,6 +128,42 @@ describe("รายเดือน", () => {
     const { slides } = await open(await buildCompareDeck({ ...month, target: undefined, owners: [] }));
     expect(titled(slides, "เป้าหมาย GMV")).toBe(false);
     expect(titled(slides, "แยกตามกลุ่มผู้ไลฟ์")).toBe(false);
+  });
+});
+
+describe("แยก Agency", () => {
+  const row = (platform: "TikTok" | "Shopee", key: string, label: string, gmv: (number | null)[]): AgencyTrend => ({
+    platform, key, label, gmv, hours: gmv.map((v) => (v === null ? null : 2)), perHour: gmv.map((v) => (v === null ? null : v / 2)),
+  });
+  const chart: AgencyChart = {
+    title: "GMV แยก Agency", labels: ["ต.ค.", "พ.ย."], lineTitle: "GMV/ชม. แยก Agency",
+    trend: [
+      row("TikTok", AGENCY_OURS, "ของเรา", [5000, 6000]), row("TikTok", "TDH", "Agency TDH", [1000, 2000]),
+      row("Shopee", AGENCY_OURS, "In house", [7000, 3000]), row("Shopee", "Infinite", "Agency Infinite", [null, 4000]),
+    ],
+  };
+  const single: CompareDeckInput = { ...base, b: [], bName: "", bRange: "", single: true, time: hourly.map((t) => ({ ...t, b: [] })) };
+  test("แท่งคู่ซ้อน (วาดด้วยรูปทรง) + ตารางกลุ่ม + หน้ากราฟเส้น GMV/ชม. · ทั้ง PowerPoint และ Google Slides", async () => {
+    for (const target of ["pptx", "gslides"] as const) {
+      const { slides } = await open(await buildCompareDeck({ ...single, agency: [chart] }, target));
+      const page = slides.find((s) => s.includes(">GMV แยก Agency<"))!;
+      expect(page).toBeTruthy();
+      expect(page).toContain("TikTok (แท่งซ้าย)");
+      expect(page).toContain("Shopee (แท่งขวา)");
+      expect(page).toContain("In house");
+      expect(page).toContain("฿14,000"); // ตาราง: TikTok รวมทั้งช่วง
+      expect((page.match(/prst="rect"/g) ?? []).length).toBeGreaterThanOrEqual(6); // ส่วนของแท่ง 6 ส่วน (+ สี่เหลี่ยมในตำนาน)
+      expect(titled(slides, "GMV/ชม. แยก Agency")).toBe(true);
+    }
+  });
+  test("หลายเดือนก็มีหน้านี้ · ไม่มีไลฟ์เลย = ไม่มีหน้า · ไม่มีคำว่าไม่ระบุกลุ่ม", async () => {
+    const keys = ["2026-10", "2026-11"];
+    const byMonth = new Map(keys.map((k) => [k, [live(`${k}-05`, "09:00", 1000)]]));
+    const multi = { rangeText: "ต.ค.–พ.ย. 2026", keys, focus: "2026-11", label: (k: string) => k.slice(5), longLabel: (k: string) => k, byMonth, now: "2026-12", filterText: "ทุกบัญชี", exportedAt: "9 พ.ย. 2026" };
+    expect(titled((await open(await buildMultiDeck({ ...multi, agency: [chart] }))).slides, ">GMV แยก Agency<")).toBe(true);
+    const empty = { ...chart, trend: [row("Shopee", AGENCY_OURS, "In house", [null, null])] };
+    expect(titled((await open(await buildCompareDeck({ ...single, agency: [empty] }))).slides, "แยก Agency")).toBe(false);
+    expect(titled((await open(await buildCompareDeck({ ...single, agency: [chart] }))).slides, "ไม่ระบุกลุ่ม")).toBe(false);
   });
 });
 
