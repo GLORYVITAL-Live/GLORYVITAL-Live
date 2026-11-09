@@ -1,6 +1,6 @@
 // เทสแยกยอดไลฟ์ตามกลุ่มจากเวลาในแพลน (bun test)
 import { describe, expect, test } from "bun:test";
-import { AGENCY_OURS, agencyTrend, LIVE_OWNER_OURS, mergePlatforms, ownerShares, ownerSpanOf, splitByOwner } from "@/lib/live-owners";
+import { AGENCY_OURS, agencySharesOf, agencyTrend, LIVE_OWNER_OURS, mergePlatforms, ownerShares, ownerSpanOf, splitByOwner } from "@/lib/live-owners";
 import type { LiveSession } from "@/lib/live-stats";
 
 const VITAL = "7126874351866037275", SKIN = "7081240278438429722";
@@ -143,6 +143,14 @@ describe("แยก Agency ทีละช่วงสำหรับกรา�
   test("Shopee เดือนที่ไม่มีข้อมูลกลุ่มเลย (เช่น ก่อน พ.ย.) = In house ทั้งหมด (ยอดรวมยังครบ)", () => {
     const res = agencyTrend([[sp("2026-10-15", "07:00", 60, 9000)], []], []);
     expect(res).toEqual([{ platform: "Shopee", key: AGENCY_OURS, label: "In house", gmv: [9000, null], hours: [1, null], perHour: [9000, null] }]);
+  });
+  test("กลุ่มของแต่ละไลฟ์ (ใช้กรองตารางช่วงเวลา): คร่อมแพลนแบ่งตามนาที · ไม่มีข้อมูลกลุ่ม = ทีมเรา", () => {
+    const spans = [plan("MCN", "Shopee", "2026-11-01", "06:00", "10:00")];
+    const a = sp("2026-11-01", "08:00", 240, 1000), b = live("TikTok", SKIN, "2026-11-01", "12:00", 60, 50), c = owned(tt("2026-10-01", "19:30", 60, 70), "TDH");
+    const res = agencySharesOf([a, b, c], spans);
+    expect([...res.get(a)!]).toEqual([["MCN", 0.5], [AGENCY_OURS, 0.5]]);
+    expect([...res.get(b)!]).toEqual([[AGENCY_OURS, 1]]);
+    expect([...res.get(c)!]).toEqual([["TDH", 1]]);
   });
   test("TikTok ช่องที่ไม่มีแพลนกลุ่ม (Cherry, Skin Expert, บัญชีอื่น) = ของเรา", () => {
     const CHERRY = "6723716820899365890";

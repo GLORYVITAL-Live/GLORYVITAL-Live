@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FileSpreadsheetIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import {
   accountLabel, accountsOf, bkkIso, bkkLocal, bkkParts, filterSessions, fmtMetric, fromBkkLocal, METRICS, metricOf, monthOf, monthWindow, parseRows,
@@ -11,7 +11,9 @@ import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
 import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
-import { AGENCY_OURS, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
+import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop, type HeatCell } from "@/lib/live-heat";
+import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
+import { ownerText } from "@/lib/plan-clash";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { monthDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
 import { DatePicker } from "@/components/date-picker";
@@ -462,6 +464,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       </section>
 
       {cur.lives ? <LineSection month={month} sessions={byMonth.get(month)!} replay={replay} spans={owners.spans} /> : null}
+      {cur.lives ? <HeatSection title={`ช่วงเวลาไหนขายดี ${monthLabel(month)}`} sessions={byMonth.get(month)!} spans={owners.spans} /> : null}
       {cur.lives ? <OwnerTable owners={owners} sessions={byMonth.get(month)!} /> : null}
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
@@ -737,6 +740,8 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
         agency={{ trend: yearAgency, title: `GMV/ชม. รายเดือน ${aName} แยก Agency`, titles: curKeys.map(monthLabel) }}
       />
 
+      {cur.lives ? <HeatSection title={`ช่วงเวลาไหนขายดี ${aName}`} sessions={curList} spans={owners.spans} /> : null}
+
       {cur.lives ? <OwnerTable owners={owners} sessions={curList} /> : null}
 
       <section className="my-4">
@@ -995,6 +1000,137 @@ function LineSection({ month, sessions, replay, spans }: { month: string; sessio
       replay={replay}
       agency={{ trend: spans ? agencyTrend(groups, spans) : null, title: "GMV/ชม. รายวัน แยก Agency" }}
     />
+  );
+}
+
+/**
+ * ช่วงเวลาไหนขายดี: ตาราง ชั่วโมง (แถว เริ่ม 06:00) × วันในสัปดาห์ (คอลัมน์) สีเดียวไล่ระดับ เข้ม = ค่าสูง (src/lib/live-heat.ts)
+ *   GMV/ชม. (ค่าเริ่ม) หรือ GMV รวม · กรองกลุ่มได้ (ทีมเรา / Agency) · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. สีจาง ไม่จัดอันดับ
+ *   แตะ / ชี้ช่องเพื่อดูตัวเลข · ตารางตัวเลขเต็มอยู่ใน "ดูเป็นตาราง"
+ */
+function HeatSection({ title, sessions, spans }: { title: string; sessions: LiveSession[]; spans?: OwnerSpan[] }) {
+  const [metric, setMetric] = useState<"perHour" | "gmv">("perHour");
+  const [group, setGroup] = useState("all");
+  const [pick, setPick] = useState<{ day: number; hour: number } | null>(null);
+  const shares = spans ? agencySharesOf(sessions, spans) : null;
+  const groups = shares ? [...new Set([...shares.values()].flatMap((m) => [...m.keys()]))].sort((a, b) => Number(a !== AGENCY_OURS) - Number(b !== AGENCY_OURS) || a.localeCompare(b)) : [];
+  const active = groups.includes(group) ? group : "all";
+  const grid = heatGrid(sessions.map((s) => ({ startedAt: s.startedAt, durationSec: s.durationSec, gmv: s.gmv, weight: active === "all" ? 1 : shares?.get(s)?.get(active) ?? 0 })));
+  const value = (c: HeatCell) => (metric === "perHour" ? heatPerHour(c) : c.gmv > 0 ? c.gmv : null);
+  const enough = (c: HeatCell) => metric === "gmv" || c.sec >= HEAT_MIN_SEC;
+  // สเกลสีจากช่องที่ข้อมูลพอ (ช่องตัวอย่างน้อยค่าแกว่ง ไม่ให้กินสเกล)
+  const max = Math.max(0, ...grid.flat().filter(enough).map((c) => value(c) ?? 0));
+  const top = heatTop(grid, value, 5);
+  const rank = new Map(top.slice(0, 3).map((x, i) => [`${x.day}|${x.hour}`, i + 1]));
+  const sel = pick ?? (top[0] ? { day: top[0].day, hour: top[0].hour } : null);
+  const selCell = sel ? grid[sel.day][sel.hour] : null;
+  const baht = (v: number | null) => fmtMetric("baht", v);
+  const slotText = (day: number, hour: number) => `${HEAT_WEEKDAY_NAMES[day]} ${heatHour(hour)}–${heatHour(hour + 1)}`;
+  const groupLabel = (k: string) => (k === AGENCY_OURS ? "ทีมเรา (ของเรา / In house)" : ownerText(k));
+  const pctOf = (v: number) => Math.round(12 + 88 * Math.min(1, max ? v / max : 0));
+
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold">{title}</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          {groups.length > 1 ? (
+            <Select value={active} onValueChange={setGroup}>
+              <SelectTrigger aria-label="กลุ่มผู้ไลฟ์" className="h-8 min-w-36 rounded-full bg-card text-[13px]"><SelectValue /></SelectTrigger>
+              <SelectContent position="popper">
+                <SelectItem value="all">ทุกกลุ่ม</SelectItem>
+                {groups.map((k) => <SelectItem key={k} value={k}>{groupLabel(k)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          ) : null}
+          <ToggleGroup type="single" spacing={1} value={metric} onValueChange={(v) => { if (v) setMetric(v as "perHour" | "gmv"); }} aria-label="ค่าในตาราง" className="rounded-full border bg-card p-0.5">
+            {[["perHour", "GMV/ชม."], ["gmv", "GMV รวม"]].map(([id, text]) => (
+              <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
+      </div>
+
+      {top.length ? (
+        <ol className="mb-3 grid gap-1 text-sm sm:grid-cols-2">
+          {top.map((x, i) => (
+            <li key={`${x.day}|${x.hour}`} className="flex items-baseline gap-2">
+              <span className="w-4 shrink-0 text-right font-bold tabular-nums">{i + 1}</span>
+              <span className="min-w-0">
+                <span className="font-semibold">{slotText(x.day, x.hour)}</span>{" "}
+                <span className="tabular-nums text-muted-foreground">{baht(x.v)}{metric === "perHour" ? "/ชม." : ""} · ไลฟ์รวม {(x.cell.sec / 3600).toFixed(1)} ชม.</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="mb-3 text-sm text-muted-foreground">ยังไม่มีช่วงเวลาที่ไลฟ์รวมถึง 2 ชม. ลองดูช่วงที่ยาวขึ้น (ทั้งปี)</p>}
+
+      <div
+        role="img" aria-label={`ตาราง${title} แถว = ชั่วโมง คอลัมน์ = วัน${top[0] ? ` ขายดีสุด ${slotText(top[0].day, top[0].hour)}` : ""}`}
+        className="grid grid-cols-[2.75rem_repeat(7,minmax(0,1fr))] gap-0.5 text-[11px] select-none"
+      >
+        <div />
+        {HEAT_WEEKDAYS.map((d) => <div key={d} className="pb-0.5 text-center font-semibold text-muted-foreground">{d}</div>)}
+        {Array.from({ length: 24 }, (_, h) => (
+          <Fragment key={h}>
+            <div className="pr-1 text-right leading-5 text-muted-foreground tabular-nums">{heatHour(h)}</div>
+            {grid.map((col, d) => {
+              const c = col[h], v = value(c), r = rank.get(`${d}|${h}`), p = v ? pctOf(v) : 0;
+              const on = sel?.day === d && sel?.hour === h;
+              return (
+                <div
+                  key={d}
+                  className={cn("flex h-5 items-center justify-center rounded-[3px] font-bold", !v && "bg-muted/40", on && "ring-2 ring-foreground ring-inset")}
+                  style={v ? { background: `color-mix(in srgb, var(--viz-cur) ${p}%, var(--card))`, opacity: enough(c) ? 1 : 0.45, color: p >= 55 ? "white" : undefined } : undefined}
+                  onMouseEnter={() => setPick({ day: d, hour: h })}
+                  onClick={() => setPick({ day: d, hour: h })}
+                >
+                  {r ?? null}
+                </div>
+              );
+            })}
+          </Fragment>
+        ))}
+      </div>
+
+      {/* ตัวเลขของช่องที่ชี้ / แตะ (มือถือแตะได้) */}
+      <div className="mt-2 rounded-lg border bg-muted/30 px-2.5 py-2 text-xs tabular-nums" aria-live="polite">
+        {sel && selCell ? (
+          <>
+            <span className="font-semibold">{slotText(sel.day, sel.hour)}</span>
+            {" · "}GMV/ชม. {baht(heatPerHour(selCell))} · GMV {baht(selCell.gmv || null)} · ไลฟ์รวม {(selCell.sec / 3600).toFixed(1)} ชม. ({selCell.lives} ไลฟ์)
+            {selCell.sec && selCell.sec < HEAT_MIN_SEC ? <span className="text-muted-foreground"> · ตัวอย่างน้อย</span> : null}
+          </>
+        ) : "แตะช่องในตารางเพื่อดูตัวเลข"}
+      </div>
+      <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+        <span>น้อย</span>
+        <span aria-hidden className="h-2 w-28 rounded-full" style={{ background: "linear-gradient(to right, color-mix(in srgb, var(--viz-cur) 12%, var(--card)), var(--viz-cur))" }} />
+        <span>มาก{max ? ` (${baht(max)}${metric === "perHour" ? "/ชม." : ""})` : ""}</span>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        ไฟล์ Export ไม่มียอดรายชั่วโมง จึงกระจาย GMV ของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ตัวเลขประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน
+        {metric === "perHour" ? " · ช่องสีจาง = ไลฟ์รวมไม่ถึง 2 ชม. (ตัวอย่างน้อย ไม่จัดอันดับ)" : ""}
+      </p>
+      <TableView title="ดูเป็นตาราง">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>เวลา</TableHead>
+              {HEAT_WEEKDAYS.map((d) => <TableHead key={d} className="text-right">{d}</TableHead>)}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: 24 }, (_, h) => (grid.some((col) => value(col[h]) !== null) ? (
+              <TableRow key={h}>
+                <TableCell className="tabular-nums">{heatHour(h)}–{heatHour(h + 1)}</TableCell>
+                {grid.map((col, d) => <TableCell key={d} className="text-right tabular-nums">{baht(value(col[h]))}</TableCell>)}
+              </TableRow>
+            ) : null))}
+          </TableBody>
+        </Table>
+      </TableView>
+    </section>
   );
 }
 

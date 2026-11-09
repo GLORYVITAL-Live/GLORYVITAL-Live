@@ -56,35 +56,48 @@ export function ownerShares(startMs: number, sec: number, spans: OwnerSpan[]): {
 }
 
 /**
- * แยกยอดตามกลุ่ม เฉพาะไลฟ์ที่บันทึกกลุ่มไว้ / อยู่ในเดือนที่ช่องนั้นมีแพลนกลุ่ม (TikTok ก่อน Shopee · ในช่องเรียง GMV มากไปน้อย)
- *   Shopee นอกเวลา Agency = In house (ส่วนที่คร่อมแพลน In house กับนอกแพลนรวมเป็นกลุ่มเดียว ไม่นับเป็นไลฟ์คร่อมกลุ่ม)
- *   ดูหลายเดือน: เดือนที่ช่องยังไม่มีแพลนไม่นับ
+ * ตัวหากลุ่มของไลฟ์ (สร้างครั้งเดียว ใช้กับหลายไลฟ์) · null = ไลฟ์นี้ไม่มีข้อมูลกลุ่ม (ช่อง / เดือนที่ไม่มีแพลนและไม่ได้บันทึกกลุ่ม)
+ *   ทีมเราของ Shopee = In house (นอกแพลน / บันทึกว่าเป็นของเรา) · ส่วนของแต่ละกลุ่มรวมกัน = 1
  */
-export function splitByOwner(sessions: LiveSession[], spans: OwnerSpan[]): ChannelSplit[] {
+function ownerFinder(spans: OwnerSpan[]) {
   const planned = new Map<string, OwnerSpan[]>();
   const planMonths = new Set<string>();
   for (const x of spans) {
     planned.set(channelKey(x.channel), [...(planned.get(channelKey(x.channel)) ?? []), x]);
     planMonths.add(`${channelKey(x.channel)}|${monthOf(new Date(x.startMs).toISOString())}`);
   }
-  const out = new Map<string, ChannelSplit>();
-  for (const s of sessions) {
+  return (s: LiveSession) => {
     const channel = slotPlatformOf(s.platform, s.accountId);
-    if (!channel) continue;
+    if (!channel) return null;
     const plan = planMonths.has(`${channelKey(channel)}|${monthOf(s.startedAt)}`) ? planned.get(channelKey(channel)) : undefined;
-    if (!plan && !s.liveOwner) continue;
-    const c = out.get(channel) ?? { channel, label: platformLabel(channel), lives: 0, sec: 0, gmv: 0, rows: [], splitLives: 0, splitGmv: 0 };
-    out.set(channel, c);
-    c.lives++; c.sec += s.durationSec; c.gmv += s.gmv;
+    if (!plan && !s.liveOwner) return null;
     const raw = s.liveOwner
       ? [{ owner: s.liveOwner === LIVE_OWNER_OURS ? null : s.liveOwner, share: 1 }]
       : ownerShares(Date.parse(s.startedAt), s.durationSec, plan!);
-    // ทีมเราของ Shopee = In house (นอกแพลน / บันทึกว่าเป็นของเรา)
     const shares = new Map<string | null, number>();
     for (const x of raw) {
       const owner = !x.owner && isShopeePlatform(channel) ? "In house" : x.owner;
       shares.set(owner, (shares.get(owner) ?? 0) + x.share);
     }
+    return { channel, shares };
+  };
+}
+
+/**
+ * แยกยอดตามกลุ่ม เฉพาะไลฟ์ที่บันทึกกลุ่มไว้ / อยู่ในเดือนที่ช่องนั้นมีแพลนกลุ่ม (TikTok ก่อน Shopee · ในช่องเรียง GMV มากไปน้อย)
+ *   Shopee นอกเวลา Agency = In house (ส่วนที่คร่อมแพลน In house กับนอกแพลนรวมเป็นกลุ่มเดียว ไม่นับเป็นไลฟ์คร่อมกลุ่ม)
+ *   ดูหลายเดือน: เดือนที่ช่องยังไม่มีแพลนไม่นับ
+ */
+export function splitByOwner(sessions: LiveSession[], spans: OwnerSpan[]): ChannelSplit[] {
+  const find = ownerFinder(spans);
+  const out = new Map<string, ChannelSplit>();
+  for (const s of sessions) {
+    const f = find(s);
+    if (!f) continue;
+    const { channel, shares } = f;
+    const c = out.get(channel) ?? { channel, label: platformLabel(channel), lives: 0, sec: 0, gmv: 0, rows: [], splitLives: 0, splitGmv: 0 };
+    out.set(channel, c);
+    c.lives++; c.sec += s.durationSec; c.gmv += s.gmv;
     if (shares.size > 1) { c.splitLives++; c.splitGmv += s.gmv; }
     for (const [owner, share] of shares) {
       let row = c.rows.find((r) => r.owner === owner);
@@ -101,6 +114,21 @@ export function splitByOwner(sessions: LiveSession[], spans: OwnerSpan[]): Chann
 
 /** กลุ่มในมุมมอง "แยก Agency" (TikTok + Shopee): key = ours (TikTok ของเรา / Shopee In house) / ชื่อ Agency (TDH, MCN, Infinite ...) */
 export const AGENCY_OURS = "ours";
+
+/** กลุ่มของแต่ละไลฟ์แบบเดียวกับกราฟแยก Agency: key -> ส่วนของไลฟ์ (รวมกัน = 1) · ไม่มีข้อมูลกลุ่ม = ทีมเรา */
+export function agencySharesOf(sessions: LiveSession[], spans: OwnerSpan[]) {
+  const find = ownerFinder(spans);
+  return new Map(sessions.map((s) => {
+    const out = new Map<string, number>();
+    const f = find(s);
+    if (!f) out.set(AGENCY_OURS, 1);
+    else for (const [owner, share] of f.shares) {
+      const key = !owner || owner === "In house" ? AGENCY_OURS : owner;
+      out.set(key, (out.get(key) ?? 0) + share);
+    }
+    return [s, out] as const;
+  }));
+}
 /** ค่าของกลุ่มหนึ่งในแต่ละช่วง (วัน / เดือน) ช่วงที่กลุ่มนี้ไม่มีไลฟ์ = null · hours รวมนาทีของไลฟ์คร่อมกลุ่มตามส่วนที่แบ่ง */
 type GroupTrend = { key: string; label: string; gmv: (number | null)[]; hours: (number | null)[]; perHour: (number | null)[] };
 /** กลุ่มของแพลตฟอร์มหนึ่ง (กราฟแท่งคู่: แท่ง TikTok | แท่ง Shopee ซ้อนตามกลุ่ม) */
