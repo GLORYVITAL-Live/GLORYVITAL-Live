@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   try {
     if (body?.action === "scan") {
       const res = await scanTawi();
-      if (!res.configured) return fail("ยังไม่ได้ตั้งโฟลเดอร์ Google Drive ของใบ 50 ทวิ (settings.tawi_drive_folder)");
+      if (!res.configured) return fail("ยังไม่ได้ตั้งโฟลเดอร์ Google Drive ของใบ 50 ทวิ (settings.tawi_team_folder)");
       return ok({ scan: res });
     }
     if (body?.action === "reset-verify") {

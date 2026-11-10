@@ -170,8 +170,8 @@ export function TawiPanel() {
         <div className="space-y-2 border-t border-inherit p-2 text-foreground">
           {!data.folderSet ? (
             <p className="rounded-lg bg-card p-2.5 text-xs leading-relaxed">
-              ตั้ง id โฟลเดอร์หลักของใบ 50 ทวิ (โฟลเดอร์ที่มีโฟลเดอร์ย่อยรายเดือน เช่น 09Sep) ใน Supabase ที่ settings.tawi_drive_folder
-              แล้วแชร์โฟลเดอร์นั้นให้บัญชีระบบ จากนั้นกด &quot;ตรวจไฟล์ใน Drive&quot;
+              ตั้ง id โฟลเดอร์ &quot;Form_ใบหัก (50 ทวิ)&quot; ของทีมบัญชี (มีโฟลเดอร์เดือน เช่น 10.2026 &gt; WHT_LIVE 10.2026) ใน Supabase ที่ settings.tawi_team_folder
+              แล้วแชร์โฟลเดอร์นั้นให้บัญชีระบบ จากนั้นกด &quot;ตรวจไฟล์ใน Drive&quot; · ระบบหาโฟลเดอร์ทีมทุกเดือนจากคำว่า WHT_LIVE (settings.tawi_team_keyword)
             </p>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">

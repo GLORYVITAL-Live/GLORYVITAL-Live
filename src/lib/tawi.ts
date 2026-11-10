@@ -9,14 +9,17 @@ import { myReceipts, receiptGaps, receiptView } from "@/lib/receipts-db";
 import { slipRoundLabel } from "@/lib/slips";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
-  cleanRealName, dominantMonth, parseTawiFile, suggestPeople, tawiMonthLabel, tawiNameKey, type TawiCandidate,
+  cleanRealName, isTeamTawiFolder, pickTawiFiles, suggestPeople, TAWI_TEAM_KEYWORD, tawiMonthLabel, tawiNameKey,
+  type TawiCandidate, type TawiFolderFiles, type TawiPicked,
 } from "@/lib/tawi-name";
 import { checkTawiVerify, failsToday, TAWI_VERIFY_MAX_FAILS, tawiVerifyState, type TawiVerifyResult } from "@/lib/tawi-verify";
 import type { HomeTawi, MyTawi, OwnerTawi, TawiOwnerDoc } from "@/lib/types";
 
 /**
  * ใบ 50 ทวิ รายเดือน (ตาราง tawi_docs) — SQL 20261029000000_tawi50 + 20261030000000_tawi_verify
- *   โฟลเดอร์หลักใน Drive (settings.tawi_drive_folder) > โฟลเดอร์รายเดือน > PDF รายคน (ชื่อจริงอยู่ในชื่อไฟล์)
+ *   โฟลเดอร์หลักใน Drive (settings.tawi_drive_folder) > โฟลเดอร์รายเดือน > PDF รายคน (ชื่อจริงอยู่ในชื่อไฟล์) — ประวัติ ก.พ.–ก.ย. 2026
+ *   + โฟลเดอร์ของทีมบัญชี (settings.tawi_team_folder "Form_ใบหัก (50 ทวิ)") > เดือน "10.2026" > โฟลเดอร์ทีม "WHT_LIVE 10.2026" > PDF
+ *     (ผู้ใช้สั่ง 2026-11-10: อ่านจากโฟลเดอร์ทีม Live · เดือนใหม่หาจากคำค้น WHT_LIVE) — SQL 20261129000000_tawi_team_folder
  *   จับคู่ไฟล์กับคน: คีย์ชื่อจริงที่รู้ของแต่ละคน = staff.legal_name / ชื่อในเอกสารทำเบิก (pay_docs.full_name)
  *     / ไฟล์ที่ Owner เคยจับคู่ — ตรงคนเดียวเท่านั้น (ชื่อซ้ำ = ไม่เดา ให้ Owner เลือก)
  *   "คน" = อีเมล (เป็นทั้ง Mc และ Admin = คนเดียวกัน) · ไม่มีอีเมล = รายชื่อนั้น
@@ -104,12 +107,26 @@ async function dropVerifiedKey(db: Db, ids: number[], key: string) {
   }
 }
 
-/** id โฟลเดอร์หลัก (ไม่ได้ตั้ง = null) · ยังไม่ได้รัน SQL = throw TAWI_SQL */
-async function rootFolder(db: Db) {
-  const { data, error } = await db.from("settings").select("tawi_drive_folder").eq("id", 1).single();
+/**
+ * โฟลเดอร์ใบ 50 ทวิ (ไม่ได้ตั้ง = null) · ยังไม่ได้รัน SQL = throw TAWI_SQL
+ *   legacy = โฟลเดอร์เดิม (settings.tawi_drive_folder) · team = โฟลเดอร์ "Form_ใบหัก (50 ทวิ)" ของทีมบัญชี (settings.tawi_team_folder)
+ *   keyword = ชื่อโฟลเดอร์ทีมเรา (settings.tawi_team_keyword ไม่ได้ตั้ง = WHT_LIVE)
+ *   ยังไม่ได้รัน SQL 20261129000000_tawi_team_folder = ใช้โฟลเดอร์เดิมอย่างเดียว (แบบก่อนหน้า)
+ */
+async function tawiFolders(db: Db) {
+  const full = await db.from("settings").select("tawi_drive_folder, tawi_team_folder, tawi_team_keyword").eq("id", 1).single();
+  const { data, error } = full.error && /tawi_team/.test(full.error.message)
+    ? await db.from("settings").select("tawi_drive_folder").eq("id", 1).single()
+    : full;
   if (error) throw dbError(error.message);
-  return (data?.tawi_drive_folder as string | null | undefined)?.trim() || null;
+  const row = (data ?? {}) as { tawi_drive_folder?: string | null; tawi_team_folder?: string | null; tawi_team_keyword?: string | null };
+  return {
+    legacy: row.tawi_drive_folder?.trim() || null,
+    team: row.tawi_team_folder?.trim() || null,
+    keyword: row.tawi_team_keyword?.trim() || TAWI_TEAM_KEYWORD,
+  };
 }
+const folderSet = (f: Awaited<ReturnType<typeof tawiFolders>>) => !!(f.legacy || f.team);
 
 /** ทุกแถว (ทีละ 1000 แถว — Supabase ส่งได้ครั้งละไม่เกินนี้) */
 async function allDocs(db: Db) {
@@ -268,29 +285,26 @@ export type TawiScan = {
 export async function scanTawi(): Promise<TawiScan> {
   const run = await withSyncLock("tawi", async () => {
     const db = createAdminClient();
-    const root = await rootFolder(db);
+    const roots = await tawiFolders(db);
     const empty = { months: 0, files: 0, added: 0, removed: 0, renamed: 0, matched: 0, unmatched: 0, notified: 0, skipped: 0 };
-    if (!root) return { configured: false, ...empty };
+    if (!folderSet(roots)) return { configured: false, ...empty };
 
     // 1. อ่านรายการไฟล์ทั้งหมดก่อน (พลาดกลางทาง = throw ไม่ลบแถวใดๆ)
+    //   โฟลเดอร์เดิม: เดือน > PDF · โฟลเดอร์ทีมบัญชี: เดือน > โฟลเดอร์ทีมที่ชื่อมีคำค้น (WHT_LIVE) > PDF — เลือกไฟล์ด้วย pickTawiFiles
     const drive = driveClient();
-    const seen = new Map<string, { fileName: string; month: string; realName: string; nameKey: string }>();
-    let months = 0, skipped = 0;
+    let seen: Map<string, TawiPicked>, months: number, skipped: number;
     try {
-      const folders = await children(drive, root, true);
-      for (const f of folders) {
-        const files = await children(drive, f.id, false);
-        // ไฟล์ที่ไม่มีเลขเอกสาร: ใช้เดือนที่พบบ่อยในโฟลเดอร์ (มีปีด้วย) ก่อนเดาจากชื่อโฟลเดอร์
-        const fallbackMonth = dominantMonth(files.map((x) => x.name));
-        let used = false;
-        for (const x of files) {
-          const p = parseTawiFile(x.name, f.name, { fallbackMonth });
-          if (!p) { skipped++; continue; } // ไม่ใช่ PDF (.zip) / ผู้รับเป็นบริษัท / อ่านชื่อไม่ได้
-          seen.set(x.id, { fileName: x.name, month: p.month, realName: p.realName, nameKey: p.nameKey });
-          used = true;
-        }
-        if (used) months++;
+      const byName = (a: { id: string; name: string }, b: { id: string; name: string }) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+      const legacy: TawiFolderFiles[] = [];
+      for (const f of roots.legacy ? (await children(drive, roots.legacy, true)).sort(byName) : []) {
+        legacy.push({ ...f, files: await children(drive, f.id, false) });
       }
+      const team: TawiFolderFiles[] = [];
+      for (const m of roots.team ? (await children(drive, roots.team, true)).sort(byName) : []) {
+        const mine = (await children(drive, m.id, true)).filter((t) => isTeamTawiFolder(t.name, roots.keyword)).sort(byName);
+        for (const t of mine) team.push({ ...t, files: await children(drive, t.id, false) });
+      }
+      ({ seen, months, skipped } = pickTawiFiles(legacy, team));
     } catch (err) {
       throw new Error(/file not found/i.test((err as Error)?.message ?? "")
         ? "บัญชีระบบเข้าโฟลเดอร์ใบ 50 ทวิไม่ได้ (แชร์โฟลเดอร์ให้บัญชีระบบ หรือตรวจ id โฟลเดอร์)"
@@ -525,8 +539,8 @@ export async function resetTawiVerify(staffId: number, scope: DocsScope) {
  */
 export async function ownerTawi(month: string | null, scope: DocsScope): Promise<OwnerTawi> {
   const db = createAdminClient();
-  let root: string | null;
-  try { root = await rootFolder(db); } catch (err) {
+  let root: boolean;
+  try { root = folderSet(await tawiFolders(db)); } catch (err) {
     if ((err as Error).message !== TAWI_SQL) throw err;
     return { ready: false, folderSet: false, verifyReady: false, month: null, months: [], docs: [], people: [] };
   }
@@ -571,7 +585,7 @@ export async function ownerTawi(month: string | null, scope: DocsScope): Promise
       verify: verifyOf(d),
     }));
   return {
-    ready: true, folderSet: !!root, verifyReady: !!verified, month: pick, months, docs: list,
+    ready: true, folderSet: root, verifyReady: !!verified, month: pick, months, docs: list,
     people: staff.map((s) => ({ id: s.id, role: s.role, label: label(s), legalName: s.legal_name?.trim() || null, hasEmail: !!s.email?.trim() }))
       .sort((a, b) => a.label.localeCompare(b.label, "th")),
   };
@@ -584,9 +598,7 @@ export async function ownerTawi(month: string | null, scope: DocsScope): Promise
  */
 export async function tawiHome(today: string, scope: DocsScope): Promise<HomeTawi | null> {
   const db = createAdminClient();
-  let root: string | null;
-  try { root = await rootFolder(db); } catch { return null; }
-  if (!root) return null;
+  try { if (!folderSet(await tawiFolders(db))) return null; } catch { return null; }
   const [docs, { staff }] = await Promise.all([allDocs(db), loadPeople(db)]);
   // ไม่มีอีเมล: เฉพาะคนฝั่งที่ดูเอกสารได้ · ใบที่ยังไม่มีเจ้าของ: แสดงทุกฝั่ง (ยังไม่รู้ว่าเป็นของใคร)
   const byId = new Map(staff.filter((s) => docsCan(scope, s.role)).map((s) => [s.id, s]));

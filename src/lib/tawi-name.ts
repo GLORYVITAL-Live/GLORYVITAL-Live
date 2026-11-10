@@ -121,6 +121,53 @@ export function parseTawiFile(fileName: string, folder: string, opts: { now?: nu
 /** ชื่อนิติบุคคล */
 export const isCompany = (name: string) => /^(บริษัท|บจก\.?|ห้างหุ้นส่วน|หจก\.?)|(จำกัด|\(มหาชน\)|co\.,?\s*ltd\.?|company limited)$/i.test(name.trim());
 
+/** คำค้นโฟลเดอร์ทีมในโฟลเดอร์ของทีมบัญชี (ไม่ได้ตั้ง settings.tawi_team_keyword) */
+export const TAWI_TEAM_KEYWORD = "WHT_LIVE";
+/** ชื่อโฟลเดอร์ทีมตรงคำค้นไหม · ไม่สนตัวพิมพ์ / เว้นวรรค / _ / - / . (เช่น "WHT_LIVE 10.2026" / "WHT LIVE") */
+export function isTeamTawiFolder(folderName: string, keyword: string) {
+  const norm = (s: string) => s.normalize("NFC").toLowerCase().replace(/[\s_.\-]+/g, "");
+  const k = norm(keyword);
+  return !!k && norm(folderName).includes(k);
+}
+
+export type TawiFolderFiles = { id: string; name: string; files: { id: string; name: string }[] };
+export type TawiPicked = { fileName: string; month: string; realName: string; nameKey: string };
+
+/**
+ * เลือกไฟล์ใบ 50 ทวิจาก 2 ที่ -> ไฟล์ที่ใช้ (id ไฟล์ -> ข้อมูล)
+ *   legacy = โฟลเดอร์เดิม (settings.tawi_drive_folder: โฟลเดอร์รายเดือน > PDF) — ประวัติ ก.พ.–ก.ย. 2026
+ *   team = โฟลเดอร์ทีมของทีมบัญชี (settings.tawi_team_folder: โฟลเดอร์เดือน > โฟลเดอร์ทีมที่ชื่อมีคำค้น > PDF) — ต.ค. 2026 เป็นต้นไป
+ *   เดือนที่โฟลเดอร์เดิมมีแล้ว ไม่อ่านจากโฟลเดอร์ทีม: ทีมบัญชีคัดลอกเดือนเก่าไว้ด้วย (id ไฟล์ใหม่) อ่านซ้ำ = ใบขึ้นสองใบ + การจับคู่ที่ทำไว้หาย
+ *   เดือนเดียวกันมีหลายโฟลเดอร์ทีม (เช่น 07.2026 ซ้ำสองโฟลเดอร์) = ใช้โฟลเดอร์แรกที่มีไฟล์ของเดือนนั้น
+ */
+export function pickTawiFiles(legacy: TawiFolderFiles[], team: TawiFolderFiles[], now?: number) {
+  const seen = new Map<string, TawiPicked>();
+  let skipped = 0;
+  const read = (f: TawiFolderFiles, keep: (month: string) => boolean) => {
+    // ไฟล์ที่ไม่มีเลขเอกสาร: ใช้เดือนที่พบบ่อยในโฟลเดอร์ (มีปีด้วย) ก่อนเดาจากชื่อโฟลเดอร์
+    const fallbackMonth = dominantMonth(f.files.map((x) => x.name));
+    for (const x of f.files) {
+      const p = parseTawiFile(x.name, f.name, { fallbackMonth, now });
+      if (!p) { skipped++; continue; } // ไม่ใช่ PDF (.zip) / ผู้รับเป็นบริษัท / อ่านชื่อไม่ได้
+      if (!keep(p.month)) continue;
+      seen.set(x.id, { fileName: x.name, month: p.month, realName: p.realName, nameKey: p.nameKey });
+    }
+  };
+  for (const f of legacy) read(f, () => true);
+  const legacyMonths = new Set([...seen.values()].map((p) => p.month));
+  const teamOf = new Map<string, string>();
+  for (const f of team) {
+    read(f, (month) => {
+      if (legacyMonths.has(month)) return false;
+      const by = teamOf.get(month);
+      if (by && by !== f.id) return false;
+      teamOf.set(month, f.id);
+      return true;
+    });
+  }
+  return { seen, months: new Set([...seen.values()].map((p) => p.month)).size, skipped };
+}
+
 /** เดือนที่พบบ่อยสุดจากเลขเอกสารในโฟลเดอร์ (ใช้กับไฟล์ที่ไม่มีเลข) ไม่มี = null */
 export function dominantMonth(fileNames: string[]) {
   const count = new Map<string, number>();

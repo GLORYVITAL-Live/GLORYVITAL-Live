@@ -1,9 +1,43 @@
 // เทสอ่านชื่อไฟล์ใบ 50 ทวิ (bun test) — ชื่อในเทสเป็นชื่อสมมติ
 import { describe, expect, test } from "bun:test";
 import {
-  cleanRealName, dominantMonth, isCompany, monthFromDocNo, monthFromFolder, parseTawiFile, similarity, stripTitle, suggestPeople,
-  tawiMonthLabel, tawiNameKey,
+  cleanRealName, dominantMonth, isCompany, isTeamTawiFolder, monthFromDocNo, monthFromFolder, parseTawiFile, pickTawiFiles, similarity, stripTitle,
+  suggestPeople, tawiMonthLabel, tawiNameKey,
 } from "@/lib/tawi-name";
+
+describe("โฟลเดอร์ของทีมบัญชี (เดือน > WHT_LIVE)", () => {
+  test("หาโฟลเดอร์ทีมจากคำค้น ไม่สนตัวพิมพ์ / เว้นวรรค / _", () => {
+    expect(isTeamTawiFolder("WHT_LIVE 10.2026", "WHT_LIVE")).toBe(true);
+    expect(isTeamTawiFolder("wht live 11.2026", "WHT_LIVE")).toBe(true);
+    expect(isTeamTawiFolder("WHT_KOL 10.2026", "WHT_LIVE")).toBe(false);
+    expect(isTeamTawiFolder("WHT_LIVE 10.2026", "")).toBe(false);
+  });
+  const file = (id: string, month: string, n: string) => ({ id, name: `WTI-${month.replace("-", "")}000${id.slice(-2)}-สมชาย ${n}.pdf` });
+  const legacy = [{ id: "L09", name: "09Sep", files: [file("a01", "2026-09", "ใจดี"), file("a02", "2026-09", "มีสุข")] }];
+  test("เดือนที่โฟลเดอร์เดิมมีแล้ว ไม่อ่านซ้ำจากโฟลเดอร์ทีม · เดือนใหม่อ่านจากโฟลเดอร์ทีม", () => {
+    const team = [
+      { id: "T09", name: "WHT_LIVE 09.2026", files: [file("b01", "2026-09", "ใจดี")] }, // สำเนาเดือนเก่า (id ใหม่)
+      { id: "T10", name: "WHT_LIVE 10.2026", files: [file("c01", "2026-10", "ใจดี"), file("c02", "2026-10", "มีสุข")] },
+    ];
+    const r = pickTawiFiles(legacy, team);
+    expect([...r.seen.keys()].sort()).toEqual(["a01", "a02", "c01", "c02"]);
+    expect(r.months).toBe(2);
+  });
+  test("เดือนเดียวกันมีสองโฟลเดอร์ทีม (07.2026 ซ้ำ) = ใช้โฟลเดอร์แรกโฟลเดอร์เดียว", () => {
+    const team = [
+      { id: "T07a", name: "WHT_LIVE 07.2026", files: [file("d01", "2026-07", "ใจดี")] },
+      { id: "T07b", name: "WHT_LIVE 07.2026", files: [file("e01", "2026-07", "ใจดี")] },
+    ];
+    expect([...pickTawiFiles([], team).seen.keys()]).toEqual(["d01"]);
+  });
+  test("ไม่มีโฟลเดอร์เดิม = อ่านโฟลเดอร์ทีมทุกเดือน · ไฟล์บริษัทข้าม", () => {
+    const team = [{ id: "T10", name: "WHT_LIVE 10.2026", files: [file("c01", "2026-10", "ใจดี"), { id: "c09", name: "WTI-20261000009-บจก.ทดสอบ.pdf" }] }];
+    const r = pickTawiFiles([], team);
+    expect([...r.seen.keys()]).toEqual(["c01"]);
+    expect(r.skipped).toBe(1);
+    expect(r.seen.get("c01")!.month).toBe("2026-10");
+  });
+});
 
 // 19 ต.ค. 2026 เวลาไทย
 const NOW = Date.UTC(2026, 9, 19, 3);
