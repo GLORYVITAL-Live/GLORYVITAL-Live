@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FileSpreadsheetIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FileSpreadsheetIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import {
   accountLabel, accountsOf, bkkIso, bkkLocal, bkkParts, filterSessions, fmtMetric, fromBkkLocal, METRICS, metricOf, monthOf, monthWindow, parseRows,
   previousWindow, readXlsx, totalsOf, type Campaign, type LiveSession, type MetricKey, type ParsedFile, type Platform, type Totals,
@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -283,34 +284,58 @@ const OVERVIEW_KEY = "glory_live_overview_mode";
 /** โหมดของแท็บภาพรวม / เทียบ: ดูภาพรวม หรือเทียบ (cmp-month = เทียบเดือน แยกจาก month = ภาพรวมรายเดือน) */
 type OverviewMode = "month" | "year" | "day" | "range" | "cmp-month" | "quarter" | "multi";
 const VIEW_MODES: [OverviewMode, string][] = [["month", "รายเดือน"], ["year", "ทั้งปี"]];
-// [โหมด, ชื่อเต็ม, ชื่อสั้นบนมือถือ (5 ปุ่มชื่อเต็มยาวเกินกล่องบนจอ 375px)]
-const COMPARE_MODES: [OverviewMode, string, string][] = [
-  ["day", "วัน", "วัน"], ["range", "ช่วงวันที่", "ช่วงวัน"], ["cmp-month", "เดือน (MoM)", "เดือน"], ["quarter", "ไตรมาส (QoQ)", "ไตรมาส"], ["multi", "หลายเดือน", "หลายเดือน"],
+// [โหมด, ชื่อเต็ม, ชื่อสั้นบนมือถือ, คำอธิบายในเมนู]
+const COMPARE_MODES: [OverviewMode, string, string, string][] = [
+  ["day", "วัน", "วัน", "วันต่อวัน · วันก่อน / สัปดาห์ก่อน / เดือนก่อน"],
+  ["range", "ช่วงวันที่", "ช่วงวัน", "เลือกช่วงวันที่เอง · ช่วงก่อนหน้า / เดือนก่อน / หลายเดือน"],
+  ["cmp-month", "เดือน (MoM)", "เดือน", "เดือนต่อเดือน หรือเดือนเดียวกันปีก่อน (YoY)"],
+  ["quarter", "ไตรมาส (QoQ)", "ไตรมาส", "ไตรมาสต่อไตรมาส หรือไตรมาสเดียวกันปีก่อน (YoY)"],
+  ["multi", "หลายเดือน", "หลายเดือน", "ค่าหลายเดือนเรียงกัน (ไม่เกิน 12 เดือน)"],
 ];
 const MODE_PILL = "rounded-full! text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!";
 
-/** ภาพรวม + เทียบช่วงอยู่หน้าเดียวกัน: เลือกโหมดจากแถบเดียว (จำโหมดล่าสุดไว้ในเครื่อง) */
+/**
+ * ภาพรวม + เทียบช่วงอยู่หน้าเดียวกัน: แถบเดียว "รายเดือน | ทั้งปี | เทียบ ▾" (จำโหมดล่าสุดไว้ในเครื่อง)
+ *   เทียบทุกแบบรวมอยู่ในปุ่มเดียว กดแล้วเลือกแบบเทียบจากเมนู (ผู้ใช้ขอ 2026-11-10 แทนปุ่มแยก 5 ปุ่ม)
+ */
 function Overview({ latest, dataMonths, version, readOnly }: { latest: string; dataMonths: string[]; version: number; readOnly: boolean }) {
   const saved = useLocal(OVERVIEW_KEY) as OverviewMode | null;
   const mode: OverviewMode = saved && [...VIEW_MODES, ...COMPARE_MODES].some(([id]) => id === saved) ? saved : "month";
+  const [menu, setMenu] = useState(false);
   const pick = (v: string) => { if (v) writeLocal(OVERVIEW_KEY, v); };
-  const inGroup = (list: [OverviewMode, ...string[]][]) => (list.some(([id]) => id === mode) ? mode : "");
+  const cmp = COMPARE_MODES.find(([id]) => id === mode);
   return (
     <>
-      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <ToggleGroup type="single" spacing={1} value={inGroup(VIEW_MODES)} onValueChange={pick} aria-label="ดูภาพรวมแบบ" className="rounded-full border bg-card p-1">
-          {VIEW_MODES.map(([id, text]) => <ToggleGroupItem key={id} value={id} className={cn(MODE_PILL, "px-4")}>{text}</ToggleGroupItem>)}
+      <div className="mb-1 flex w-fit max-w-full items-center gap-0.5 rounded-full border bg-card p-1">
+        <ToggleGroup type="single" spacing={1} value={cmp ? "" : mode} onValueChange={pick} aria-label="ดูภาพรวมแบบ">
+          {VIEW_MODES.map(([id, text]) => <ToggleGroupItem key={id} value={id} className={cn(MODE_PILL, "px-3 sm:px-4")}>{text}</ToggleGroupItem>)}
         </ToggleGroup>
-        <div className="flex max-w-full min-w-0 items-center gap-2">
-          <span className="shrink-0 text-xs font-semibold text-muted-foreground">เทียบ</span>
-          <ToggleGroup type="single" spacing={1} value={inGroup(COMPARE_MODES)} onValueChange={pick} aria-label="เทียบเป็น" className="no-scrollbar max-w-full min-w-0 overflow-x-auto rounded-full border bg-card p-1">
-            {COMPARE_MODES.map(([id, text, short]) => (
-              <ToggleGroupItem key={id} value={id} className={cn(MODE_PILL, "px-2.5 sm:px-3")}>
-                <span className="sm:hidden">{short}</span><span className="max-sm:hidden">{text}</span>
-              </ToggleGroupItem>
+        <Popover open={menu} onOpenChange={setMenu}>
+          <PopoverTrigger asChild>
+            <button
+              type="button" aria-label={cmp ? `เทียบแบบ ${cmp[1]} (เปลี่ยนแบบเทียบ)` : "เทียบ: เลือกแบบเทียบ"}
+              className={cn(
+                "inline-flex h-8 min-w-0 items-center gap-1 rounded-full px-3 text-[13px] font-semibold whitespace-nowrap text-muted-foreground transition-all outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:min-h-9",
+                cmp && "bg-tint text-tint-foreground hover:bg-tint hover:text-tint-foreground",
+              )}
+            >
+              เทียบ{cmp ? <>: <span className="sm:hidden">{cmp[2]}</span><span className="max-sm:hidden">{cmp[1]}</span></> : null}
+              <ChevronDownIcon className="size-4 opacity-60" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] gap-0 p-1">
+            {COMPARE_MODES.map(([id, text, , desc]) => (
+              <Button
+                key={id} variant="ghost" aria-pressed={id === mode}
+                className={cn("h-auto w-full justify-start gap-2.5 py-2 text-left whitespace-normal", id === mode && "bg-muted")}
+                onClick={() => { pick(id); setMenu(false); }}
+              >
+                <CheckIcon className={cn("size-4 shrink-0", id !== mode && "invisible")} />
+                <span><span className="block font-semibold">{text}</span><span className="text-xs font-normal text-muted-foreground">{desc}</span></span>
+              </Button>
             ))}
-          </ToggleGroup>
-        </div>
+          </PopoverContent>
+        </Popover>
       </div>
       {mode === "year" ? <YearOverview latest={latest} dataMonths={dataMonths} version={version} />
         : mode === "multi" ? <MultiMonthView dataMonths={dataMonths} version={version} />
@@ -1427,27 +1452,27 @@ function AgencyCompare({ trend, curName, prevName, replay }: { trend: AgencyTren
   );
 }
 
-/** ตัวชี้วัดของกราฟเทียบรายกลุ่ม / รายบัญชี (ผู้ใช้เลือก 4 ตัว 2026-11-10) · ตัวที่เหลืออยู่ในตาราง */
-const BREAKDOWN_METRICS: { key: MetricKey; label: string }[] = [
-  { key: "gmv", label: "GMV" }, { key: "gmvPerHour", label: "GMV / ชม." }, { key: "viewers", label: "Viewers" }, { key: "orders", label: "ออเดอร์" },
-];
+/** ตัวชี้วัดในดรอปดาวน์ของกราฟเทียบรายกลุ่ม / รายบัญชี (ผู้ใช้เลือก 2026-11-10) · ตัวชี้วัดอื่นอยู่ในตาราง */
+const BREAKDOWN_METRICS: MetricKey[] = ["gmv", "gmvPerHour", "ctr", "co", "impressions", "viewers", "orders"];
 
 /**
- * เทียบ 2 ช่วงรายกลุ่ม (Agency / ทีมเรา) และรายบัญชี: แยกแพลตฟอร์ม TikTok | Shopee ตั้งแต่แรก แต่ละฝั่งกราฟแท่งคู่ทีละตัวชี้วัด
- *   + ขาที่ทำให้ GMV เปลี่ยน + ตารางตัวเลข (src/lib/live-breakdown.ts)
+ * เทียบ 2 ช่วงรายกลุ่ม (Agency / ทีมเรา) และรายบัญชี: เลือกตัวชี้วัดทีละตัวจากดรอปดาวน์ · แยกแพลตฟอร์ม TikTok | Shopee ตั้งแต่แรก
+ *   แต่ละฝั่งกราฟแท่งคู่ (ช่วงนี้ vs ช่วงก่อน) + ขาที่ทำให้ GMV เปลี่ยน + ตารางตัวเลข (src/lib/live-breakdown.ts)
  *   เป้าหมาย: เห็นว่ากลุ่ม / ช่องไหนดรอป และดรอปที่ขาไหน (ชั่วโมงไลฟ์ / คนดูต่อชม. / ยอดต่อคนดู) จะได้ไปแก้ถูกจุด
- *   ยอดรวมแพลตฟอร์มอยู่ที่หัวของฝั่งนั้น ไม่เป็นแท่ง (ยอดรวมใหญ่จนแท่งของกลุ่มเล็ก)
+ *   ยอดรวมแพลตฟอร์มอยู่ที่หัวของฝั่งนั้น ไม่เป็นแท่ง (ยอดรวมใหญ่จนแท่งของกลุ่มเล็ก) · Impressions / CTR มีแค่ TikTok
  */
 function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
   a: LiveSession[]; b: LiveSession[]; curName: string; prevName: string; spans?: OwnerSpan[]; replay: string;
 }) {
   const [view, setView] = useState<"group" | "account">("group");
+  const [metric, setMetric] = useState<MetricKey>("gmv");
   const { groups, accounts } = breakdownRows(a, b, spans ?? null);
   if (!groups.length) return null;
   const v = (t: Totals, k: MetricKey) => (t.lives ? metricOf(k).value(t) : null);
   const cols: { key: MetricKey; label: string }[] = [
-    { key: "duration", label: "ชม." }, { key: "gmvPerHour", label: "GMV/ชม." }, { key: "viewersPerHour", label: "Viewers/ชม." },
-    { key: "gmvPerViewer", label: "GMV/Viewer" }, { key: "orders", label: "ออเดอร์" }, { key: "aov", label: "AOV" },
+    { key: "duration", label: "ชม." }, { key: "gmvPerHour", label: "GMV/ชม." }, { key: "viewers", label: "Viewers" }, { key: "viewersPerHour", label: "Viewers/ชม." },
+    { key: "gmvPerViewer", label: "GMV/Viewer" }, { key: "impressions", label: "Impressions" }, { key: "ctr", label: "CTR" }, { key: "co", label: "CO" },
+    { key: "orders", label: "ออเดอร์" }, { key: "aov", label: "AOV" },
   ];
   const table = (title: string, rows: BreakdownRow[]) => (
     <>
@@ -1498,34 +1523,37 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
   const pctTxt = (c: number) => `${c > 0 ? "▲" : "▼"} ${(Math.abs(c) * 100).toFixed(1)}%`;
   // ชื่อใต้แท่ง: ตัด "Agency " และชื่อบัญชียาวเกิน 12 ตัว · ชื่อเต็มอยู่ในกล่องตัวเลข
   const short = (r: BreakdownRow) => { const s = r.label.replace(/^Agency /, ""); return s.length > 12 ? `${s.slice(0, 11)}…` : s; };
-  /** ฝั่งของแพลตฟอร์มเดียว: หัว + ยอดรวม · กราฟ 4 ตัว · ขาที่ทำให้ GMV เปลี่ยน */
+  const def = metricOf(metric);
+  /** ฝั่งของแพลตฟอร์มเดียว: หัว + ค่ารวมของตัวชี้วัดที่เลือก · กราฟ · ขาที่ทำให้ GMV เปลี่ยน */
   const panel = (total: BreakdownRow) => {
     const p = total.platform;
     const rows = (byGroup ? groupRows : accounts).filter((r) => r.platform === p);
     if (!rows.length) return null;
     const titles = rows.map((r) => `${p} · ${r.label}`);
     const legs = rows.flatMap((r) => { const leg = mainLeg(r.a, r.b); return leg ? [{ name: r.label, leg }] : []; });
+    const none = rows.every((r) => v(r.a, metric) === null && v(r.b, metric) === null);
+    const cur = v(total.a, metric), prev = v(total.b, metric);
     return (
       <div key={p} className="min-w-0 space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 border-b pb-1.5">
-          <h3 className="text-base font-bold">{p}</h3>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            GMV รวม {fmtMetric("baht", v(total.a, "gmv"))} vs {fmtMetric("baht", v(total.b, "gmv"))} <ChangeText cur={v(total.a, "gmv")} prev={v(total.b, "gmv")} />
-          </span>
+        <div className="rounded-xl border p-2.5">
+          <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3">
+            <h3 className="text-base font-bold">{p}</h3>
+            {none ? null : (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {def.label} รวม {fmtMetric(def.kind, cur)} vs {fmtMetric(def.kind, prev)} <ChangeText cur={cur} prev={prev} />
+              </span>
+            )}
+          </div>
+          {none ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">{p} ไม่มีข้อมูล {def.label} ในไฟล์ Export</p>
+          ) : (
+            <BarChart
+              key={`${p}|${metric}|${view}|${replay}`} label={`${p} ${def.label} ${byGroup ? "แยกกลุ่ม" : "แยกบัญชี"} ${curName} เทียบ ${prevName}`} height={240}
+              categories={rows.map(short)} tooltipTitles={titles} series={pair(rows, metric)}
+              format={(x) => fmtMetric(def.kind, x)} formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
+            />
+          )}
         </div>
-        {BREAKDOWN_METRICS.map((m) => {
-          const def = metricOf(m.key);
-          return (
-            <div key={m.key} className="rounded-xl border p-2.5">
-              <h4 className="mb-1 text-sm font-semibold">{m.label}</h4>
-              <BarChart
-                key={`${p}|${m.key}|${view}|${replay}`} label={`${p} ${m.label} ${byGroup ? "แยกกลุ่ม" : "แยกบัญชี"} ${curName} เทียบ ${prevName}`} height={180}
-                categories={rows.map(short)} tooltipTitles={titles} series={pair(rows, m.key)}
-                format={(x) => fmtMetric(def.kind, x)} formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
-              />
-            </div>
-          );
-        })}
         {legs.length ? (
           <div>
             <h4 className="text-sm font-semibold">ขาที่ทำให้ GMV เปลี่ยนมากสุด</h4>
@@ -1547,16 +1575,24 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
     <section className="my-4 rounded-2xl border bg-card p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-bold">เทียบรายกลุ่มและรายบัญชี: {curName} vs {prevName}</h2>
-        {hasGroups ? (
-          <ToggleGroup type="single" spacing={1} value={view} onValueChange={(x) => { if (x) setView(x as "group" | "account"); }} aria-label="เทียบตาม" className="rounded-full border bg-card p-0.5">
-            {[["group", "แยกกลุ่ม"], ["account", "แยกบัญชี"]].map(([id, text]) => (
-              <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={metric} onValueChange={(x) => setMetric(x as MetricKey)}>
+            <SelectTrigger aria-label="ตัวชี้วัดที่เทียบ" className="h-8 min-w-36 rounded-full bg-card text-[13px]"><SelectValue /></SelectTrigger>
+            <SelectContent position="popper">
+              {BREAKDOWN_METRICS.map((k) => <SelectItem key={k} value={k}>{metricOf(k).label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {hasGroups ? (
+            <ToggleGroup type="single" spacing={1} value={view} onValueChange={(x) => { if (x) setView(x as "group" | "account"); }} aria-label="เทียบตาม" className="rounded-full border bg-card p-0.5">
+              {[["group", "แยกกลุ่ม"], ["account", "แยกบัญชี"]].map(([id, text]) => (
+                <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          ) : null}
+        </div>
       </div>
       <p className="text-xs text-muted-foreground">
-        ชี้ / แตะแท่งดูตัวเลขและ % ที่เปลี่ยน · ขาที่ทำให้ GMV เปลี่ยน: GMV = ชั่วโมงไลฟ์ × Viewers/ชม. × GMV/Viewer ขาที่ลดมากสุดคือจุดที่ควรแก้ก่อน · ตัวชี้วัดอื่นอยู่ในตาราง
+        เลือกตัวชี้วัดจากดรอปดาวน์ · ชี้ / แตะแท่งดูตัวเลขและ % ที่เปลี่ยน{def.note ? ` · ${def.label}: ${def.note}` : ""} · ขาที่ทำให้ GMV เปลี่ยน: GMV = ชั่วโมงไลฟ์ × Viewers/ชม. × GMV/Viewer ขาที่ลดมากสุดคือจุดที่ควรแก้ก่อน
       </p>
       <div className="mt-1"><Legend series={pair([], "gmv")} /></div>
       <div className="mt-2 grid gap-x-4 gap-y-6 lg:grid-cols-2">
