@@ -5,8 +5,9 @@ import type { ExportSheet } from "@/lib/export";
 
 const RATE_MAX = 1_000_000;
 
-/** In house เป็นทีมของเราเอง ไม่มีงบแบบกลุ่มภายนอก */
-export const hasBudget = (agency: string) => agency !== "In house";
+/** กลุ่มที่ไม่มีงบแบบกลุ่มภายนอก: In house (ทีมเราเอง) / Vis (KOL ที่ไลฟ์ Shopee บางสล็อต ไม่คิดค่าใช้จ่าย · ผู้ใช้ 2026-11-10) */
+const NO_BUDGET = new Set(["In house", "Vis"]);
+export const hasBudget = (agency: string) => !NO_BUDGET.has(agency);
 
 /** ชื่อกลุ่มที่รับจากหน้าเว็บ (ตัวอักษร / ตัวเลข / ช่องว่าง สั้นๆ) */
 export const cleanAgency = (v: unknown) => {

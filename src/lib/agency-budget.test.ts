@@ -25,8 +25,9 @@ describe("พิมพ์เรท", () => {
   });
 });
 
-test("In house ไม่มีงบ กลุ่มภายนอกมี", () => {
+test("In house / Vis (KOL) ไม่มีงบ กลุ่มภายนอกมี", () => {
   expect(hasBudget("In house")).toBe(false);
+  expect(hasBudget("Vis")).toBe(false);
   for (const a of ["TDH", "Infinite", "MCN"]) expect(hasBudget(a)).toBe(true);
 });
 

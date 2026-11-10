@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useId, useState } from "react";
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
-import { parseRate } from "@/lib/agency-budget";
+import { hasBudget, parseRate } from "@/lib/agency-budget";
 import { costBook, costRatio, costTotals, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
 import { fmtDayMonth, fmtMonthShort, money, monthKey, monthLabel, num, parseKey } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
@@ -42,7 +42,8 @@ function RowDetail({ r }: { r: CostRow }) {
   const source = rowSource(r);
   const tag = source ? <span className={cn("block", Object.values(r.sources).includes("forecast") && "font-semibold text-warning-foreground")}>{source}</span> : null;
   if (!r.owner && r.app === "Shopee") return <>ยอดขายที่ไม่มีกลุ่มในแพลนช่วงเวลานี้</>;
-  if (r.owner && r.owner !== "In house") {
+  if (r.owner && r.owner !== "In house" && !hasBudget(r.owner)) return <>ไม่คิดค่าใช้จ่าย{tag}</>;
+  if (r.owner && hasBudget(r.owner)) {
     return (
       <>
         {r.rate ? <>฿{Math.round(r.rate).toLocaleString("th-TH")} × {num(r.planHours)} ชม.</>
@@ -120,7 +121,7 @@ export function CostPage() {
     ...(see.agency ? [{ label: "งบ Agency", value: totals.agency, format: baht, delta: <ChangeText cur={totals.agency} prev={prev.agency} suffix={vs} neutral />, note: "" }] : []),
   ];
 
-  const noRate = report.rows.filter((r) => r.owner && r.owner !== "In house" && !r.rate && !r.sources.agency);
+  const noRate = report.rows.filter((r) => r.owner && hasBudget(r.owner) && !r.rate && !r.sources.agency);
   const groups = (["TikTok", "Shopee"] as CostApp[]).map((app) => ({ app, rows: report.rows.filter((r) => r.app === app) })).filter((g) => g.rows.length);
   // มี Cost ของกลุ่มแต่แยก GMV ไม่ได้ (เดือนที่ยังไม่มีแพลนกลุ่ม)
   const noGroupGmv = see.gmv && report.rows.some((r) => r.owner && rowCost(r) && r.gmv === null);

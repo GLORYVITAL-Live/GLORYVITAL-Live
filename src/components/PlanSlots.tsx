@@ -129,10 +129,11 @@ const CHANNELS: Column[] = [
   { platform: SHOPEE, agency: "In house", times: SHOPEE_TIMES },
   { platform: SHOPEE, agency: "Infinite", times: SHOPEE_TIMES },
   { platform: SHOPEE, agency: "MCN", times: SHOPEE_TIMES },
+  // KOL ที่ไลฟ์ Shopee บางสล็อต (ไม่มีงบ · hasBudget)
+  { platform: SHOPEE, agency: "Vis", times: SHOPEE_TIMES },
 ];
-/** ชื่อกลุ่มที่แสดง (ชื่อที่เก็บ -> ชื่อเต็ม) */
-const OWNER_LABEL: Record<string, string> = { "In house": "In house", MCN: "MCN" };
-const ownerLabel = (agency: string | null | undefined) => (!agency ? "ของเรา" : OWNER_LABEL[agency] ?? `Agency ${agency}`);
+/** ชื่อกลุ่มที่แสดง (ชื่อที่เก็บ -> ชื่อเต็ม) ใช้ชื่อเดียวกับหน้าสถิติไลฟ์ / Cost */
+const ownerLabel = ownerText;
 
 function daysOf(month: string) {
   const [y, m] = month.split("-").map(Number);
@@ -177,8 +178,8 @@ function useDraft(month: string) {
 // ---------- ส่งออก Shopee แบบตารางส่งทีม (แบบที่ใช้ส่ง Agency / MCN) ----------
 
 /** สีหัวกลุ่ม Shopee (เหมือนชีตที่ทีมใช้) */
-const SHOPEE_COLORS: Record<string, string> = { Infinite: "00FFFF", MCN: "FF9900", "In house": "FFFF00" };
-const SHOPEE_ORDER = ["Infinite", "MCN", "In house"];
+const SHOPEE_COLORS: Record<string, string> = { Infinite: "00FFFF", MCN: "FF9900", "In house": "FFFF00", Vis: "F9CB9C" };
+const SHOPEE_ORDER = ["Infinite", "MCN", "In house", "Vis"];
 
 /**
  * ตาราง Shopee แบบส่งทีม: หัวตาราง (ดำ) > หัวกลุ่ม (สีของกลุ่ม + ชั่วโมงรวม) > วันละแถว (ช่วงที่ต่อกันรวมเป็นช่วงเดียว)
@@ -1061,7 +1062,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
             <>
               <p className="mb-2 text-xs text-muted-foreground">
                 {readOnly ? "ชี้ที่ช่องเพื่อดูรายละเอียด · กดวันที่ = ดู slot + Campaign ของวันนั้น" : mode === "shopee"
-                  ? "แพลน Shopee (In house / Agency Infinite / MCN) เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · ช่วงเวลาเดียวกันเป็นของกลุ่มใดกลุ่มหนึ่ง กดช่องของอีกกลุ่ม = ย้ายมา · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้"
+                  ? "แพลน Shopee (In house / Agency Infinite / MCN / Vis (KOL)) เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · ช่วงเวลาเดียวกันเป็นของกลุ่มใดกลุ่มหนึ่ง กดช่องของอีกกลุ่ม = ย้ายมา · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้"
                   : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · กดป้ายสถานะของ Agency = สลับ Confirmed / Adjusted (ไฟล์ส่งออกแสดงตามนี้)"}
               </p>
               <TickView

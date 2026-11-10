@@ -28,7 +28,7 @@ const hm = (t: string) => t.slice(0, 5);
 const bkkDate = (ms: number) => new Date(ms + 7 * 3600_000).toISOString().slice(0, 10);
 const slotKey = (r: SlotRow) => `${r.platform.trim().toLowerCase()}|${Date.parse(r.starts_at)}|${Date.parse(r.ends_at)}`;
 /** ชื่อกลุ่มแพลนในเว็บ (เหมือนหน้า Plan Slot Live) */
-const agencyLabel = (a: string) => (a === "In house" || a === "MCN" ? a : `Agency ${a}`);
+const agencyLabel = (a: string) => ownerText(a);
 
 /** ชื่อของช่วงที่ต่อกัน: คนเดียวทั้งไลฟ์ = ชื่ออย่างเดียว / หลายคน = ชื่อ (ช่วงเวลา) ชื่อเดิมที่ต่อกันรวมเป็นช่วงเดียว */
 function names(list: { name: string; start: string; end: string }[]) {

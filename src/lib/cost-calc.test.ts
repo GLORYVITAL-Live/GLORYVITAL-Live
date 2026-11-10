@@ -104,6 +104,14 @@ describe("GMV", () => {
     });
     expect(rows.map((r) => [r.label, r.gmv])).toEqual([["In house", 300], ["Agency Infinite", 500]]);
   });
+  test("Vis (KOL): ไม่มีงบ (แพลนไม่สร้างแถวงบ) แต่ GMV ช่วงของ Vis เป็นแถวของตัวเอง", () => {
+    const vis = plan("Vis", "2026-11-01", "18:00", "22:00", "Shopee");
+    const { rows } = run({
+      plan: [vis], spans: [spanRow(vis)], rates: new Map([["Vis", 999]]),
+      sessions: [live("2026-11-01", "19:00", 800, "Shopee", "x"), live("2026-11-01", "10:00", 100, "Shopee", "x")],
+    });
+    expect(rows.map((r) => [r.label, r.gmv, rowCost(r), r.rate])).toEqual([["In house", 100, 0, null], ["Vis (KOL)", 800, 0, null]]);
+  });
   test("Shopee เดือนที่ยังไม่มีแพลนกลุ่ม: ยอดทั้งหมด = In house", () => {
     const { rows } = run({ sessions: [live("2026-11-01", "15:00", 200, "Shopee", "x")] });
     expect(rows.map((r) => [r.app, r.label, r.gmv])).toEqual([["Shopee", "In house", 200]]);
