@@ -3,11 +3,14 @@
 import { Fragment, useEffect, useId, useState } from "react";
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { hasBudget, parseRate } from "@/lib/agency-budget";
-import { costBook, costRatio, costTotals, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
+import { costBook, costRatio, costTotals, roiOf, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
+import { buildCostDeck } from "@/lib/cost-slides";
+import { bkkStamp } from "@/lib/live-export";
+import type { CostReport as McCostReport } from "@/lib/mc-cost-calc";
 import { fmtDayMonth, fmtMonthShort, money, monthKey, monthLabel, num, parseKey } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
-import { ExportMenu } from "@/components/ExportMenu";
+import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { BarChart, ChangeText, Legend, LineChart, TableView } from "@/components/LiveCharts";
 import { McCostView } from "@/components/McCostView";
 import { MonthPicker } from "@/components/MonthPicker";
@@ -36,8 +39,10 @@ function cutText(ms: number) {
 
 /** Cost/GMV ของแถวในตาราง: ไม่มี Cost ในระบบ = "-" (0.0% จะอ่านเหมือนไม่ต้องจ่ายอะไรเลย) */
 const rowPct = (cost: number, gmv: number | null) => (cost ? pct(costRatio(cost, gmv)) : "-");
-/** ROI ของไลฟ์ = GMV ÷ Cost (จ่าย ฿1 ได้ยอดขายกี่บาท) · ไม่มี GMV / Cost = null */
-const roiOf = (gmv: number | null, cost: number) => (gmv !== null && cost > 0 ? gmv / cost : null);
+/** ความคุ้มค่า Mc ของเดือนนี้ไว้ใส่ไฟล์ส่งออก / สไลด์ · null = ไม่มีสิทธิ์ดู / โหลดไม่ได้ (ส่วนอื่นยังออกได้) */
+const loadMcCost = (month: string | null) => (month
+  ? api<{ report: McCostReport }>(`/api/live-stats/cost?month=${month}`).then((r) => (r.ok ? r.report : null)).catch(() => null)
+  : Promise.resolve(null));
 const roiText = (v: number | null) => (v === null ? "-" : `×${v.toLocaleString("th-TH", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`);
 
 /** ค่าใช้จ่ายของแถวนี้มาจากอะไร */
@@ -143,7 +148,15 @@ export function CostPage() {
             : <>ทั้งเดือน {monthLabel(report.month)} · เทียบ {monthLabel(report.prevMonth)}</>}
           {totals.agency && !prev.agency ? <span className="block font-semibold text-warning-foreground">{prevName} ยังไม่มีงบ Agency ในยอด Cost ที่เทียบกันจึงดูเพิ่มขึ้นมากกว่าจริง</span> : null}
         </p>
-        <ExportMenu size="sm" label="ส่งออก" build={() => costBook(report, trend)} />
+        <div className="flex flex-wrap gap-2">
+          <ExportMenu size="sm" label="ส่งออก" build={async () => costBook(report, trend, await loadMcCost(see.mc && see.gmv ? month : null))} />
+          <SlidesMenu label="สไลด์" title={`GLORY Cost ROI ${monthLabel(report.month)}`} build={async (target) => buildCostDeck({
+            report, trend, mc: await loadMcCost(see.mc && see.gmv ? month : null),
+            monthName: monthLabel(report.month), prevName, shortMonth, monthLabel,
+            cutText: report.upTo !== null ? `นับถึง ${cutText(report.upTo)} · ${prevName} นับถึงเวลาเดียวกัน` : `ทั้งเดือน ${monthLabel(report.month)} · เทียบ ${monthLabel(report.prevMonth)}`,
+            exportedAt: bkkStamp(new Date().toISOString()),
+          }, target)} />
+        </div>
       </div>
 
       {report.sheet.error ? (

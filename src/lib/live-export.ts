@@ -2,7 +2,11 @@
 //   ทุกไฟล์มีแผ่น "ข้อมูล" (ช่วงเวลา ตัวกรอง นิยามตัวชี้วัด) ตัวเลขเป็นตัวเลขจริง คำนวณต่อใน Excel / Google Sheet ได้
 
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
-import { accountLabel, accountsOf, bkkParts, changeOf, crewKey, METRICS, totalsOf, type LiveCrew, type LiveSession, type Totals } from "@/lib/live-stats";
+import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
+import { dayKindLabel, dayKindStats, liveDay, type DayTag } from "@/lib/live-days";
+import { HEAT_WEEKDAY_NAMES, heatGrid, heatHour, heatPerHour, type HeatCell } from "@/lib/live-heat";
+import { splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
+import { accountLabel, accountsOf, bkkParts, changeOf, crewKey, METRICS, totalsOf, type LiveCrew, type LiveSession, type Platform, type Totals } from "@/lib/live-stats";
 
 type Kind = (typeof METRICS)[number]["kind"];
 
@@ -117,6 +121,18 @@ function pairSheet(
   name: string, first: string, aName: string, bName: string, groups: { label: string; a: LiveSession[]; b: LiveSession[] }[],
   total?: { a: LiveSession[]; b: LiveSession[] },
 ): ExportSheet {
+  return pairTotalsSheet(name, first, aName, bName, [
+    ...groups.map((g) => ({ label: g.label, ta: totalsOf(g.a), tb: totalsOf(g.b) })),
+    ...(total ? [{ label: "รวม", ta: totalsOf(total.a), tb: totalsOf(total.b), total: true }] : []),
+  ]);
+}
+
+/**
+ * แกนของ pairSheet จากยอดรวม (เช่น ส่วนของกลุ่มที่แบ่งตามนาที) · total = แถวสรุปตัวหนา · band = แถวหัวกลุ่ม (เช่น รวมแพลตฟอร์ม)
+ *   extra = คอลัมน์ท้ายตาราง (เช่น ขาที่ทำให้ GMV เปลี่ยนมากสุด)
+ */
+type PairRow = { label: string; ta: Totals; tb: Totals; total?: boolean; band?: boolean; extra?: Cell };
+function pairTotalsSheet(name: string, first: string, aName: string, bName: string, list: PairRow[], extraHead?: string): ExportSheet {
   const metrics = MULTI_ORDER.map((k) => METRICS.find((m) => m.key === k)!);
   const TINT = ["FDE8F0", "EEF1F6"];
   const rowStyles: Record<number, RowStyle> = {};
@@ -130,11 +146,12 @@ function pairSheet(
   });
   cellStyles["1:0"] = { bg: "FFFFFF", bold: true };
   cellStyles["2:0"] = { bg: TINT[0], bold: true };
-  const all = [...groups.map((g) => ({ ...g, total: false })), ...(total ? [{ label: "รวม", ...total, total: true }] : [])];
+  const all = list;
   const body = all.map((g, gi): Cell[] => {
-    const ta = totalsOf(g.a), tb = totalsOf(g.b);
+    const { ta, tb } = g;
     const r = 3 + gi;
     if (g.total) rowStyles[r] = { bg: "FFF7E6", bold: true, border: true };
+    else if (g.band) rowStyles[r] = { bg: "F6EEF2", bold: true };
     return [g.label, ...metrics.flatMap((m, i) => {
       const va = ta.lives ? m.value(ta) : null, vb = tb.lives ? m.value(tb) : null;
       const d = deltaOf(m.kind, va, vb);
@@ -144,21 +161,164 @@ function pairSheet(
           : { bg: g.total ? "FFF7E6" : "FDECEC", color: "B42318", bold: g.total };
       }
       return [num(m.kind, va), num(m.kind, vb), m.kind === "pct" ? d?.text ?? null : d ? { v: d.value, f: "pct" as const } : null];
-    })];
+    }), ...(extraHead ? [g.extra ?? null] : [])];
   });
   return {
     name,
     header: 2,
     rows: [
       [`ช่วงหลัก = ${aName}   ·   ช่วงเทียบ = ${bName}   ·   เปลี่ยน = ช่วงหลักเทียบช่วงเทียบ (CTR / CO เป็น pp)`],
-      ["", ...metrics.flatMap((m) => [m.note && m.note.length <= 8 ? `${m.label} (${m.note})` : m.label, "", ""])],
-      [first, ...metrics.flatMap(() => ["ช่วงหลัก", "ช่วงเทียบ", "เปลี่ยน"])],
+      ["", ...metrics.flatMap((m) => [m.note && m.note.length <= 8 ? `${m.label} (${m.note})` : m.label, "", ""]), ...(extraHead ? [""] : [])],
+      [first, ...metrics.flatMap(() => ["ช่วงหลัก", "ช่วงเทียบ", "เปลี่ยน"]), ...(extraHead ? [extraHead] : [])],
       ...body,
     ],
     rowStyles,
     cellStyles,
-    colWidths: [Math.min(36, Math.max(12, ...all.map((g) => g.label.length + 2), first.length + 2)), ...metrics.flatMap(() => [13, 13, 10])],
+    colWidths: [Math.min(36, Math.max(12, ...all.map((g) => g.label.length + 2), first.length + 2)), ...metrics.flatMap(() => [13, 13, 10]), ...(extraHead ? [30] : [])],
   };
+}
+
+// ---------- ส่วนเสริมที่หน้าเว็บแสดง (กลุ่มผู้ไลฟ์ / เทียบรายกลุ่ม / แยก Agency / ช่วงเวลาขายดี / วันแคมเปญ) ----------
+
+/**
+ * ส่วนเสริมของไฟล์ส่งออก ให้ครบเหมือนหน้าเว็บ (ไม่ใส่ = ไม่มีแผ่นนั้น)
+ *   owners = ตาราง "แยกตามกลุ่มผู้ไลฟ์" (ต้องมี spans) · breakdown = เทียบรายกลุ่ม / รายบัญชีทุกตัวชี้วัด (b ว่าง = ค่าของช่วงหลักอย่างเดียว)
+ *   agency = แผ่น GMV / GMV/ชม. แยก Agency ตามเวลา · heat = ช่วงเวลาไหนขายดี · tags = วันปกติ vs วันแคมเปญ
+ */
+export type ExportExtras = {
+  spans?: OwnerSpan[] | null;
+  owners?: boolean;
+  breakdown?: { b: LiveSession[]; aName: string; bName: string };
+  agency?: { name: string; first: string; labels: string[]; trend: AgencyTrend[] }[];
+  heat?: boolean;
+  tags?: Map<string, DayTag> | null;
+};
+
+/** ตาราง "แยกตามกลุ่มผู้ไลฟ์": ช่อง (ตัวหนา) + กลุ่ม · สัดส่วน = ของช่องนั้น */
+function ownersSheet(sessions: LiveSession[], spans: OwnerSpan[]): ExportSheet | null {
+  const channels = splitByOwner(sessions, spans);
+  if (!channels.length) return null;
+  const rowStyles: Record<number, RowStyle> = {};
+  const rows: Cell[][] = [["ช่อง", "กลุ่ม", "ไลฟ์", "ชั่วโมง", "GMV", "สัดส่วน", "GMV/ชม."]];
+  for (const c of channels) {
+    rowStyles[rows.length] = { bg: "F6EEF2", bold: true };
+    rows.push([c.label, "รวม", c.lives, { v: c.sec / 3600, f: "dec" }, { v: c.gmv, f: "money" }, { v: 1, f: "pct" }, c.sec ? { v: c.gmv / (c.sec / 3600), f: "money" } : null]);
+    for (const r of c.rows) {
+      rows.push([c.label, r.label, r.lives, { v: r.sec / 3600, f: "dec" }, { v: r.gmv, f: "money" }, c.gmv ? { v: r.gmv / c.gmv, f: "pct" } : null, r.sec ? { v: r.gmv / (r.sec / 3600), f: "money" } : null]);
+    }
+  }
+  const split = channels.reduce((a, c) => a + c.splitLives, 0);
+  rows.push([], [`ไลฟ์ที่ไม่ใช่ Agency = ทีมเรา (TikTok ของเรา / Shopee In house)${split ? ` · ${split} ไลฟ์คร่อมหลายกลุ่ม แบ่งตัวเลขตามนาที (ประมาณ)` : ""}`]);
+  return { name: "แยกกลุ่มผู้ไลฟ์", rows, rowStyles };
+}
+
+/** เทียบรายกลุ่ม / รายบัญชีทุกตัวชี้วัด (เหมือนส่วน "เทียบรายกลุ่มและรายบัญชี" บนเว็บ) */
+function breakdownSheets(a: LiveSession[], x: NonNullable<ExportExtras["breakdown"]>, spans: OwnerSpan[] | null): ExportSheet[] {
+  const { groups, accounts } = breakdownRows(a, x.b, spans);
+  if (!groups.length) return [];
+  const label = (r: BreakdownRow) => (r.level === "group" ? `   ${r.label}` : r.level === "account" && r.label !== r.platform ? `${r.label} (${r.platform})` : r.label);
+  if (!x.b.length) {
+    // ไม่มีช่วงเทียบ: ค่าของช่วงหลักอย่างเดียว
+    const flat = (name: string, first: string, rows: BreakdownRow[]): ExportSheet => ({
+      name,
+      rows: [[first, ...METRIC_HEADERS], ...rows.map((r): Cell[] => [label(r), ...metricCells(r.a)])],
+      rowStyles: Object.fromEntries(rows.flatMap((r, i) => (r.level === "platform" ? [[i + 1, { bg: "F6EEF2", bold: true }]] : []))),
+    });
+    return [...(groups.some((r) => r.level === "group") ? [flat("เทียบรายกลุ่ม", "กลุ่ม", groups)] : []), flat("รายบัญชี ทุกตัวชี้วัด", "บัญชี", accounts)];
+  }
+  const pairRows = (rows: BreakdownRow[]): PairRow[] => rows.map((r) => {
+    const leg = mainLeg(r.a, r.b);
+    return {
+      label: label(r), ta: r.a, tb: r.b, band: r.level === "platform",
+      extra: leg ? `${leg.label} ${leg.change > 0 ? "+" : ""}${(leg.change * 100).toFixed(1)}% (GMV ${leg.gmv > 0 ? "+" : ""}${(leg.gmv * 100).toFixed(1)}%)` : null,
+    };
+  });
+  return [
+    ...(groups.some((r) => r.level === "group") ? [pairTotalsSheet("เทียบรายกลุ่ม", "กลุ่ม", x.aName, x.bName, pairRows(groups), "ขาที่ทำให้ GMV เปลี่ยนมากสุด")] : []),
+    pairTotalsSheet("เทียบรายบัญชี", "บัญชี", x.aName, x.bName, pairRows(accounts), "ขาที่ทำให้ GMV เปลี่ยนมากสุด"),
+  ];
+}
+
+/** GMV และ GMV/ชม. แยก Agency ตามเวลา (แถว = วัน / เดือน · คอลัมน์ = แพลตฟอร์ม · กลุ่ม) */
+function agencySheet(o: NonNullable<ExportExtras["agency"]>[number]): ExportSheet | null {
+  if (!o.trend.some((t) => t.gmv.some((v) => v !== null))) return null;
+  const name = (t: AgencyTrend) => `${t.platform} · ${t.label}`;
+  return {
+    name: o.name,
+    rows: [
+      [o.first, ...o.trend.map((t) => `GMV ${name(t)}`), ...o.trend.map((t) => `GMV/ชม. ${name(t)}`), ...o.trend.map((t) => `ชม. ${name(t)}`)],
+      ...o.labels.map((l, i): Cell[] => [
+        l,
+        ...o.trend.map((t) => num("baht", t.gmv[i])),
+        ...o.trend.map((t) => num("baht", t.perHour[i])),
+        ...o.trend.map((t) => num("hours", t.hours[i])),
+      ]),
+    ],
+  };
+}
+
+/** ช่วงเวลาไหนขายดี: ตาราง ชั่วโมง × วัน (GMV/ชม. · GMV · ชั่วโมงไลฟ์) เฉพาะชั่วโมงที่มีไลฟ์ */
+function heatSheet(sessions: LiveSession[]): ExportSheet | null {
+  const grid = heatGrid(sessions.map((s) => ({ startedAt: s.startedAt, durationSec: s.durationSec, gmv: s.gmv })));
+  const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => grid.some((col) => col[h].sec || col[h].gmv));
+  if (!hours.length) return null;
+  const block = (title: string, cell: (c: HeatCell) => Cell): Cell[][] => [
+    [title, ...HEAT_WEEKDAY_NAMES],
+    ...hours.map((h): Cell[] => [`${heatHour(h)}–${heatHour(h + 1)}`, ...grid.map((col) => cell(col[h]))]),
+    [],
+  ];
+  const rows: Cell[][] = [
+    ["ไฟล์ Export ไม่มียอดรายชั่วโมง: กระจาย GMV ของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. เป็นตัวอย่างน้อย"],
+    [],
+    ...block("GMV/ชม.", (c) => num("baht", heatPerHour(c))),
+    ...block("GMV รวม", (c) => (c.gmv ? { v: c.gmv, f: "money" } : null)),
+    ...block("ชั่วโมงไลฟ์", (c) => (c.sec ? { v: c.sec / 3600, f: "dec" } : null)),
+  ];
+  return { name: "ช่วงเวลาขายดี", rows, colWidths: [14, ...HEAT_WEEKDAY_NAMES.map(() => 13)] };
+}
+
+/** วันปกติ vs วันแคมเปญ: ตัวเลขของแต่ละชนิดวันต่อแพลตฟอร์ม + รายการวันที่มีป้าย */
+function dayKindSheet(sessions: LiveSession[], tags: Map<string, DayTag>): ExportSheet | null {
+  const per = (["TikTok", "Shopee"] as Platform[]).map((p) => ({ p, ...dayKindStats(sessions, tags, p) })).filter((x) => x.stats.length);
+  if (!per.length) return null;
+  const rows: Cell[][] = [["แพลตฟอร์ม", "ชนิดวัน", "วัน", "ไลฟ์", "GMV", "GMV/วัน", "เทียบวันปกติ (เท่า)", "GMV/ชม.", "เทียบวันปกติ (เท่า)"]];
+  for (const x of per) {
+    const bau = x.stats.find((s) => s.kind === "bau");
+    for (const s of x.stats) {
+      rows.push([
+        x.p, dayKindLabel(s.kind), s.days, s.lives, { v: s.gmv, f: "money" }, num("baht", s.perDay),
+        s.kind !== "bau" && bau?.perDay && s.perDay !== null ? { v: s.perDay / bau.perDay, f: "dec" } : null,
+        num("baht", s.perHour),
+        s.kind !== "bau" && bau?.perHour && s.perHour !== null ? { v: s.perHour / bau.perHour, f: "dec" } : null,
+      ]);
+    }
+  }
+  const untagged = per.reduce((a, x) => a + x.untagged, 0);
+  rows.push([], [`ป้ายวันจากชีตของทีม · วัน = วันที่มีไลฟ์ นับตามเวลาเริ่มไลฟ์${untagged ? ` · ${untagged} ไลฟ์อยู่ในวันที่ยังไม่มีป้าย จึงไม่นับ` : ""}`], []);
+  // วันที่มีป้าย (ไม่ใช่วันปกติ) ทีละวัน
+  const days = [...new Set(sessions.map((s) => `${s.platform}|${liveDay(s)}`))].sort((a, b) => a.slice(-10).localeCompare(b.slice(-10)) || a.localeCompare(b));
+  const tagged = days.flatMap((k) => { const t = tags.get(k); return t && t.kind !== "bau" ? [t] : []; });
+  if (tagged.length) {
+    rows.push(["วันที่", "แพลตฟอร์ม", "ป้าย", "ชนิดวัน", "GMV"]);
+    for (const t of tagged) {
+      const gmv = sessions.filter((s) => s.platform === t.platform && liveDay(s) === t.day).reduce((a, s) => a + s.gmv, 0);
+      rows.push([t.day, t.platform, t.label || dayKindLabel(t.kind), dayKindLabel(t.kind), { v: gmv, f: "money" }]);
+    }
+  }
+  return { name: "วันปกติ vs วันแคมเปญ", rows };
+}
+
+/** แผ่นส่วนเสริมทั้งหมดของช่วงหลัก a (เรียงตามหน้าเว็บ) */
+function extraSheets(a: LiveSession[], x?: ExportExtras): ExportSheet[] {
+  if (!x) return [];
+  const spans = x.spans ?? null;
+  return [
+    x.owners && spans ? ownersSheet(a, spans) : null,
+    ...(x.breakdown ? breakdownSheets(a, x.breakdown, spans) : []),
+    ...(x.agency ?? []).map(agencySheet),
+    x.heat ? heatSheet(a) : null,
+    x.tags ? dayKindSheet(a, x.tags) : null,
+  ].filter((s): s is ExportSheet => !!s);
 }
 
 /**
@@ -204,6 +364,7 @@ function platformSheets(curLabel: string, cur: LiveSession[], compare: { label: 
 export function monthBook(o: {
   month: string; monthLabel: (k: string) => string; months13: string[]; byMonth: Map<string, LiveSession[]>; filter: ExportFilter;
   crew?: CrewMap;
+  extras?: ExportExtras;
 }): ExportBook {
   const { month, monthLabel, months13, byMonth } = o;
   const prevKey = months13[11], yoyKey = months13[0];
@@ -224,6 +385,7 @@ export function monthBook(o: {
         ],
       },
       accountSheet(byMonth.get(month) ?? [], byMonth.get(prevKey) ?? [], monthLabel(prevKey)),
+      ...extraSheets(byMonth.get(month) ?? [], o.extras),
       sessionSheet("ไลฟ์", byMonth.get(month) ?? [], o.crew),
     ],
   };
@@ -236,6 +398,7 @@ export function yearBook(o: {
   byMonth: Map<string, LiveSession[]>; curList: LiveSession[]; prevList: LiveSession[];
   quarters: { label: string; a: LiveSession[]; b: LiveSession[] }[]; filter: ExportFilter;
   crew?: CrewMap;
+  extras?: ExportExtras;
 }): ExportBook {
   const { aName, bName, curKeys, prevKeys, byMonth, monthLabel } = o;
   const t = (k: string) => totalsOf(byMonth.get(k) ?? []);
@@ -255,6 +418,7 @@ export function yearBook(o: {
       },
       pairSheet("รายไตรมาส", "ไตรมาส", aName, bName, o.quarters, { a: o.curList, b: o.prevList }),
       accountSheet(o.curList, o.prevList, bName),
+      ...extraSheets(o.curList, o.extras),
       sessionSheet("ไลฟ์", o.curList, o.crew),
     ],
   };
@@ -284,6 +448,7 @@ export function multiBook(o: {
   crew?: CrewMap;
   /** ช่วงวันเดียวกันหลายเดือน: รายวันของแต่ละเดือน (labels = "วันที่ 19" ... · byDay = เดือน -> ไลฟ์ของวันที่ 1, 2, ...) */
   daily?: { labels: string[]; byDay: Map<string, LiveSession[][]> };
+  extras?: ExportExtras;
 }): ExportBook {
   const { keys, byMonth, monthLabel, shortLabel, focus } = o;
   const list = (k: string) => byMonth.get(k) ?? [];
@@ -360,6 +525,7 @@ export function multiBook(o: {
       wideSheet("แยกบัญชี GMV", "บัญชี (GMV)",
         accountsOf(keys.flatMap(list)).map((a) => ({ label: accountLabel(a), m: gmv, sel: (s: LiveSession) => keyOf(s) === a.key })),
         { label: "รวม", m: gmv }),
+      ...extraSheets(keys.flatMap(list), o.extras),
       sessionSheet("ไลฟ์", keys.flatMap(list), o.crew),
     ],
   };
@@ -423,6 +589,7 @@ function dailySheet(
 export function singleBook(o: {
   title: string; report: string; aName: string; aRange: string; a: LiveSession[];
   timeName: string; time: { label: string; a: LiveSession[] }[]; filter: ExportFilter; crew?: CrewMap;
+  extras?: ExportExtras;
 }): ExportBook {
   const groupSheet = (name: string, first: string, groups: { label: string; a: LiveSession[] }[]): ExportSheet => ({
     name,
@@ -440,6 +607,7 @@ export function singleBook(o: {
         { label: "รวม", a: o.a },
       ]),
       ...(o.time.length > 1 ? [groupSheet(o.timeName, o.timeName, o.time)] : []),
+      ...extraSheets(o.a, o.extras),
       sessionSheet(`ไลฟ์ ${o.aName}`, o.a, o.crew),
     ],
   };
@@ -450,6 +618,7 @@ export function compareBook(o: {
   title: string; report: string; aName: string; bName: string; aRange: string; bRange: string;
   a: LiveSession[]; b: LiveSession[]; timeName: string; time: { label: string; a: LiveSession[]; b: LiveSession[] }[]; filter: ExportFilter;
   crew?: CrewMap;
+  extras?: ExportExtras;
 }): ExportBook {
   const accounts = accountsOf([...o.a, ...o.b]);
   return {
@@ -462,6 +631,7 @@ export function compareBook(o: {
         accounts.map((acc) => ({ label: accountLabel(acc), a: o.a.filter((s) => keyOf(s) === acc.key), b: o.b.filter((s) => keyOf(s) === acc.key) })),
         { a: o.a, b: o.b }),
       ...(o.time.length > 1 ? [pairSheet(o.timeName, o.timeName, o.aName, o.bName, o.time, { a: o.a, b: o.b })] : []),
+      ...extraSheets(o.a, o.extras),
       sessionSheet(`ไลฟ์ ${o.aName}`, o.a, o.crew),
       sessionSheet(`ไลฟ์ ${o.bName}`, o.b, o.crew),
     ],

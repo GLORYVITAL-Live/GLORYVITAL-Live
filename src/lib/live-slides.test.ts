@@ -167,6 +167,40 @@ describe("แยก Agency", () => {
   });
 });
 
+describe("ส่วนเสริมเหมือนหน้าเว็บ (เทียบรายกลุ่ม / ช่วงเวลาขายดี / วันแคมเปญ)", () => {
+  // บัญชี GLORY VITAL (ช่อง GLORY MALL ใน src/lib/platform.ts) = มีกลุ่มผู้ไลฟ์
+  const vital = (d: string, t: string, gmv: number, liveOwner: string | null = null) => ({ ...live(d, t, gmv), accountId: "7126874351866037275", liveOwner }) as LiveSession;
+  const a = [vital("2026-11-05", "09:00", 1000, "ours"), vital("2026-11-05", "20:00", 3000, "TDH"), live("2026-11-06", "12:00", 800, "Shopee")];
+  const b = [vital("2026-10-05", "09:00", 900, "ours"), vital("2026-10-05", "20:00", 2000, "TDH"), live("2026-10-06", "12:00", 1000, "Shopee")];
+  const input: CompareDeckInput = { ...base, a, b, aName: "พ.ย.", bName: "ต.ค.", time: [], timeName: "รายวัน" };
+  const tags = new Map([["Shopee|2026-11-06", { platform: "Shopee" as const, day: "2026-11-06", kind: "dday" as const, label: "11.11" }], ["TikTok|2026-11-05", { platform: "TikTok" as const, day: "2026-11-05", kind: "bau" as const, label: "" }]]);
+  test("มีหน้ากราฟ GMV / GMV/ชม. แยกกลุ่ม + ตารางทุกตัวชี้วัด + ช่วงเวลาขายดี + วันแคมเปญ · ทั้ง PowerPoint และ Google Slides", async () => {
+    for (const target of ["pptx", "gslides"] as const) {
+      const { slides } = await open(await buildCompareDeck({ ...input, breakdown: { spans: [] }, heat: { title: "ช่วงเวลาไหนขายดี พ.ย." }, dayKinds: { title: "วันปกติ vs วันแคมเปญ พ.ย.", tags } }, target));
+      expect(titled(slides, "GMV แยกกลุ่ม: พ.ย. vs ต.ค.")).toBe(true);
+      expect(titled(slides, "GMV / ชม. แยกกลุ่ม")).toBe(true);
+      expect(titled(slides, "เทียบรายกลุ่ม ทุกตัวชี้วัด")).toBe(true);
+      expect(titled(slides, "เทียบรายบัญชี ทุกตัวชี้วัด")).toBe(true);
+      expect(titled(slides, "Agency TDH")).toBe(true);
+      expect(titled(slides, "ขาที่ทำให้ GMV เปลี่ยนมากสุด")).toBe(true);
+      expect(titled(slides, "ช่วงเวลาไหนขายดี พ.ย.")).toBe(true);
+      expect(titled(slides, "วันปกติ vs วันแคมเปญ พ.ย.")).toBe(true);
+    }
+  });
+  test("ไม่มีช่วงเทียบ: แท่งเดียว ไม่มีคำว่า vs และไม่มีคอลัมน์ขาที่ทำให้เปลี่ยน", async () => {
+    const { slides } = await open(await buildCompareDeck({ ...input, b: [], single: true, breakdown: { spans: [] } }));
+    expect(titled(slides, "GMV แยกกลุ่ม: พ.ย.<")).toBe(true);
+    expect(titled(slides, "รายกลุ่ม ทุกตัวชี้วัด: พ.ย.")).toBe(true);
+    expect(titled(slides, "ขาที่ทำให้ GMV เปลี่ยนมากสุด")).toBe(false);
+  });
+  test("ไม่ส่งส่วนเสริม = ไม่มีหน้าเหล่านี้", async () => {
+    const { slides } = await open(await buildCompareDeck(input));
+    expect(titled(slides, "แยกกลุ่ม:")).toBe(false);
+    expect(titled(slides, "ช่วงเวลาไหนขายดี")).toBe(false);
+    expect(titled(slides, "วันปกติ vs วันแคมเปญ")).toBe(false);
+  });
+});
+
 describe("เทียบหลายเดือน", () => {
   const keys = ["2026-09", "2026-10", "2026-11"];
   const byMonth = new Map(keys.map((k) => [k, [live(`${k}-05`, "09:00", 1000), live(`${k}-05`, "12:00", 500, "Shopee"), live(`${k}-06`, "09:00", 700)]]));

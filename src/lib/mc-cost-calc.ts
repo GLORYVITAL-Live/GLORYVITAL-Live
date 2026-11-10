@@ -1,4 +1,4 @@
-import { instLabel, type Band, type CampInfo } from "@/lib/campaign";
+import { BANDS, instLabel, type Band, type CampInfo } from "@/lib/campaign";
 import { gmvCoverage } from "@/lib/gmv";
 import { itemRate, type PayData } from "@/lib/owner-pay";
 import { slotPay } from "@/lib/pay";
@@ -35,6 +35,25 @@ export type CostReport = {
   /** คิวของ Mc ประจำที่ไม่นับ */
   salaried: number;
 };
+
+/** มุมที่แยกดูได้ (หน้าเว็บ / ไฟล์ส่งออก / สไลด์ใช้ชุดเดียวกัน) */
+export const MC_COST_DIMS = [["band", "ช่วงเวลา"], ["platform", "ช่อง"], ["mc", "Mc"], ["camp", "แคมเปญ"], ["app", "แพลตฟอร์ม"]] as const;
+export type McCostDim = (typeof MC_COST_DIMS)[number][0];
+const BAND_TIME: Record<string, string> = { เช้า: "07–11", บ่าย: "11–15", เย็น: "15–19", ไพรม์: "19–23", ดึก: "23–07" };
+export type McCostRow = { key: string; label: string; slots: number; hours: number; cost: number; gmv: number; estHours: number };
+
+/** รวมค่าจ้าง + ยอดตามมุมที่เลือก · ช่วงเวลาเรียงตามเวลา · อย่างอื่นเรียงตามค่าจ้าง (งบไปที่ไหนมากที่สุด) */
+export function mcCostRows(cells: CostCell[], dim: McCostDim): McCostRow[] {
+  const m = new Map<string, McCostRow>();
+  for (const c of cells) {
+    const key = c[dim];
+    const r = m.get(key) ?? { key, label: dim === "band" ? `${key} ${BAND_TIME[key] ?? ""}` : key, slots: 0, hours: 0, cost: 0, gmv: 0, estHours: 0 };
+    r.slots += c.slots; r.hours += c.hours; r.cost += c.cost; r.gmv += c.gmv; r.estHours += c.estHours;
+    m.set(key, r);
+  }
+  const rows = [...m.values()];
+  return dim === "band" ? rows.sort((a, b) => BANDS.indexOf(a.key as never) - BANDS.indexOf(b.key as never)) : rows.sort((a, b) => b.cost - a.cost);
+}
 
 export function costCells(summary: Summary, slots: CostSlot[], { now, upToDay }: { now: number; upToDay?: number }) {
   const salariedNames = new Set(summary.mc.filter((p) => p.salaried).map((p) => p.name));

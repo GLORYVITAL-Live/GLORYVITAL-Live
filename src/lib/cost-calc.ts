@@ -10,6 +10,7 @@ import type { CostSheetEntry, CostSheetKind } from "@/lib/cost-sheet";
 import type { ExportBook, ExportSheet } from "@/lib/export";
 import type { LiveSession } from "@/lib/live-stats";
 import { splitByOwner, type OwnerSpan } from "@/lib/live-owners";
+import { MC_COST_DIMS, mcCostRows, type CostReport as McCostReport } from "@/lib/mc-cost-calc";
 import { hasRateOf, payOfItems, salariedOf, travelOf, type PayData } from "@/lib/owner-pay";
 import { ownerText, spanLen, spanMs } from "@/lib/plan-clash";
 import { isShopeePlatform } from "@/lib/platform";
@@ -219,16 +220,23 @@ export function yearRows(points: CostPoint[]): CostRow[] {
 
 /** Cost ต่อ GMV · ไม่มี GMV = null */
 export const costRatio = (cost: number, gmv: number | null) => (gmv ? cost / gmv : null);
+/** ROI ของไลฟ์ = GMV ÷ Cost (จ่าย ฿1 ได้ยอดขายกี่บาท) · ไม่มี GMV / Cost = null */
+export const roiOf = (gmv: number | null, cost: number) => (gmv !== null && cost > 0 ? gmv / cost : null);
 
 const money = (v: number | null) => ({ v, f: "money" as const });
 const pct = (v: number | null) => ({ v, f: "pct" as const });
+const dec = (v: number | null) => (v === null ? null : { v, f: "dec" as const });
+const change = (a: number | null, b: number | null) => (a === null || b === null || !b ? null : pct(a / b - 1));
 
-/** ไฟล์ส่งออกหน้า Cost: สรุปตามกลุ่ม + งบ Agency + แนวโน้มรายเดือน */
-export function costBook(report: CostReport, trend: CostPoint[] | null): ExportBook {
+/**
+ * ไฟล์ส่งออกหน้า Cost / ROI: สรุปตามกลุ่ม + งบ Agency + แนวโน้มรายเดือน (ROI + ROI MoM) + แยกกลุ่มทั้งปี
+ *   mc = ความคุ้มค่า Mc ของเดือนนี้ (แยก 5 มุมเหมือนหน้าเว็บ) · ไม่ส่ง = ไม่มีแผ่นนั้น
+ */
+export function costBook(report: CostReport, trend: CostPoint[] | null, mc?: McCostReport | null): ExportBook {
   const open = report.upTo !== null;
   const line = (app: string, label: string, r: Pick<CostRow, "mc" | "admin" | "travel" | "agency" | "full" | "gmv">, source = "") => [
     app, label, money(r.mc), money(r.admin), money(r.travel), money(r.agency), money(rowCost(r)), money(r.gmv), pct(costRatio(rowCost(r), r.gmv)),
-    ...(open ? [money(r.full)] : []), source,
+    dec(roiOf(r.gmv, rowCost(r))), ...(open ? [money(r.full)] : []), source,
   ];
   // งบจากเรทในเว็บเท่านั้น (แถวที่มาจากชีตเรทคำนวณกลับจากยอด ไม่ใช่เรทที่ตั้งไว้)
   const budget = budgetSheet(report.rows.filter((r) => r.owner && hasBudget(r.owner) && !r.sources.agency).map((r) => (
@@ -238,21 +246,46 @@ export function costBook(report: CostReport, trend: CostPoint[] | null): ExportB
     {
       name: "Cost",
       rows: [
-        ["แพลตฟอร์ม", "กลุ่ม", "Mc", "Admin", "ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", ...(open ? ["ทั้งเดือนตามแผน"] : []), "ที่มา"],
+        ["แพลตฟอร์ม", "กลุ่ม", "Mc", "Admin", "ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", "ROI (GMV ÷ Cost)", ...(open ? ["ทั้งเดือนตามแผน"] : []), "ที่มา"],
         ...report.rows.map((r) => line(r.app, r.label, r, rowSource(r) || "ระบบ")),
         line("รวม", "", report.totals),
+        [],
+        [`เทียบ ${report.prevMonth}${open ? " (นับถึงเวลาเดียวกัน)" : ""}`, "", money(report.prev.mc), money(report.prev.admin), money(report.prev.travel), money(report.prev.agency), money(report.prev.cost), money(report.prev.gmv), pct(costRatio(report.prev.cost, report.prev.gmv)), dec(roiOf(report.prev.gmv, report.prev.cost))],
       ],
     },
     ...(budget ? [budget] : []),
     ...(trend?.length ? [{
       name: "แนวโน้มรายเดือน",
       rows: [
-        ["เดือน", "Mc", "Admin + ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", "ในจำนวนนี้เป็นประมาณการ", "หมายเหตุ"],
-        ...trend.map((p) => [
-          p.month, money(p.mc), money(p.admin + p.travel), money(p.agency), money(p.cost), money(p.gmv), pct(costRatio(p.cost, p.gmv)), money(p.forecast || null), p.open ? "ยังไม่จบเดือน" : "",
+        ["เดือน", "Mc", "Admin + ค่ารถ", "Agency", "Cost รวม", "GMV", "Cost/GMV", "ROI (GMV ÷ Cost)", "ROI MoM", "ในจำนวนนี้เป็นประมาณการ", "หมายเหตุ"],
+        ...trend.map((p, i) => [
+          p.month, money(p.mc), money(p.admin + p.travel), money(p.agency), money(p.cost), money(p.gmv), pct(costRatio(p.cost, p.gmv)),
+          dec(roiOf(p.gmv, p.cost)), i ? change(roiOf(p.gmv, p.cost), roiOf(trend[i - 1].gmv, trend[i - 1].cost)) : null,
+          money(p.forecast || null), p.open ? "ยังไม่จบเดือน" : "",
         ]),
       ],
+    }, {
+      name: "แยกกลุ่มทั้งปี",
+      rows: [
+        ["แพลตฟอร์ม", "กลุ่ม", "Mc", "Admin", "ค่ารถ", "Agency", "Cost รวม", "สัดส่วน Cost", "GMV", "ROI (GMV ÷ Cost)", "ในนี้เป็นประมาณการ"],
+        ...yearRows(trend).filter((r) => rowCost(r) || r.gmv).map((r) => {
+          const yearCost = trend.reduce((a, p) => a + p.cost, 0);
+          return [r.app, r.label, money(r.mc), money(r.admin), money(r.travel), money(r.agency), money(rowCost(r)), pct(costRatio(rowCost(r), yearCost)), money(r.gmv), dec(roiOf(r.gmv, rowCost(r))), money(r.forecast || null)];
+        }),
+      ],
     }] : []),
+    ...(mc?.cells.length ? MC_COST_DIMS.map(([dim, title]) => ({
+      name: `คุ้มค่า Mc ${title}`,
+      rows: [
+        [title, "คิว", "ชม.", "ค่าจ้าง", "GMV", "ค่าจ้าง/ชม.", "GMV/ชม.", "ค่าจ้าง/ยอด", "จ่าย ฿1 ได้ยอด"],
+        ...mcCostRows(mc.cells, dim).map((x) => [
+          x.label, x.slots, dec(x.hours), money(x.cost), money(x.gmv), money(x.hours ? x.cost / x.hours : null), money(x.hours ? x.gmv / x.hours : null),
+          pct(x.gmv ? x.cost / x.gmv : null), dec(x.cost ? x.gmv / x.cost : null),
+        ]),
+        [],
+        ["ค่าจ้าง Mc (สูตรเดียวกับสรุปรายเดือน) เทียบยอดขายของคิวเดียวกัน · ไม่นับ Mc ประจำ · ยอดต่อคิว = GMV ที่กรอกใน slot ก่อน ไม่มีใช้ยอดจากไฟล์ Export แบ่งตามนาที (ประมาณ)"],
+      ],
+    })) : []),
   ];
   return { title: `GLORY Cost ${report.month}`, sheets };
 }

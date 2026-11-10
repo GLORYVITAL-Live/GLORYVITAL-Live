@@ -14,7 +14,7 @@ import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib
 import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
 import { DAY_KINDS, dayKindLabel, dayKindStats, liveDay, tagKey, type DayTag } from "@/lib/live-days";
 import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop, type HeatCell } from "@/lib/live-heat";
-import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
+import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
 import { ownerText } from "@/lib/plan-clash";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
 import { monthDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
@@ -423,6 +423,10 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
         { title: "GMV รายวัน แยก Agency", labels: monthDays(month).map((d) => String(Number(d.slice(8)))), trend: agencyTrend(dayGroups, owners), lineTitle: "GMV/ชม. รายวัน แยก Agency" },
         { title: "GMV รายเดือน (13 เดือน) แยก Agency", labels: monthCategories, trend: agencyTrend(months13.map((m) => byMonth.get(m)!), owners) },
       ],
+      // เหมือนหน้าเว็บ: เทียบรายกลุ่ม / รายบัญชีกับเดือนก่อน + ช่วงเวลาขายดี + วันปกติ vs วันแคมเปญ
+      breakdown: { spans: owners },
+      heat: { title: `ช่วงเวลาไหนขายดี ${monthLabel(month)}` },
+      dayKinds: dayTags.tags ? { title: `วันปกติ vs วันแคมเปญ ${monthLabel(month)}`, tags: dayTags.tags } : undefined,
     }, target);
   };
 
@@ -434,6 +438,15 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
           <ExportMenu size="sm" label="ส่งออก" build={async () => monthBook({
             month, monthLabel, months13, byMonth, filter: { platform: filter.platform, account: filter.account, sessions: data },
             crew: await loadCrew(byMonth.get(month) ?? []),
+            // ให้ครบเหมือนหน้าเว็บ: กลุ่มผู้ไลฟ์ / เทียบรายกลุ่ม / แยก Agency / ช่วงเวลาขายดี / วันแคมเปญ
+            extras: {
+              spans: owners.spans ?? null, owners: true, heat: true, tags: dayTags.tags ?? null,
+              breakdown: { b: prevList, aName: `${shortMonth(month)}${cutText}`, bName: `${shortMonth(prevKey)}${cutText}` },
+              agency: owners.spans ? [
+                { name: "แยก Agency รายวัน", first: "วันที่", labels: monthDays(month), trend: agencyTrend(monthDays(month).map((d) => (byMonth.get(month) ?? []).filter((s) => bkkParts(s.startedAt).d === Number(d.slice(8)))), owners.spans) },
+                { name: "แยก Agency 13 เดือน", first: "เดือน", labels: months13.map(monthLabel), trend: agencyTrend(months13.map((m) => byMonth.get(m)!), owners.spans) },
+              ] : undefined,
+            },
           })} />
           {cur.lives ? <SlidesMenu label="สไลด์" title={`GLORY รายเดือน ${monthLabel(month)}`} build={buildSlides} /> : null}
         </div>
@@ -624,7 +637,8 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
   const n = monthsIn(range);
   const loadFrom = monthKey(-12, range.from);
   const { data, error, retry } = useSessions(monthWindow(loadFrom).from, monthWindow(range.to).to, version);
-  const owners = useOwnerSpans(`from=${range.from}&to=${range.to}`, version);
+  // แพลนกลุ่มย้อนถึงปีก่อนด้วย (ส่วนเทียบรายกลุ่มกับปีก่อน)
+  const owners = useOwnerSpans(`from=${loadFrom}&to=${range.to}`, version);
   const dayTags = useDayTags(`from=${range.from}&to=${range.to}`, version);
   const [yearSplit, setYearSplit] = useState<Split>("platform");
   const shift =(by: number) => setRange({ from: monthKey(by, range.from), to: monthKey(by, range.to) });
@@ -704,6 +718,11 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
         title: `GMV รายเดือน ${aName} แยก Agency`, lineTitle: `GMV/ชม. รายเดือน ${aName} แยก Agency`,
         labels: doneKeys.map((k) => `${shortMonth(k)}${k === now ? "*" : ""}`), trend: agencyTrend(doneKeys.map((k) => byMonth.get(k) ?? []), owners.spans),
       }] : undefined,
+      // เหมือนหน้าเว็บ: กลุ่มผู้ไลฟ์ + รายกลุ่ม / รายบัญชี (เทียบปีก่อนเมื่อมีข้อมูล) + ช่วงเวลาขายดี + วันปกติ vs วันแคมเปญ
+      owners: owners.spans ? splitByOwner(curList, owners.spans) : undefined,
+      breakdown: { spans: owners.spans ?? null },
+      heat: { title: `ช่วงเวลาไหนขายดี ${aName}` },
+      dayKinds: dayTags.tags ? { title: `วันปกติ vs วันแคมเปญ ${aName}`, tags: dayTags.tags } : undefined,
     }, target);
   };
 
@@ -717,6 +736,11 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
             quarters: quarters.map((q) => ({ label: q.partial ? `${q.label} (บางเดือน)` : q.label, a: q.a, b: q.b })),
             filter: { platform: filter.platform, account: filter.account, sessions: data },
             crew: await loadCrew(curList),
+            extras: {
+              spans: owners.spans ?? null, owners: true, heat: true, tags: dayTags.tags ?? null,
+              breakdown: { b: prevList, aName: ongoing ? rangeText : aName, bName: ongoing ? `${bName} ช่วงเดียวกัน` : bName },
+              agency: owners.spans ? [{ name: "แยก Agency รายเดือน", first: "เดือน", labels: doneKeys.map(monthLabel), trend: agencyTrend(doneKeys.map((k) => byMonth.get(k) ?? []), owners.spans) }] : undefined,
+            },
           })} />
           <SlidesMenu label="สไลด์" title={`GLORY ภาพรวม ${aName}`} build={buildSlides} />
         </div>
@@ -797,6 +821,9 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
       {cur.lives ? <DayKindSection title={`วันปกติ vs วันแคมเปญ ${aName}`} sessions={curList} tags={dayTags.tags} ready={dayTags.ready} replay={replay} /> : null}
 
       {cur.lives ? <OwnerTable owners={owners} sessions={curList} /> : null}
+      {cur.lives ? (
+        <BreakdownSection a={curList} b={prevList} curName={ongoing ? rangeText : aName} prevName={ongoing ? `${bName} ช่วงเดียวกัน` : bName} spans={owners.spans} replay={replay} />
+      ) : null}
 
       <section className="my-4">
         <h2 className="mb-2 text-lg font-bold">{def.label} รายไตรมาส</h2>
@@ -1468,6 +1495,8 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
   const [metric, setMetric] = useState<MetricKey>("gmv");
   const { groups, accounts } = breakdownRows(a, b, spans ?? null);
   if (!groups.length) return null;
+  // ช่วงก่อนไม่มีไลฟ์ (เช่น ทั้งปี 2026 ไม่มีข้อมูลปี 2025) = แสดงเฉพาะช่วงนี้ · มีข้อมูลเมื่อไรเทียบให้เอง
+  const single = !b.length;
   const v = (t: Totals, k: MetricKey) => (t.lives ? metricOf(k).value(t) : null);
   const cols: { key: MetricKey; label: string }[] = [
     { key: "duration", label: "ชม." }, { key: "gmvPerHour", label: "GMV/ชม." }, { key: "viewers", label: "Viewers" }, { key: "viewersPerHour", label: "Viewers/ชม." },
@@ -1480,23 +1509,42 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
       <div className="overflow-x-auto rounded-xl border">
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead className={STICKY_HEAD}>{title.replace("แยก", "")}</TableHead>
-              <TableHead className="text-right">GMV {prevName}</TableHead><TableHead className="text-right">GMV {curName}</TableHead>
-              <TableHead className="text-right">ส่วนต่าง</TableHead><TableHead className="text-right">GMV</TableHead>
-              {cols.map((c) => <TableHead key={c.key} className="text-right">{c.label}</TableHead>)}
-              <TableHead>ขาที่ทำให้เปลี่ยนมากสุด</TableHead>
-            </TableRow>
+            {single ? (
+              <TableRow>
+                <TableHead className={STICKY_HEAD}>{title.replace("แยก", "")}</TableHead>
+                <TableHead className="text-right">ไลฟ์</TableHead><TableHead className="text-right">GMV</TableHead>
+                {cols.map((c) => <TableHead key={c.key} className="text-right">{c.label}</TableHead>)}
+              </TableRow>
+            ) : (
+              <TableRow>
+                <TableHead className={STICKY_HEAD}>{title.replace("แยก", "")}</TableHead>
+                <TableHead className="text-right">GMV {prevName}</TableHead><TableHead className="text-right">GMV {curName}</TableHead>
+                <TableHead className="text-right">ส่วนต่าง</TableHead><TableHead className="text-right">GMV</TableHead>
+                {cols.map((c) => <TableHead key={c.key} className="text-right">{c.label}</TableHead>)}
+                <TableHead>ขาที่ทำให้เปลี่ยนมากสุด</TableHead>
+              </TableRow>
+            )}
           </TableHeader>
           <TableBody>
             {rows.map((r) => {
+              const name = (
+                <TableCell className={cn(STICKY_CELL, r.level === "platform" && "bg-muted", r.level === "group" && "pl-5")}>
+                  {r.level === "account" ? <span className="block text-[11px] text-muted-foreground">{r.platform}</span> : null}{r.label}
+                </TableCell>
+              );
+              if (single) return (
+                <TableRow key={r.key} className={cn(r.level === "platform" && "bg-muted/50 font-semibold hover:bg-muted/50")}>
+                  {name}
+                  <TableCell className="text-right tabular-nums">{r.a.lives || "-"}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtMetric("baht", v(r.a, "gmv"))}</TableCell>
+                  {cols.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{fmtMetric(metricOf(c.key).kind, v(r.a, c.key))}</TableCell>)}
+                </TableRow>
+              );
               const leg = mainLeg(r.a, r.b);
               const gap = r.a.lives && r.b.lives ? r.a.gmv - r.b.gmv : null;
               return (
                 <TableRow key={r.key} className={cn(r.level === "platform" && "bg-muted/50 font-semibold hover:bg-muted/50")}>
-                  <TableCell className={cn(STICKY_CELL, r.level === "platform" && "bg-muted", r.level === "group" && "pl-5")}>
-                    {r.level === "account" ? <span className="block text-[11px] text-muted-foreground">{r.platform}</span> : null}{r.label}
-                  </TableCell>
+                  {name}
                   <TableCell className="text-right tabular-nums">{fmtMetric("baht", v(r.b, "gmv"))}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtMetric("baht", v(r.a, "gmv"))}</TableCell>
                   <TableCell className={cn("text-right tabular-nums", gap !== null && gap < 0 && "text-destructive")}>{gap === null ? "-" : `${gap > 0 ? "+" : gap < 0 ? "−" : ""}${fmtMetric("baht", Math.abs(gap))}`}</TableCell>
@@ -1518,7 +1566,7 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
   const byGroup = view === "group" && hasGroups;
   const pair = (rows: BreakdownRow[], k: MetricKey) => [
     { name: curName, color: CUR, values: rows.map((r) => v(r.a, k)) },
-    { name: prevName, color: PREV, values: rows.map((r) => v(r.b, k)) },
+    ...(single ? [] : [{ name: prevName, color: PREV, values: rows.map((r) => v(r.b, k)) }]),
   ];
   const pctTxt = (c: number) => `${c > 0 ? "▲" : "▼"} ${(Math.abs(c) * 100).toFixed(1)}%`;
   // ชื่อใต้แท่ง: ตัด "Agency " และชื่อบัญชียาวเกิน 12 ตัว · ชื่อเต็มอยู่ในกล่องตัวเลข
@@ -1540,7 +1588,7 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
             <h3 className="text-base font-bold">{p}</h3>
             {none ? null : (
               <span className="text-xs text-muted-foreground tabular-nums">
-                {def.label} รวม {fmtMetric(def.kind, cur)} vs {fmtMetric(def.kind, prev)} <ChangeText cur={cur} prev={prev} />
+                {def.label} รวม {fmtMetric(def.kind, cur)}{single ? null : <> vs {fmtMetric(def.kind, prev)} <ChangeText cur={cur} prev={prev} /></>}
               </span>
             )}
           </div>
@@ -1548,7 +1596,7 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
             <p className="py-10 text-center text-sm text-muted-foreground">{p} ไม่มีข้อมูล {def.label} ในไฟล์ Export</p>
           ) : (
             <BarChart
-              key={`${p}|${metric}|${view}|${replay}`} label={`${p} ${def.label} ${byGroup ? "แยกกลุ่ม" : "แยกบัญชี"} ${curName} เทียบ ${prevName}`} height={240}
+              key={`${p}|${metric}|${view}|${replay}`} label={`${p} ${def.label} ${byGroup ? "แยกกลุ่ม" : "แยกบัญชี"} ${curName}${single ? "" : ` เทียบ ${prevName}`}`} height={240}
               categories={rows.map(short)} tooltipTitles={titles} series={pair(rows, metric)}
               format={(x) => fmtMetric(def.kind, x)} formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
             />
@@ -1574,7 +1622,7 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
   return (
     <section className="my-4 rounded-2xl border bg-card p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-bold">เทียบรายกลุ่มและรายบัญชี: {curName} vs {prevName}</h2>
+        <h2 className="font-bold">{single ? `รายกลุ่มและรายบัญชี: ${curName}` : `เทียบรายกลุ่มและรายบัญชี: ${curName} vs ${prevName}`}</h2>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={metric} onValueChange={(x) => setMetric(x as MetricKey)}>
             <SelectTrigger aria-label="ตัวชี้วัดที่เทียบ" className="h-8 min-w-36 rounded-full bg-card text-[13px]"><SelectValue /></SelectTrigger>
@@ -1591,10 +1639,18 @@ function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
           ) : null}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        เลือกตัวชี้วัดจากดรอปดาวน์ · ชี้ / แตะแท่งดูตัวเลขและ % ที่เปลี่ยน{def.note ? ` · ${def.label}: ${def.note}` : ""} · ขาที่ทำให้ GMV เปลี่ยน: GMV = ชั่วโมงไลฟ์ × Viewers/ชม. × GMV/Viewer ขาที่ลดมากสุดคือจุดที่ควรแก้ก่อน
-      </p>
-      <div className="mt-1"><Legend series={pair([], "gmv")} /></div>
+      {single ? (
+        <p className="text-xs text-muted-foreground">
+          เลือกตัวชี้วัดจากดรอปดาวน์ · ชี้ / แตะแท่งดูตัวเลข{def.note ? ` · ${def.label}: ${def.note}` : ""} · ยังไม่มีข้อมูลไลฟ์ {prevName} จึงยังเทียบไม่ได้ มีข้อมูลเมื่อไรจะขึ้นแท่งเทียบให้เอง
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            เลือกตัวชี้วัดจากดรอปดาวน์ · ชี้ / แตะแท่งดูตัวเลขและ % ที่เปลี่ยน{def.note ? ` · ${def.label}: ${def.note}` : ""} · ขาที่ทำให้ GMV เปลี่ยน: GMV = ชั่วโมงไลฟ์ × Viewers/ชม. × GMV/Viewer ขาที่ลดมากสุดคือจุดที่ควรแก้ก่อน
+          </p>
+          <div className="mt-1"><Legend series={pair([], "gmv")} /></div>
+        </>
+      )}
       <div className="mt-2 grid gap-x-4 gap-y-6 lg:grid-cols-2">
         {groups.filter((r) => r.level === "platform").map(panel)}
       </div>
@@ -1652,6 +1708,40 @@ function AgencyLines({ trend: byPlatform, categories, titles, label, rowHead, re
  * ตารางแยก GMV ตามกลุ่มผู้ไลฟ์ต่อช่อง: กลุ่มที่บันทึกไว้กับไลฟ์ / เทียบเวลาไลฟ์ในไฟล์กับแพลนหน้า Plan Slot Live (src/lib/live-owners.ts)
  *   เดือนที่ไม่มีข้อมูลกลุ่มของช่องนั้น = ไม่นับ · กราฟแยกกลุ่มอยู่ในแท็บ "แยก Agency" ของการ์ดกราฟด้านบน
  */
+/**
+ * แถบสัดส่วน GMV ของแต่ละกลุ่มในช่องเดียว (ผู้ใช้ขอ 2026-11-10) · สีตามกลุ่มแบบเดียวกับกราฟแยก Agency
+ *   ช่องว่าง 2px สีพื้นคั่นแต่ละส่วน · ชื่อ + % อยู่ใต้แถบ (ไม่ใช้สีอย่างเดียว)
+ */
+function ShareBar({ c }: { c: ChannelSplit }) {
+  const parts = c.rows.filter((r) => r.gmv > 0);
+  const pct = (gmv: number) => `${((gmv / c.gmv) * 100).toFixed(1)}%`;
+  const color = (owner: string | null) => agencyColor(!owner || owner === "In house" ? AGENCY_OURS : owner);
+  return (
+    <div className="min-w-0">
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold">{c.label}</span>
+        <span className="text-xs text-muted-foreground tabular-nums">GMV {fmtMetric("baht", c.gmv)}</span>
+      </div>
+      <div
+        role="img" aria-label={`สัดส่วน GMV ${c.label}: ${parts.map((r) => `${r.label} ${pct(r.gmv)}`).join(", ")}`}
+        className="flex h-4 w-full gap-0.5 overflow-hidden rounded-full"
+      >
+        {parts.map((r) => (
+          <div key={r.owner ?? ""} className="h-full min-w-0.5" style={{ width: `${(r.gmv / c.gmv) * 100}%`, background: color(r.owner) }} title={`${r.label} ${fmtMetric("baht", r.gmv)} · ${pct(r.gmv)}`} />
+        ))}
+      </div>
+      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        {parts.map((r) => (
+          <li key={r.owner ?? ""} className="inline-flex items-center gap-1.5">
+            <span className="size-2 shrink-0 rounded-[2px]" style={{ background: color(r.owner) }} aria-hidden />
+            <span className="text-muted-foreground">{r.label}</span><span className="font-semibold tabular-nums">{pct(r.gmv)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function OwnerTable({ owners, sessions }: { owners: { spans?: OwnerSpan[]; error?: string }; sessions: LiveSession[] }) {
   if (owners.error) return <Notice variant="warning">โหลดแพลนของกลุ่มไม่สำเร็จ จึงยังแยก GMV ตามกลุ่มไม่ได้: {owners.error}</Notice>;
   if (!owners.spans) return null;
@@ -1667,6 +1757,9 @@ function OwnerTable({ owners, sessions }: { owners: { spans?: OwnerSpan[]; error
   return (
     <section className="my-4">
       <h2 className="mb-2 text-lg font-bold">แยกตามกลุ่มผู้ไลฟ์</h2>
+      <div className="mb-3 grid gap-x-6 gap-y-4 rounded-xl border bg-card p-3 sm:grid-cols-2">
+        {channels.map((c) => <ShareBar key={c.channel} c={c} />)}
+      </div>
       <div className="overflow-x-auto rounded-xl border bg-card">
         <Table>
           <TableHeader>
@@ -1942,6 +2035,7 @@ function MultiMonthView({ dataMonths, version, days }: { dataMonths: string[]; v
             rangeText, monthLabel: long, shortLabel: short, keys, focus, byMonth, filter: exportFilter,
             ...(days && nDays > 1 ? { daily: { labels: dayLabels, byDay } } : {}),
             crew: await loadCrew(keys.flatMap((k) => byMonth.get(k) ?? [])),
+            extras: agency ? { agency: [{ name: "แยก Agency", first: days ? "ช่วง" : "เดือน", labels: keys.map(long), trend: agency }] } : undefined,
           })} />
           <SlidesMenu label="สไลด์" title={`GLORY เทียบหลายเดือน ${rangeText}`} build={(target) => buildMultiDeck({
             rangeText, keys, focus, label: short, longLabel: long, byMonth, now,
@@ -2655,15 +2749,21 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
   const title = single ? `GLORY ${report} ${curName}` : `GLORY ${report} ${curName} vs ${prevName}`;
   const exportFilter = { platform: filter.platform, account: filter.account, sessions: allData };
 
+  // ให้ครบเหมือนหน้าเว็บ: เทียบรายกลุ่ม / รายบัญชี + แยก Agency (ช่วงเดียว = ตามเวลา)
+  const exportExtras = {
+    spans: owners.spans ?? null,
+    breakdown: single ? undefined : { b: prev, aName: curName, bName: prevName },
+    agency: agencyData && hasAgency(agencyData) ? [{ name: "แยก Agency", first: single && steps > 1 ? timeText : "ช่วง", labels: agencyTitles, trend: agencyData }] : undefined,
+  };
   const exportBook = async () => (pp
     ? compareBook({
       title, report, aName: curName, bName: prevName,
       aRange: windowText(pc.from, pc.to), bRange: windowText(pp.from, pp.to), a: cur, b: prev,
-      timeName: timeText, time: timeGroups, filter: exportFilter, crew: await loadCrew([...cur, ...prev]),
+      timeName: timeText, time: timeGroups, filter: exportFilter, crew: await loadCrew([...cur, ...prev]), extras: exportExtras,
     })
     : singleBook({
       title, report, aName: curName, aRange: windowText(pc.from, pc.to), a: cur,
-      timeName: timeText, time: timeGroups, filter: exportFilter, crew: await loadCrew(cur),
+      timeName: timeText, time: timeGroups, filter: exportFilter, crew: await loadCrew(cur), extras: exportExtras,
     }));
 
   return (
@@ -2677,7 +2777,9 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
             filterText: filterText(exportFilter).join(" · "),
             exportedAt: bkkStamp(new Date().toISOString()),
             ...(single ? { single: true, cover: { kicker: report, headline: curName } } : {}),
-            agency: agencySlides,
+            // เทียบ 2 ช่วง: หน้าเทียบรายกลุ่ม (แท่งคู่ช่วงนี้ vs ช่วงก่อน เหมือนเว็บ) แทนแท่งซ้อนแยก Agency · ช่วงเดียว = แยก Agency ตามเวลา
+            agency: single ? agencySlides : undefined,
+            breakdown: single ? undefined : { spans: owners.spans ?? null },
           }, target)} />
         </div>
       </FilterBar>

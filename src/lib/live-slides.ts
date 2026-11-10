@@ -6,8 +6,11 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type PptxGenJS from "pptxgenjs";
 import { analyze } from "@/lib/live-insights";
 import { platformSeries, totalSeries } from "@/lib/live-lines";
-import { mergePlatforms, type AgencyTrend, type ChannelSplit } from "@/lib/live-owners";
-import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Totals } from "@/lib/live-stats";
+import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
+import { DAY_KINDS, dayKindLabel, dayKindStats, type DayTag } from "@/lib/live-days";
+import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop } from "@/lib/live-heat";
+import { AGENCY_OURS, mergePlatforms, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
+import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Platform, type Totals } from "@/lib/live-stats";
 import type { targetReport } from "@/lib/live-targets";
 
 export type CompareDeckInput = {
@@ -43,6 +46,12 @@ export type CompareDeckInput = {
   owners?: ChannelSplit[];
   /** หน้า GMV แยก Agency (แท่งคู่ TikTok | Shopee ซ้อนตามกลุ่ม เหมือนแท็บ "แยก Agency" บนเว็บ) */
   agency?: AgencyChart[];
+  /** หน้าเทียบรายกลุ่มและรายบัญชี (src/lib/live-breakdown.ts) · spans null = มีแค่รายบัญชี */
+  breakdown?: { spans: OwnerSpan[] | null };
+  /** หน้า "ช่วงเวลาไหนขายดี" (ไลฟ์ของช่วงหลัก · src/lib/live-heat.ts) */
+  heat?: { title: string };
+  /** หน้า "วันปกติ vs วันแคมเปญ" (src/lib/live-days.ts) */
+  dayKinds?: { title: string; tags: Map<string, DayTag> };
 };
 
 /** กราฟแยก Agency 1 หน้า · lineTitle = เพิ่มหน้ากราฟเส้น GMV/ชม. เส้นละกลุ่ม */
@@ -95,6 +104,7 @@ function insights(o: CompareDeckInput, ta: Totals, tb: Totals) {
 }
 
 /** ตัวเลขย่อบนกราฟ: ฿25.8M / ฿931K / ฿0 */
+const compactBaht = (v: number) => compact(v);
 function compact(v: number) {
   const a = Math.abs(v);
   if (a >= 1_000_000) return `฿${(v / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
@@ -134,11 +144,18 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
   emphasis?: number;
   /** แท่งซ้อน: ความสูงรวม = ยอดรวม ตัวเลขบนแท่งเป็นยอดรวม */
   stacked?: boolean;
+  /** รูปแบบตัวเลขบนแกน / แท่ง (ไม่ใส่ = บาทย่อ ฿1.2M) */
+  format?: (v: number) => string;
+  /** false = ไม่วาดตำนาน (หลายกราฟในหน้าเดียว ใช้ตำนานร่วม) */
+  legend?: boolean;
+  /** false = ไม่ใส่ % ที่เปลี่ยนเหนือคู่แท่ง (2 ชุดไม่ใช่ช่วงที่เทียบกัน เช่น TikTok / Shopee) */
+  change?: boolean;
 }) {
   const { x, y, w, h } = o.box;
   const em = o.emphasis ?? 0;
+  const compact = o.format ?? compactBaht;
   const text = (t: string, opts: PptxGenJS.TextPropsOptions) => s.addText(t, { fontFace: FONT, margin: 0, isTextBox: true, ...opts });
-  shapeLegend(pres, s, { x, y, w }, o.series);
+  if (o.legend !== false) shapeLegend(pres, s, { x, y, w }, o.series);
   // เผื่อที่ด้านบน 25% ให้ตัวเลขบนแท่ง + % ที่เปลี่ยน ไม่ชนขอบ
   const totalAt = (i: number) => o.series.reduce((a, sr) => a + (sr.values[i] ?? 0), 0);
   const max = o.stacked ? Math.max(0, ...o.labels.map((_, i) => totalAt(i))) : Math.max(0, ...o.series.flatMap((sr) => sr.values));
@@ -185,7 +202,7 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
     });
     // % ที่เปลี่ยน (ชุดแรก เทียบ ชุดที่สอง) เหนือคู่แท่ง
     const [a, b] = [o.series[0]?.values[i] ?? 0, o.series[1]?.values[i] ?? 0];
-    const c = k === 2 ? changeOf(a, b || null) : null;
+    const c = k === 2 && o.change !== false ? changeOf(a, b || null) : null;
     if (o.showValue && c !== null) {
       text(pctText(c), {
         x: px + i * gw, y: yOf(peak) - 0.7, w: gw, h: 0.32, fontSize: Math.max(valueSize, gw >= 1.1 ? 12 : 10), bold: true,
@@ -218,16 +235,22 @@ function platformTrend(groups: LiveSession[][], metric: MetricKey, withTotal: bo
  * กราฟเส้น: ลากเชื่อมทุกจุดที่มีค่า ข้ามช่วงที่ไม่มีค่า (เหมือนเว็บ) จุด = ค่าจริง
  *   PowerPoint = กราฟจริงแก้ตัวเลขได้ / Google Slides = วาดด้วยรูปทรง (Google แปลงกราฟจริงเป็นรูปเบลอ)
  */
-function lineChart(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, o: { title: string; labels: string[]; series: LineSeries[]; box: ChartBox }) {
+function lineChart(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, o: {
+  title: string; labels: string[]; series: LineSeries[]; box: ChartBox;
+  /** รูปแบบตัวเลข (ไม่ใส่ = บาทย่อ) · code = รูปแบบของ PowerPoint · fn = ของ Google Slides */
+  format?: { code: string; fn: (v: number) => string };
+}) {
   const points = o.series.reduce((a, sr) => a + sr.values.filter((v) => v !== null).length, 0);
   // จุดไม่เยอะ = ใส่ตัวเลขได้ไม่รก
   const showValue = points <= 16;
+  const code = o.format?.code ?? COMPACT;
+  const compact = o.format?.fn ?? compactBaht;
   if (target === "pptx") {
     s.addChart(pres.ChartType.line, o.series.map((sr) => ({ name: sr.name, labels: o.labels, values: sr.values as number[] })), {
       ...o.box, chartColors: o.series.map((sr) => sr.color), lineSize: 2.25, lineDataSymbol: "circle", lineDataSymbolSize: 7, displayBlanksAs: "span",
       showLegend: o.series.length > 1, legendPos: "t", legendFontSize: 12, legendFontFace: FONT, legendColor: C.text, showTitle: false, altText: o.title,
-      showValue, dataLabelPosition: "t", dataLabelFormatCode: COMPACT, dataLabelFontSize: 11, dataLabelFontFace: FONT, dataLabelColor: C.text,
-      valAxisMinVal: 0, valAxisLabelFormatCode: COMPACT, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
+      showValue, dataLabelPosition: "t", dataLabelFormatCode: code, dataLabelFontSize: 11, dataLabelFontFace: FONT, dataLabelColor: C.text,
+      valAxisMinVal: 0, valAxisLabelFormatCode: code, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
       catAxisLabelFontSize: 11, catAxisLabelFontFace: FONT, catAxisLabelColor: C.text, valGridLine: { color: C.grid, size: 0.75 }, catGridLine: { style: "none" },
     });
     return;
@@ -500,11 +523,37 @@ function addTargetSlide(pres: PptxGenJS, title: string, t: NonNullable<CompareDe
   }
 }
 
-/** หน้าแยกตามกลุ่มผู้ไลฟ์: เทียบเวลาไลฟ์ในไฟล์กับเวลาในแพลน (เฉพาะช่องที่มีแพลนกลุ่ม) */
+/**
+ * หน้าแยกตามกลุ่มผู้ไลฟ์: แถบสัดส่วน GMV ของแต่ละช่อง (บน · เหมือนเว็บ) + ตาราง (ล่าง)
+ *   เทียบเวลาไลฟ์ในไฟล์กับเวลาในแพลน (เฉพาะช่องที่มีแพลนกลุ่ม)
+ */
 function addOwnersSlide(pres: PptxGenJS, channels: ChannelSplit[]) {
   if (!channels.length) return;
   const s = pres.addSlide({ masterName: "CONTENT" });
   s.addText("GMV แยกตามกลุ่มผู้ไลฟ์", { placeholder: "title" });
+  // แถบสัดส่วน: ช่องละคอลัมน์ (ไม่เกิน 2 ช่องต่อแถว) · ชื่อ + % ใต้แถบ (ไม่ใช้สีอย่างเดียว)
+  const shown = channels.slice(0, 2);
+  const colW = (W - 2 * M - 0.5 * (shown.length - 1)) / shown.length;
+  shown.forEach((c, i) => {
+    const x = M + i * (colW + 0.5), y = 1.3;
+    const parts = c.rows.filter((r) => r.gmv > 0);
+    s.addText([{ text: c.label, options: { bold: true, color: C.text } }, { text: `   GMV ${fmt("gmv", c.gmv)}`, options: { color: C.muted } }],
+      { x, y, w: colW, h: 0.3, fontSize: 13, fontFace: FONT, margin: 0, valign: "middle", isTextBox: true });
+    let bx = x;
+    const gapW = 0.03, usable = colW - gapW * Math.max(0, parts.length - 1);
+    for (const r of parts) {
+      const bw = Math.max(0.02, (usable * r.gmv) / (c.gmv || 1));
+      const color = agencyHex(!r.owner || r.owner === "In house" ? AGENCY_OURS : r.owner);
+      s.addShape(pres.ShapeType.rect, { x: bx, y: y + 0.36, w: bw, h: 0.24, fill: { color }, line: { color, width: 0 } });
+      bx += bw + gapW;
+    }
+    s.addText(parts.flatMap((r, j) => [
+      { text: "■ ", options: { color: agencyHex(!r.owner || r.owner === "In house" ? AGENCY_OURS : r.owner) } },
+      { text: `${r.label.replace(/^Agency /, "")} `, options: { color: C.muted } },
+      { text: `${c.gmv ? ((r.gmv / c.gmv) * 100).toFixed(1) : "0"}%${j < parts.length - 1 ? "  " : ""}`, options: { bold: true, color: C.text } },
+    ]), { x, y: y + 0.66, w: colW, h: 0.3, fontSize: parts.length > 3 ? 10 : 11, fontFace: FONT, margin: 0, valign: "middle", fit: "shrink", isTextBox: true });
+  });
+  const tableY = 2.45;
   const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
   const line = (label: string, lives: number, sec: number, gmv: number, share: string, top: boolean): PptxGenJS.TableRow => {
     const base = top ? { bold: true, fill: { color: C.tint } } : {};
@@ -525,7 +574,7 @@ function addOwnersSlide(pres: PptxGenJS, channels: ChannelSplit[]) {
     ]),
   ];
   s.addTable(rows, {
-    x: M, y: 1.45, w: W - 2 * M, colW: [4.533, 1.2, 1.2, 2.2, 1.4, 1.6], fontSize: 13, fontFace: FONT, color: C.text, rowH: Math.min(0.45, 4.8 / rows.length),
+    x: M, y: tableY, w: W - 2 * M, colW: [4.533, 1.2, 1.2, 2.2, 1.4, 1.6], fontSize: rows.length > 12 ? 11 : 13, fontFace: FONT, color: C.text, rowH: Math.min(0.4, (6.4 - tableY) / rows.length),
     border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
   });
   const splitLives = channels.reduce((a, c) => a + c.splitLives, 0), splitGmv = channels.reduce((a, c) => a + c.splitGmv, 0);
@@ -619,6 +668,205 @@ function addAgencySlides(pres: PptxGenJS, target: ChartTarget, charts: AgencyCha
       addTrendSlide(pres, target, c.lineTitle, c.labels, mergePlatforms(c.trend).map((t) => ({ name: t.label, color: agencyHex(t.key), values: t.perHour })));
     }
   }
+}
+
+/** ตัวชี้วัดของหน้าเทียบรายกลุ่ม / รายบัญชี (เหมือนดรอปดาวน์บนเว็บ) */
+const BREAKDOWN_KEYS: MetricKey[] = ["gmv", "gmvPerHour", "ctr", "co", "impressions", "viewers", "orders"];
+/** ตัวเลขย่อตามชนิดตัวชี้วัด (แกน / ป้ายบนแท่ง) */
+const compactOf = (k: MetricKey) => (v: number) => {
+  const kind = metricOf(k).kind;
+  return kind === "baht" ? compact(v) : kind === "pct" ? `${(v * 100).toFixed(v && v < 0.1 ? 1 : 0)}%` : fmtMetric(kind === "hours" ? "int" : kind, v, true);
+};
+
+/**
+ * เทียบรายกลุ่มและรายบัญชี (เหมือนส่วน "เทียบรายกลุ่มและรายบัญชี" บนเว็บ · src/lib/live-breakdown.ts)
+ *   กราฟ GMV และ GMV/ชม. แยกกลุ่ม: TikTok ซ้าย | Shopee ขวา แท่งคู่ ช่วงหลัก (ชมพู) vs ช่วงเทียบ (ฟ้า) · ยอดรวมแพลตฟอร์มที่หัวฝั่ง
+ *   ตารางทุกตัวชี้วัด (GMV, GMV/ชม., CTR, CO, Impressions, Viewers, ออเดอร์) + ขาที่ทำให้ GMV เปลี่ยนมากสุด: แยกกลุ่ม / แยกบัญชี
+ *   ช่วงเทียบไม่มีไลฟ์ = แท่งเดียว ตารางเป็นค่าของช่วงหลัก
+ */
+function addBreakdownSlides(pres: PptxGenJS, o: { a: LiveSession[]; b: LiveSession[]; aName: string; bName: string; spans: OwnerSpan[] | null }) {
+  const { groups, accounts } = breakdownRows(o.a, o.b, o.spans);
+  if (!groups.length) return;
+  const single = !o.b.length;
+  const v = (t: Totals, k: MetricKey) => (t.lives ? metricOf(k).value(t) : null);
+  const platforms = groups.filter((r) => r.level === "platform");
+  const groupRows = groups.filter((r) => r.level === "group");
+  const short = (r: BreakdownRow) => { const t = r.label.replace(/^Agency /, ""); return t.length > 12 ? `${t.slice(0, 11)}…` : t; };
+  const vsText = single ? o.aName : `${o.aName} vs ${o.bName}`;
+
+  // กราฟแยกกลุ่ม (ไม่มีแพลนกลุ่ม = ข้าม · รายบัญชีมีกราฟ GMV แยกตามบัญชีแล้ว)
+  if (groupRows.length) {
+    for (const k of ["gmv", "gmvPerHour"] as MetricKey[]) {
+      const m = metricOf(k);
+      const s = pres.addSlide({ masterName: "CONTENT" });
+      s.addText(`${m.label} แยกกลุ่ม: ${vsText}`, { placeholder: "title" });
+      const series = (rows: BreakdownRow[]) => [
+        { name: o.aName, color: C.pink, values: rows.map((r) => v(r.a, k) ?? 0) },
+        ...(single ? [] : [{ name: o.bName, color: C.blue, values: rows.map((r) => v(r.b, k) ?? 0) }]),
+      ];
+      shapeLegend(pres, s, { x: M, y: 1.25, w: W - 2 * M }, series([]));
+      const colW = (W - 2 * M - 0.4 * (platforms.length - 1)) / platforms.length;
+      platforms.forEach((p, i) => {
+        const rows = groupRows.filter((r) => r.platform === p.platform);
+        const x = M + i * (colW + 0.4);
+        const cur = v(p.a, k), prev = v(p.b, k), c = changeOf(cur, prev);
+        s.addText([
+          { text: `${p.platform}  `, options: { bold: true, color: C.text, fontSize: 16 } },
+          { text: `${m.label} รวม ${fmt(k, cur)}${single ? "" : ` vs ${fmt(k, prev)}  `}`, options: { color: C.muted } },
+          ...(single ? [] : [{ text: pctText(c), options: { bold: true, color: pctColor(c) } }]),
+        ], { x, y: 1.65, w: colW, h: 0.4, fontSize: 12, fontFace: FONT, margin: 0, valign: "middle", fit: "shrink", isTextBox: true });
+        if (rows.length) shapeBars(pres, s, { labels: rows.map(short), series: series(rows), box: { x, y: 1.75, w: colW, h: 4.75 }, showValue: true, format: compactOf(k), legend: false });
+      });
+      s.addText("กลุ่มที่ไม่ใช่ Agency = ทีมเรา: TikTok = ของเรา (รวม Cherry, Skin Expert) · Shopee = In house · ไลฟ์ที่คร่อมหลายกลุ่มแบ่งตัวเลขตามนาที", {
+        x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+      });
+    }
+  }
+
+  // ตารางทุกตัวชี้วัด: ค่า (บรรทัดบน) + % ที่เปลี่ยน (บรรทัดล่าง) · แถวรวมแพลตฟอร์มระบายสี
+  const table = (title: string, rows: BreakdownRow[]) => {
+    if (!rows.length) return;
+    const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
+    const MAX = 13;
+    for (let start = 0; start < rows.length; start += MAX) {
+      const part = rows.slice(start, start + MAX);
+      const s = pres.addSlide({ masterName: "CONTENT" });
+      s.addText(`${single ? title.replace(/^เทียบ/, "") : title}: ${vsText}${start ? " (ต่อ)" : ""}`, { placeholder: "title" });
+      const body = part.map((r): PptxGenJS.TableRow => {
+        const band = r.level === "platform" ? { bold: true, fill: { color: C.tint } } : {};
+        const leg = single ? null : mainLeg(r.a, r.b);
+        return [
+          { text: r.level === "group" ? `   ${r.label}` : r.level === "account" && r.label !== r.platform ? `${r.label} (${r.platform})` : r.label, options: { ...band, align: "left" } },
+          ...BREAKDOWN_KEYS.map((k) => {
+            const a = v(r.a, k), c = changeOf(a, v(r.b, k));
+            return {
+              text: single ? fmt(k, a) : [
+                { text: fmt(k, a), options: { bold: true, breakLine: true } },
+                { text: c === null ? "-" : pctText(c), options: { color: pctColor(c), fontSize: 9 } },
+              ],
+              options: { ...band, align: "right" as const },
+            };
+          }),
+          ...(single ? [] : [{ text: leg ? `${leg.label} ${pctText(leg.change)}` : "-", options: { ...band, align: "left" as const, color: leg ? (leg.gmv < 0 ? C.down : C.up) : C.muted, bold: !!leg && leg.gmv < 0 } }]),
+        ];
+      });
+      s.addTable([
+        [head(title.includes("บัญชี") ? "บัญชี" : "กลุ่ม", "left"), ...BREAKDOWN_KEYS.map((k) => head(metricOf(k).label)), ...(single ? [] : [head("ขาที่ทำให้ GMV เปลี่ยนมากสุด", "left")])],
+        ...body,
+      ], {
+        x: M, y: 1.4, w: W - 2 * M, colW: single ? [2.733, 1.35, 1.35, 1.35, 1.35, 1.35, 1.35, 1.3] : [2.2, 1.18, 1.18, 0.95, 0.95, 1.18, 1.1, 1.0, 2.373],
+        fontSize: 10, fontFace: FONT, color: C.text, rowH: Math.min(single ? 0.36 : 0.44, 5.05 / (part.length + 1)),
+        border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.06, 0, 0.06],
+      });
+      s.addText(single
+        ? `ยังไม่มีข้อมูลไลฟ์ ${o.bName} จึงแสดงเฉพาะ ${o.aName} · Impressions / CTR มีเฉพาะ TikTok · CO: TikTok ÷ คลิก · Shopee ÷ Viewers`
+        : `บรรทัดล่าง = % เทียบ ${o.bName} · GMV = ชั่วโมงไลฟ์ × Viewers/ชม. × GMV/Viewer ขาที่ลดมากสุดคือจุดที่ควรแก้ก่อน · Impressions / CTR มีเฉพาะ TikTok`, {
+        x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+      });
+    }
+  };
+  if (groupRows.length) table("เทียบรายกลุ่ม ทุกตัวชี้วัด", groups);
+  table("เทียบรายบัญชี ทุกตัวชี้วัด", accounts);
+}
+
+/** สีช่องในหน้าช่วงเวลาขายดี: ชมพูไล่ระดับจากพื้นอ่อน (12%) ถึงชมพูเต็ม · ช่องตัวอย่างน้อย = จางลง */
+function heatFill(p: number, faded: boolean) {
+  const mix = (a: string, b: string, t: number) => {
+    const c = (i: number) => Math.round(parseInt(a.slice(i, i + 2), 16) * (1 - t) + parseInt(b.slice(i, i + 2), 16) * t).toString(16).padStart(2, "0");
+    return `${c(0)}${c(2)}${c(4)}`.toUpperCase();
+  };
+  const full = mix(C.white, C.pink, 0.12 + 0.88 * p);
+  return faded ? mix(full, C.white, 0.55) : full;
+}
+
+/**
+ * ช่วงเวลาไหนขายดี (เหมือนเว็บ · src/lib/live-heat.ts): ตาราง ชั่วโมง × วันในสัปดาห์ ค่า = GMV/ชม. (เข้ม = สูง) + 5 อันดับขายดี (ขวา)
+ *   แสดงเฉพาะชั่วโมงที่มีไลฟ์ · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. สีจาง ไม่จัดอันดับ
+ */
+function addHeatSlide(pres: PptxGenJS, title: string, sessions: LiveSession[]) {
+  if (!sessions.length) return;
+  const grid = heatGrid(sessions.map((x) => ({ startedAt: x.startedAt, durationSec: x.durationSec, gmv: x.gmv })));
+  const enough = (c: { sec: number }) => c.sec >= HEAT_MIN_SEC;
+  const max = Math.max(0, ...grid.flat().filter(enough).map((c) => heatPerHour(c) ?? 0));
+  const top = heatTop(grid, heatPerHour, 5);
+  const rank = new Map(top.slice(0, 3).map((x, i) => [`${x.day}|${x.hour}`, i + 1]));
+  const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => grid.some((col) => heatPerHour(col[h]) !== null));
+  if (!hours.length) return;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  const head = (text: string) => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align: "center" as const } });
+  const rows: PptxGenJS.TableRow[] = [
+    [head("เวลา"), ...HEAT_WEEKDAYS.map(head)],
+    ...hours.map((h): PptxGenJS.TableRow => [
+      { text: heatHour(h), options: { align: "right", color: C.muted } },
+      ...grid.map((col, d) => {
+        const c = col[h], val = heatPerHour(c), r = rank.get(`${d}|${h}`);
+        if (val === null) return { text: "", options: { fill: { color: "FAF5F7" } } };
+        const p = max ? Math.min(1, val / max) : 0;
+        return {
+          text: `${r ? `#${r} ` : ""}${compact(val)}`,
+          options: { align: "center" as const, bold: !!r, fill: { color: heatFill(p, !enough(c)) }, color: p >= 0.55 && enough(c) ? C.white : C.text },
+        };
+      }),
+    ]),
+  ];
+  s.addTable(rows, {
+    x: M, y: 1.3, w: 8.3, colW: [0.86, ...HEAT_WEEKDAYS.map(() => 1.063)], fontSize: hours.length > 18 ? 8 : 9, fontFace: FONT, color: C.text,
+    rowH: Math.min(0.3, 5.25 / rows.length), border: { type: "solid", pt: 0.5, color: C.white }, valign: "middle", margin: [0, 0.04, 0, 0.04],
+  });
+  s.addShape(pres.ShapeType.roundRect, { x: 9.2, y: 1.3, w: W - M - 9.2, h: 5.2, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
+  s.addText("ขายดีสุด (GMV/ชม.)", { x: 9.4, y: 1.45, w: 3.3, h: 0.4, fontSize: 16, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+  s.addText(top.length ? top.flatMap((x, i) => [
+    { text: `${i + 1}. ${HEAT_WEEKDAY_NAMES[x.day]} ${heatHour(x.hour)}–${heatHour(x.hour + 1)}`, options: { bold: true, breakLine: true } },
+    { text: `${fmt("gmv", x.v)}/ชม. · ไลฟ์รวม ${(x.cell.sec / 3600).toFixed(1)} ชม.`, options: { color: C.muted, breakLine: i < top.length - 1 } },
+  ]) : [{ text: "ยังไม่มีช่วงเวลาที่ไลฟ์รวมถึง 2 ชม.", options: { color: C.muted } }],
+  { x: 9.4, y: 1.9, w: 3.3, h: 4.45, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, valign: "top", paraSpaceAfter: 6, fit: "shrink", isTextBox: true });
+  s.addText("ไฟล์ Export ไม่มียอดรายชั่วโมง จึงกระจาย GMV ของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน · ช่องสีจาง = ไลฟ์รวมไม่ถึง 2 ชม. · #1–3 = อันดับ", {
+    x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 10, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+  });
+}
+
+/**
+ * วันปกติ vs วันแคมเปญ (เหมือนเว็บ · src/lib/live-days.ts): กราฟ GMV ต่อวันแยกชนิดวัน (แท่งละแพลตฟอร์ม) + ตารางของแต่ละแพลตฟอร์ม
+ *   (วัน · GMV/วัน · เทียบวันปกติ · GMV/ชม. · เทียบวันปกติ) · วันที่ยังไม่มีป้ายไม่นับ
+ */
+function addDayKindSlide(pres: PptxGenJS, title: string, sessions: LiveSession[], tags: Map<string, DayTag>) {
+  const per = (["TikTok", "Shopee"] as Platform[]).map((p) => ({ p, ...dayKindStats(sessions, tags, p) })).filter((x) => x.stats.length);
+  if (!per.length) return;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  const kinds = DAY_KINDS.filter((k) => per.some((x) => x.stats.some((st) => st.kind === k.kind)));
+  shapeBars(pres, s, {
+    labels: kinds.map((k) => k.label.replace(/ \(.*\)$/, "")),
+    series: per.map((x) => ({ name: `${x.p} GMV ต่อวัน`, color: PLATFORM_COLOR[x.p], values: kinds.map((k) => x.stats.find((st) => st.kind === k.kind)?.perDay ?? 0) })),
+    box: { x: M, y: 1.3, w: W - 2 * M, h: 2.85 }, showValue: true, change: false,
+  });
+  const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
+  const times = (val: number | null, base: number | null) => (val === null || !base ? "-" : `×${(val / base).toFixed(2)}`);
+  const tw = (W - 2 * M - 0.3 * (per.length - 1)) / per.length;
+  per.forEach((x, i) => {
+    const bau = x.stats.find((st) => st.kind === "bau");
+    const rows: PptxGenJS.TableRow[] = [
+      [head(x.p, "left"), head("วัน"), head("GMV/วัน"), head("เทียบปกติ"), head("GMV/ชม."), head("เทียบปกติ")],
+      ...x.stats.map((st): PptxGenJS.TableRow => [
+        { text: dayKindLabel(st.kind), options: { align: "left" } },
+        { text: String(st.days), options: { align: "right" } },
+        { text: fmt("gmv", st.perDay), options: { align: "right" } },
+        { text: st.kind === "bau" ? "-" : times(st.perDay, bau?.perDay ?? null), options: { align: "right", bold: true } },
+        { text: fmt("gmv", st.perHour), options: { align: "right" } },
+        { text: st.kind === "bau" ? "-" : times(st.perHour, bau?.perHour ?? null), options: { align: "right", bold: true } },
+      ]),
+    ];
+    const r = tw / 6.05;
+    s.addTable(rows, {
+      x: M + i * (tw + 0.3), y: 4.3, w: tw, colW: [1.75, 0.5, 1.05, 0.85, 1.05, 0.85].map((c) => c * r), fontSize: 10, fontFace: FONT, color: C.text,
+      rowH: Math.min(0.3, 2.2 / rows.length), border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.05, 0, 0.05],
+    });
+  });
+  const untagged = per.reduce((a, x) => a + x.untagged, 0);
+  s.addText(`ป้ายวันจากชีตของทีม · วัน = วันที่มีไลฟ์ นับตามเวลาเริ่มไลฟ์${untagged ? ` · ${untagged.toLocaleString("th-TH")} ไลฟ์อยู่ในวันที่ยังไม่มีป้าย จึงไม่นับ` : ""}`, {
+    x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+  });
 }
 
 function addTop5Slide(pres: PptxGenJS, lives: LiveSession[], name: string) {
@@ -912,9 +1160,14 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     });
   }
 
-  // 7.5) แยกตามกลุ่มผู้ไลฟ์ (หน้ารายเดือน) + กราฟแยก Agency
+  // 7.5) แยกตามกลุ่มผู้ไลฟ์ (หน้ารายเดือน) + เทียบรายกลุ่ม / รายบัญชี + กราฟแยก Agency
   if (o.owners) addOwnersSlide(pres, o.owners);
+  if (o.breakdown) addBreakdownSlides(pres, { a: o.a, b: o.b, aName: o.aName, bName: o.bName, spans: o.breakdown.spans });
   addAgencySlides(pres, target, o.agency);
+
+  // 7.7) ช่วงเวลาไหนขายดี + วันปกติ vs วันแคมเปญ (เหมือนหน้ารายเดือน / ทั้งปีบนเว็บ)
+  if (o.heat) addHeatSlide(pres, o.heat.title, o.a);
+  if (o.dayKinds) addDayKindSlide(pres, o.dayKinds.title, o.a, o.dayKinds.tags);
 
   // 8) Top 5 ไลฟ์ของช่วงหลัก
   addTop5Slide(pres, o.a, o.aName);
@@ -1261,4 +1514,4 @@ function thaiThemeFont(pptx: Uint8Array) {
 }
 
 // ใช้ร่วมกับสไลด์อื่น (src/lib/campaign-slides.ts)
-export { C as SLIDE_C, FONT as SLIDE_FONT, W as SLIDE_W, H as SLIDE_H, M as SLIDE_M, newDeck, finish, shapeBars, pctText, pctColor };
+export { C as SLIDE_C, FONT as SLIDE_FONT, W as SLIDE_W, H as SLIDE_H, M as SLIDE_M, newDeck, finish, shapeBars, pctText, pctColor, lineChart };
