@@ -58,6 +58,8 @@ type CampaignRange = { from: string; to: string; platform: string; campaign: str
 type Draft = {
   add: NewSlot[]; campaign: Record<string, string>; del: string[]; ranges: CampaignRange[]; agencyDel: string[]; assign: Record<string, number>;
   adjust: Record<string, boolean>;
+  /** slot เดิมที่จะเอาชื่อ Mc ออก (key) — slot ยังอยู่ ว่างให้ลงคนอื่น (โหมดติ๊กเป็น Mc ประจำ กดช่องของ Mc คนนั้นซ้ำ) */
+  unassign: string[];
 };
 /** กลุ่มคอลัมน์ติ๊ก: แพลตฟอร์ม (+ Agency ที่ไลฟ์ผ่านช่องนั้น) */
 type Column = { platform: string; agency?: string; times: { start: string; end: string }[] };
@@ -67,9 +69,11 @@ type Item = {
   existing: Existing | null; agencyId: number | null; deleting: boolean; campaignChanged: boolean; overlap: boolean;
   /** Mc ประจำที่ลงชื่อในร่าง (ยังไม่บันทึก) */
   assign: { id: number; name: string } | null;
+  /** slot เดิมที่จะเอาชื่อ Mc ออกตอนบันทึก */
+  unassigning: boolean;
 };
 
-const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agencyDel: [], assign: {}, adjust: {} };
+const EMPTY: Draft = { add: [], campaign: {}, del: [], ranges: [], agencyDel: [], assign: {}, adjust: {}, unassign: [] };
 const DRAFT_KEY = "glory_plan_draft_";
 const MONTH_KEY = "glory_plan_month";
 const VIEW_KEY = "glory_plan_view";
@@ -165,6 +169,7 @@ function parseDraft(raw: string | null): Draft | null {
       agencyDel: Array.isArray(v?.agencyDel) ? v.agencyDel : [],
       assign: v?.assign && typeof v.assign === "object" ? v.assign : {},
       adjust: v?.adjust && typeof v.adjust === "object" ? v.adjust : {},
+      unassign: Array.isArray(v?.unassign) ? v.unassign : [],
     };
   } catch {
     return null;
@@ -426,6 +431,7 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
     if (!plan) return [];
     const del = new Set(draft.del);
     const agencyDel = new Set(draft.agencyDel);
+    const unassign = new Set(draft.unassign);
     const regular = new Map((plan.regulars ?? []).map((m) => [m.id, m.name]));
     const assignOf = (id: number | null | undefined) => (id ? { id, name: regular.get(id) ?? `#${id}` } : null);
     const list: Item[] = [
@@ -435,19 +441,20 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
           key: s.key, date: s.date, platform: s.platform, start: s.start, end: s.end, campaign, agency: null,
           existing: s, agencyId: null, deleting: del.has(s.key), campaignChanged: !!s.mc && campaign !== s.campaign, overlap: false,
           assign: s.mc?.free ? assignOf(draft.assign[s.key]) : null,
+          unassigning: !del.has(s.key) && !!s.mc?.personId && unassign.has(s.key),
         };
       }),
       ...plan.agencySlots.map((s) => {
         const key = agencyKey(s.agency, keyOf(s));
         return {
           key, date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: "", agency: s.agency,
-          existing: null, agencyId: s.id, deleting: agencyDel.has(key), campaignChanged: false, overlap: false, assign: null,
+          existing: null, agencyId: s.id, deleting: agencyDel.has(key), campaignChanged: false, overlap: false, assign: null, unassigning: false,
         };
       }),
       ...draft.add.filter((s) => s.date.startsWith(month) && (s.agency ? !agencyMap.has(agencyKey(s.agency, keyOf(s))) : !existingMap.has(keyOf(s))))
         .map((s) => ({
           ...s, campaign: s.agency ? "" : s.campaign, agency: s.agency ?? null, key: ownKey(keyOf(s), s.agency),
-          existing: null, agencyId: null, deleting: false, campaignChanged: false, overlap: false, assign: s.agency ? null : assignOf(s.mcId),
+          existing: null, agencyId: null, deleting: false, campaignChanged: false, overlap: false, assign: s.agency ? null : assignOf(s.mcId), unassigning: false,
         })),
     ].sort((a, b) => a.date.localeCompare(b.date) || a.platform.localeCompare(b.platform) || dayOrder(a.start, a.platform) - dayOrder(b.start, b.platform));
     // เวลาทับกันในช่องเดียวกัน (รวมของเรากับ Agency เพราะไลฟ์บัญชีเดียวกัน — src/lib/plan-clash.ts) เทียบทุกคู่ในวัน + ช่องเดียวกัน
@@ -497,9 +504,12 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
       .map((x) => ({ slotId: x.existing!.mc!.id, personId: x.assign!.id }));
     const agencyAdjust = Object.entries(draft.adjust).filter(([k, on]) => on !== adjustedSaved.has(k))
       .map(([k, on]) => ({ agency: k.split("|")[0], date: k.split("|")[1], on }));
+    // เอาชื่อ Mc ออกจาก slot เดิม (slot ยังอยู่) — ส่งรหัส Mc เดิมไปด้วย กันเอาคนที่เพิ่งเปลี่ยนเข้ามาออก
+    const unassigns = ours.filter((x) => x.unassigning && x.existing?.mc?.personId && !x.deleting && canRelease(x.existing, release, todayKey()))
+      .map((x) => ({ slotId: x.existing!.mc!.id, personId: x.existing!.mc!.personId!, item: x }));
     return {
-      create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust,
-      total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length + assigns.length + agencyAdjust.length,
+      create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust, unassigns,
+      total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length + assigns.length + agencyAdjust.length + unassigns.length,
     };
   }, [items, ours, draft.adjust, adjustedSaved, release]);
 
@@ -553,6 +563,7 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
   /** เอาติ๊กออก: ร่างใหม่ = ลบจากร่าง / ของเดิม = ลบตอนบันทึก (ชื่อ Mc ที่ลงไว้ในร่างหายด้วย) */
   function withOff(d: Draft, k: string, agency: string | null): Draft {
     if (!agency && d.assign[k]) d = withMc(d, k, null);
+    if (!agency && d.unassign.includes(k)) d = withUnassign(d, k, false); // ลบทั้ง slot แล้ว ไม่ต้องเอาชื่อออกแยก
     if (agency) {
       const ak = agencyKey(agency, k);
       if (agencyMap.has(ak)) return { ...d, agencyDel: d.agencyDel.includes(ak) ? d.agencyDel : [...d.agencyDel, ak] };
@@ -571,11 +582,26 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
 
   // ---------- ลงชื่อ Mc ประจำตอนติ๊ก (เลือกที่ "ติ๊กเป็น") ----------
 
-  /** Mc ที่ลงชื่อในร่างของช่อง k (slot ของเรา): ร่างใหม่ = mcId / slot เดิม = assign */
+  /**
+   * Mc ของช่อง k (slot ของเรา) ตามร่าง: ร่างใหม่ = mcId / slot เดิม = ลงชื่อในร่าง หรือคนที่อยู่ใน slot แล้ว (ยกเว้นที่จะเอาชื่อออก)
+   */
   function mcOf(d: Draft, k: string): number | null {
-    if (existingMap.has(k)) return d.del.includes(k) ? null : d.assign[k] ?? null;
+    const ex = existingMap.get(k);
+    if (ex) {
+      if (d.del.includes(k)) return null;
+      if (d.assign[k]) return d.assign[k];
+      return ex.mc?.personId && !ex.mc.free && !d.unassign.includes(k) ? ex.mc.personId : null;
+    }
     return d.add.find((s) => !s.agency && keyOf(s) === k)?.mcId ?? null;
   }
+  /** เอาชื่อ Mc ออกจาก slot เดิม (on) / ยกเลิก (off) */
+  function withUnassign(d: Draft, k: string, on: boolean): Draft {
+    const has = d.unassign.includes(k);
+    if (on === has) return d;
+    return { ...d, unassign: on ? [...d.unassign, k] : d.unassign.filter((x) => x !== k) };
+  }
+  /** slot เดิมที่มีชื่อ Mc คนนี้ เอาชื่อออกได้ไหม (มีสิทธิ์จัดการ Mc + ยังไม่ถึงวัน) */
+  const canUnassign = (ex: Existing) => release.mc && ex.date >= todayKey();
   function withMc(d: Draft, k: string, mcId: number | null): Draft {
     if (existingMap.has(k)) {
       const assign = { ...d.assign };
@@ -590,7 +616,8 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
     const k = keyOf(slot);
     const from = dayOrder(slot.start, slot.platform), to = from + lenOf(slot);
     const mine = [
-      ...(plan?.slots ?? []).filter((s) => !d.del.includes(s.key) && !s.mc?.cancelled && (s.mc?.personId === mcId || d.assign[s.key] === mcId)),
+      ...(plan?.slots ?? []).filter((s) => !d.del.includes(s.key) && !s.mc?.cancelled
+        && ((s.mc?.personId === mcId && !d.unassign.includes(s.key)) || d.assign[s.key] === mcId)),
       ...d.add.filter((s) => !s.agency && s.mcId === mcId),
     ];
     const hit = mine.find((s) => s.date === slot.date && keyOf(s) !== k
@@ -602,7 +629,19 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
     const k = keyOf(slot);
     const ex = existingMap.get(k);
     const name = `Mc ${regulars.find((m) => m.id === mcId)?.name ?? ""}`;
-    if (ex?.mc && !ex.mc.free) { toast(ex.mc.personId === mcId ? `slot นี้ ${name} อยู่แล้ว` : lockedMsg, "error"); return; }
+    if (ex?.mc && !ex.mc.free) {
+      if (ex.mc.personId !== mcId) {
+        toast(`slot นี้ ${ex.mc.name ? `Mc ${ex.mc.name.replace(/^mc\s*/i, "")}` : "มีคน"}จองแล้ว (จะลบ slot ให้เลือก "ติ๊กปกติ" แล้วเอาติ๊กออก)`, "error");
+        return;
+      }
+      // ชื่อ Mc นี้อยู่ใน slot แล้ว (บันทึกแล้ว): กดซ้ำ = เอาชื่อออกตอนบันทึก (slot ยังอยู่) / กดอีกครั้ง = ยกเลิก
+      if (!draft.unassign.includes(k) && !canUnassign(ex)) {
+        toast(`เอา ${name} ออกไม่ได้ (วันที่ผ่านไปแล้ว หรือบัญชีนี้ไม่มีสิทธิ์จัดการ Mc)`, "error");
+        return;
+      }
+      update((d) => withUnassign(d, k, !d.unassign.includes(k)));
+      return;
+    }
     const on = isOn(draft, k, null);
     if (on && mcOf(draft, k) === mcId) {
       // กดซ้ำ: slot เดิม = เอาชื่อออก (slot ยังอยู่) / ร่างใหม่ = เอาออกจากร่าง
@@ -634,8 +673,15 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
     for (const s of slots) {
       const k = keyOf(s);
       const ex = existingMap.get(k);
+      // slot เดิมที่ Mc คนนี้อยู่แล้ว (บันทึกแล้ว): ลากเอาออก = เอาชื่อออกตอนบันทึก / ลากใส่ = ยกเลิกการเอาชื่อออก
+      const saved = !!ex?.mc && !ex.mc.free && ex.mc.personId === mcId && !next.del.includes(k);
       if (off) {
-        if (mcOf(next, k) === mcId) { next = ex ? withMc(next, k, null) : withOff(next, k, null); changed++; }
+        if (saved) {
+          if (next.unassign.includes(k)) continue;
+          if (canUnassign(ex!)) { next = withUnassign(next, k, true); changed++; } else kept++;
+        } else if (mcOf(next, k) === mcId) { next = ex ? withMc(next, k, null) : withOff(next, k, null); changed++; }
+      } else if (saved) {
+        if (next.unassign.includes(k)) { next = withUnassign(next, k, false); changed++; }
       } else if (mcOf(next, k) !== mcId) {
         if ((ex?.mc && !ex.mc.free) || otherOwner(next, k, null, s.platform) !== undefined || mcBusy(next, mcId, s)) kept++;
         else if (!isOn(next, k, null) && channelClash(next, s, null)) kept++; // ทับกับ Agency ในบัญชีเดียวกัน
@@ -649,7 +695,7 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
     const today = todayKey();
     const slots = daysOf(month).filter((d) => d >= today).map((date) => ({ date, platform, start: t.start, end: t.end }));
     if (!slots.length) { toast("เดือนนี้ผ่านไปแล้ว", "error"); return; }
-    const allOn = slots.every((s) => mcOf(draft, keyOf(s)) === mcId || existingMap.get(keyOf(s))?.mc?.personId === mcId);
+    const allOn = slots.every((s) => mcOf(draft, keyOf(s)) === mcId);
     const { next, kept } = paintMc(draft, slots, mcId, allOn);
     update(() => next);
     const name = `Mc ${regulars.find((m) => m.id === mcId)?.name ?? ""}`;
@@ -832,12 +878,14 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
   }
 
   async function save() {
-    const { create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust } = changes;
+    const { create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust, unassigns } = changes;
     const named = create.filter((s) => s.assign).length + assigns.length;
     // slot ที่มีคนจองแล้ว: บันทึก = เอาคนออก + ลบนัดในปฏิทิน + แจ้งคนนั้น แล้วลบ slot (ต้องเห็นชื่อก่อนยืนยัน)
     const booked = deletes.filter((s) => !canDelete(s));
     const free = deletes.length - booked.length;
     const bookedList = booked.slice(0, 8).map((s) => `${fmtDayNum(s.date)} ${s.start}–${s.end} ${platformLabel(s.platform)}: ${bookedText(s)}`);
+    // เอาชื่อ Mc ออก (slot ยังอยู่): บอกชื่อ + วันเวลาก่อนยืนยันเหมือนกัน
+    const unassignList = unassigns.slice(0, 8).map(({ item: x }) => `${fmtDayNum(x.date)} ${x.start}–${x.end} ${platformLabel(x.platform)}: ${bookedText({ ...x.existing!, admin: null })}`);
     const ok = await confirm({
       title: `บันทึกแพลน ${monthLabel(month)}?`,
       description: (
@@ -858,10 +906,17 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
               {booked.length > bookedList.length ? <span className="block text-xs">และอีก {booked.length - bookedList.length} slot</span> : null}
             </span>
           ) : null}
+          {unassigns.length ? (
+            <span className="mt-2 block rounded-md border border-destructive/40 bg-destructive/5 p-2 text-destructive">
+              <b>เอาชื่อ Mc ออก {unassigns.length} slot</b> (slot ยังอยู่ ว่างให้ลงคนอื่น) — ลบนัดในปฏิทิน + แจ้งเตือน Mc ให้
+              {unassignList.map((t) => <span key={t} className="block text-xs">• {t}</span>)}
+              {unassigns.length > unassignList.length ? <span className="block text-xs">และอีก {unassigns.length - unassignList.length} slot</span> : null}
+            </span>
+          ) : null}
         </>
       ),
-      confirmText: booked.length ? `บันทึก + เอาคนออก ${booked.length} slot` : "บันทึก",
-      destructive: booked.length > 0,
+      confirmText: booked.length || unassigns.length ? `บันทึก + เอาคนออก ${booked.length + unassigns.length} slot` : "บันทึก",
+      destructive: booked.length + unassigns.length > 0,
     });
     if (!ok) return;
     setSaving(true);
@@ -875,8 +930,8 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
         update((d) => ({ ...d, del: [] }));
         if (res.kept) toast(`มี ${res.kept} slot ที่ไม่ได้ลบ (มีคนจองเข้ามาระหว่างนั้น / ลบนัดในปฏิทินไม่สำเร็จ / ไม่มีสิทธิ์) ลองใหม่อีกครั้ง`, "error");
       }
-      if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length || agencyAdjust.length) {
-        const res = await api<{ created: number; skipped: number; updated: number; assignSkipped: number; loanWarnings?: string[] }>("/api/plan", {
+      if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length || agencyAdjust.length || unassigns.length) {
+        const res = await api<{ created: number; skipped: number; updated: number; assignSkipped: number; unassignSkipped?: number; loanWarnings?: string[] }>("/api/plan", {
           create: create.map((s) => ({
             date: s.date, platform: s.platform, start: s.start, end: s.end, campaign: s.campaign, mcId: s.assign?.id ?? null,
           })),
@@ -885,16 +940,18 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
           agencyDelete,
           agencyAdjust,
           assigns,
+          unassigns: unassigns.map(({ slotId, personId }) => ({ slotId, personId })),
         });
         if (!res.ok) throw new Error(res.message);
         if (res.assignSkipped) toast(`มี ${res.assignSkipped} slot ที่มี Mc จองเข้ามาก่อน ไม่ได้ลงชื่อ Mc ประจำ`, "error");
+        if (res.unassignSkipped) toast(`มี ${res.unassignSkipped} slot ที่ไม่ได้เอาชื่อออก (เปลี่ยนคนไปแล้ว / เริ่มไลฟ์แล้ว)`, "error");
         // ไลฟ์ที่เพิ่มชนของที่อนุมัติให้ยืมไปแล้ว (ไฟ / กล้องประจำห้องไม่พอ) — แจ้งคนจัดการอุปกรณ์ให้แล้ว
         if (res.loanWarnings?.length) {
           toast(`ไลฟ์ชนอุปกรณ์ที่ให้ยืมอยู่: ${res.loanWarnings.join(" | ")} — แจ้งคนจัดการอุปกรณ์แล้ว`, "error");
         }
       }
       update((d) => ({ ...EMPTY, ranges: d.ranges }));
-      toast(create.length || campaigns.length || deletes.length || assigns.length
+      toast(create.length || campaigns.length || deletes.length || assigns.length || unassigns.length
         ? "บันทึกแล้ว ระบบกำลังเขียนลงชีต (อาจใช้เวลา 1–2 นาที)" : "บันทึกแพลนในเว็บแล้ว");
       reload();
     } catch (err) {
@@ -931,9 +988,14 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
   const namedDraft = ours.filter((x) => x.assign && !x.deleting);
   // ชั่วโมง Mc ประจำเดือนนี้: ลงชีตแล้ว (ชื่ออยู่ใน slot แล้ว) / ในร่าง
   const regularHours = regulars.map((m) => {
-    const saved = ours.filter((x) => !x.deleting && !x.existing?.mc?.cancelled && x.existing?.mc?.personId === m.id);
+    // ลงชีตแล้ว (ชื่ออยู่ใน slot) · ในร่างจะเอาชื่อออก / ลบ slot = หักออกจากยอดรวม
+    const inSheet = ours.filter((x) => !x.existing?.mc?.cancelled && x.existing?.mc?.personId === m.id);
+    const leaving = inSheet.filter((x) => x.unassigning || x.deleting);
     const draftOnes = namedDraft.filter((x) => x.assign!.id === m.id);
-    return { ...m, saved: hrs(saved), draft: hrs(draftOnes), slots: saved.length + draftOnes.length };
+    return {
+      ...m, saved: hrs(inSheet), draft: hrs(draftOnes), removed: hrs(leaving),
+      slots: inSheet.length - leaving.length + draftOnes.length, total: hrs(inSheet) - hrs(leaving) + hrs(draftOnes),
+    };
   });
 
   return (
@@ -1066,7 +1128,7 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
               </ToggleGroup>
               <span className="text-xs text-muted-foreground">
                 {brushId
-                  ? `ช่องที่ติ๊กจะลงชื่อ Mc ${regulars.find((m) => m.id === brushId)?.name} ไว้เลย (ลงชีต + ปฏิทินตอนบันทึก) · กดช่องที่ลงชื่อแล้วซ้ำ = ยกเลิก · ช่อง Agency ไม่ลงชื่อ`
+                  ? `ช่องที่ติ๊กจะลงชื่อ Mc ${regulars.find((m) => m.id === brushId)?.name} ไว้เลย (ลงชีต + ปฏิทินตอนบันทึก) · กดช่องที่มีชื่อ Mc คนนี้ซ้ำ (รวมที่บันทึกแล้ว) = เอาชื่อออก slot ยังอยู่ · ช่อง Agency ไม่ลงชื่อ`
                   : "เลือก Mc ประจำเพื่อลงชื่อในช่องที่ติ๊ก ไม่ต้องรอ Mc จองเอง"}
               </span>
               {/* ชั่วโมงของ Mc ประจำเดือนนี้: ลงชีตแล้ว + ในร่าง */}
@@ -1074,8 +1136,9 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
                 {regularHours.map((m) => (
                   <span key={m.id} className="tabular-nums">
                     <strong>Mc {m.name}</strong> {monthLabel(month)}:{" "}
-                    <strong className="text-p2">{num(m.saved + m.draft)} ชม.</strong> ({m.slots} slot)
+                    <strong className="text-p2">{num(m.total)} ชม.</strong> ({m.slots} slot)
                     <span className="text-muted-foreground"> · ลงชีตแล้ว {num(m.saved)} ชม. · ร่าง +{num(m.draft)} ชม.</span>
+                    {m.removed ? <span className="font-semibold text-destructive"> −{num(m.removed)} ชม.</span> : null}
                   </span>
                 ))}
               </div>
@@ -1151,6 +1214,7 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
                   changes.campaigns.length ? `แก้ Campaign ${changes.campaigns.length}` : "",
                   changes.deletes.length ? `ลบ ${changes.deletes.length} (-${num(hrs(changes.deletes))} ชม.)` : "",
                   namedDraft.length ? `ลงชื่อ Mc ประจำ ${namedDraft.length} (${num(hrs(namedDraft))} ชม.)` : "",
+                  changes.unassigns.length ? `เอาชื่อ Mc ออก ${changes.unassigns.length} (${num(hrs(changes.unassigns.map((u) => u.item)))} ชม.)` : "",
                   changes.agencyCreate.length || changes.agencyDelete.length
                     ? `แพลนในเว็บ +${changes.agencyCreate.length} (${num(hrs(changes.agencyCreate))} ชม.)${changes.agencyDelete.length ? ` / ลบ ${changes.agencyDelete.length}` : ""}` : "",
                   changes.agencyAdjust.length ? `เปลี่ยนสถานะ Agency ${changes.agencyAdjust.length} วัน` : "",
@@ -1213,6 +1277,7 @@ function Legend({ tick }: { tick: boolean }) {
           {sample("border-p2 bg-p2", "Mc จองแล้ว (เอาติ๊กออก = เอา Mc ออกตอนบันทึก)")}
           {sample("border-2 border-warning-border bg-warning", "Admin จองแล้ว ยังไม่มี Mc")}
           {sample("border-2 border-dashed border-p2 bg-p2/20", "ร่างลงชื่อ Mc ประจำ")}
+          {sample("border-2 border-dashed border-destructive bg-p2/15", "ร่างเอาชื่อ Mc ออก (slot ยังอยู่)")}
           {sample("border-destructive bg-destructive/15", "จะลบ")}
         </>
       ) : (
@@ -1227,16 +1292,21 @@ function Legend({ tick }: { tick: boolean }) {
   );
 }
 
-type TickState = "none" | "other" | "del" | "have" | "new" | "assign" | "cancel" | "taken" | "noMc";
+type TickState = "none" | "other" | "del" | "have" | "new" | "assign" | "cancel" | "taken" | "noMc" | "unassign";
 
-/** หน้าตาช่องระหว่างลาก (ยังไม่ลงร่างจนกว่าจะปล่อยเมาส์): เปลี่ยนเฉพาะช่องที่จะเปลี่ยนจริง ช่องที่มีคนจอง / เป็นของอีกฝั่ง คงเดิม */
+/**
+ * หน้าตาช่องระหว่างลาก (ยังไม่ลงร่างจนกว่าจะปล่อยเมาส์): เปลี่ยนเฉพาะช่องที่จะเปลี่ยนจริง ช่องที่เป็นของอีกฝั่งคงเดิม
+ *   ช่องที่มีคนจอง: ลากเอาออก = จะลบ (ช่องที่ไม่มีสิทธิ์ / วันที่ผ่านไปแล้ว ข้ามตอนปล่อยเมาส์ + แจ้งจำนวน)
+ *   ติ๊กเป็น Mc ประจำ: ช่องที่ Mc คนนั้นอยู่แล้ว ลากเอาออก = เอาชื่อออก
+ */
 function previewState(st: TickState, item: Item | undefined, preview: "on" | "off", brush: number | null): TickState {
+  const mine = !!brush && item?.existing?.mc?.personId === brush && !item.existing.mc.free;
   if (preview === "on") {
-    if (brush) return st === "none" || st === "del" || st === "have" || st === "new" ? "assign" : st;
+    if (brush) return mine && st === "unassign" ? "taken" : st === "none" || st === "del" || st === "have" || st === "new" ? "assign" : st;
     return st === "none" ? "new" : st === "del" ? "have" : st;
   }
-  if (brush) return item?.assign?.id === brush ? (item.existing ? "have" : "none") : st;
-  if (st === "have") return "del";
+  if (brush) return mine && st === "taken" ? "unassign" : item?.assign?.id === brush ? (item.existing ? "have" : "none") : st;
+  if (st === "have" || st === "taken" || st === "noMc" || st === "cancel" || st === "unassign") return "del";
   if (st === "new") return "none";
   return st === "assign" ? (item?.existing ? "del" : "none") : st;
 }
@@ -1252,6 +1322,7 @@ function Tick({ item, other, agency, label, preview, brush, onClick }: {
   const now: TickState = !item || (item.deleting && other) ? (other ? "other" : "none")
     : item.deleting ? "del"
       : item.agency ? (item.agencyId ? "have" : "new")
+        : item.unassigning ? "unassign"
         : item.assign ? "assign"
         : !item.existing ? "new"
           : item.existing.mc?.cancelled ? "cancel" : item.existing.mc?.name ? "taken"
@@ -1276,12 +1347,13 @@ function Tick({ item, other, agency, label, preview, brush, onClick }: {
         st === "taken" && "border-p2 bg-p2 text-white",
         st === "noMc" && "border-2 border-warning-border bg-warning text-warning-foreground",
         st === "assign" && "border-2 border-dashed border-p2 bg-p2/20 text-p2",
+        st === "unassign" && "border-2 border-dashed border-destructive bg-p2/15 text-destructive",
         st === "cancel" && "bg-muted text-muted-foreground",
         st === "del" && "border-destructive bg-destructive/15 text-destructive",
         st !== "other" && item?.overlap && "ring-2 ring-warning-border",
       )}
     >
-      {st === "new" || st === "have" ? <CheckIcon /> : st === "taken" || st === "assign" ? <UserIcon /> : st === "noMc" ? <UserXIcon /> : st === "del" ? <XIcon />
+      {st === "new" || st === "have" ? <CheckIcon /> : st === "taken" || st === "assign" ? <UserIcon /> : st === "noMc" || st === "unassign" ? <UserXIcon /> : st === "del" ? <XIcon />
         : st === "cancel" || st === "other" ? <MinusIcon /> : null}
     </button>
   );

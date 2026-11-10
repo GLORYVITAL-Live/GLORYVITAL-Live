@@ -204,8 +204,16 @@ export async function POST(request: Request) {
     if (!Number.isInteger(x?.slotId) || !Number.isInteger(x?.personId)) return fail("ข้อมูลลงชื่อ Mc ไม่ถูกต้อง");
     assigns.push({ slotId: x.slotId, personId: x.personId });
   }
-  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length && !agencyAdjust.length && !assigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
-  if (assigns.length > MAX_CREATE) return fail(`ลงชื่อ Mc ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
+  // เอาชื่อ Mc ออกจาก slot เดิม (slot ยังอยู่) { slotId (mc_slots), personId = คนเดิม กันเอาคนที่เพิ่งเปลี่ยนเข้ามาออก }
+  //   ต้องมีสิทธิ์จัดการ Mc · เฉพาะ slot ที่ยังไม่เริ่มไลฟ์
+  const unassigns: { slotId: number; personId: number }[] = [];
+  for (const x of Array.isArray(body?.unassigns) ? body.unassigns : []) {
+    if (!Number.isInteger(x?.slotId) || !Number.isInteger(x?.personId)) return fail("ข้อมูลเอาชื่อ Mc ออกไม่ถูกต้อง");
+    unassigns.push({ slotId: x.slotId, personId: x.personId });
+  }
+  if (unassigns.length && !r.me.owner?.mc) return fail("บัญชีนี้ไม่มีสิทธิ์จัดการ Mc จึงเอาชื่อ Mc ออกไม่ได้", 403);
+  if (!create.length && !campaigns.length && !agencyCreate.length && !agencyDelete.length && !agencyAdjust.length && !assigns.length && !unassigns.length) return fail("ยังไม่มีอะไรให้บันทึก");
+  if (assigns.length > MAX_CREATE || unassigns.length > MAX_CREATE) return fail(`ลงชื่อ / เอาชื่อ Mc ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (agencyCreate.length > MAX_CREATE || agencyDelete.length > MAX_CREATE || agencyAdjust.length > MAX_CREATE) return fail(`แก้แพลนของ Agency ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (create.length > MAX_CREATE) return fail(`สร้างได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
   if (campaigns.length > MAX_CREATE) return fail(`แก้ Campaign ได้ครั้งละไม่เกิน ${MAX_CREATE} slot`);
@@ -302,10 +310,24 @@ export async function POST(request: Request) {
         assigned.push(...(data ?? []).map((x) => x.id as number));
       }
     }
-    // ลงปฏิทินของ Mc ที่ลงชื่อไว้ (slot ใหม่ที่มีชื่อ + slot เดิมที่ลงชื่อ)
+    // เอาชื่อ Mc ออก (slot ยังอยู่): เฉพาะที่ยังเป็นคนเดิมและยังไม่เริ่มไลฟ์ · ปฏิทิน = งานลงปฏิทินลบนัดให้ · ชีต = DB trigger
+    const unassigned: { slotId: number; personId: number }[] = [];
+    const nowIso = new Date().toISOString();
+    const unByPerson = new Map<number, number[]>();
+    for (const u of unassigns) unByPerson.set(u.personId, [...(unByPerson.get(u.personId) ?? []), u.slotId]);
+    for (const [personId, ids] of unByPerson) {
+      for (let i = 0; i < ids.length; i += 300) {
+        const { data, error } = await db.from("mc_slots").update({ mc_id: null, confirmed: null })
+          .in("id", ids.slice(i, i + 300)).eq("mc_id", personId).gt("starts_at", nowIso).select("id");
+        if (error) throw new Error(error.message);
+        unassigned.push(...(data ?? []).map((x) => ({ slotId: x.id as number, personId })));
+      }
+    }
+    // ลงปฏิทินของ Mc ที่ลงชื่อไว้ (slot ใหม่ที่มีชื่อ + slot เดิมที่ลงชื่อ) + ลบนัดของ slot ที่เอาชื่อออก
     const withPerson = [...mcIds.filter((_, i) => newMc[i] && "mc_id" in newMc[i]), ...assigned];
-    for (let i = 0; i < withPerson.length; i += 500) {
-      const { error } = await db.from("calendar_jobs").insert(withPerson.slice(i, i + 500).map((slot_id) => ({ slot_table: "mc_slots", slot_id })));
+    const calendarIds = [...withPerson, ...unassigned.map((u) => u.slotId)];
+    for (let i = 0; i < calendarIds.length; i += 500) {
+      const { error } = await db.from("calendar_jobs").insert(calendarIds.slice(i, i + 500).map((slot_id) => ({ slot_table: "mc_slots", slot_id })));
       if (error) throw new Error(error.message);
     }
 
@@ -366,7 +388,12 @@ export async function POST(request: Request) {
       const personOf = new Map<number, number>();
       mcIds.forEach((id, i) => { const p = (newMc[i] as { mc_id?: number }).mc_id; if (p) personOf.set(id, p); });
       for (const a of assigns) if (assigned.includes(a.slotId)) personOf.set(a.slotId, a.personId);
-      await notifySlotChanges("mc_slots", [...personOf].map(([id, p]) => ({ id, oldPerson: null, newPerson: p, oldCancelled: false })), r.me.email);
+      await notifySlotChanges("mc_slots", [
+        ...[...personOf].map(([id, p]) => ({ id, oldPerson: null, newPerson: p, oldCancelled: false })),
+        // เอาชื่อออก = Mc คนนั้น "ถูกเอาออกจากคิว"
+        ...unassigned.map((u) => ({ id: u.slotId, oldPerson: u.personId, newPerson: null, oldCancelled: false })),
+      ], r.me.email);
+      if (unassigned.length) await log(r.me, "Plan Slot Live: เอาชื่อ Mc ออก", "mc_slots", unassigned.map((u) => u.slotId));
       // ไลฟ์ใหม่ชนของที่อนุมัติให้ยืมไปแล้ว → คนจัดการอุปกรณ์ทันที (ไม่รอ cron)
       if (mcIds.length) await sendLoanLiveAlerts();
     });
@@ -377,6 +404,7 @@ export async function POST(request: Request) {
     return ok({
       created: mcIds.length, adminCreated: adminIds.length, skipped: create.length - Math.max(mcIds.length, adminIds.length), updated, agencyAdded, agencyRemoved,
       assigned: withPerson.length, assignSkipped: assigns.length - assigned.length, loanWarnings,
+      unassigned: unassigned.length, unassignSkipped: unassigns.length - unassigned.length,
     });
   } catch (err) {
     return fail((err as Error).message, 500);
