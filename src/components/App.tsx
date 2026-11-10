@@ -428,7 +428,7 @@ function Shell({ me }: { me: Me | null }) {
       {me && registered && page === "home" ? <HomeView go={goTo} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
       {me && registered && page === "stats" ? <LiveStats readOnly={!me.owner?.analytics} analytics={!!me.owner?.see.analytics} cost={costAccess} /> : null}
-      {me && registered && page === "plan" ? <PlanSlots readOnly={!me.owner?.plan} /> : null}
+      {me && registered && page === "plan" ? <PlanSlots readOnly={!me.owner?.plan} release={{ mc: !!me.owner?.mc, admin: !!me.owner?.admin }} /> : null}
       {me && registered && page === "ceo" ? <CeoLive /> : null}
       {me && registered && page === "equipment" ? <EquipmentPage /> : null}
       {me && registered && page === "training" ? <TrainingPage /> : null}

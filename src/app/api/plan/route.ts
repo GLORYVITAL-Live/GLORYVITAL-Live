@@ -3,6 +3,7 @@ import { cleanAgency } from "@/lib/agency-budget";
 import { platformLabel, platformRaw } from "@/lib/platform";
 import { firstClash, ownerText, type PlanSpan } from "@/lib/plan-clash";
 import { fail, monthRange, ok, requirePlanner } from "@/lib/api";
+import { deleteCalendarEvent } from "@/lib/calendar";
 import { canonicalCampaign } from "@/lib/campaign";
 import { loanLiveIssues, sendLoanLiveAlerts } from "@/lib/loans-db";
 import { notifyNewSlots, notifySlotChanges } from "@/lib/notifications";
@@ -18,7 +19,8 @@ import type { Me } from "@/lib/types";
 //          สร้าง slot (ทั้งฝั่ง Mc + Admin ข้ามที่มีอยู่แล้ว) + แก้ Campaign ของ slot เดิม
 //          + แพลนของ Agency (ตาราง agency_slots ไว้ดูภาพรวม / สรุปชั่วโมง ไม่เขียนลงชีต)
 //          + สถานะ Adjusted รายวันของ Agency (ตาราง agency_adjusted)
-//   DELETE { slots: [{ mcId?, adminId? }] }  ลบ slot ที่ยังว่าง (ไม่มีคน + ไม่มี event ในปฏิทิน)
+//   DELETE { slots: [{ mcId?, adminId? }], release? }  ลบ slot ที่ยังว่าง (ไม่มีคน + ไม่มี event ในปฏิทิน)
+//          release: true = ลบ slot ที่มีคนจองด้วย (ฝั่งที่ Owner มีสิทธิ์จัดการคน + ยังไม่เริ่มไลฟ์): ลบนัดในปฏิทิน -> ลบ slot + แถวในชีต -> แจ้งคนนั้น
 // สิทธิ์: Owner ที่ติ๊ก "Plan Slot Live" เท่านั้น (เขียนได้ทั้งสองแท็บ)
 // slot ของแท็บ "ลงตาราง MC Shopee" (mc_slots.sheet_tab = 'shopee') ไม่อยู่ในหน้านี้ — แพลน Shopee ยังเป็นแพลนในเว็บ (agency_slots)
 
@@ -396,18 +398,30 @@ export async function DELETE(request: Request) {
   if (ids.mc_slots.length > MAX_DELETE || ids.admin_slots.length > MAX_DELETE) return fail(`ลบได้ครั้งละไม่เกิน ${MAX_DELETE} slot`);
 
   const db = createAdminClient();
-  type Row = { id: number; platform: string; live_date: string; start_time: string; end_time: string; calendar_event_id: string | null } & Record<string, unknown>;
+  type Row = {
+    id: number; platform: string; live_date: string; start_time: string; end_time: string; starts_at: string; ends_at: string;
+    is_cancelled: boolean; confirmed: boolean | null; calendar_email: string | null; calendar_event_id: string | null; sheet_tab?: string | null;
+  } & Record<string, unknown>;
   const removed: Record<Table, Row[]> = { mc_slots: [], admin_slots: [] };
+  /** slot ที่มีคนจองและถูกลบ (เอาคนออก) — ใช้แจ้งเตือนคนนั้น */
+  const released: Record<Table, Row[]> = { mc_slots: [], admin_slots: [] };
+  // slot ที่มีคนจอง (release: true จากหน้าแพลนหลังผู้ใช้ยืนยันรายชื่อแล้ว): ฝั่งที่มีสิทธิ์จัดการคน + ยังไม่เริ่มไลฟ์เท่านั้น
+  const release = body?.release === true;
+  const canRelease: Record<Table, boolean> = { mc_slots: release && !!r.me.owner?.mc, admin_slots: release && !!r.me.owner?.admin };
+  const now = Date.now();
   let kept = 0;
   try {
     for (const table of ["mc_slots", "admin_slots"] as const) {
       if (!ids[table].length) continue;
       const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
       const rows = await all<Row>((a, b) => db.from(table)
-        .select(`id, platform, live_date, start_time, end_time, calendar_event_id, ${personCol}`).in("id", ids[table]).order("id").range(a, b));
-      // ลบได้เฉพาะ slot ที่ไม่มีคนและไม่มี event ในปฏิทินค้าง (ไม่งั้น event จะค้างในปฏิทิน)
+        .select(`id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, calendar_email, calendar_event_id, ${personCol}${table === "mc_slots" ? ", sheet_tab" : ""}`)
+        .in("id", ids[table]).order("id").range(a, b));
+      // ลบได้เลย: slot ที่ไม่มีคนและไม่มี event ในปฏิทินค้าง
       const free = rows.filter((x) => !x[personCol] && !x.calendar_event_id);
-      kept += rows.length - free.length;
+      // มีคน / มีนัดค้าง: เอาออกได้เมื่อขอ + มีสิทธิ์ฝั่งนั้น + ยังไม่เริ่มไลฟ์ (คิวที่ไลฟ์แล้วต้องอยู่ให้คิดค่าจ้าง)
+      const busy = rows.filter((x) => (x[personCol] || x.calendar_event_id) && canRelease[table] && Date.parse(x.starts_at) > now);
+      kept += rows.length - free.length - busy.length;
       for (let i = 0; i < free.length; i += 300) {
         // ตรวจซ้ำตอนลบ กันมีคนจองเข้ามาระหว่างนั้น
         const { data, error } = await db.from(table).delete()
@@ -417,18 +431,66 @@ export async function DELETE(request: Request) {
         kept += free.slice(i, i + 300).length - done.size;
         removed[table].push(...free.slice(i, i + 300).filter((x) => done.has(x.id)));
       }
+      for (const x of busy) {
+        // ลบนัดในปฏิทินก่อน (ลบไม่สำเร็จ = ไม่ลบ slot กันนัดค้างในปฏิทินของคนนั้น) · นัดที่หายไปแล้ว = สำเร็จ
+        if (x.calendar_email && x.calendar_event_id) {
+          try {
+            await deleteCalendarEvent(x.calendar_email, x.calendar_event_id);
+          } catch (err) {
+            console.warn(`ลบนัดในปฏิทินของ slot ${table} ${x.id} ไม่สำเร็จ:`, err);
+            kept++;
+            continue;
+          }
+        }
+        // ลบเมื่อยังเป็นคนเดิม (มีการเปลี่ยนคนระหว่างนั้น = ไม่ลบ)
+        const person = x[personCol] as number | null;
+        const q = db.from(table).delete().eq("id", x.id);
+        const { data, error } = await (person ? q.eq(personCol, person) : q.is(personCol, null)).select("id");
+        if (error) throw new Error(error.message);
+        if (!data?.length) { kept++; continue; }
+        removed[table].push(x);
+        if (person) released[table].push(x);
+      }
     }
   } catch (err) {
     return fail((err as Error).message, 500);
   }
 
   after(async () => {
-    // ลบแถวของ slot เหล่านี้ในชีตด้วย
     for (const table of ["mc_slots", "admin_slots"] as const) {
       if (!removed[table].length) continue;
+      const personCol = table === "mc_slots" ? "mc_id" : "admin_id";
+      // ลบแถวของ slot เหล่านี้ในชีตด้วย
       try { await deleteSheetRows(table, removed[table]); } catch (err) { console.warn("ลบแถวในชีตไม่สำเร็จ:", err); }
-      await log(r.me, "Plan Slot Live: ลบ slot", table, removed[table].map((x) => x.id));
+      const freeIds = removed[table].filter((x) => !released[table].includes(x)).map((x) => x.id);
+      if (freeIds.length) await log(r.me, "Plan Slot Live: ลบ slot", table, freeIds);
+      if (!released[table].length) continue;
+      await log(r.me, "Plan Slot Live: ลบ slot + เอาคนออก", table, released[table].map((x) => x.id));
+      // แจ้งคนที่ถูกเอาออก (ข้อมูล slot ก่อนลบ)
+      await notifySlotChanges(table, released[table].map((x) => ({ id: x.id, oldPerson: x[personCol] as number, newPerson: null, oldCancelled: x.is_cancelled })), r.me.email,
+        released[table].map((x) => ({
+          id: x.id, platform: x.platform, live_date: x.live_date, start_time: x.start_time, end_time: x.end_time, starts_at: x.starts_at, ends_at: x.ends_at,
+          is_cancelled: x.is_cancelled, confirmed: x.confirmed, person: x[personCol] as number, sheet_tab: x.sheet_tab ?? null,
+        })));
+    }
+    // slot คู่ของอีกฝั่งที่ยังอยู่ (เช่น Admin ที่ไม่ได้ลบ): นัดในปฏิทินมีชื่อคนของ slot ที่ถูกลบ -> ลงนัดใหม่
+    const jobs: { slot_table: Table; slot_id: number }[] = [];
+    for (const table of ["mc_slots", "admin_slots"] as const) {
+      const other: Table = table === "mc_slots" ? "admin_slots" : "mc_slots";
+      const otherCol = other === "mc_slots" ? "mc_id" : "admin_id";
+      const gone = new Set(removed[other].map((x) => x.id));
+      for (const x of released[table]) {
+        const { data } = await db.from(other).select("id").eq("platform", x.platform).eq("starts_at", x.starts_at).eq("ends_at", x.ends_at).not(otherCol, "is", null);
+        for (const p of data ?? []) if (!gone.has(p.id as number)) jobs.push({ slot_table: other, slot_id: p.id as number });
+      }
+    }
+    if (jobs.length) {
+      await db.from("calendar_jobs").insert(jobs);
+      await processSyncJobs();
     }
   });
-  return ok({ deleted: Math.max(removed.mc_slots.length, removed.admin_slots.length), kept });
+  return ok({
+    deleted: Math.max(removed.mc_slots.length, removed.admin_slots.length), kept,
+    released: released.mc_slots.length + released.admin_slots.length,
+  });
 }

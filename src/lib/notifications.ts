@@ -222,6 +222,8 @@ type Slot = {
   /** เฉพาะ slot Mc: แท็บ (mc = Deal Mc / shopee = MC Shopee) */
   sheet_tab?: string | null;
 };
+/** ข้อมูล slot ที่ส่งให้ notifySlotChanges เอง (เช่น slot ที่กำลังจะถูกลบ) */
+export type NotifySlot = Slot;
 /** คอลัมน์ของ slot ฝั่งนั้น (ฝั่ง Mc มีแท็บของ slot ด้วย) */
 const slotCols = (side: Side) =>
   `id, platform, live_date, start_time, end_time, starts_at, ends_at, is_cancelled, confirmed, person:${personCol(side)}${side === "mc" ? ", sheet_tab" : ""}`;
@@ -323,12 +325,13 @@ export type SlotChange = { id: number; oldPerson: number | null; newPerson: numb
  * Owner เปลี่ยนคน / แคนคิว → คนที่ได้คิว / เสียคิว (เฉพาะ slot ที่ยังไม่เริ่ม · ไม่แจ้งคนที่แก้เอง)
  *   คนเดียวได้หลายเรื่อง = รวมเป็นแจ้งเตือนเดียว
  */
-export async function notifySlotChanges(table: Table, changes: SlotChange[], actorEmail = "") {
+export async function notifySlotChanges(table: Table, changes: SlotChange[], actorEmail = "", known?: NotifySlot[]) {
   try {
     if (!changes.length) return 0;
     const side = sideOf(table);
     const now = Date.now();
-    const slots = new Map((await slotsOf(side, changes.map((c) => c.id))).map((s) => [s.id, s]));
+    // known = ข้อมูล slot ก่อนลบ (slot ที่ลบไปแล้วอ่านจากฐานข้อมูลไม่ได้)
+    const slots = new Map((known ?? await slotsOf(side, changes.map((c) => c.id))).map((s) => [s.id, s]));
     const emails = await emailsOf(changes.flatMap((c) => [c.oldPerson, c.newPerson]));
     const per = new Map<string, { added: Slot[]; removed: Slot[]; cancelled: Slot[] }>();
     const bucket = (id: number | null) => {

@@ -62,7 +62,7 @@ export function SlotWorkspace({ me, scope, edit, plan }: { me: Me; scope: OwnerS
           <SlotManager scope={scope} edit={edit} />
         </>
       ) : view === "plan" ? (
-        <PlanSlots readOnly={plan !== "edit"} />
+        <PlanSlots readOnly={plan !== "edit"} release={edit} />
       ) : viewAs ? (
         <>
           {roles.length > 1 ? (

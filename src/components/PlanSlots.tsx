@@ -90,6 +90,18 @@ const fmtMin = (m: number) => `${String(Math.floor((((m % 1440) + 1440) % 1440) 
 /** ความยาว slot เป็นนาที (เวลาจบก่อนเวลาเริ่ม = ข้ามเที่ยงคืน) */
 const lenOf = (s: { start: string; end: string }) => (toMin(s.end) - toMin(s.start) + 1440) % 1440;
 const canDelete = (s: Existing) => (!s.mc || s.mc.free) && (!s.admin || s.admin.free);
+/**
+ * ฝั่งที่ Owner คนนี้เอาคนออกได้ (สิทธิ์จัดการ Mc / Admin) — ผู้ใช้ขอ 2026-11-10: ช่องที่ Mc จองแล้วเอาติ๊กออกได้จากหน้าแพลน
+ *   ตอนบันทึก = เอาคนออก + ลบนัดในปฏิทิน + แจ้งคนนั้น แล้วลบ slot (วันที่ผ่านไปแล้วเอาออกไม่ได้ ค่าจ้างของคิวนั้นต้องอยู่)
+ */
+type Release = { mc: boolean; admin: boolean };
+const canRelease = (s: Existing, r: Release, today: string) => s.date >= today
+  && (!s.mc || s.mc.free || r.mc) && (!s.admin || s.admin.free || r.admin);
+/** slot เดิมที่เอาออกได้ (ว่าง = ลบได้เลย / มีคนจอง = ฝั่งที่มีสิทธิ์ + ยังไม่ถึงวัน) */
+const removable = (s: Existing, r: Release, today: string) => canDelete(s) || canRelease(s, r, today);
+/** ชื่อคนที่จะถูกเอาออกจาก slot นี้ เช่น "Mc ปิ่น · Admin ฝน" */
+const bookedText = (s: Existing) => [s.mc && !s.mc.free && s.mc.name ? `Mc ${s.mc.name.replace(/^mc\s*/i, "")}` : "", s.admin && !s.admin.free && s.admin.name ? `Admin ${s.admin.name}` : ""]
+  .filter(Boolean).join(" · ") || "คิวที่มีนัดในปฏิทิน";
 const fmtDayNum = (d: string) => `${fmtWeekShort.format(parseKey(d))} ${parseKey(d).getUTCDate()}`;
 const fmtRange = (r: { from: string; to: string }) => r.from === r.to ? fmtDayMonth.format(parseKey(r.from))
   : `${parseKey(r.from).getUTCDate()}–${fmtDayMonth.format(parseKey(r.to))}`;
@@ -354,7 +366,9 @@ function planBook(
  * หน้า Plan Slot Live: แพลน slot ทั้งเดือน (ร่างก่อน) แล้วกดบันทึกลงชีตทั้ง Deal Mc + Admin เสริม
  * readOnly = สิทธิ์ดูได้อย่างเดียว: เห็นแพลน / สรุปชั่วโมง / ส่งออกได้ แต่ติ๊ก / ตั้ง Campaign / บันทึกไม่ได้
  */
-export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
+const NO_RELEASE: Release = { mc: false, admin: false };
+
+export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly?: boolean; release?: Release }) {
   const toast = useToast();
   const confirm = useConfirm();
   const savedMonth = useLocal(MONTH_KEY);
@@ -475,7 +489,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     const create = ours.filter((x) => !x.existing);
     const campaigns = ours.filter((x) => x.existing?.mc && x.campaignChanged && !x.deleting)
       .map((x) => ({ mcId: x.existing!.mc!.id, campaign: x.campaign }));
-    const deletes = ours.filter((x) => x.deleting && x.existing && canDelete(x.existing)).map((x) => x.existing!);
+    const deletes = ours.filter((x) => x.deleting && x.existing && removable(x.existing, release, todayKey())).map((x) => x.existing!);
     const agencyCreate = items.filter((x) => x.agency && !x.agencyId);
     const agencyDelete = items.filter((x) => x.agencyId && x.deleting).map((x) => x.agencyId!);
     // ลงชื่อ Mc ประจำใน slot เดิมที่ยังว่าง
@@ -487,7 +501,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
       create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust,
       total: create.length + campaigns.length + deletes.length + agencyCreate.length + agencyDelete.length + assigns.length + agencyAdjust.length,
     };
-  }, [items, ours, draft.adjust, adjustedSaved]);
+  }, [items, ours, draft.adjust, adjustedSaved, release]);
 
   // ---------- ติ๊ก ----------
   // ช่องเดียวกัน (แพลตฟอร์ม + วัน + เวลา) เป็นของเรา (agency = null) หรือของ Agency อย่างใดอย่างหนึ่ง
@@ -547,12 +561,12 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
     if (existingMap.has(k)) return { ...d, del: d.del.includes(k) ? d.del : [...d.del, k] };
     return { ...d, add: d.add.filter((s) => !(!s.agency && keyOf(s) === k)) };
   }
-  /** slot ของเราที่มีคนจองแล้ว เอาออกไม่ได้ */
+  /** slot ของเราที่มีคนจองแล้วและเอาออกไม่ได้ (วันที่ผ่านไปแล้ว / ไม่มีสิทธิ์จัดการคนฝั่งนั้น) · มีสิทธิ์ = เอาติ๊กออกได้ ตอนบันทึกเอาคนออกให้ */
   const locked = (k: string, agency: string | null) => {
     const ex = agency ? undefined : existingMap.get(k);
-    return !!ex && !canDelete(ex);
+    return !!ex && !removable(ex, release, todayKey());
   };
-  const lockedMsg = "slot นี้มีคนจองแล้ว แก้ไม่ได้ (เอาคนออกที่หน้าจัดการ slot ก่อน)";
+  const lockedMsg = "slot นี้มีคนจองแล้ว เอาออกไม่ได้ (วันที่ผ่านไปแล้ว หรือบัญชีนี้ไม่มีสิทธิ์จัดการคนฝั่งนี้)";
   const ownerName = ownerLabel;
 
   // ---------- ลงชื่อ Mc ประจำตอนติ๊ก (เลือกที่ "ติ๊กเป็น") ----------
@@ -820,29 +834,46 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
   async function save() {
     const { create, campaigns, deletes, agencyCreate, agencyDelete, assigns, agencyAdjust } = changes;
     const named = create.filter((s) => s.assign).length + assigns.length;
+    // slot ที่มีคนจองแล้ว: บันทึก = เอาคนออก + ลบนัดในปฏิทิน + แจ้งคนนั้น แล้วลบ slot (ต้องเห็นชื่อก่อนยืนยัน)
+    const booked = deletes.filter((s) => !canDelete(s));
+    const free = deletes.length - booked.length;
+    const bookedList = booked.slice(0, 8).map((s) => `${fmtDayNum(s.date)} ${s.start}–${s.end} ${platformLabel(s.platform)}: ${bookedText(s)}`);
     const ok = await confirm({
       title: `บันทึกแพลน ${monthLabel(month)}?`,
-      description: [
-        create.length ? `สร้าง ${create.length} slot (เขียนทั้งแท็บ Deal Mc และ Admin เสริม)` : "",
-        named ? `ลงชื่อ Mc ประจำ ${named} slot (ลงชีต + ปฏิทินให้)` : "",
-        campaigns.length ? `แก้ Campaign ${campaigns.length} slot` : "",
-        deletes.length ? `ลบ ${deletes.length} slot ที่ยังว่าง` : "",
-        agencyCreate.length || agencyDelete.length
-          ? `แพลนในเว็บ (Agency / Shopee) +${agencyCreate.length} / ลบ ${agencyDelete.length} slot (เก็บในเว็บ ไม่ลงชีต)` : "",
-        agencyAdjust.length ? `เปลี่ยนสถานะ Agency ${agencyAdjust.length} วัน` : "",
-      ].filter(Boolean).join(" · "),
-      confirmText: "บันทึก",
+      description: (
+        <>
+          {[
+            create.length ? `สร้าง ${create.length} slot (เขียนทั้งแท็บ Deal Mc และ Admin เสริม)` : "",
+            named ? `ลงชื่อ Mc ประจำ ${named} slot (ลงชีต + ปฏิทินให้)` : "",
+            campaigns.length ? `แก้ Campaign ${campaigns.length} slot` : "",
+            free ? `ลบ ${free} slot ที่ยังว่าง` : "",
+            agencyCreate.length || agencyDelete.length
+              ? `แพลนในเว็บ (Agency / Shopee) +${agencyCreate.length} / ลบ ${agencyDelete.length} slot (เก็บในเว็บ ไม่ลงชีต)` : "",
+            agencyAdjust.length ? `เปลี่ยนสถานะ Agency ${agencyAdjust.length} วัน` : "",
+          ].filter(Boolean).join(" · ")}
+          {booked.length ? (
+            <span className="mt-2 block rounded-md border border-destructive/40 bg-destructive/5 p-2 text-destructive">
+              <b>เอาคนออกและลบ {booked.length} slot ที่มีคนจองแล้ว</b> — ลบนัดในปฏิทิน + แจ้งเตือนคนนั้นให้
+              {bookedList.map((t) => <span key={t} className="block text-xs">• {t}</span>)}
+              {booked.length > bookedList.length ? <span className="block text-xs">และอีก {booked.length - bookedList.length} slot</span> : null}
+            </span>
+          ) : null}
+        </>
+      ),
+      confirmText: booked.length ? `บันทึก + เอาคนออก ${booked.length} slot` : "บันทึก",
+      destructive: booked.length > 0,
     });
     if (!ok) return;
     setSaving(true);
     try {
       if (deletes.length) {
-        const res = await api<{ deleted: number; kept: number }>("/api/plan", {
+        const res = await api<{ deleted: number; kept: number; released: number }>("/api/plan", {
           slots: deletes.map((s) => ({ mcId: s.mc?.id, adminId: s.admin?.id })),
+          release: booked.length > 0,
         }, "DELETE");
         if (!res.ok) throw new Error(res.message);
         update((d) => ({ ...d, del: [] }));
-        if (res.kept) toast(`มี ${res.kept} slot ที่มีคนจองแล้ว ไม่ได้ลบ`, "error");
+        if (res.kept) toast(`มี ${res.kept} slot ที่ไม่ได้ลบ (มีคนจองเข้ามาระหว่างนั้น / ลบนัดในปฏิทินไม่สำเร็จ / ไม่มีสิทธิ์) ลองใหม่อีกครั้ง`, "error");
       }
       if (create.length || campaigns.length || agencyCreate.length || agencyDelete.length || assigns.length || agencyAdjust.length) {
         const res = await api<{ created: number; skipped: number; updated: number; assignSkipped: number; loanWarnings?: string[] }>("/api/plan", {
@@ -1063,7 +1094,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
               <p className="mb-2 text-xs text-muted-foreground">
                 {readOnly ? "ชี้ที่ช่องเพื่อดูรายละเอียด · กดวันที่ = ดู slot + Campaign ของวันนั้น" : mode === "shopee"
                   ? "แพลน Shopee (In house / Agency Infinite / MCN / Vis (KOL)) เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · ช่วงเวลาเดียวกันเป็นของกลุ่มใดกลุ่มหนึ่ง กดช่องของอีกกลุ่ม = ย้ายมา · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้"
-                  : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (เฉพาะ slot ที่ยังไม่มีคน) · คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · กดป้ายสถานะของ Agency = สลับ Confirmed / Adjusted (ไฟล์ส่งออกแสดงตามนี้)"}
+                  : "ติ๊กช่องเพื่อเพิ่ม slot · เอาติ๊กออก = ลบ (ช่องที่มีคนจองแล้ว = เอาคนออกด้วย ตอนบันทึกจะถามยืนยันพร้อมรายชื่อ) ·คลิกค้างแล้วลากด้วยเมาส์ = ติ๊ก / เอาติ๊กออกหลายช่องพร้อมกัน (กด Esc = ยกเลิก) · กดเวลาที่หัวคอลัมน์ = ติ๊กเวลานั้นทุกวันตั้งแต่วันนี้ · กดวันที่ = เพิ่มเวลาอื่น / ใส่ Campaign รายวัน · แพลนของ Agency เก็บในเว็บไว้ดูภาพรวม ไม่เขียนลงชีต · กดป้ายสถานะของ Agency = สลับ Confirmed / Adjusted (ไฟล์ส่งออกแสดงตามนี้)"}
               </p>
               <TickView
                 month={month}
@@ -1102,6 +1133,7 @@ export function PlanSlots({ readOnly = false }: { readOnly?: boolean }) {
           onAdd={(s) => addSlots([s])}
           onRemoveNew={removeNew}
           onToggleDelete={toggleDelete}
+          canRemove={(ex) => removable(ex, release, todayKey())}
           onCampaign={setCampaign}
           onMove={(n) => setOpenDay(days[days.indexOf(openDay) + n] ?? openDay)}
           onClose={() => setOpenDay(null)}
@@ -1178,7 +1210,7 @@ function Legend({ tick }: { tick: boolean }) {
         <>
           {sample("border-2 border-dashed border-primary bg-primary/15", "ร่างใหม่")}
           {sample("border-primary bg-primary", "มีในชีตแล้ว (ยังว่าง)")}
-          {sample("border-p2 bg-p2", "Mc จองแล้ว (เอาออกไม่ได้)")}
+          {sample("border-p2 bg-p2", "Mc จองแล้ว (เอาติ๊กออก = เอา Mc ออกตอนบันทึก)")}
           {sample("border-2 border-warning-border bg-warning", "Admin จองแล้ว ยังไม่มี Mc")}
           {sample("border-2 border-dashed border-p2 bg-p2/20", "ร่างลงชื่อ Mc ประจำ")}
           {sample("border-destructive bg-destructive/15", "จะลบ")}
@@ -2010,7 +2042,7 @@ function CampaignPanel({ month, items, platforms, ranges, choices, onApply, onRe
 
 // ---------- แก้รายวัน ----------
 
-function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemoveNew, onToggleDelete, onCampaign, onMove, onClose }: {
+function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemoveNew, onToggleDelete, canRemove, onCampaign, onMove, onClose }: {
   date: string;
   items: Item[];
   platforms: string[];
@@ -2019,6 +2051,8 @@ function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemove
   onAdd: (s: NewSlot) => { added: number; skipped: number; clashed: number };
   onRemoveNew: (key: string) => void;
   onToggleDelete: (key: string) => void;
+  /** slot เดิมนี้เอาออกได้ไหม (ว่าง / มีคนจองแต่มีสิทธิ์เอาคนออก) */
+  canRemove: (ex: Existing) => boolean;
   onCampaign: (keys: string[], campaign: string) => void;
   onMove: (n: number) => void;
   onClose: () => void;
@@ -2059,7 +2093,8 @@ function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemove
             <div className="divide-y rounded-lg border">
               {items.filter((x) => x.platform === p).map((x) => {
                 const ex = x.existing;
-                const locked = !!ex && !canDelete(ex);
+                const locked = !!ex && !canRemove(ex);
+                const booked = !!ex && !canDelete(ex);
                 return (
                   <div key={x.key} className={cn("flex flex-wrap items-center gap-2 px-2 py-1.5", x.deleting && "bg-destructive/5", x.overlap && "bg-warning")}>
                     <span className={cn(chipClass(x), "text-sm")}>{x.start}–{x.end}</span>
@@ -2085,7 +2120,8 @@ function DayDialog({ date, items, platforms, tagIndex, readOnly, onAdd, onRemove
                       <IconButton label="ยกเลิกการลบ" variant="ghost" onClick={() => onToggleDelete(x.key)}><Undo2Icon /></IconButton>
                     ) : (
                       <IconButton
-                        label={locked ? "มีคนจองแล้ว ลบไม่ได้ (เอาคนออกที่หน้าจัดการ slot ก่อน)" : "ลบ slot นี้ (ตอนบันทึก)"}
+                        label={locked ? "มีคนจองแล้ว ลบไม่ได้ (วันที่ผ่านไปแล้ว หรือไม่มีสิทธิ์จัดการคนฝั่งนี้)"
+                          : booked ? "ลบ slot นี้ + เอาคนที่จองออก (ตอนบันทึก)" : "ลบ slot นี้ (ตอนบันทึก)"}
                         variant="ghost"
                         disabled={locked}
                         className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
