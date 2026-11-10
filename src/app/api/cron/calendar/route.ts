@@ -7,6 +7,8 @@ import { removeSlotsDeletedInSheet } from "@/lib/sheet-sync";
 import { scanReceiptFiles } from "@/lib/receipts-db";
 import { scanTawi } from "@/lib/tawi";
 import { processSyncJobs } from "@/lib/sync";
+import { weeklyDropAlert } from "@/lib/live-alerts";
+import { syncDayTags } from "@/lib/live-days-sync";
 
 export const maxDuration = 60;
 
@@ -49,5 +51,9 @@ export async function GET(request: Request) {
     .then((s) => (s.configured ? { added: s.added, removed: s.removed, matched: s.matched, unmatched: s.unmatched, synced: s.synced } : { skipped: "no folder" }))
     .catch(errorOf);
   const equipment = await syncEquipmentPhotosToDrive(20).catch(errorOf);
-  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs, tawi, receipts, equipment });
+  // วันจันทร์: สรุปยอดดรอป 7 วันล่าสุดเทียบ 7 วันก่อน -> Owner ที่ดู Data analytics ได้ (วันอื่นข้าม)
+  const drops = await weeklyDropAlert().catch(errorOf);
+  // ป้ายวันแคมเปญจากชีตของทีม (ตั้ง settings.cost_sheet_id แล้วเท่านั้น)
+  const dayTags = await syncDayTags().catch(errorOf);
+  return NextResponse.json({ ok: true, ...(await processSyncJobs()), removed, digest, openSoon, calendarClosed, calendarShared, payDocs, tawi, receipts, equipment, drops, dayTags });
 }

@@ -55,6 +55,14 @@ describe("% achieve", () => {
     expect(r.perDayLeft).toBeCloseTo(2_720_000 / 28);
     expect(r.days[0]).toEqual({ date: "2026-11-01", target: 100_000, gmv: 150_000, pct: 1.5, manual: false });
   });
+  test("คาดการณ์สิ้นเดือน: ตามเป้ารายวันที่เหลือ × อัตราที่ทำได้ (วันแคมเปญที่ยังไม่ถึงนับให้) + แบบเฉลี่ยเท่ากันทุกวัน", () => {
+    // เป้าเดือน 3 ล้าน วันที่ 11 ใส่เอง 1.55 ล้าน (วันอื่น 5 หมื่น) · ทำได้ 2 วันแรกวันละ 4 หมื่น = 80% ของเป้า
+    const r = targetReport([target({ days: { "2026-11-11": 1_550_000 } })], [sale("2026-11-01", 40_000), sale("2026-11-02", 40_000)], "2026-11", 2);
+    expect(r.projection!.value).toBeCloseTo(80_000 + (3_000_000 - 100_000) * 0.8);
+    expect(r.projection!.pct).toBeCloseTo(0.8);
+    expect(r.projection!.runRate).toBeCloseTo(40_000 * 30);
+    expect(targetReport([target()], [], "2026-11").projection).toBeNull(); // เดือนจบแล้ว
+  });
   test("เกินเป้า = ยอดที่เหลือ 0 · เดือนจบแล้วไม่มีเป้าถึงวันนี้", () => {
     const r = targetReport([target({ monthly: 100 })], [sale("2026-11-05", 500)], "2026-11");
     expect(r.remaining).toBe(0);

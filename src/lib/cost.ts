@@ -101,7 +101,7 @@ export async function costReport(month: string | null, see: CostSee): Promise<Co
   const names = new Set([...hours.keys(), ...cur.rates.keys()]);
   return {
     month: cur.range.key, prevMonth: prevKey, upTo: cut === Infinity ? null : cut, see,
-    rows, totals: costTotals(rows), prev: costTotals(prevRows),
+    rows, totals: costTotals(rows), prev: costTotals(prevRows), prevRows,
     salaried, unrated,
     agencies: see.agency
       ? [...names].sort().map((agency) => ({ agency, label: ownerText(agency), rate: cur.rates.get(agency) ?? null, hours: hours.get(agency) ?? 0 }))

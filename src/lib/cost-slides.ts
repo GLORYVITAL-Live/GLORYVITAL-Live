@@ -3,7 +3,7 @@
 //   แสดงเฉพาะส่วนที่บัญชีนี้ดูได้ (see) เหมือนหน้าเว็บ
 
 import type PptxGenJS from "pptxgenjs";
-import { costRatio, costTotals, roiOf, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
+import { costMoM, costRatio, costTotals, roiOf, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
 import { hasBudget } from "@/lib/agency-budget";
 import { MC_COST_DIMS, mcCostRows, type CostReport as McCostReport } from "@/lib/mc-cost-calc";
 import {
@@ -135,6 +135,45 @@ export async function buildCostDeck(o: CostDeckInput, target: "pptx" | "gslides"
       border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
     });
     note(s, "ไม่รวมเงินเดือน Mc / Admin ประจำ · งบ Agency = เรท × ชั่วโมงในแพลน ไม่ใช่ยอดที่จ่ายจริง · GMV แยกตามเวลาในแพลน ไลฟ์ที่คร่อมหลายกลุ่มแบ่งตามนาที (ประมาณ)");
+  }
+
+  // 3.5) เทียบ MoM รายกลุ่ม: Cost (และ ROI ถ้าเห็น GMV) เดือนนี้ vs เดือนก่อน + ตาราง
+  if (report.prevRows && (report.rows.length || report.prevRows.length)) {
+    const mom = costMoM(report.rows, report.prevRows);
+    const groups = mom.filter((r) => r.level === "group");
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    const prevShort = `${o.prevName}${open ? " (ถึงเวลาเดียวกัน)" : ""}`;
+    s.addText(`เทียบ MoM: ${o.monthName} vs ${prevShort}`, { placeholder: "title" });
+    if (groups.length) {
+      shapeBars(pres, s, {
+        labels: groups.map((r) => r.label.replace(/^Agency /, "")), box: { x: M, y: 1.3, w: 6.2, h: 5.1 }, showValue: true,
+        series: [{ name: o.monthName, color: C.pink, values: groups.map((r) => r.cur.cost) }, { name: prevShort, color: C.blue, values: groups.map((r) => r.prev.cost) }],
+      });
+    }
+    const roiCell = (x: { cost: number; gmv: number | null }) => roiText(roiOf(x.gmv, x.cost));
+    const chg = (a: number | null, b: number | null, tone: "neutral" | "up") => {
+      const c = changeOf(a, b);
+      return { text: c === null ? "-" : pctText(c), options: { align: "right" as const, bold: c !== null, color: c === null || tone === "neutral" ? C.muted : pctColor(c) } };
+    };
+    s.addTable([
+      [head("กลุ่ม", "left"), head("Cost"), head("MoM"), ...(see.gmv ? [head("ROI"), head("MoM")] : [])],
+      ...mom.map((r): PptxGenJS.TableRow => {
+        const band = r.level !== "group" ? { bold: true, fill: { color: C.tint } } : {};
+        return [
+          { text: r.level === "group" ? `   ${r.label}` : r.label, options: { ...band, align: "left" } },
+          { text: baht(r.cur.cost), options: { ...band, align: "right" } },
+          { ...chg(r.cur.cost, r.prev.cost, "neutral"), options: { ...band, ...chg(r.cur.cost, r.prev.cost, "neutral").options } },
+          ...(see.gmv ? [
+            { text: roiCell(r.cur), options: { ...band, align: "right" as const, bold: true } },
+            { ...chg(roiOf(r.cur.gmv, r.cur.cost), roiOf(r.prev.gmv, r.prev.cost), "up"), options: { ...band, ...chg(roiOf(r.cur.gmv, r.cur.cost), roiOf(r.prev.gmv, r.prev.cost), "up").options } },
+          ] : []),
+        ];
+      }),
+    ], {
+      x: 7.1, y: 1.4, w: W - M - 7.1, colW: see.gmv ? [1.9, 1.2, 0.85, 0.75, 0.933] : [2.6, 1.6, 1.433], fontSize: 10, fontFace: FONT, color: C.text,
+      rowH: Math.min(0.36, 5.0 / (mom.length + 1)), border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.05, 0, 0.05],
+    });
+    note(s, `แท่ง = Cost แยกกลุ่ม (ชมพู = ${o.monthName} · ฟ้า = ${prevShort})${open ? " · เดือนก่อนนับถึงเวลาเดียวกัน ใช้ตัวเลขที่ระบบคำนวณ" : ""}${report.totals.agency && !report.prev.agency ? ` · ${o.prevName} ยังไม่มีงบ Agency` : ""}`);
   }
 
   if (trend?.length) {

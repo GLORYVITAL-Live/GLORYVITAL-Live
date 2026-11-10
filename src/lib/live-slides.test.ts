@@ -100,6 +100,7 @@ describe("รายเดือน", () => {
       lastDay: 3, names: new Map([["TikTok|1", "GLORY VITAL"]]),
       report: {
         monthly: 30000, gmv: 6000, pct: 0.2, toDate: { target: 3000, pct: 2, gap: 3000 }, remaining: 24000, daysLeft: 27, perDayLeft: 888, days: [],
+        projection: { value: 60000, pct: 2, gap: 30000, runRate: 62000 },
         accounts: [{ key: "TikTok|1", monthly: 30000, gmv: 6000, pct: 0.2, toDatePct: 2 }],
       },
     },

@@ -6,6 +6,7 @@ import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown"
 import { dayKindLabel, dayKindStats, liveDay, type DayTag } from "@/lib/live-days";
 import { HEAT_WEEKDAY_NAMES, heatGrid, heatHour, heatPerHour, type HeatCell } from "@/lib/live-heat";
 import { splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
+import { planVsActual, type PlanGroupCheck } from "@/lib/live-plan";
 import { accountLabel, accountsOf, bkkParts, changeOf, crewKey, METRICS, totalsOf, type LiveCrew, type LiveSession, type Platform, type Totals } from "@/lib/live-stats";
 
 type Kind = (typeof METRICS)[number]["kind"];
@@ -192,7 +193,41 @@ export type ExportExtras = {
   agency?: { name: string; first: string; labels: string[]; trend: AgencyTrend[] }[];
   heat?: boolean;
   tags?: Map<string, DayTag> | null;
+  /** แพลน vs ไลฟ์จริง (src/lib/live-plan.ts) ของช่วงนี้ (ต้องมี spans) */
+  plan?: { fromMs: number; toMs: number };
 };
+
+/** แพลน vs ไลฟ์จริง: สรุปรายกลุ่ม + รายการ slot ที่ไม่ได้ไลฟ์ / ไลฟ์ไม่ครบ */
+function planSheet(sessions: LiveSession[], spans: OwnerSpan[], range: { fromMs: number; toMs: number }): ExportSheet | null {
+  const groups = planVsActual(sessions, spans, range);
+  if (!groups.length) return null;
+  const split = splitByOwner(sessions, spans);
+  const gmvOf = (g: PlanGroupCheck) => split.find((c) => c.channel.trim().toLowerCase() === g.channel.trim().toLowerCase())?.rows.find((r) => (r.owner ?? "") === g.owner)?.gmv ?? null;
+  const when = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+  const t = (ms: number) => when.format(new Date(ms)).replace(",", "");
+  const issues = groups.flatMap((g) => [...g.missed.map((s) => ({ g, s, kind: "ไม่ได้ไลฟ์" })), ...g.partial.map((s) => ({ g, s, kind: "ไลฟ์ไม่ครบ" }))])
+    .sort((a, b) => a.s.startMs - b.s.startMs);
+  return {
+    name: "แพลน vs ไลฟ์จริง",
+    rows: [
+      ["ช่อง", "กลุ่ม", "slot ที่ตรวจแล้ว", "ชม. ในแพลน", "ชม. ไลฟ์จริง", "% ตามแพลน", "ไม่ได้ไลฟ์ (slot)", "ไลฟ์ไม่ครบ (slot)", "รอไฟล์ (slot)", "GMV", "GMV / ชม. แพลน"],
+      ...groups.map((g): Cell[] => {
+        const gmv = gmvOf(g);
+        return [
+          g.channelLabel, g.ownerLabel, g.slots, { v: g.planSec / 3600, f: "dec" }, { v: g.liveSec / 3600, f: "dec" }, g.coverage === null ? null : { v: g.coverage, f: "pct" },
+          g.missed.length, g.partial.length, g.pending, num("baht", gmv), num("baht", gmv !== null && g.planSec ? gmv / (g.planSec / 3600) : null),
+        ];
+      }),
+      [],
+      ["ไม่ได้ไลฟ์ = ไลฟ์จริงไม่ถึงครึ่ง slot · ไลฟ์ไม่ครบ = ไม่ถึง 90% · รอไฟล์ = slot ที่ยังไม่ถึง / ยังไม่อัปโหลดไฟล์ Export · แพลน = Agency TDH (TikTok) + แพลน Shopee"],
+      [],
+      ...(issues.length ? [
+        ["เริ่ม (แพลน)", "จบ (แพลน)", "ช่อง", "กลุ่ม", "ไลฟ์จริง (นาที)", "% ของ slot", "สถานะ"],
+        ...issues.map(({ g, s, kind }): Cell[] => [t(s.startMs), t(s.endMs), g.channelLabel, g.ownerLabel, Math.round(s.liveSec / 60), { v: s.share, f: "pct" }, kind]),
+      ] : []),
+    ],
+  };
+}
 
 /** ตาราง "แยกตามกลุ่มผู้ไลฟ์": ช่อง (ตัวหนา) + กลุ่ม · สัดส่วน = ของช่องนั้น */
 function ownersSheet(sessions: LiveSession[], spans: OwnerSpan[]): ExportSheet | null {
@@ -314,6 +349,7 @@ function extraSheets(a: LiveSession[], x?: ExportExtras): ExportSheet[] {
   const spans = x.spans ?? null;
   return [
     x.owners && spans ? ownersSheet(a, spans) : null,
+    x.plan && spans ? planSheet(a, spans, x.plan) : null,
     ...(x.breakdown ? breakdownSheets(a, x.breakdown, spans) : []),
     ...(x.agency ?? []).map(agencySheet),
     x.heat ? heatSheet(a) : null,
@@ -365,18 +401,27 @@ export function monthBook(o: {
   month: string; monthLabel: (k: string) => string; months13: string[]; byMonth: Map<string, LiveSession[]>; filter: ExportFilter;
   crew?: CrewMap;
   extras?: ExportExtras;
+  /**
+   * เดือนที่ยังไม่จบ: เดือนก่อน / ปีก่อน นับถึงวันเดียวกัน (เหมือนหน้าเว็บ) — text = " 1–9"
+   *   ไม่ส่ง = เทียบทั้งเดือน (เดิมเทียบทั้งเดือนตอนเดือนยังไม่จบ MoM ใน Excel จึงดูตกหนักเกินจริง)
+   */
+  cut?: { prev: LiveSession[]; yoy: LiveSession[]; text: string };
 }): ExportBook {
   const { month, monthLabel, months13, byMonth } = o;
   const prevKey = months13[11], yoyKey = months13[0];
   const t = (k: string) => totalsOf(byMonth.get(k) ?? []);
+  const prevList = o.cut?.prev ?? byMonth.get(prevKey) ?? [], yoyList = o.cut?.yoy ?? byMonth.get(yoyKey) ?? [];
+  const cutText = o.cut?.text ?? "";
+  const prevName = `${monthLabel(prevKey)}${cutText}`, yoyName = `${monthLabel(yoyKey)}${cutText}`;
   return {
     title: `GLORY สถิติไลฟ์ ${monthLabel(month)}`,
     sheets: [
-      infoSheet([["รายงาน", "ภาพรวมรายเดือน (MoM / YoY)"], ["เดือน", monthLabel(month)], ["MoM เทียบกับ", monthLabel(prevKey)], ["YoY เทียบกับ", monthLabel(yoyKey)]], o.filter),
-      summarySheet("สรุป", monthLabel(month), t(month), [{ label: monthLabel(prevKey), totals: t(prevKey) }, { label: monthLabel(yoyKey), totals: t(yoyKey) }]),
-      ...platformSheets(monthLabel(month), byMonth.get(month) ?? [], [
-        { label: monthLabel(prevKey), list: byMonth.get(prevKey) ?? [] }, { label: monthLabel(yoyKey), list: byMonth.get(yoyKey) ?? [] },
-      ]),
+      infoSheet([
+        ["รายงาน", "ภาพรวมรายเดือน (MoM / YoY)"], ["เดือน", `${monthLabel(month)}${cutText ? ` (ยังไม่จบเดือน ข้อมูลวันที่${cutText})` : ""}`],
+        ["MoM เทียบกับ", prevName], ["YoY เทียบกับ", yoyName],
+      ], o.filter),
+      summarySheet("สรุป", monthLabel(month), t(month), [{ label: prevName, totals: totalsOf(prevList) }, { label: yoyName, totals: totalsOf(yoyList) }]),
+      ...platformSheets(monthLabel(month), byMonth.get(month) ?? [], [{ label: prevName, list: prevList }, { label: yoyName, list: yoyList }]),
       {
         name: "13 เดือน",
         rows: [
@@ -384,7 +429,7 @@ export function monthBook(o: {
           ...months13.map((k, i): Cell[] => [monthLabel(k), ...metricCells(t(k)), i ? pct(t(k).lives ? t(k).gmv : null, t(months13[i - 1]).lives ? t(months13[i - 1]).gmv : null) : null]),
         ],
       },
-      accountSheet(byMonth.get(month) ?? [], byMonth.get(prevKey) ?? [], monthLabel(prevKey)),
+      accountSheet(byMonth.get(month) ?? [], prevList, prevName),
       ...extraSheets(byMonth.get(month) ?? [], o.extras),
       sessionSheet("ไลฟ์", byMonth.get(month) ?? [], o.crew),
     ],

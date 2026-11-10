@@ -44,6 +44,8 @@ export type CostReport = {
   upTo: number | null;
   see: CostSee;
   rows: CostRow[]; totals: CostTotals; prev: CostTotals;
+  /** แถวของเดือนก่อน (นับถึงเวลาเดียวกันถ้าเดือนนี้ยังไม่จบ) ไว้เทียบ MoM รายกลุ่ม · เซิร์ฟเวอร์เก่ายังไม่ส่ง = ไม่มี */
+  prevRows?: CostRow[];
   /** คิวที่ไลฟ์แล้วแต่ไม่อยู่ในยอด: Mc / Admin ประจำ · ยังไม่ได้ตั้งค่าจ้าง */
   salaried: number; unrated: number;
   /** กลุ่มภายนอกของเดือนนี้ (ช่องใส่เรท) · ไม่มีสิทธิ์ = ว่าง */
@@ -218,6 +220,34 @@ export function yearRows(points: CostPoint[]): CostRow[] {
   return [...out.values()].sort((a, b) => rankOf(a) - rankOf(b) || b.full - a.full || a.label.localeCompare(b.label));
 }
 
+/** แถวเทียบ MoM: รวมแพลตฟอร์ม (app) / กลุ่ม (group) / รวมทั้งหมด (total) */
+export type CostMomRow = {
+  key: string; app: CostApp | null; label: string; level: "app" | "group" | "total";
+  cur: { cost: number; gmv: number | null }; prev: { cost: number; gmv: number | null };
+};
+/**
+ * เทียบ MoM รายแพลตฟอร์ม + กลุ่ม (กลุ่มที่มีแค่เดือนใดเดือนหนึ่งก็แสดง อีกเดือนเป็น 0 / ไม่มี GMV)
+ *   เรียงแบบตารางหลัก: TikTok ก่อน Shopee · ในแพลตฟอร์มตามลำดับของเดือนนี้ แล้วกลุ่มที่มีแค่เดือนก่อน
+ */
+export function costMoM(rows: CostRow[], prev: CostRow[]): CostMomRow[] {
+  const keyOf = (r: CostRow) => `${r.app}|${r.owner ?? ""}`;
+  const pick = (r: CostRow | undefined) => ({ cost: r ? rowCost(r) : 0, gmv: r?.gmv ?? null });
+  const sums = (list: CostRow[]) => { const t = costTotals(list); return { cost: t.cost, gmv: t.gmv }; };
+  const out: CostMomRow[] = [];
+  for (const app of ["TikTok", "Shopee"] as CostApp[]) {
+    const a = rows.filter((r) => r.app === app), b = prev.filter((r) => r.app === app);
+    if (!a.length && !b.length) continue;
+    out.push({ key: app, app, label: app, level: "app", cur: sums(a), prev: sums(b) });
+    const keys = [...new Set([...a, ...b].map(keyOf))];
+    for (const k of keys) {
+      const ra = a.find((r) => keyOf(r) === k), rb = b.find((r) => keyOf(r) === k);
+      out.push({ key: k, app, label: (ra ?? rb)!.label, level: "group", cur: pick(ra), prev: pick(rb) });
+    }
+  }
+  out.push({ key: "total", app: null, label: "รวม", level: "total", cur: sums(rows), prev: sums(prev) });
+  return out;
+}
+
 /** Cost ต่อ GMV · ไม่มี GMV = null */
 export const costRatio = (cost: number, gmv: number | null) => (gmv ? cost / gmv : null);
 /** ROI ของไลฟ์ = GMV ÷ Cost (จ่าย ฿1 ได้ยอดขายกี่บาท) · ไม่มี GMV / Cost = null */
@@ -254,6 +284,23 @@ export function costBook(report: CostReport, trend: CostPoint[] | null, mc?: McC
       ],
     },
     ...(budget ? [budget] : []),
+    ...(report.prevRows ? [{
+      name: "เทียบ MoM",
+      rows: [
+        [`เดือนนี้ = ${report.month}${open ? " (ยังไม่จบเดือน)" : ""} · เดือนก่อน = ${report.prevMonth}${open ? " นับถึงเวลาเดียวกัน (ตัวเลขระบบ)" : ""}`],
+        ["แพลตฟอร์ม", "กลุ่ม", "Cost เดือนนี้", "Cost เดือนก่อน", "Cost MoM", "GMV เดือนนี้", "GMV เดือนก่อน", "GMV MoM", "ROI เดือนนี้", "ROI เดือนก่อน", "ROI MoM", "Cost/GMV เดือนนี้", "Cost/GMV เดือนก่อน"],
+        ...costMoM(report.rows, report.prevRows).map((r) => {
+          const ra = roiOf(r.cur.gmv, r.cur.cost), rb = roiOf(r.prev.gmv, r.prev.cost);
+          return [
+            r.level === "total" ? "รวม" : r.app ?? "", r.level === "group" ? r.label : "",
+            money(r.cur.cost), money(r.prev.cost), change(r.cur.cost, r.prev.cost),
+            money(r.cur.gmv), money(r.prev.gmv), change(r.cur.gmv, r.prev.gmv),
+            dec(ra), dec(rb), change(ra, rb),
+            pct(r.cur.cost ? costRatio(r.cur.cost, r.cur.gmv) : null), pct(r.prev.cost ? costRatio(r.prev.cost, r.prev.gmv) : null),
+          ];
+        }),
+      ],
+    }] : []),
     ...(trend?.length ? [{
       name: "แนวโน้มรายเดือน",
       rows: [

@@ -9,6 +9,7 @@ import { platformSeries, totalSeries } from "@/lib/live-lines";
 import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
 import { DAY_KINDS, dayKindLabel, dayKindStats, type DayTag } from "@/lib/live-days";
 import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop } from "@/lib/live-heat";
+import { PLAN_FULL, planVsActual } from "@/lib/live-plan";
 import { AGENCY_OURS, mergePlatforms, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
 import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Platform, type Totals } from "@/lib/live-stats";
 import type { targetReport } from "@/lib/live-targets";
@@ -52,6 +53,8 @@ export type CompareDeckInput = {
   heat?: { title: string };
   /** หน้า "วันปกติ vs วันแคมเปญ" (src/lib/live-days.ts) */
   dayKinds?: { title: string; tags: Map<string, DayTag> };
+  /** หน้า "แพลน vs ไลฟ์จริง" (src/lib/live-plan.ts) · spans = แพลนในตัวกรอง */
+  plan?: { title: string; spans: OwnerSpan[]; fromMs: number; toMs: number };
 };
 
 /** กราฟแยก Agency 1 หน้า · lineTitle = เพิ่มหน้ากราฟเส้น GMV/ชม. เส้นละกลุ่ม */
@@ -501,8 +504,15 @@ function addTargetSlide(pres: PptxGenJS, title: string, t: NonNullable<CompareDe
     s.addText(`${baht(r.gmv)} / เป้า ${baht(tile.target)}`, { x: x + 0.3, y: y0 + 1.4, w: inner, h: 0.32, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
     if (tile.note) s.addText(tile.note, { x: x + 0.3, y: y0 + 1.72, w: inner, h: 0.32, fontSize: 13, bold: true, color: tile.color, fontFace: FONT, margin: 0, isTextBox: true });
   });
-  if (r.perDayLeft !== null) {
-    s.addText(`เหลืออีก ${baht(r.remaining)} ใน ${r.daysLeft} วัน · เฉลี่ยวันละ ${baht(r.perDayLeft)}`, { x: M, y: 3.75, w: W - 2 * M, h: 0.35, fontSize: 14, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+  if (r.perDayLeft !== null || r.projection) {
+    s.addText([
+      ...(r.projection ? [
+        { text: `คาดการณ์สิ้นเดือน ${baht(r.projection.value)} (${pctOf(r.projection.pct)} ของเป้า · `, options: { bold: true, color: C.text } },
+        { text: r.projection.gap >= 0 ? `เกินเป้า ${baht(r.projection.gap)}` : `ขาดเป้า ${baht(-r.projection.gap)}`, options: { bold: true, color: r.projection.gap >= 0 ? C.up : C.down } },
+        { text: ")   ", options: { bold: true, color: C.text } },
+      ] : []),
+      ...(r.perDayLeft !== null ? [{ text: `เหลืออีก ${baht(r.remaining)} ใน ${r.daysLeft} วัน · เฉลี่ยวันละ ${baht(r.perDayLeft)}`, options: { color: C.muted } }] : []),
+    ], { x: M, y: 3.75, w: W - 2 * M, h: 0.35, fontSize: 14, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
   }
   const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
   const rows = r.accounts.slice(0, 6);
@@ -668,6 +678,50 @@ function addAgencySlides(pres: PptxGenJS, target: ChartTarget, charts: AgencyCha
       addTrendSlide(pres, target, c.lineTitle, c.labels, mergePlatforms(c.trend).map((t) => ({ name: t.label, color: agencyHex(t.key), values: t.perHour })));
     }
   }
+}
+
+/**
+ * แพลน vs ไลฟ์จริง (เหมือนเว็บ · src/lib/live-plan.ts): แท่งคู่ ชม. ในแพลน (ฟ้า) vs ชม. ไลฟ์จริง (ชมพู) รายกลุ่ม (ซ้าย)
+ *   + ตารางสรุป (ขวา) + slot ที่ไม่ได้ไลฟ์ล่าสุด (ล่าง) · ยังไม่มี slot ที่ตรวจได้ = ไม่มีหน้านี้
+ */
+function addPlanSlide(pres: PptxGenJS, title: string, sessions: LiveSession[], spans: OwnerSpan[], range: { fromMs: number; toMs: number }) {
+  const groups = planVsActual(sessions, spans, range).filter((g) => g.slots);
+  if (!groups.length) return;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  const hrs = (sec: number) => (sec / 3600).toLocaleString("th-TH", { maximumFractionDigits: 1 });
+  const pct = (v: number | null) => (v === null ? "-" : `${(v * 100).toFixed(0)}%`);
+  shapeBars(pres, s, {
+    labels: groups.map((g) => g.ownerLabel.replace(/^Agency /, "")), box: { x: M, y: 1.3, w: 6.0, h: 3.9 }, showValue: true, change: false,
+    format: (v) => `${Math.round(v)} ชม.`,
+    series: [{ name: "ชม. ในแพลน", color: C.blue, values: groups.map((g) => g.planSec / 3600) }, { name: "ชม. ไลฟ์จริง", color: C.pink, values: groups.map((g) => g.liveSec / 3600) }],
+  });
+  const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
+  s.addTable([
+    [head("กลุ่ม", "left"), head("ชม. แพลน"), head("ไลฟ์จริง"), head("%"), head("ไม่ได้ไลฟ์")],
+    ...groups.map((g): PptxGenJS.TableRow => [
+      { text: `${g.channelLabel} · ${g.ownerLabel}`, options: { align: "left" } },
+      { text: hrs(g.planSec), options: { align: "right" } },
+      { text: hrs(g.liveSec), options: { align: "right" } },
+      { text: pct(g.coverage), options: { align: "right", bold: true, color: g.coverage !== null && g.coverage < PLAN_FULL ? C.down : C.text } },
+      { text: String(g.missed.length), options: { align: "right", bold: g.missed.length > 0, color: g.missed.length ? C.down : C.text } },
+    ]),
+  ], {
+    x: 6.9, y: 1.4, w: W - M - 6.9, colW: [2.233, 0.95, 0.95, 0.7, 1.0], fontSize: 11, fontFace: FONT, color: C.text,
+    rowH: Math.min(0.38, 3.7 / (groups.length + 1)), border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.06, 0, 0.06],
+  });
+  const missed = groups.flatMap((g) => g.missed.map((m) => ({ g, m }))).sort((a, b) => b.m.startMs - a.m.startMs);
+  const when = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { day: "numeric", month: "short", timeZone: "Asia/Bangkok" });
+  const hm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+  s.addText(missed.length ? [
+    { text: `slot ที่ไม่ได้ไลฟ์ (${missed.length})${missed.length > 8 ? " ล่าสุด 8 slot" : ""}: `, options: { bold: true, color: C.down } },
+    { text: missed.slice(0, 8).map(({ g, m }) => `${when.format(new Date(m.startMs))} ${hm.format(new Date(m.startMs))}–${hm.format(new Date(m.endMs))} ${g.ownerLabel}`).join(" · "), options: { color: C.text } },
+  ] : [{ text: "ไม่มี slot ที่ไม่ได้ไลฟ์ตามแพลน", options: { bold: true, color: C.up } }], {
+    x: M, y: 5.4, w: W - 2 * M, h: 1.1, fontSize: 12, fontFace: FONT, margin: 0, valign: "top", fit: "shrink", isTextBox: true,
+  });
+  s.addText("ไม่ได้ไลฟ์ = ไลฟ์จริงไม่ถึงครึ่ง slot · % = ชม. ไลฟ์จริงในเวลาแพลน ÷ ชม. ในแพลน · ไม่นับ slot ที่ยังไม่มีไฟล์ Export · แพลน = Agency TDH + แพลน Shopee", {
+    x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+  });
 }
 
 /** ตัวชี้วัดของหน้าเทียบรายกลุ่ม / รายบัญชี (เหมือนดรอปดาวน์บนเว็บ) */
@@ -1160,8 +1214,9 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     });
   }
 
-  // 7.5) แยกตามกลุ่มผู้ไลฟ์ (หน้ารายเดือน) + เทียบรายกลุ่ม / รายบัญชี + กราฟแยก Agency
+  // 7.5) แยกตามกลุ่มผู้ไลฟ์ (หน้ารายเดือน) + แพลน vs ไลฟ์จริง + เทียบรายกลุ่ม / รายบัญชี + กราฟแยก Agency
   if (o.owners) addOwnersSlide(pres, o.owners);
+  if (o.plan) addPlanSlide(pres, o.plan.title, o.a, o.plan.spans, { fromMs: o.plan.fromMs, toMs: o.plan.toMs });
   if (o.breakdown) addBreakdownSlides(pres, { a: o.a, b: o.b, aName: o.aName, bName: o.bName, spans: o.breakdown.spans });
   addAgencySlides(pres, target, o.agency);
 

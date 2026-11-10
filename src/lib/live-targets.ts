@@ -60,10 +60,22 @@ export function targetReport(targets: LiveTarget[], sales: Sale[], month: string
   const toDateTarget = lastDay ? days.filter((d) => !upTo(d.date)).reduce((a, d) => a + d.target, 0) : null;
   const daysLeft = lastDay ? Math.max(0, dates.length - lastDay) : 0;
   const remaining = Math.max(0, monthly - gmv);
+  /**
+   * คาดการณ์สิ้นเดือน (เดือนที่ยังไม่จบ · ผู้ใช้ขอ 2026-11-10)
+   *   value = ยอดถึงวันนี้ + เป้าของวันที่เหลือ × อัตราที่ทำได้ถึงวันนี้ (เป้ารายวันมีวันแคมเปญหนักกว่า = คาดการณ์นับวันแคมเปญที่ยังไม่ถึงให้แล้ว)
+   *   runRate = เฉลี่ยต่อวันที่ผ่านมา × จำนวนวันทั้งเดือน (ไม่สนว่าวันไหนเป็นวันแคมเปญ)
+   */
+  const restTarget = lastDay ? days.filter((d) => upTo(d.date)).reduce((a, d) => a + d.target, 0) : 0;
+  const pace = toDateTarget ? gmv / toDateTarget : null;
+  const projected = lastDay && daysLeft ? (pace !== null ? gmv + restTarget * pace : (gmv / lastDay) * dates.length) : null;
   return {
     monthly, gmv, pct: achieveOf(gmv, monthly),
     toDate: toDateTarget === null ? null : { target: toDateTarget, pct: achieveOf(gmv, toDateTarget), gap: gmv - toDateTarget },
     remaining, daysLeft, perDayLeft: daysLeft ? remaining / daysLeft : null,
+    projection: projected === null ? null : {
+      value: projected, pct: achieveOf(projected, monthly), gap: projected - monthly,
+      runRate: (gmv / lastDay) * dates.length,
+    },
     days,
     accounts: dailies.map(({ t, daily }) => {
       const key = targetKey(t);

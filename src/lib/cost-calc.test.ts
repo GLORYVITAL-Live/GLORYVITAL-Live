@@ -1,6 +1,21 @@
 // เทสหน้า Cost (bun test): ตัวเลขเดียวกับสรุปรายเดือน · จุดตัด · งบกลุ่มภายนอก · GMV ตามเวลาในแพลน · สิทธิ์
 import { describe, expect, test } from "bun:test";
-import { costBook, costCut, costRatio, costRows, costTotals, rowCost, yearRows, type CostReport, type CostSee } from "@/lib/cost-calc";
+import { costBook, costCut, costMoM, costRatio, costRows, costTotals, rowCost, yearRows, type CostReport, type CostRow, type CostSee } from "@/lib/cost-calc";
+
+describe("เทียบ MoM", () => {
+  const r = (app: "TikTok" | "Shopee", owner: string | null, label: string, mc: number, agency: number, gmv: number | null): CostRow =>
+    ({ app, owner, label, mc, admin: 0, travel: 0, agency, rate: null, planHours: 0, full: mc + agency, gmv, sources: {}, forecast: 0 });
+  test("รวมแพลตฟอร์ม + กลุ่ม (กลุ่มที่มีแค่เดือนเดียวก็แสดง) + รวมทั้งหมด", () => {
+    const cur = [r("TikTok", null, "ของเรา", 100, 0, 5000), r("TikTok", "TDH", "Agency TDH", 0, 50, 1000)];
+    const prev = [r("TikTok", null, "ของเรา", 80, 0, 4000), r("Shopee", "MCN", "MCN", 0, 30, 900)];
+    const mom = costMoM(cur, prev);
+    expect(mom.map((x) => `${x.level}:${x.label}`)).toEqual(["app:TikTok", "group:ของเรา", "group:Agency TDH", "app:Shopee", "group:MCN", "total:รวม"]);
+    expect(mom.find((x) => x.label === "Agency TDH")!.prev).toEqual({ cost: 0, gmv: null });
+    expect(mom.find((x) => x.label === "MCN")!.cur).toEqual({ cost: 0, gmv: null });
+    expect(mom.at(-1)!.cur.cost).toBe(150);
+    expect(mom.at(-1)!.prev.gmv).toBe(4900);
+  });
+});
 import { ownerSpanOf } from "@/lib/live-owners";
 import type { LiveSession } from "@/lib/live-stats";
 import { payOfItems } from "@/lib/owner-pay";

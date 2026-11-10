@@ -3,7 +3,8 @@
 import { Fragment, useEffect, useId, useState } from "react";
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { hasBudget, parseRate } from "@/lib/agency-budget";
-import { costBook, costRatio, costTotals, roiOf, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
+import { costBook, costMoM, costRatio, costTotals, roiOf, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { buildCostDeck } from "@/lib/cost-slides";
 import { bkkStamp } from "@/lib/live-export";
 import type { CostReport as McCostReport } from "@/lib/mc-cost-calc";
@@ -240,6 +241,8 @@ export function CostPage() {
         </section>
       ) : <StateBox title={`ยังไม่มีค่าใช้จ่ายของ${monthLabel(report.month)}`}>ลองเลือกเดือนอื่น</StateBox>}
 
+      {report.prevRows && (report.rows.length || report.prevRows.length) ? <MomSection report={report} prevName={prevName} /> : null}
+
       <TrendSection key={attempt} trend={trend} report={report} month={month} year={year} />
 
       {see.agency && report.agencies.length ? (
@@ -260,6 +263,103 @@ export function CostPage() {
         </Collapsible>
       ) : null}
     </div>
+  );
+}
+
+type MomMetric = "cost" | "gmv" | "roi" | "ratio";
+const MOM_METRICS: { key: MomMetric; label: string; gmv: boolean }[] = [
+  { key: "cost", label: "Cost", gmv: false }, { key: "gmv", label: "GMV", gmv: true },
+  { key: "roi", label: "ROI (GMV ÷ Cost)", gmv: true }, { key: "ratio", label: "Cost ต่อ GMV", gmv: true },
+];
+const momValue = (x: { cost: number; gmv: number | null }, k: MomMetric) =>
+  k === "cost" ? x.cost : k === "gmv" ? x.gmv : k === "roi" ? roiOf(x.gmv, x.cost) : x.cost ? costRatio(x.cost, x.gmv) : null;
+const momFormat = (k: MomMetric, v: number | null) => (k === "roi" ? roiText(v) : k === "ratio" ? pct(v) : baht(v));
+
+/**
+ * เทียบ MoM รายแพลตฟอร์ม + กลุ่ม (ผู้ใช้ขอ 2026-11-10): กราฟแท่งคู่ เดือนนี้ (ชมพู) vs เดือนก่อน (ฟ้า) เลือกตัวชี้วัดจากดรอปดาวน์ + ตารางครบทุกค่า
+ *   เดือนที่ยังไม่จบ: เดือนก่อนนับถึงเวลาเดียวกัน (ตัวเลขระบบ ไม่ใช้ยอดทั้งเดือนในชีต) · Cost เพิ่ม = ไม่ระบายเขียว/แดง · Cost/GMV ลด = ดี
+ */
+function MomSection({ report, prevName }: { report: CostReport; prevName: string }) {
+  const [metric, setMetric] = useState<MomMetric>("cost");
+  const { see } = report;
+  const rows = costMoM(report.rows, report.prevRows ?? []);
+  const groups = rows.filter((r) => r.level === "group");
+  const metrics = MOM_METRICS.filter((m) => see.gmv || !m.gmv);
+  const active = metrics.some((m) => m.key === metric) ? metric : "cost";
+  const def = MOM_METRICS.find((m) => m.key === active)!;
+  const curName = shortMonth(report.month), prevShort = `${prevName}${report.upTo !== null ? " (ถึงเวลาเดียวกัน)" : ""}`;
+  const delta = (k: MomMetric, r: (typeof rows)[number]) => (
+    <ChangeText cur={momValue(r.cur, k)} prev={momValue(r.prev, k)} neutral={k === "cost"} goodDown={k === "ratio"} />
+  );
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold">เทียบ MoM: {curName} vs {prevShort}</h2>
+        <Select value={active} onValueChange={(v) => setMetric(v as MomMetric)}>
+          <SelectTrigger aria-label="ตัวชี้วัดที่เทียบ" className="h-8 min-w-36 rounded-full bg-card text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectContent position="popper">
+            {metrics.map((m) => <SelectItem key={m.key} value={m.key}>{m.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      <p className="mb-2 text-xs text-muted-foreground">
+        แท่งชมพู = {curName} · แท่งฟ้า = {prevShort} · ชี้ / แตะแท่งดูตัวเลขและ % ที่เปลี่ยน
+        {report.upTo !== null ? " · เดือนก่อนนับถึงเวลาเดียวกัน ใช้ตัวเลขที่ระบบคำนวณ (ยอดในชีตเป็นยอดทั้งเดือน)" : ""}
+      </p>
+      {groups.length ? (
+        <BarChart
+          key={`${active}|${report.month}`} label={`${def.label} แยกกลุ่ม ${curName} เทียบ ${prevShort}`} height={220}
+          categories={groups.map((r) => r.label.replace(/^Agency /, ""))} tooltipTitles={groups.map((r) => `${r.app} · ${r.label}`)}
+          series={[
+            { name: curName, color: "var(--viz-cur)", values: groups.map((r) => momValue(r.cur, active)) },
+            { name: prevShort, color: "var(--viz-prev)", values: groups.map((r) => momValue(r.prev, active)) },
+          ]}
+          format={(v) => momFormat(active, v)}
+          formatAxis={(v) => (active === "roi" ? `×${v.toLocaleString("th-TH", { maximumFractionDigits: 1 })}` : active === "ratio" ? `${(v * 100).toFixed(0)}%`
+            : v >= 1_000_000 ? `฿${(v / 1_000_000).toLocaleString("th-TH", { maximumFractionDigits: 1 })}M` : v >= 1000 ? `฿${Math.round(v / 1000)}K` : `฿${v}`)}
+        />
+      ) : null}
+      <div className="mt-1"><Legend series={[{ name: curName, color: "var(--viz-cur)" }, { name: prevShort, color: "var(--viz-prev)" }]} /></div>
+      <div className="mt-3 overflow-x-auto rounded-xl border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className={STICKY_HEAD}>กลุ่ม</TableHead>
+              <TableHead className="text-right">Cost {curName}</TableHead><TableHead className="text-right">Cost {prevName}</TableHead><TableHead className="text-right">MoM</TableHead>
+              {see.gmv ? (
+                <>
+                  <TableHead className="text-right">GMV {curName}</TableHead><TableHead className="text-right">GMV {prevName}</TableHead><TableHead className="text-right">MoM</TableHead>
+                  <TableHead className="text-right">ROI {curName}</TableHead><TableHead className="text-right">ROI {prevName}</TableHead><TableHead className="text-right">MoM</TableHead>
+                </>
+              ) : null}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.key} className={cn(r.level !== "group" && "bg-muted/50 font-semibold hover:bg-muted/50")}>
+                <TableCell className={cn(STICKY_CELL, r.level !== "group" && "bg-muted", r.level === "group" && "pl-5")}>{r.label}</TableCell>
+                <TableCell className="text-right tabular-nums">{baht(r.cur.cost)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">{baht(r.prev.cost)}</TableCell>
+                <TableCell className="text-right">{delta("cost", r)}</TableCell>
+                {see.gmv ? (
+                  <>
+                    <TableCell className="text-right tabular-nums">{baht(r.cur.gmv)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{baht(r.prev.gmv)}</TableCell>
+                    <TableCell className="text-right">{delta("gmv", r)}</TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums">{roiText(momValue(r.cur, "roi"))}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{roiText(momValue(r.prev, "roi"))}</TableCell>
+                    <TableCell className="text-right">{delta("roi", r)}</TableCell>
+                  </>
+                ) : null}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {report.totals.agency && !report.prev.agency ? (
+        <p className="mt-1 text-xs font-semibold text-warning-foreground">{prevName} ยังไม่มีงบ Agency ในยอด Cost ที่เทียบกันจึงดูเพิ่มขึ้นมากกว่าจริง</p>
+      ) : null}
+    </section>
   );
 }
 

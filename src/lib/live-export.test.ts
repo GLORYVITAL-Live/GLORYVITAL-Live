@@ -43,6 +43,17 @@ describe("แผ่นส่วนเสริม", () => {
     expect(sheet.rows.some((r) => r[0] === "Shopee" && r[1] === "วันแคมเปญ (D-Day)")).toBe(true);
     expect(sheet.rows.some((r) => r[0] === "2026-11-06" && r[2] === "11.11")).toBe(true);
   });
+  test("เดือนที่ยังไม่จบ: สรุป / แยกบัญชีเทียบเดือนก่อนถึงวันเดียวกัน (ไม่ใช่ทั้งเดือน)", () => {
+    const octFull = [...b, live("2026-10-25", "09:00", 50000)];
+    const book = monthBook({
+      month: "2026-11", monthLabel: (k) => k, months13: Array.from({ length: 13 }, (_, i) => `${i < 2 ? 2025 : 2026}-${String(((i + 10) % 12) + 1).padStart(2, "0")}`),
+      byMonth: new Map([["2026-10", octFull], ["2026-11", a]]), filter, cut: { prev: b, yoy: [], text: " 1–6" },
+    });
+    const summary = book.sheets.find((s) => s.name === "สรุป")!;
+    expect(summary.rows[0]).toContain("2026-10 1–6");
+    const gmvRow = summary.rows.find((r) => r[0] === "GMV")!;
+    expect((gmvRow[2] as { v: number }).v).toBe(3900); // ต.ค. 1–6 ไม่รวมไลฟ์วันที่ 25
+  });
   test("ไม่ส่งส่วนเสริม = แผ่นเดิมเท่านั้น", () => {
     const list = names(compareBook({ title: "t", report: "MoM", aName: "พ.ย.", bName: "ต.ค.", aRange: "", bRange: "", a, b, timeName: "รายวัน", time: [], filter }));
     expect(list).not.toContain("เทียบรายกลุ่ม");

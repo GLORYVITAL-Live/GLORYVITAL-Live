@@ -170,7 +170,25 @@ export function TargetPanel({ month, sessions, platform, account, lastDay, readO
             />
           </div>
 
-          {r.toDate ? (
+          {r.projection ? (
+            <div className="mt-2 rounded-xl border bg-card px-3 py-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                <span className="text-xs text-muted-foreground">คาดการณ์สิ้นเดือน (ถ้าทำได้ตามอัตราถึงวันที่ {lastDay})</span>
+                <span className={cn("text-xs font-semibold tabular-nums", r.projection.gap >= 0 ? "text-success" : "text-destructive")}>
+                  {r.projection.gap >= 0 ? `เกินเป้า ${baht(r.projection.gap)}` : `ขาดเป้า ${baht(-r.projection.gap)}`}
+                </span>
+              </div>
+              <div className="text-lg font-bold tabular-nums">
+                {baht(r.projection.value)} <span className="text-sm font-semibold text-muted-foreground">= {pctText(r.projection.pct)} ของเป้า</span>
+              </div>
+              <p className="text-xs text-muted-foreground tabular-nums">
+                {r.remaining > 0
+                  ? `ต้องทำอีก ${baht(r.remaining)}${r.daysLeft ? ` ใน ${r.daysLeft} วัน · เฉลี่ยวันละ ${baht(r.perDayLeft)}` : ""}`
+                  : "ถึงเป้าเดือนแล้ว"}
+                {" · "}คิดตามเป้ารายวันที่เหลือ (วันแคมเปญที่ยังไม่ถึงนับให้แล้ว) · ถ้าเฉลี่ยเท่ากันทุกวัน = {baht(r.projection.runRate)}
+              </p>
+            </div>
+          ) : r.toDate ? (
             <p className="mt-2 text-xs text-muted-foreground tabular-nums">
               {r.remaining > 0
                 ? `เหลืออีก ${baht(r.remaining)}${r.daysLeft ? ` ใน ${r.daysLeft} วัน · เฉลี่ยวันละ ${baht(r.perDayLeft)}` : ""}`

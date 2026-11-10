@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
 import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
 import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
+import { PLAN_FULL, planVsActual, type PlanGroupCheck } from "@/lib/live-plan";
+import { isShopeePlatform, slotPlatformOf } from "@/lib/platform";
 import { DAY_KINDS, dayKindLabel, dayKindStats, liveDay, tagKey, type DayTag } from "@/lib/live-days";
 import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop, type HeatCell } from "@/lib/live-heat";
 import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
@@ -425,6 +427,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       ],
       // เหมือนหน้าเว็บ: เทียบรายกลุ่ม / รายบัญชีกับเดือนก่อน + ช่วงเวลาขายดี + วันปกติ vs วันแคมเปญ
       breakdown: { spans: owners },
+      plan: { title: `แพลน vs ไลฟ์จริง ${monthLabel(month)}`, spans: spansInFilter(owners, filter.platform, filter.account), fromMs: Date.parse(monthWindow(month).from), toMs: Date.parse(monthWindow(month).to) },
       heat: { title: `ช่วงเวลาไหนขายดี ${monthLabel(month)}` },
       dayKinds: dayTags.tags ? { title: `วันปกติ vs วันแคมเปญ ${monthLabel(month)}`, tags: dayTags.tags } : undefined,
     }, target);
@@ -438,9 +441,12 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
           <ExportMenu size="sm" label="ส่งออก" build={async () => monthBook({
             month, monthLabel, months13, byMonth, filter: { platform: filter.platform, account: filter.account, sessions: data },
             crew: await loadCrew(byMonth.get(month) ?? []),
+            // เดือนที่ยังไม่จบ: เทียบเดือนก่อน / ปีก่อนถึงวันเดียวกัน เหมือนหน้าเว็บ
+            cut: cutText ? { prev: prevList, yoy: upTo(byMonth.get(yoyKey)!), text: cutText } : undefined,
             // ให้ครบเหมือนหน้าเว็บ: กลุ่มผู้ไลฟ์ / เทียบรายกลุ่ม / แยก Agency / ช่วงเวลาขายดี / วันแคมเปญ
             extras: {
-              spans: owners.spans ?? null, owners: true, heat: true, tags: dayTags.tags ?? null,
+              spans: owners.spans ? spansInFilter(owners.spans, filter.platform, filter.account) : null, owners: true, heat: true, tags: dayTags.tags ?? null,
+              plan: { fromMs: Date.parse(monthWindow(month).from), toMs: Date.parse(monthWindow(month).to) },
               breakdown: { b: prevList, aName: `${shortMonth(month)}${cutText}`, bName: `${shortMonth(prevKey)}${cutText}` },
               agency: owners.spans ? [
                 { name: "แยก Agency รายวัน", first: "วันที่", labels: monthDays(month), trend: agencyTrend(monthDays(month).map((d) => (byMonth.get(month) ?? []).filter((s) => bkkParts(s.startedAt).d === Number(d.slice(8)))), owners.spans) },
@@ -528,6 +534,13 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       {cur.lives ? <HeatSection title={`ช่วงเวลาไหนขายดี ${monthLabel(month)}`} sessions={byMonth.get(month)!} spans={owners.spans} /> : null}
       {cur.lives ? <DayKindSection title={`วันปกติ vs วันแคมเปญ ${monthLabel(month)}`} sessions={byMonth.get(month)!} tags={dayTags.tags} ready={dayTags.ready} replay={replay} /> : null}
       {cur.lives ? <OwnerTable owners={owners} sessions={byMonth.get(month)!} /> : null}
+      {cur.lives && owners.spans ? (
+        <PlanSection
+          title={`แพลน vs ไลฟ์จริง ${monthLabel(month)}`} sessions={byMonth.get(month)!} replay={replay}
+          spans={spansInFilter(owners.spans, filter.platform, filter.account)}
+          range={{ fromMs: Date.parse(monthWindow(month).from), toMs: Date.parse(monthWindow(month).to) }}
+        />
+      ) : null}
       {cur.lives && prev.lives ? (
         <BreakdownSection a={byMonth.get(month)!} b={prevList} curName={`${shortMonth(month)}${cutText}`} prevName={`${shortMonth(prevKey)}${cutText}`} spans={owners.spans} replay={replay} />
       ) : null}
@@ -1708,6 +1721,110 @@ function AgencyLines({ trend: byPlatform, categories, titles, label, rowHead, re
  * ตารางแยก GMV ตามกลุ่มผู้ไลฟ์ต่อช่อง: กลุ่มที่บันทึกไว้กับไลฟ์ / เทียบเวลาไลฟ์ในไฟล์กับแพลนหน้า Plan Slot Live (src/lib/live-owners.ts)
  *   เดือนที่ไม่มีข้อมูลกลุ่มของช่องนั้น = ไม่นับ · กราฟแยกกลุ่มอยู่ในแท็บ "แยก Agency" ของการ์ดกราฟด้านบน
  */
+/** ช่วงเวลาของ slot ในแพลน เช่น "5 พ.ย. 19:30–21:30" */
+const slotTime = (s: { startMs: number; endMs: number }) => `${bkkDate.format(new Date(s.startMs))} ${bkkTime.format(new Date(s.startMs))}–${bkkTime.format(new Date(s.endMs))}`;
+/** แพลนเฉพาะแพลตฟอร์ม / ช่องในตัวกรอง (บัญชี TikTok = ช่องของบัญชีนั้น) */
+const spansInFilter = (spans: OwnerSpan[], platform: Platform | "", account: string) => spans.filter((s) => {
+  const app = isShopeePlatform(s.channel) ? "Shopee" : "TikTok";
+  if (platform && app !== platform) return false;
+  if (!account) return true;
+  const [p, id] = account.split("|");
+  const ch = slotPlatformOf(p, id);
+  return p === app && (!ch || ch.trim().toLowerCase() === s.channel.trim().toLowerCase());
+});
+
+/**
+ * แพลน vs ไลฟ์จริง รายกลุ่ม (ผู้ใช้ขอ 2026-11-10 · src/lib/live-plan.ts): ชั่วโมงในแพลน vs ชั่วโมงที่ไลฟ์จริงในเวลาแพลน
+ *   slot ที่ไม่ได้ไลฟ์ (ไลฟ์ไม่ถึงครึ่ง) / ไลฟ์ไม่ครบ (ไม่ถึง 90%) / รอไฟล์ (ยังไม่ถึง / ยังไม่อัปโหลด) + GMV ต่อชั่วโมงในแพลน
+ *   แพลน = Agency TDH (TikTok) + แพลน Shopee ทุกกลุ่ม · ทีมเราฝั่ง TikTok ใช้ slot จองของ Mc ไม่อยู่ในส่วนนี้
+ */
+function PlanSection({ title, sessions, spans, range, replay }: { title: string; sessions: LiveSession[]; spans: OwnerSpan[]; range: { fromMs: number; toMs: number }; replay: string }) {
+  const groups = planVsActual(sessions, spans, range);
+  if (!groups.length) return null;
+  const split = splitByOwner(sessions, spans);
+  const gmvOf = (g: PlanGroupCheck) => split.find((c) => c.channel.trim().toLowerCase() === g.channel.trim().toLowerCase())
+    ?.rows.find((r) => (r.owner ?? "") === g.owner)?.gmv ?? null;
+  const judged = groups.filter((g) => g.slots);
+  const issues = groups.flatMap((g) => [...g.missed.map((s) => ({ g, s, kind: "miss" as const })), ...g.partial.map((s) => ({ g, s, kind: "part" as const }))])
+    .sort((a, b) => a.s.startMs - b.s.startMs);
+  const hrs = (sec: number) => (sec / 3600).toLocaleString("th-TH", { maximumFractionDigits: 1 });
+  const pctText = (v: number | null) => (v === null ? "-" : `${(v * 100).toFixed(0)}%`);
+  const name = (g: PlanGroupCheck) => `${g.channelLabel} · ${g.ownerLabel}`;
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <h2 className="font-bold">{title}</h2>
+      <p className="mb-2 text-xs text-muted-foreground">
+        ชั่วโมงในแพลน (Agency TDH + แพลน Shopee) เทียบชั่วโมงที่ไลฟ์จริงในเวลานั้นจากไฟล์ Export · ไม่ได้ไลฟ์ = ไลฟ์ไม่ถึงครึ่ง slot · ไม่ครบ = ไม่ถึง 90%
+        · slot ที่ยังไม่ถึง / ยังไม่อัปโหลดไฟล์ = รอไฟล์ (ไม่นับ)
+      </p>
+      {judged.length ? (
+        <>
+          <BarChart
+            key={replay} label={`${title} ชั่วโมงแพลน เทียบ ชั่วโมงไลฟ์จริง`} height={200} compare={false}
+            categories={judged.map((g) => g.ownerLabel.replace(/^Agency /, ""))} tooltipTitles={judged.map(name)}
+            series={[
+              { name: "ชม. ในแพลน", color: "var(--viz-prev)", values: judged.map((g) => g.planSec / 3600) },
+              { name: "ชม. ไลฟ์จริง", color: "var(--viz-cur)", values: judged.map((g) => g.liveSec / 3600) },
+            ]}
+            format={(v) => (v === null ? "-" : `${hrs(v * 3600)} ชม.`)} formatAxis={(v) => `${v}`}
+          />
+          <div className="mt-1"><Legend series={[{ name: "ชม. ในแพลน", color: "var(--viz-prev)" }, { name: "ชม. ไลฟ์จริง", color: "var(--viz-cur)" }]} /></div>
+        </>
+      ) : <p className="text-sm text-muted-foreground">ยังไม่มี slot ที่ผ่านไปแล้วและมีไฟล์ Export ให้ตรวจ</p>}
+      <div className="mt-3 overflow-x-auto rounded-xl border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className={STICKY_HEAD}>กลุ่ม</TableHead>
+              <TableHead className="text-right">slot</TableHead><TableHead className="text-right">ชม. แพลน</TableHead><TableHead className="text-right">ชม. ไลฟ์จริง</TableHead>
+              <TableHead className="text-right">% ตามแพลน</TableHead><TableHead className="text-right">ไม่ได้ไลฟ์</TableHead><TableHead className="text-right">ไม่ครบ</TableHead>
+              <TableHead className="text-right">รอไฟล์</TableHead><TableHead className="text-right">GMV</TableHead><TableHead className="text-right">GMV / ชม. แพลน</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {groups.map((g) => {
+              const gmv = gmvOf(g);
+              return (
+                <TableRow key={`${g.channel}|${g.owner}`}>
+                  <TableCell className={STICKY_CELL}><span className="block text-[11px] text-muted-foreground">{g.channelLabel}</span>{g.ownerLabel}</TableCell>
+                  <TableCell className="text-right tabular-nums">{g.slots}</TableCell>
+                  <TableCell className="text-right tabular-nums">{hrs(g.planSec)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{hrs(g.liveSec)}</TableCell>
+                  <TableCell className={cn("text-right font-semibold tabular-nums", g.coverage !== null && g.coverage < PLAN_FULL && "text-destructive")}>{pctText(g.coverage)}</TableCell>
+                  <TableCell className={cn("text-right tabular-nums", g.missed.length > 0 && "font-semibold text-destructive")}>{g.missed.length}</TableCell>
+                  <TableCell className="text-right tabular-nums">{g.partial.length}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{g.pending}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtMetric("baht", gmv)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtMetric("baht", gmv !== null && g.planSec ? gmv / (g.planSec / 3600) : null)}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+      {issues.length ? (
+        <TableView title={`slot ที่ไม่ได้ไลฟ์ / ไลฟ์ไม่ครบ (${issues.length})`}>
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead>เวลาในแพลน</TableHead><TableHead>กลุ่ม</TableHead><TableHead className="text-right">ไลฟ์จริง</TableHead><TableHead>สถานะ</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {issues.map(({ g, s, kind }) => (
+                <TableRow key={`${g.channel}|${g.owner}|${s.startMs}`}>
+                  <TableCell className="whitespace-nowrap tabular-nums">{slotTime(s)}</TableCell>
+                  <TableCell>{name(g)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{Math.round(s.liveSec / 60)} นาที ({pctText(s.share)})</TableCell>
+                  <TableCell className={cn(kind === "miss" ? "font-semibold text-destructive" : "text-muted-foreground")}>{kind === "miss" ? "ไม่ได้ไลฟ์" : "ไลฟ์ไม่ครบ"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableView>
+      ) : null}
+    </section>
+  );
+}
+
 /**
  * แถบสัดส่วน GMV ของแต่ละกลุ่มในช่องเดียว (ผู้ใช้ขอ 2026-11-10) · สีตามกลุ่มแบบเดียวกับกราฟแยก Agency
  *   ช่องว่าง 2px สีพื้นคั่นแต่ละส่วน · ชื่อ + % อยู่ใต้แถบ (ไม่ใช้สีอย่างเดียว)
