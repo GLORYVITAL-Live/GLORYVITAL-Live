@@ -11,6 +11,7 @@ import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, multiBook, singleBook, yearBook, type CrewMap } from "@/lib/live-export";
 import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
+import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
 import { DAY_KINDS, dayKindLabel, dayKindStats, liveDay, tagKey, type DayTag } from "@/lib/live-days";
 import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop, type HeatCell } from "@/lib/live-heat";
 import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
@@ -23,6 +24,8 @@ import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components
 import { BarChart, ChangeText, Legend, LineChart, PairBars, TableView } from "@/components/LiveCharts";
 import { CountUp } from "@/components/motion";
 import { CeoLive } from "@/components/CeoLive";
+import { STICKY_CELL, STICKY_HEAD } from "@/components/SortHead";
+import dynamic from "next/dynamic";
 import { DayTarget, TargetPanel } from "@/components/LiveTargets";
 import {
   AppDialog, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useConfirm, useToast,
@@ -42,6 +45,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 type MonthRow = { month: string; platform: string; lives: number; gmv: number };
 
 const TAB_KEY = "glory_live_stats_tab";
+/** แท็บ Cost / ROI = หน้า Cost ทั้งหน้า (โหลดเมื่อเปิดแท็บ) */
+const CostPage = dynamic(() => import("@/components/CostPage").then((m) => m.CostPage), { loading: () => <LoadingBlock /> });
 const CUR = "var(--viz-cur)";
 const PREV = "var(--viz-prev)";
 
@@ -105,10 +110,14 @@ async function fetchCampaigns() {
   return res.campaigns;
 }
 
-/** หน้า Data analytics · readOnly = ดูได้อย่างเดียว (ไม่มีแท็บอัปโหลด / แก้แคมเปญไม่ได้ แต่ส่งออกได้) */
-export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
+/**
+ * หน้า Analytics = สถิติไลฟ์ + แท็บ Cost / ROI (หน้า Cost เดิมทั้งหน้า)
+ *   analytics = เห็นสถิติไลฟ์ · readOnly = ดูได้อย่างเดียว (ไม่มีแท็บอัปโหลด / แก้แคมเปญไม่ได้ แต่ส่งออกได้)
+ *   cost = เห็นแท็บ Cost (ตัวเลขเงิน) · ไม่มีสิทธิ์สถิติไลฟ์ = มีแค่ Cost
+ */
+export function LiveStats({ readOnly = false, analytics = true, cost = false }: { readOnly?: boolean; analytics?: boolean; cost?: boolean }) {
   const saved = useLocal(TAB_KEY);
-  const tab = saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) ? saved : "overview";
+  const tab = (saved === "cost" && cost) || saved === "campaign" || saved === "ceo" || (saved === "upload" && !readOnly) ? saved! : "overview";
   const [months, setMonths] = useState<MonthRow[] | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
   const [error, setError] = useState("");
@@ -118,23 +127,28 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
   const onError = (err: unknown) => setError((err as Error).message);
 
   useEffect(() => {
+    if (!analytics) return;
     Promise.all([fetchMonths(), fetchCampaigns()])
       .then(([m, c]) => { setMonths(m); setCampaigns(c); setError(""); })
       .catch((err) => setError((err as Error).message));
-  }, [attempt]);
+  }, [attempt, analytics]);
 
-  if (error) return <LoadError title="โหลดสถิติไลฟ์ไม่สำเร็จ" message={error} onRetry={() => setAttempt((n) => n + 1)} />;
-  if (!months || !campaigns) return <LoadingBlock />;
+  if (!analytics) return <div className="pt-3"><CostPage /></div>;
 
-  const tabs = [
-    ["overview", "ภาพรวม / เทียบ"], ["campaign", "แคมเปญ"],
-    ["ceo", "CEO Live"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as const]),
-  ] as const;
-  const dataMonths = [...new Set(months.map((m) => m.month))];
+  const tabs: [string, ReactNode][] = [
+    ["overview", "ภาพรวม / เทียบ"],
+    ...(cost ? [["cost", <><span className="sm:hidden">Cost</span><span className="max-sm:hidden">Cost / ROI</span></>] as [string, ReactNode]] : []),
+    ["campaign", "แคมเปญ"], ["ceo", "CEO Live"], ...(readOnly ? [] : [["upload", "อัปโหลด"] as [string, ReactNode]]),
+  ];
+  const dataMonths = months ? [...new Set(months.map((m) => m.month))] : [];
   const empty = <EmptyData readOnly={readOnly} />;
+  // แท็บสถิติไลฟ์รอข้อมูลเดือน / แคมเปญ · แท็บ Cost ใช้ได้เลยไม่ต้องรอ
+  const stats = (body: () => ReactNode) => (error
+    ? <LoadError title="โหลดสถิติไลฟ์ไม่สำเร็จ" message={error} onRetry={() => setAttempt((n) => n + 1)} />
+    : !months || !campaigns ? <LoadingBlock /> : body());
   return (
     <Tabs value={tab} onValueChange={(v) => writeLocal(TAB_KEY, v)} className="gap-0 pb-10">
-      <TabsList aria-label="เมนูสถิติไลฟ์" className="my-3 h-auto! w-full rounded-full border bg-card p-1">
+      <TabsList aria-label="เมนู Analytics" className="my-3 h-auto! w-full rounded-full border bg-card p-1">
         {tabs.map(([id, label]) => (
           // มือถือ: แท็บทั้งหมดต้องพอดีแถวเดียว (ระยะข้างแคบลง)
           <TabsTrigger key={id} value={id} className="rounded-full py-1.5 text-[13px] font-semibold data-active:bg-tint! data-active:text-tint-foreground! max-sm:px-1 max-sm:text-[12.5px] sm:text-sm">
@@ -143,16 +157,17 @@ export function LiveStats({ readOnly = false }: { readOnly?: boolean }) {
         ))}
       </TabsList>
       <TabsContent value="overview">
-        {months.length ? <Overview latest={months[0].month} dataMonths={dataMonths} version={version} readOnly={readOnly} /> : empty}
+        {stats(() => (months!.length ? <Overview latest={months![0].month} dataMonths={dataMonths} version={version} readOnly={readOnly} /> : empty))}
       </TabsContent>
+      {cost ? <TabsContent value="cost"><CostPage /></TabsContent> : null}
       <TabsContent value="campaign">
-        <CampaignView campaigns={campaigns} dataMonths={dataMonths} version={version} readOnly={readOnly} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />
+        {stats(() => <CampaignView campaigns={campaigns!} dataMonths={dataMonths} version={version} readOnly={readOnly} onChanged={() => fetchCampaigns().then(setCampaigns, onError)} />)}
       </TabsContent>
       {/* หน้าเดียวกับที่บัญชี Marketing เห็น */}
       <TabsContent value="ceo"><CeoLive key={version} /></TabsContent>
       {readOnly ? null : (
         <TabsContent value="upload">
-          <UploadView months={months} onChanged={() => { setVersion((v) => v + 1); fetchMonths().then(setMonths, onError); }} />
+          {stats(() => <UploadView months={months!} onChanged={() => { setVersion((v) => v + 1); fetchMonths().then(setMonths, onError); }} />)}
         </TabsContent>
       )}
     </Tabs>
@@ -233,6 +248,9 @@ const shortMonth = (key: string) => {
   const label = fmtMonthShort.format(new Date(`${key}-01T12:00:00Z`));
   return key.endsWith("-01") ? `${label} ${key.slice(2, 4)}` : label;
 };
+
+/** ส่วนต่างตามหน่วยของตัวชี้วัด (ไม่ใส่เครื่องหมาย) · ค่าที่เป็น % = pp */
+const gapText = (kind: (typeof METRICS)[number]["kind"], g: number) => (kind === "pct" ? `${(g * 100).toFixed(2)}pp` : fmtMetric(kind, g));
 
 /** การ์ดตัวชี้วัด + % เทียบกับช่วงอื่น (เช่น MoM / YoY) */
 function KpiGrid({ cur, compare }: { cur: Totals; compare: { totals: Totals; label: string }[] }) {
@@ -472,6 +490,9 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       {cur.lives ? <HeatSection title={`ช่วงเวลาไหนขายดี ${monthLabel(month)}`} sessions={byMonth.get(month)!} spans={owners.spans} /> : null}
       {cur.lives ? <DayKindSection title={`วันปกติ vs วันแคมเปญ ${monthLabel(month)}`} sessions={byMonth.get(month)!} tags={dayTags.tags} ready={dayTags.ready} replay={replay} /> : null}
       {cur.lives ? <OwnerTable owners={owners} sessions={byMonth.get(month)!} /> : null}
+      {cur.lives && prev.lives ? (
+        <BreakdownSection a={byMonth.get(month)!} b={prevList} curName={`${shortMonth(month)}${cutText}`} prevName={`${shortMonth(prevKey)}${cutText}`} spans={owners.spans} replay={replay} />
+      ) : null}
       {cur.lives ? <AccountTable cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} /> : null}
     </>
   );
@@ -1370,6 +1391,183 @@ function AgencyBars({ trend, categories, titles, label, rowHead, replay, highlig
         </Table>
       </TableView>
     </>
+  );
+}
+
+/**
+ * แยก Agency ตอนเทียบ 2 ช่วง: ไม่ซ้อน (ซ้อนแล้วเทียบกันยาก) = กราฟยอดรวมต่อแพลตฟอร์ม + กราฟแท่งแยกรายกลุ่ม
+ *   ทุกกราฟแท่งคู่ สีบอกช่วงเวลา (ชมพู = ช่วงหลัก / ฟ้า = ช่วงเทียบ) เหมือนกราฟเทียบอื่นในหน้านี้ · trend = agencyTrend([ช่วงเทียบ, ช่วงหลัก])
+ */
+function AgencyCompare({ trend, curName, prevName, replay }: { trend: AgencyTrend[]; curName: string; prevName: string; replay: string }) {
+  const platforms = [...new Set(trend.map((t) => t.platform))];
+  const sum = (list: AgencyTrend[], i: number) => (list.some((t) => t.gmv[i] !== null) ? list.reduce((a, t) => a + (t.gmv[i] ?? 0), 0) : null);
+  const totals = [...platforms.map((p) => ({ name: p, list: trend.filter((t) => t.platform === p) })), ...(platforms.length > 1 ? [{ name: "รวม", list: trend }] : [])];
+  const pair = (cur: (number | null)[], prev: (number | null)[]) => [{ name: curName, color: CUR, values: cur }, { name: prevName, color: PREV, values: prev }];
+  // ชื่อกลุ่มใต้แท่ง: สั้น · ชื่อเดียวกันสองแพลตฟอร์ม (เช่น MCN) ต่อท้ายแพลตฟอร์ม
+  const dup = (t: AgencyTrend) => trend.filter((x) => x.label === t.label).length > 1;
+  const short = (t: AgencyTrend) => `${t.label.replace(/^Agency /, "")}${dup(t) ? ` (${t.platform})` : ""}`;
+  const baht = (v: number | null) => fmtMetric("baht", v), axis = (v: number) => fmtMetric("baht", v, true);
+  return (
+    <>
+      <Legend series={pair([], [])} />
+      <h3 className="mt-3 mb-1 text-sm font-semibold">ยอดรวม</h3>
+      <BarChart
+        key={`agency-total|${replay}`} label={`GMV รวม ${curName} เทียบ ${prevName}`} height={180}
+        categories={totals.map((x) => x.name)} series={pair(totals.map((x) => sum(x.list, 1)), totals.map((x) => sum(x.list, 0)))}
+        format={baht} formatAxis={axis}
+      />
+      <h3 className="mt-3 mb-1 text-sm font-semibold">แยกรายกลุ่ม</h3>
+      <BarChart
+        key={`agency-groups|${replay}`} label={`GMV แยกกลุ่ม ${curName} เทียบ ${prevName}`}
+        categories={trend.map(short)} tooltipTitles={trend.map((t) => `${t.platform} · ${t.label}`)}
+        series={pair(trend.map((t) => t.gmv[1]), trend.map((t) => t.gmv[0]))} format={baht} formatAxis={axis}
+      />
+      <p className="mt-1 text-xs text-muted-foreground">{agencyNote(trend, false)} · ตัวเลขทุกตัวชี้วัดของแต่ละกลุ่มอยู่ในตาราง &ldquo;เทียบรายกลุ่มและรายบัญชี&rdquo; ด้านล่าง</p>
+    </>
+  );
+}
+
+/** ตัวชี้วัดของกราฟเทียบรายกลุ่ม / รายบัญชี (ผู้ใช้เลือก 4 ตัว 2026-11-10) · ตัวที่เหลืออยู่ในตาราง */
+const BREAKDOWN_METRICS: { key: MetricKey; label: string }[] = [
+  { key: "gmv", label: "GMV" }, { key: "gmvPerHour", label: "GMV / ชม." }, { key: "viewers", label: "Viewers" }, { key: "orders", label: "ออเดอร์" },
+];
+
+/**
+ * เทียบ 2 ช่วงรายกลุ่ม (Agency / ทีมเรา) และรายบัญชี: แยกแพลตฟอร์ม TikTok | Shopee ตั้งแต่แรก แต่ละฝั่งกราฟแท่งคู่ทีละตัวชี้วัด
+ *   + ขาที่ทำให้ GMV เปลี่ยน + ตารางตัวเลข (src/lib/live-breakdown.ts)
+ *   เป้าหมาย: เห็นว่ากลุ่ม / ช่องไหนดรอป และดรอปที่ขาไหน (ชั่วโมงไลฟ์ / คนดูต่อชม. / ยอดต่อคนดู) จะได้ไปแก้ถูกจุด
+ *   ยอดรวมแพลตฟอร์มอยู่ที่หัวของฝั่งนั้น ไม่เป็นแท่ง (ยอดรวมใหญ่จนแท่งของกลุ่มเล็ก)
+ */
+function BreakdownSection({ a, b, curName, prevName, spans, replay }: {
+  a: LiveSession[]; b: LiveSession[]; curName: string; prevName: string; spans?: OwnerSpan[]; replay: string;
+}) {
+  const [view, setView] = useState<"group" | "account">("group");
+  const { groups, accounts } = breakdownRows(a, b, spans ?? null);
+  if (!groups.length) return null;
+  const v = (t: Totals, k: MetricKey) => (t.lives ? metricOf(k).value(t) : null);
+  const cols: { key: MetricKey; label: string }[] = [
+    { key: "duration", label: "ชม." }, { key: "gmvPerHour", label: "GMV/ชม." }, { key: "viewersPerHour", label: "Viewers/ชม." },
+    { key: "gmvPerViewer", label: "GMV/Viewer" }, { key: "orders", label: "ออเดอร์" }, { key: "aov", label: "AOV" },
+  ];
+  const table = (title: string, rows: BreakdownRow[]) => (
+    <>
+      <h3 className="mt-3 mb-1 text-sm font-semibold">{title}</h3>
+      <div className="overflow-x-auto rounded-xl border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className={STICKY_HEAD}>{title.replace("แยก", "")}</TableHead>
+              <TableHead className="text-right">GMV {prevName}</TableHead><TableHead className="text-right">GMV {curName}</TableHead>
+              <TableHead className="text-right">ส่วนต่าง</TableHead><TableHead className="text-right">GMV</TableHead>
+              {cols.map((c) => <TableHead key={c.key} className="text-right">{c.label}</TableHead>)}
+              <TableHead>ขาที่ทำให้เปลี่ยนมากสุด</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => {
+              const leg = mainLeg(r.a, r.b);
+              const gap = r.a.lives && r.b.lives ? r.a.gmv - r.b.gmv : null;
+              return (
+                <TableRow key={r.key} className={cn(r.level === "platform" && "bg-muted/50 font-semibold hover:bg-muted/50")}>
+                  <TableCell className={cn(STICKY_CELL, r.level === "platform" && "bg-muted", r.level === "group" && "pl-5")}>
+                    {r.level === "account" ? <span className="block text-[11px] text-muted-foreground">{r.platform}</span> : null}{r.label}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtMetric("baht", v(r.b, "gmv"))}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtMetric("baht", v(r.a, "gmv"))}</TableCell>
+                  <TableCell className={cn("text-right tabular-nums", gap !== null && gap < 0 && "text-destructive")}>{gap === null ? "-" : `${gap > 0 ? "+" : gap < 0 ? "−" : ""}${fmtMetric("baht", Math.abs(gap))}`}</TableCell>
+                  <TableCell className="text-right"><ChangeText cur={v(r.a, "gmv")} prev={v(r.b, "gmv")} /></TableCell>
+                  {cols.map((c) => <TableCell key={c.key} className="text-right"><ChangeText cur={v(r.a, c.key)} prev={v(r.b, c.key)} /></TableCell>)}
+                  <TableCell className={cn("text-xs whitespace-nowrap", leg && (leg.gmv < 0 ? "font-semibold text-destructive" : "text-success"))}>
+                    {leg ? `${leg.label} ${leg.change > 0 ? "▲" : "▼"} ${(Math.abs(leg.change) * 100).toFixed(1)}%` : "-"}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </>
+  );
+  const groupRows = groups.filter((r) => r.level === "group");
+  const hasGroups = groupRows.length > 0;
+  const byGroup = view === "group" && hasGroups;
+  const pair = (rows: BreakdownRow[], k: MetricKey) => [
+    { name: curName, color: CUR, values: rows.map((r) => v(r.a, k)) },
+    { name: prevName, color: PREV, values: rows.map((r) => v(r.b, k)) },
+  ];
+  const pctTxt = (c: number) => `${c > 0 ? "▲" : "▼"} ${(Math.abs(c) * 100).toFixed(1)}%`;
+  // ชื่อใต้แท่ง: ตัด "Agency " และชื่อบัญชียาวเกิน 12 ตัว · ชื่อเต็มอยู่ในกล่องตัวเลข
+  const short = (r: BreakdownRow) => { const s = r.label.replace(/^Agency /, ""); return s.length > 12 ? `${s.slice(0, 11)}…` : s; };
+  /** ฝั่งของแพลตฟอร์มเดียว: หัว + ยอดรวม · กราฟ 4 ตัว · ขาที่ทำให้ GMV เปลี่ยน */
+  const panel = (total: BreakdownRow) => {
+    const p = total.platform;
+    const rows = (byGroup ? groupRows : accounts).filter((r) => r.platform === p);
+    if (!rows.length) return null;
+    const titles = rows.map((r) => `${p} · ${r.label}`);
+    const legs = rows.flatMap((r) => { const leg = mainLeg(r.a, r.b); return leg ? [{ name: r.label, leg }] : []; });
+    return (
+      <div key={p} className="min-w-0 space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 border-b pb-1.5">
+          <h3 className="text-base font-bold">{p}</h3>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            GMV รวม {fmtMetric("baht", v(total.a, "gmv"))} vs {fmtMetric("baht", v(total.b, "gmv"))} <ChangeText cur={v(total.a, "gmv")} prev={v(total.b, "gmv")} />
+          </span>
+        </div>
+        {BREAKDOWN_METRICS.map((m) => {
+          const def = metricOf(m.key);
+          return (
+            <div key={m.key} className="rounded-xl border p-2.5">
+              <h4 className="mb-1 text-sm font-semibold">{m.label}</h4>
+              <BarChart
+                key={`${p}|${m.key}|${view}|${replay}`} label={`${p} ${m.label} ${byGroup ? "แยกกลุ่ม" : "แยกบัญชี"} ${curName} เทียบ ${prevName}`} height={180}
+                categories={rows.map(short)} tooltipTitles={titles} series={pair(rows, m.key)}
+                format={(x) => fmtMetric(def.kind, x)} formatAxis={(x) => fmtMetric(def.kind === "hours" ? "int" : def.kind, x, true)}
+              />
+            </div>
+          );
+        })}
+        {legs.length ? (
+          <div>
+            <h4 className="text-sm font-semibold">ขาที่ทำให้ GMV เปลี่ยนมากสุด</h4>
+            <ul className="mt-1 space-y-1 text-sm">
+              {legs.map(({ name, leg }) => (
+                <li key={name}>
+                  <span className="font-semibold">{name}</span>{" "}
+                  <span className="text-muted-foreground tabular-nums">GMV {pctTxt(leg.gmv)}</span>{" → "}
+                  <span className={cn("tabular-nums", leg.gmv < 0 ? "font-semibold text-destructive" : "text-success")}>{leg.label} {pctTxt(leg.change)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+  return (
+    <section className="my-4 rounded-2xl border bg-card p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold">เทียบรายกลุ่มและรายบัญชี: {curName} vs {prevName}</h2>
+        {hasGroups ? (
+          <ToggleGroup type="single" spacing={1} value={view} onValueChange={(x) => { if (x) setView(x as "group" | "account"); }} aria-label="เทียบตาม" className="rounded-full border bg-card p-0.5">
+            {[["group", "แยกกลุ่ม"], ["account", "แยกบัญชี"]].map(([id, text]) => (
+              <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        ชี้ / แตะแท่งดูตัวเลขและ % ที่เปลี่ยน · ขาที่ทำให้ GMV เปลี่ยน: GMV = ชั่วโมงไลฟ์ × Viewers/ชม. × GMV/Viewer ขาที่ลดมากสุดคือจุดที่ควรแก้ก่อน · ตัวชี้วัดอื่นอยู่ในตาราง
+      </p>
+      <div className="mt-1"><Legend series={pair([], "gmv")} /></div>
+      <div className="mt-2 grid gap-x-4 gap-y-6 lg:grid-cols-2">
+        {groups.filter((r) => r.level === "platform").map(panel)}
+      </div>
+      <TableView title="ดูตัวเลขเป็นตาราง">
+        {hasGroups ? table("แยกกลุ่ม", groups) : null}
+        {table("แยกบัญชี", accounts)}
+      </TableView>
+      {spans ? <p className="mt-1 text-xs text-muted-foreground">กลุ่ม: ไลฟ์ที่คร่อมหลายกลุ่มแบ่งตัวเลขตามนาที · ไม่ใช่ Agency = ทีมเรา (TikTok ของเรา / Shopee In house)</p> : null}
+    </section>
   );
 }
 
@@ -2465,7 +2663,7 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
             <div className="grid gap-2 sm:grid-cols-2">
               {METRICS.map((m) => (
                 <PairBars key={m.key} label={m.label} note={m.note} cur={tc.lives ? m.value(tc) : null} prev={tp.lives ? m.value(tp) : null}
-                  format={(v) => fmtMetric(m.kind, v)} curName={curName} prevName={prevName} />
+                  format={(v) => fmtMetric(m.kind, v)} curName={curName} prevName={prevName} diff={(g) => gapText(m.kind, g)} />
               ))}
             </div>
           )}
@@ -2485,8 +2683,10 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
                 {byAgency ? null : <MetricSelect value={metric} onChange={setMetric} />}
               </div>
             </div>
-            {byAgency ? (
-              <AgencyBars trend={agencyData!} categories={agencyCats} titles={agencyTitles} label={single ? `GMV แยก Agency ${curName}` : `GMV แยก Agency ${prevName} และ ${curName}`} rowHead={single && steps > 1 ? (unit === "hour" ? "ช่วงเวลา" : unit === "day" ? "วัน" : "เดือน") : "ช่วง"} replay={replay} />
+            {byAgency && !single ? (
+              <AgencyCompare trend={agencyData!} curName={curName} prevName={prevName} replay={replay} />
+            ) : byAgency ? (
+              <AgencyBars trend={agencyData!} categories={agencyCats} titles={agencyTitles} label={`GMV แยก Agency ${curName}`} rowHead={steps > 1 ? (unit === "hour" ? "ช่วงเวลา" : unit === "day" ? "วัน" : "เดือน") : "ช่วง"} replay={replay} />
             ) : <>
             {single ? null : <Legend series={chartSeries} />}
             <div className="mt-2">
@@ -2549,6 +2749,8 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
               agency={single ? { trend: agencyData, title: `GMV/ชม. ${timeText} แยก Agency` } : undefined}
             />
           ) : null}
+
+          {single ? null : <BreakdownSection a={cur} b={prev} curName={curName} prevName={prevName} spans={owners.spans} replay={replay} />}
 
           <SessionList title={`ไลฟ์ใน ${curName} (${cur.length})`} sessions={cur} />
           {single ? null : <SessionList title={`ไลฟ์ใน ${prevName} (${prev.length})`} sessions={prev} />}

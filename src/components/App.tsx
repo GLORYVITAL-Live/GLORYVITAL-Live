@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
-  GraduationCapIcon, PackageIcon, PackageOpenIcon, ShoppingBagIcon, SunIcon, WalletIcon, type LucideIcon,
+  GraduationCapIcon, PackageIcon, PackageOpenIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
 } from "lucide-react";
 import { boardsOf, type Board } from "@/lib/live-team";
 import type { Me, OwnerScope, Role } from "@/lib/types";
@@ -21,7 +21,6 @@ import { AppProviders, IconButton, LoadingBlock, Notice, StateBox, useToast } fr
 const Loading = () => <LoadingBlock />;
 const Nothing = () => null;
 const CeoLive = dynamic(() => import("@/components/CeoLive").then((m) => m.CeoLive), { loading: Loading });
-const CostPage = dynamic(() => import("@/components/CostPage").then((m) => m.CostPage), { loading: Loading });
 const EquipmentPage = dynamic(() => import("@/components/EquipmentPage").then((m) => m.EquipmentPage), { loading: Loading });
 const HomeView = dynamic(() => import("@/components/HomeView").then((m) => m.HomeView), { loading: Loading });
 const LiveStats = dynamic(() => import("@/components/LiveStats").then((m) => m.LiveStats), { loading: Loading });
@@ -74,13 +73,8 @@ export const MODES = {
     rule: "",
   },
   stats: {
-    sub: "Live stats", title: "สถิติไลฟ์", label: "Data analytics",
-    hint: "ยอดไลฟ์ TikTok / Shopee จากไฟล์ Export เทียบเดือนก่อน (MoM) ปีก่อน (YoY) และเทียบแคมเปญกับช่วงเดียวกันของเดือนก่อน",
-    rule: "",
-  },
-  cost: {
-    sub: "Cost", title: "Cost", label: "Cost",
-    hint: "ค่าใช้จ่ายทีมไลฟ์ในหน้าเดียว: ค่าจ้าง Mc / Admin · ค่ารถ · งบ Agency เทียบ GMV แยกตามแพลตฟอร์มและกลุ่มที่ไลฟ์",
+    sub: "Analytics", title: "Analytics", label: "Analytics",
+    hint: "สถิติไลฟ์ TikTok / Shopee จากไฟล์ Export (เทียบ MoM / YoY / แคมเปญ) และ Cost / ROI ของทีมไลฟ์ (ค่าจ้าง Mc / Admin · ค่ารถ · งบ Agency เทียบ GMV) ในหน้าเดียว",
     rule: "",
   },
   equipment: {
@@ -114,21 +108,23 @@ export const MODES = {
  * หน้าที่เลือกได้จากเมนู = บทบาท + หน้าหลักฐานไลฟ์ (Admin ทุกคน / Owner ฝั่ง Mc) + สถิติไลฟ์ / Plan Slot Live (Owner ที่ติ๊กสิทธิ์)
  *   + CEO Live (บัญชี Marketing — Owner ดูได้ที่แท็บ CEO Live ในหน้าสถิติไลฟ์) + เทรนนิ่ง (ทุกคน)
  */
-type Page = Role | "home" | "proof" | "stats" | "cost" | "plan" | "ceo" | "equipment" | "training" | "borrow";
+type Page = Role | "home" | "proof" | "stats" | "plan" | "ceo" | "equipment" | "training" | "borrow";
 /** ลำดับในเมนูเลือกหน้า */
-const PAGE_ORDER: Page[] = ["home", "owner", "stats", "cost", "ceo", "plan", "mc", "admin", "proof", "equipment", "borrow", "training"];
+const PAGE_ORDER: Page[] = ["home", "owner", "stats", "ceo", "plan", "mc", "admin", "proof", "equipment", "borrow", "training"];
 /** ชื่อสั้น + ไอคอนในแถบเมนู */
 const PAGE_SHORT: Record<Page, string> = {
-  home: "หน้าแรก", owner: "เจ้าของ", stats: "สถิติไลฟ์", cost: "Cost", ceo: "CEO Live", plan: "แพลน slot", mc: "Mc", admin: "Admin", proof: "หลักฐานไลฟ์", equipment: "อุปกรณ์",
+  home: "หน้าแรก", owner: "เจ้าของ", stats: "Analytics", ceo: "CEO Live", plan: "แพลน slot", mc: "Mc", admin: "Admin", proof: "หลักฐานไลฟ์", equipment: "อุปกรณ์",
   training: "เทรนนิ่ง", borrow: "ขอยืม",
 };
 const PAGE_ICON: Record<Page, LucideIcon> = {
-  home: HouseIcon, owner: BriefcaseIcon, stats: ChartColumnIcon, cost: WalletIcon, ceo: CrownIcon, plan: CalendarRangeIcon, mc: MicIcon, admin: HeadsetIcon, proof: CameraIcon, equipment: PackageIcon,
+  home: HouseIcon, owner: BriefcaseIcon, stats: ChartColumnIcon, ceo: CrownIcon, plan: CalendarRangeIcon, mc: MicIcon, admin: HeadsetIcon, proof: CameraIcon, equipment: PackageIcon,
   training: GraduationCapIcon, borrow: PackageOpenIcon,
 };
 
 const ROLE_KEY = PAGE_KEY;
 const THEME_KEY = "glory_booking_theme";
+/** แท็บที่เปิดค้างในหน้า Analytics (คีย์เดียวกับ TAB_KEY ใน LiveStats) */
+const STATS_TAB_KEY = "glory_live_stats_tab";
 
 /**
  * หน้าที่บัญชีนี้เปิดได้: บทบาทจริงก่อน แล้วต่อด้วยหน้าที่ Owner เปิดดูได้ตามสิทธิ์ (ดูอย่างเดียว)
@@ -163,16 +159,16 @@ function Shell({ me }: { me: Me | null }) {
   const toast = useToast();
   // Owner ที่เปิดหน้าเจ้าของได้: Plan Slot Live และหน้าจองแบบดูอย่างเดียว ย้ายไปอยู่ในหน้าเจ้าของ > ตาราง slot
   const ownerPage = !!me?.owner && (me.owner.see.mc || me.owner.see.admin);
+  // Cost / ROI: Owner ที่เห็นตัวเลขเงินอย่างน้อยหนึ่งส่วน (จัดการ Mc / Admin / แพลนได้ · ดูอย่างเดียวไม่เห็นเงิน)
+  const costAccess = !!me?.owner && (me.owner.mc || me.owner.admin || me.owner.plan);
   const roles = rolesOf(me).filter((r) => !(ownerPage && isPreview(me, r)));
   const pages: Page[] = [
     // หน้าแรก (งานค้าง): Owner ที่จัดการ Mc หรือ Admin
     ...(ownerPage ? ["home" as const] : []),
     ...roles,
     ...(me && (me.admin || me.owner?.see.mc || me.owner?.see.proofs) ? ["proof" as const] : []),
-    // Data analytics: Owner ที่ติ๊กสิทธิ์ (จัดการได้ หรือ ดูได้อย่างเดียว)
-    ...(me?.owner?.see.analytics ? ["stats" as const] : []),
-    // Cost: Owner ที่เห็นตัวเลขเงินอย่างน้อยหนึ่งส่วน (จัดการ Mc / Admin / แพลนได้ · ดูอย่างเดียวไม่เห็นเงิน)
-    ...(me?.owner && (me.owner.mc || me.owner.admin || me.owner.plan) ? ["cost" as const] : []),
+    // Analytics = สถิติไลฟ์ (Owner ที่ติ๊ก Data analytics) + แท็บ Cost / ROI (Owner ที่เห็นตัวเลขเงินอย่างน้อยหนึ่งส่วน) — มีอย่างใดอย่างหนึ่งก็เข้าได้
+    ...(me?.owner?.see.analytics || costAccess ? ["stats" as const] : []),
     // CEO Live: บัญชี Marketing (Owner ที่เข้าสถิติไลฟ์ได้ ดูที่แท็บ CEO Live ในหน้านั้นแทน)
     ...(me?.marketing && !me.owner?.see.analytics ? ["ceo" as const] : []),
     // Plan Slot Live: Owner ที่มีสิทธิ์นี้แต่ไม่มีหน้าเจ้าของ (คนอื่นใช้ที่หน้าเจ้าของ > ตาราง slot)
@@ -184,9 +180,15 @@ function Shell({ me }: { me: Me | null }) {
     // เทรนนิ่ง (วิดีโอ product training + สไลด์บรีฟ + เฟรมไลฟ์สำหรับคนที่จัดการบรีฟการแต่งตัว): ทุกคนในทีมไลฟ์ (ไม่รวมบัญชีทีมอื่น)
     ...(me && (me.mc || me.admin || me.owner || me.marketing) ? ["training" as const] : []),
   ].sort((a, b) => PAGE_ORDER.indexOf(a) - PAGE_ORDER.indexOf(b));
-  // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก
-  const savedPage = useLocal(ROLE_KEY) as Page | null;
+  // หน้าที่ใช้ล่าสุด (จำไว้ในเครื่อง) ไม่เคยใช้ = บทบาทแรก · หน้า Cost เดิม = แท็บ Cost ในหน้า Analytics
+  const storedPage = useLocal(ROLE_KEY);
+  const savedPage = (storedPage === "cost" ? "stats" : storedPage) as Page | null;
   const page: Page | null = savedPage && pages.includes(savedPage) ? savedPage : pages[0] ?? null;
+  useEffect(() => {
+    if (storedPage !== "cost") return;
+    writeLocal(STATS_TAB_KEY, "cost");
+    writeLocal(ROLE_KEY, "stats");
+  }, [storedPage]);
   // หน้าเดิมที่ย้ายไปอยู่ในหน้าเจ้าของแล้ว (Plan Slot Live / ดูหน้าจองของ Mc, Admin) -> เปิดแท็บนั้นให้
   const pageKey = pages.join(",");
   useEffect(() => {
@@ -281,7 +283,7 @@ function Shell({ me }: { me: Me | null }) {
   const registered = pages.length > 0;
   const name = me && role ? displayName(me, role)
     : me && page === "proof" ? me.owner?.name || me.admin?.name || ""
-      : me && (page === "home" || page === "stats" || page === "cost" || page === "plan") ? me.owner?.name || ""
+      : me && (page === "home" || page === "stats" || page === "plan") ? me.owner?.name || ""
         : me && page === "ceo" ? me.marketing?.name || ""
           : me && page === "equipment" ? me.owner?.name || me.admin?.name || ""
             : me && page === "training" ? me.owner?.name || (me.mc ? `Mc ${me.mc.name}` : "") || me.admin?.name || me.marketing?.name || ""
@@ -425,8 +427,7 @@ function Shell({ me }: { me: Me | null }) {
       ) : null}
       {me && registered && page === "home" ? <HomeView go={goTo} /> : null}
       {me && registered && page === "proof" ? <ProofPage /> : null}
-      {me && registered && page === "stats" ? <LiveStats readOnly={!me.owner?.analytics} /> : null}
-      {me && registered && page === "cost" ? <CostPage /> : null}
+      {me && registered && page === "stats" ? <LiveStats readOnly={!me.owner?.analytics} analytics={!!me.owner?.see.analytics} cost={costAccess} /> : null}
       {me && registered && page === "plan" ? <PlanSlots readOnly={!me.owner?.plan} /> : null}
       {me && registered && page === "ceo" ? <CeoLive /> : null}
       {me && registered && page === "equipment" ? <EquipmentPage /> : null}

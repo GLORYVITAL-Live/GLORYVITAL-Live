@@ -349,8 +349,11 @@ export function ChangeText({ cur, prev, suffix, className, neutral = false, good
   );
 }
 
-/** การ์ดเทียบตัวชี้วัด: แท่งแนวนอน ช่วงนี้ vs ช่วงก่อน (ยาวตามค่าที่มากกว่า) */
-export function PairBars({ label, note, cur, prev, format, curName, prevName }: {
+/**
+ * การ์ดเทียบตัวชี้วัด: แท่งแนวนอน ช่วงนี้ vs ช่วงก่อน (ยาวตามค่าที่มากกว่า)
+ *   diff = ส่วนต่างเป็นหน่วยจริง (ช่วงนี้ − ช่วงก่อน) ใต้ % ที่เปลี่ยน เช่น +฿1,303,474 · ค่าที่เป็น % ส่งมาเป็น pp
+ */
+export function PairBars({ label, note, cur, prev, format, curName, prevName, diff }: {
   label: string;
   note?: string;
   cur: number | null;
@@ -358,14 +361,19 @@ export function PairBars({ label, note, cur, prev, format, curName, prevName }: 
   format: (v: number | null) => string;
   curName: string;
   prevName: string;
+  diff?: (gap: number) => string;
 }) {
   const max = Math.max(cur ?? 0, prev ?? 0) || 1;
   const rows = [[curName, cur, "var(--viz-cur)"], [prevName, prev, "var(--viz-prev)"]] as const;
+  const gap = cur !== null && prev !== null ? cur - prev : null;
   return (
     <div className="rounded-xl border bg-card p-3">
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-sm font-semibold">{label}</span>
-        <ChangeText cur={cur} prev={prev} />
+        <span className="flex flex-col items-end">
+          <ChangeText cur={cur} prev={prev} />
+          {diff && gap !== null ? <span className="text-xs tabular-nums text-muted-foreground">{gap > 0 ? "+" : gap < 0 ? "−" : "±"}{diff(Math.abs(gap))}</span> : null}
+        </span>
       </div>
       {note ? <div className="text-[11px] text-muted-foreground">{note}</div> : null}
       <div className="mt-2 space-y-1.5">

@@ -8,7 +8,7 @@ import { fmtDayMonth, fmtMonthShort, money, monthKey, monthLabel, num, parseKey 
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { ExportMenu } from "@/components/ExportMenu";
-import { BarChart, ChangeText, Legend, TableView } from "@/components/LiveCharts";
+import { BarChart, ChangeText, Legend, LineChart, TableView } from "@/components/LiveCharts";
 import { McCostView } from "@/components/McCostView";
 import { MonthPicker } from "@/components/MonthPicker";
 import { CountUp } from "@/components/motion";
@@ -36,6 +36,9 @@ function cutText(ms: number) {
 
 /** Cost/GMV ของแถวในตาราง: ไม่มี Cost ในระบบ = "-" (0.0% จะอ่านเหมือนไม่ต้องจ่ายอะไรเลย) */
 const rowPct = (cost: number, gmv: number | null) => (cost ? pct(costRatio(cost, gmv)) : "-");
+/** ROI ของไลฟ์ = GMV ÷ Cost (จ่าย ฿1 ได้ยอดขายกี่บาท) · ไม่มี GMV / Cost = null */
+const roiOf = (gmv: number | null, cost: number) => (gmv !== null && cost > 0 ? gmv / cost : null);
+const roiText = (v: number | null) => (v === null ? "-" : `×${v.toLocaleString("th-TH", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`);
 
 /** ค่าใช้จ่ายของแถวนี้มาจากอะไร */
 function RowDetail({ r }: { r: CostRow }) {
@@ -111,6 +114,10 @@ export function CostPage() {
       label: "Cost ต่อ GMV", value: costRatio(totals.cost, totals.gmv), format: pct,
       delta: <ChangeText cur={costRatio(totals.cost, totals.gmv)} prev={costRatio(prev.cost, prev.gmv)} suffix={vs} goodDown />,
       note: totals.gmv === null ? "ยังไม่มีไฟล์ Export ของเดือนนี้" : `GMV ${baht(totals.gmv)}`,
+    }, {
+      label: "ROI (GMV ÷ Cost)", value: roiOf(totals.gmv, totals.cost), format: roiText,
+      delta: <ChangeText cur={roiOf(totals.gmv, totals.cost)} prev={roiOf(prev.gmv, prev.cost)} suffix={vs} />,
+      note: roiOf(totals.gmv, totals.cost) === null ? "" : `จ่าย ฿1 ได้ยอดขาย ${baht(roiOf(totals.gmv, totals.cost))}`,
     }] : []),
     ...(see.mc ? [{ label: "ค่าจ้าง Mc", value: totals.mc, format: baht, delta: <ChangeText cur={totals.mc} prev={prev.mc} suffix={vs} neutral />, note: "" }] : []),
     ...(see.admin ? [{
@@ -148,7 +155,7 @@ export function CostPage() {
         </Notice>
       ) : null}
 
-      <dl className={cn("mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border", kpis.length === 5 ? "sm:grid-cols-5" : kpis.length === 4 ? "sm:grid-cols-4" : "sm:grid-cols-3")}>
+      <dl className={cn("mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border", kpis.length === 5 ? "sm:grid-cols-5" : kpis.length === 4 ? "sm:grid-cols-4" : kpis.length === 6 ? "sm:grid-cols-3 lg:grid-cols-6" : "sm:grid-cols-3")}>
         {kpis.map((k, i) => (
           // จำนวนช่องคี่ (มือถือ 2 คอลัมน์): ช่องแรก Cost รวมเต็มแถว
           <div key={k.label} className={cn("min-w-0 bg-card px-3 py-2.5", i === 0 && kpis.length % 2 === 1 && "col-span-2 sm:col-span-1")}>
@@ -258,12 +265,13 @@ function TrendSection({ trend, report, month, year }: { trend: CostPoint[] | nul
     ...(see.agency ? [{ name: "Agency", color: "var(--cost-agency)", values: trend.map((p) => p.agency) }] : []),
   ];
   const at = trend.findIndex((p) => p.month === month);
+  const roi = trend.map((p) => roiOf(p.gmv, p.cost));
   return (
     <section className="my-4 rounded-2xl border bg-card p-3">
       <h2 className="font-bold">Cost ปี {year}</h2>
       <p className="text-sm">
         รวม <b className="tabular-nums">{baht(yearCost)}</b>
-        {see.gmv && yearGmv !== null ? <> · GMV <span className="tabular-nums">{baht(yearGmv)}</span> · Cost/GMV <b className="tabular-nums">{pct(costRatio(yearCost, yearGmv))}</b></> : null}
+        {see.gmv && yearGmv !== null ? <> · GMV <span className="tabular-nums">{baht(yearGmv)}</span> · Cost/GMV <b className="tabular-nums">{pct(costRatio(yearCost, yearGmv))}</b> · ROI <b className="tabular-nums">{roiText(roiOf(yearGmv, yearCost))}</b></> : null}
       </p>
       <p className="mb-2 text-xs text-muted-foreground">
         * = ยังไม่จบเดือน · ~ = มีตัวเลขประมาณการ (Forecast){yearForecast ? ` รวม ${baht(yearForecast)}` : ""}{at >= 0 ? " · ชื่อตัวหนา = เดือนที่เลือก" : ""}
@@ -280,6 +288,19 @@ function TrendSection({ trend, report, month, year }: { trend: CostPoint[] | nul
         compare={false}
       />
       {series.length > 1 ? <div className="mt-1"><Legend series={series} /></div> : null}
+      {see.gmv && roi.some((v) => v !== null) ? (
+        <>
+          <h3 className="mt-4 text-sm font-semibold">ROI รายเดือน (GMV ÷ Cost)</h3>
+          <p className="text-xs text-muted-foreground">จ่ายค่าทีมไลฟ์ ฿1 ได้ยอดขายกี่บาท · สูงขึ้น = คุ้มขึ้น{at > 0 && roi[at] !== null && roi[at - 1] !== null ? <> · {monthLabel(month)} เทียบเดือนก่อน <ChangeText cur={roi[at]} prev={roi[at - 1]} /></> : null}</p>
+          <LineChart
+            label={`ROI รายเดือน ปี ${year}`} height={200}
+            categories={trend.map((p) => `${shortMonth(p.month)}${p.open ? "*" : p.forecast ? "~" : ""}`)}
+            tooltipTitles={trend.map((p) => monthLabel(p.month))}
+            series={[{ name: "ROI", color: "var(--viz-cur)", values: roi }]}
+            format={roiText} formatAxis={(v) => `×${v.toLocaleString("th-TH", { maximumFractionDigits: 1 })}`}
+          />
+        </>
+      ) : null}
       <TableView title="ดูรายเดือนเป็นตาราง">
         <Table>
           <TableHeader>
@@ -287,7 +308,7 @@ function TrendSection({ trend, report, month, year }: { trend: CostPoint[] | nul
               <TableHead>เดือน</TableHead>
               {series.map((s) => <TableHead key={s.name} className="text-right">{s.name}</TableHead>)}
               <TableHead className="text-right">Cost รวม</TableHead>
-              {see.gmv ? <><TableHead className="text-right">GMV</TableHead><TableHead className="text-right">Cost/GMV</TableHead></> : null}
+              {see.gmv ? <><TableHead className="text-right">GMV</TableHead><TableHead className="text-right">Cost/GMV</TableHead><TableHead className="text-right">ROI</TableHead><TableHead className="text-right">ROI MoM</TableHead></> : null}
               <TableHead className="text-right">ในนี้เป็นประมาณการ</TableHead>
             </TableRow>
           </TableHeader>
@@ -297,7 +318,13 @@ function TrendSection({ trend, report, month, year }: { trend: CostPoint[] | nul
                 <TableCell className={cn(i === at && "font-semibold")}>{monthLabel(p.month)}{p.open ? <span className="text-xs text-muted-foreground"> (ยังไม่จบ)</span> : null}</TableCell>
                 {series.map((s) => <TableCell key={s.name} className="text-right tabular-nums">{baht(s.values[i])}</TableCell>)}
                 <TableCell className="text-right font-semibold tabular-nums">{baht(p.cost)}</TableCell>
-                {see.gmv ? <><TableCell className="text-right tabular-nums">{baht(p.gmv)}</TableCell><TableCell className="text-right tabular-nums">{pct(costRatio(p.cost, p.gmv))}</TableCell></> : null}
+                {see.gmv ? (
+                  <>
+                    <TableCell className="text-right tabular-nums">{baht(p.gmv)}</TableCell><TableCell className="text-right tabular-nums">{pct(costRatio(p.cost, p.gmv))}</TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums">{roiText(roi[i])}</TableCell>
+                    <TableCell className="text-right">{i > 0 ? <ChangeText cur={roi[i]} prev={roi[i - 1]} /> : null}</TableCell>
+                  </>
+                ) : null}
                 <TableCell className={cn("text-right tabular-nums", p.forecast ? "font-semibold text-warning-foreground" : "text-muted-foreground")}>{p.forecast ? baht(p.forecast) : "-"}</TableCell>
               </TableRow>
             ))}
@@ -307,7 +334,12 @@ function TrendSection({ trend, report, month, year }: { trend: CostPoint[] | nul
               <TableHead className="font-semibold text-foreground">รวม</TableHead>
               {series.map((s) => <TableCell key={s.name} className="text-right font-semibold tabular-nums">{baht(s.values.reduce<number>((a, v) => a + (v ?? 0), 0))}</TableCell>)}
               <TableCell className="text-right font-semibold tabular-nums">{baht(yearCost)}</TableCell>
-              {see.gmv ? <><TableCell className="text-right font-semibold tabular-nums">{baht(yearGmv)}</TableCell><TableCell className="text-right font-semibold tabular-nums">{pct(costRatio(yearCost, yearGmv))}</TableCell></> : null}
+              {see.gmv ? (
+                <>
+                  <TableCell className="text-right font-semibold tabular-nums">{baht(yearGmv)}</TableCell><TableCell className="text-right font-semibold tabular-nums">{pct(costRatio(yearCost, yearGmv))}</TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">{roiText(roiOf(yearGmv, yearCost))}</TableCell><TableCell />
+                </>
+              ) : null}
               <TableCell className="text-right font-semibold tabular-nums">{yearForecast ? baht(yearForecast) : "-"}</TableCell>
             </TableRow>
           </TableFooter>
