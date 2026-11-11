@@ -7,7 +7,7 @@ import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { fmtDayShort, parseKey } from "@/lib/format";
 import { shopeeCrew, tiktokOnly, withLiveTeam } from "@/lib/live-team";
-import { platformLabel } from "@/lib/platform";
+import { isShopeePlatform, platformLabel } from "@/lib/platform";
 import { createAdminClient } from "@/lib/supabase/server";
 import { addDays, fmtDay, rangeText, type BookRange } from "@/lib/window";
 
@@ -526,7 +526,9 @@ export async function sendPreLiveReminders(now = Date.now(), dryRun = false) {
     items.push({
       email, kind: "reminder", page: s.side, dedupe: `soon:${s.side}:${s.id}`,
       title: `อีก ${mins} นาทีไลฟ์ ${hm(s.start_time)}–${hm(s.end_time)} ${platformLabel(s.platform)}`,
-      body: pairName ? `คู่ไลฟ์: ${s.side === "mc" ? pairName : `Mc ${pairName}`}` : `${s.side === "mc" ? "ยังไม่มี Admin" : "ยังไม่มี Mc"} ใน slot นี้`,
+      // คิว Shopee ไม่มี Admin คู่ (ไม่ใช่ "ยังไม่มี")
+      body: isShopeePlatform(s.platform) && s.side === "mc" ? "คิว Shopee · เตรียมเข้าไลฟ์ให้ตรงเวลา"
+        : pairName ? `คู่ไลฟ์: ${s.side === "mc" ? pairName : `Mc ${pairName}`}` : `${s.side === "mc" ? "ยังไม่มี Admin" : "ยังไม่มี Mc"} ใน slot นี้`,
     });
   }
   // dryRun = ดูว่าจะส่งอะไร (ไม่ส่งจริง) ใช้ตรวจก่อน

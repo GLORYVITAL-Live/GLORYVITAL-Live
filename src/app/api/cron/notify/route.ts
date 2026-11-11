@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { processCalendarJobs } from "@/lib/calendar";
 import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySummary, sendWorkReminders } from "@/lib/notifications";
 import { sendLoanLiveAlerts, sendLoanReminders } from "@/lib/loans-db";
+import { withSyncLock } from "@/lib/lock";
 import { sendReceiptReminders } from "@/lib/receipts-db";
 import { processSheetJobs } from "@/lib/sheet-sync";
 import { scanSlips } from "@/lib/slips-db";
@@ -9,44 +10,50 @@ import { scanTawi } from "@/lib/tawi";
 
 export const maxDuration = 60;
 
-// เตือนก่อนไลฟ์ — GitHub Actions เรียกทุก 15 นาที (.github/workflows/notify.yml)
+// เตือนก่อนไลฟ์ + งานรอบ 15 นาที — เว็บบน Render เรียกเองทุก 15 นาที (src/lib/cron-timer.ts)
+//   GitHub Actions เรียกเป็นรอบสำรอง (.github/workflows/notify.yml — ถูกหน่วงจนเหลือวันละไม่กี่รอบ)
 //   ต้องส่ง header  Authorization: Bearer <CRON_SECRET>  (ค่าเดียวกับในโฮสต์ ใส่ไว้ใน GitHub > Settings > Secrets)
-//   Vercel cron แบบฟรีรันได้วันละครั้ง จึงใช้ GitHub เรียกแทน (เวลาอาจคลาด 5–15 นาที)
+//   มาพร้อมกันสองที่ = รอบหลังข้าม (ล็อก cron-notify) ไม่ทำงานซ้ำ
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
     return NextResponse.json({ ok: false }, { status: 401 });
   }
   try {
-    const reminders = await sendPreLiveReminders();
-    // งานค้าง (หลักฐาน / GMV / ยังไม่แชร์ปฏิทิน) — พลาดไม่กระทบเตือนก่อนไลฟ์
-    const fail = (err: unknown) => ({ error: String((err as Error)?.message ?? err) });
-    const work = await sendWorkReminders().then((x) => ({ sent: x.sent })).catch(fail);
-    // แจ้ง Owner ทันที (slot ว่างใกล้ไลฟ์ / ข้อมูลผิด) + สรุปรายสัปดาห์ (อาทิตย์เย็น)
-    const owner = await sendOwnerAlerts().then((x) => ({ sent: x.sent })).catch(fail);
-    const weekly = await sendWeeklySummary().then((x) => ({ sent: x.sent })).catch(fail);
-    // ยังไม่ส่งเอกสารรับเงิน (เดือนที่บังคับ) → เตือนทุก 3 วัน
-    const receipt = await sendReceiptReminders().then((x) => ({ sent: x.sent })).catch(fail);
-    // สลิปโอนเงินใหม่ในโฟลเดอร์ Slip (Drive) → จับคู่ + แจ้งเจ้าตัว · ชั่วโมงละครั้ง (รอบที่ตรงต้นชั่วโมง)
-    const onTheHour = new Date().getUTCMinutes() < 15;
-    const slips = onTheHour
-      ? await scanSlips().then((x) => ({ matched: x.matched, notified: x.notified })).catch(fail)
-      : null;
-    // ใบ 50 ทวิใหม่ใน Drive → จับคู่ + แจ้งเจ้าตัว · ชั่วโมงละครั้ง: คนที่ส่งเอกสารรับเงินไว้ก่อน ไม่ต้องรอ cron เช้า
-    const tawi = onTheHour
-      ? await scanTawi().then((x) => ({ added: x.added, matched: x.matched, notified: x.notified })).catch(fail)
-      : null;
-    // ยืมอุปกรณ์: ใกล้ถึง / เลยกำหนดคืน → ผู้ยืม (+ คนที่อนุมัติได้ ถ้าเลยกำหนด)
-    const loans = await sendLoanReminders().then((sent) => ({ sent })).catch(fail);
-    // เพิ่ม / ย้ายไลฟ์ทีหลังจนชนของที่อนุมัติให้ยืมไปแล้ว → คนจัดการอุปกรณ์
-    const loanLive = await sendLoanLiveAlerts().then((sent) => ({ sent })).catch(fail);
-    // งานเขียนชีตที่ค้าง (เช่น แท็บเปิดตัวกรองอยู่ตอนเพิ่ม slot) → ลองใหม่ทุก 15 นาที
-    const sheet = await processSheetJobs().catch(fail);
-    // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
-    const calendar = await processCalendarJobs(30, 15_000).catch(fail);
-    await pruneNotifications().catch(() => undefined);
-    return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, calendar });
+    const res = await withSyncLock("cron-notify", run, 1_000);
+    return res ?? NextResponse.json({ ok: true, skipped: "รอบก่อนยังทำงานอยู่" });
   } catch (err) {
     return NextResponse.json({ ok: false, message: String((err as Error)?.message ?? err) }, { status: 500 });
   }
+}
+
+async function run() {
+  const reminders = await sendPreLiveReminders();
+  // งานค้าง (หลักฐาน / GMV / ยังไม่แชร์ปฏิทิน) — พลาดไม่กระทบเตือนก่อนไลฟ์
+  const fail = (err: unknown) => ({ error: String((err as Error)?.message ?? err) });
+  const work = await sendWorkReminders().then((x) => ({ sent: x.sent })).catch(fail);
+  // แจ้ง Owner ทันที (slot ว่างใกล้ไลฟ์ / ข้อมูลผิด) + สรุปรายสัปดาห์ (อาทิตย์เย็น)
+  const owner = await sendOwnerAlerts().then((x) => ({ sent: x.sent })).catch(fail);
+  const weekly = await sendWeeklySummary().then((x) => ({ sent: x.sent })).catch(fail);
+  // ยังไม่ส่งเอกสารรับเงิน (เดือนที่บังคับ) → เตือนทุก 3 วัน
+  const receipt = await sendReceiptReminders().then((x) => ({ sent: x.sent })).catch(fail);
+  // สลิปโอนเงินใหม่ในโฟลเดอร์ Slip (Drive) → จับคู่ + แจ้งเจ้าตัว · ชั่วโมงละครั้ง (รอบที่ตรงต้นชั่วโมง)
+  const onTheHour = new Date().getUTCMinutes() < 15;
+  const slips = onTheHour
+    ? await scanSlips().then((x) => ({ matched: x.matched, notified: x.notified })).catch(fail)
+    : null;
+  // ใบ 50 ทวิใหม่ใน Drive → จับคู่ + แจ้งเจ้าตัว · ชั่วโมงละครั้ง: คนที่ส่งเอกสารรับเงินไว้ก่อน ไม่ต้องรอ cron เช้า
+  const tawi = onTheHour
+    ? await scanTawi().then((x) => ({ added: x.added, matched: x.matched, notified: x.notified })).catch(fail)
+    : null;
+  // ยืมอุปกรณ์: ใกล้ถึง / เลยกำหนดคืน → ผู้ยืม (+ คนที่อนุมัติได้ ถ้าเลยกำหนด)
+  const loans = await sendLoanReminders().then((sent) => ({ sent })).catch(fail);
+  // เพิ่ม / ย้ายไลฟ์ทีหลังจนชนของที่อนุมัติให้ยืมไปแล้ว → คนจัดการอุปกรณ์
+  const loanLive = await sendLoanLiveAlerts().then((sent) => ({ sent })).catch(fail);
+  // งานเขียนชีตที่ค้าง (เช่น แท็บเปิดตัวกรองอยู่ตอนเพิ่ม slot) → ลองใหม่ทุก 15 นาที
+  const sheet = await processSheetJobs().catch(fail);
+  // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
+  const calendar = await processCalendarJobs(30, 15_000).catch(fail);
+  await pruneNotifications().catch(() => undefined);
+  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, calendar });
 }
