@@ -341,7 +341,7 @@ function Shell({ me }: { me: Me | null }) {
     {showNav ? (
       <SideNav
         items={pages.map((p) => ({ id: p, label: navLabel(p), icon: PAGE_ICON[p], group: PAGE_GROUP[p], badge: badgeOf(badges, p), badgeTitle: BADGE_TITLE[p as keyof Badges] }))}
-        active={page} onPick={(id) => setRole(id as Page)} sub={mode?.sub}
+        active={page} onPick={(id) => setRole(id as Page)}
         collapsed={sideCollapsed} onToggle={() => writeLocal(SIDE_KEY, sideCollapsed ? "0" : "1")}
       />
     ) : null}

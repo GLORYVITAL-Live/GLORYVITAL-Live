@@ -15,14 +15,12 @@ export type SideItem = { id: string; label: string; icon: LucideIcon; badge?: nu
 
 export const SIDE_W = { open: 240, closed: 72 } as const;
 
-export function SideNav({ items, active, onPick, collapsed, onToggle, sub }: {
+export function SideNav({ items, active, onPick, collapsed, onToggle }: {
   items: SideItem[];
   active: string | null;
   onPick: (id: string) => void;
   collapsed: boolean;
   onToggle: () => void;
-  /** คำใต้โลโก้ เช่น "Owner dashboard" */
-  sub?: string;
 }) {
   const list = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState<{ top: number; height: number } | null>(null);
@@ -47,13 +45,9 @@ export function SideNav({ items, active, onPick, collapsed, onToggle, sub }: {
       className="fixed inset-y-0 left-0 z-30 hidden flex-col border-r bg-card transition-[width] duration-300 ease-out motion-reduce:transition-none lg:flex"
       style={{ width: collapsed ? SIDE_W.closed : SIDE_W.open }}
     >
-      <div className={cn("flex items-center gap-2 pt-[calc(16px+env(safe-area-inset-top))] pb-3", collapsed ? "flex-col px-2" : "px-4")}>
-        {collapsed ? null : (
-          <div className="min-w-0 flex-1">
-            <BrandLogo />
-            {sub ? <span className="mt-0.5 block truncate text-[11px] font-medium text-muted-foreground">{sub}</span> : null}
-          </div>
-        )}
+      {/* หัวเมนู: โลโก้ (สูงเท่าปุ่มย่อ) + ปุ่มย่อ · เส้นคั่นก่อนรายการเมนู (ไม่มีชื่อหน้าใต้โลโก้ — ซ้ำกับเมนูที่เลือกอยู่) */}
+      <div className={cn("mb-3 flex h-16 shrink-0 items-center gap-2 border-b", collapsed ? "justify-center px-2" : "justify-between pr-3 pl-5")}>
+        {collapsed ? null : <BrandLogo className="h-7 sm:h-7" />}
         <button
           type="button" onClick={onToggle}
           aria-label={collapsed ? "ขยายเมนู" : "ย่อเมนู"} title={collapsed ? "ขยายเมนู" : "ย่อเมนู"}
