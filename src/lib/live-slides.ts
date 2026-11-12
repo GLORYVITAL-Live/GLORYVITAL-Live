@@ -8,7 +8,10 @@ import { analyze } from "@/lib/live-insights";
 import { platformSeries, totalSeries } from "@/lib/live-lines";
 import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
 import { DAY_KINDS, dayKindLabel, dayKindStats, type DayTag } from "@/lib/live-days";
-import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop } from "@/lib/live-heat";
+import {
+  HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatImpressionsPerHour, heatOrdersPerHour, heatPerHour, heatSecOf, heatTop,
+  heatViewersPerHour, type HeatCell,
+} from "@/lib/live-heat";
 import { PLAN_FULL, planVsActual } from "@/lib/live-plan";
 import { AGENCY_OURS, mergePlatforms, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
 import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Platform, type Totals } from "@/lib/live-stats";
@@ -834,17 +837,31 @@ function heatFill(p: number, faded: boolean) {
 }
 
 /**
- * ช่วงเวลาไหนขายดี (เหมือนเว็บ · src/lib/live-heat.ts): ตาราง ชั่วโมง × วันในสัปดาห์ ค่า = GMV/ชม. (เข้ม = สูง) + 5 อันดับขายดี (ขวา)
- *   แสดงเฉพาะชั่วโมงที่มีไลฟ์ · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. สีจาง ไม่จัดอันดับ
+ * ช่วงเวลาไหนขายดี (เหมือนเว็บ · src/lib/live-heat.ts): ตาราง ชั่วโมง × วันในสัปดาห์ (เข้ม = สูง) + 5 อันดับ (ขวา)
+ *   ค่า = GMV/ชม. (หน้าแรก) · ออเดอร์/ชม. · Viewers/ชม. · Impressions/ชม. (เฉพาะ TikTok) — หน้าละตัวชี้วัด เหมือนตัวเลือกในเว็บ (ผู้ใช้ขอ 2026-11-12)
+ *   แสดงเฉพาะชั่วโมงที่มีไลฟ์ · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. สีจาง ไม่จัดอันดับ (Impressions = ชั่วโมงไลฟ์ TikTok)
  */
-function addHeatSlide(pres: PptxGenJS, title: string, sessions: LiveSession[]) {
+const HEAT_SLIDE = {
+  gmv: { value: heatPerHour, unit: "GMV/ชม.", head: "ขายดีสุด (GMV/ชม.)", word: "GMV", metric: "perHour" },
+  orders: { value: heatOrdersPerHour, unit: "ออเดอร์/ชม.", head: "ออเดอร์เยอะสุด (ต่อชม.)", word: "ออเดอร์", metric: "ordersPerHour" },
+  viewers: { value: heatViewersPerHour, unit: "Viewers/ชม.", head: "คนดูเยอะสุด (Viewers/ชม.)", word: "Viewers", metric: "viewersPerHour" },
+  impressions: { value: heatImpressionsPerHour, unit: "Impressions/ชม. (TikTok)", head: "Impressions เยอะสุด (ต่อชม.)", word: "Impressions", metric: "impressionsPerHour" },
+} as const;
+type HeatSlideKind = keyof typeof HEAT_SLIDE;
+
+function addHeatSlide(pres: PptxGenJS, title: string, sessions: LiveSession[], kind: HeatSlideKind = "gmv") {
   if (!sessions.length) return;
-  const grid = heatGrid(sessions.map((x) => ({ startedAt: x.startedAt, durationSec: x.durationSec, gmv: x.gmv })));
-  const enough = (c: { sec: number }) => c.sec >= HEAT_MIN_SEC;
-  const max = Math.max(0, ...grid.flat().filter(enough).map((c) => heatPerHour(c) ?? 0));
-  const top = heatTop(grid, heatPerHour, 5);
+  const grid = heatGrid(sessions.map((x) => ({
+    startedAt: x.startedAt, durationSec: x.durationSec, gmv: x.gmv, orders: x.orders, viewers: x.viewers, impressions: x.impressions,
+  })));
+  const k = HEAT_SLIDE[kind];
+  const valueOf = k.value, unit = k.unit;
+  const secOf = (c: HeatCell) => heatSecOf(k.metric, c);
+  const enough = (c: HeatCell) => secOf(c) >= HEAT_MIN_SEC;
+  const max = Math.max(0, ...grid.flat().filter(enough).map((c) => valueOf(c) ?? 0));
+  const top = heatTop(grid, valueOf, 5, secOf);
   const rank = new Map(top.slice(0, 3).map((x, i) => [`${x.day}|${x.hour}`, i + 1]));
-  const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => grid.some((col) => heatPerHour(col[h]) !== null));
+  const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => grid.some((col) => valueOf(col[h]) !== null));
   if (!hours.length) return;
   const s = pres.addSlide({ masterName: "CONTENT" });
   s.addText(title, { placeholder: "title" });
@@ -854,7 +871,7 @@ function addHeatSlide(pres: PptxGenJS, title: string, sessions: LiveSession[]) {
     ...hours.map((h): PptxGenJS.TableRow => [
       { text: heatHour(h), options: { align: "right", color: C.muted } },
       ...grid.map((col, d) => {
-        const c = col[h], val = heatPerHour(c), r = rank.get(`${d}|${h}`);
+        const c = col[h], val = valueOf(c), r = rank.get(`${d}|${h}`);
         if (val === null) return { text: "", options: { fill: { color: "FAF5F7" } } };
         const p = max ? Math.min(1, val / max) : 0;
         return {
@@ -869,13 +886,16 @@ function addHeatSlide(pres: PptxGenJS, title: string, sessions: LiveSession[]) {
     rowH: Math.min(0.3, 5.25 / rows.length), border: { type: "solid", pt: 0.5, color: C.white }, valign: "middle", margin: [0, 0.04, 0, 0.04],
   });
   s.addShape(pres.ShapeType.roundRect, { x: 9.2, y: 1.3, w: W - M - 9.2, h: 5.2, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
-  s.addText("ขายดีสุด (GMV/ชม.)", { x: 9.4, y: 1.45, w: 3.3, h: 0.4, fontSize: 16, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+  s.addText(k.head, { x: 9.4, y: 1.45, w: 3.3, h: 0.4, fontSize: 16, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
   s.addText(top.length ? top.flatMap((x, i) => [
     { text: `${i + 1}. ${HEAT_WEEKDAY_NAMES[x.day]} ${heatHour(x.hour)}–${heatHour(x.hour + 1)}`, options: { bold: true, breakLine: true } },
-    { text: `${fmt("gmv", x.v)}/ชม. · ไลฟ์รวม ${(x.cell.sec / 3600).toFixed(1)} ชม.`, options: { color: C.muted, breakLine: i < top.length - 1 } },
+    {
+      text: `${kind === "gmv" ? fmt("gmv", x.v) : Math.round(x.v ?? 0).toLocaleString("th-TH")}/ชม. · ไลฟ์${kind === "impressions" ? " TikTok" : ""}รวม ${(secOf(x.cell) / 3600).toFixed(1)} ชม.`,
+      options: { color: C.muted, breakLine: i < top.length - 1 },
+    },
   ]) : [{ text: "ยังไม่มีช่วงเวลาที่ไลฟ์รวมถึง 2 ชม.", options: { color: C.muted } }],
   { x: 9.4, y: 1.9, w: 3.3, h: 4.45, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, valign: "top", paraSpaceAfter: 6, fit: "shrink", isTextBox: true });
-  s.addText("ไฟล์ Export ไม่มียอดรายชั่วโมง จึงกระจาย GMV ของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน · ช่องสีจาง = ไลฟ์รวมไม่ถึง 2 ชม. · #1–3 = อันดับ", {
+  s.addText(`ค่าในตาราง = ${unit} · ไฟล์ Export ไม่มียอดรายชั่วโมง จึงกระจาย ${k.word} ของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน · ช่องสีจาง = ไลฟ์รวมไม่ถึง 2 ชม. · #1–3 = อันดับ`, {
     x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 10, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
   });
 }
@@ -1221,7 +1241,14 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
   addAgencySlides(pres, target, o.agency);
 
   // 7.7) ช่วงเวลาไหนขายดี + วันปกติ vs วันแคมเปญ (เหมือนหน้ารายเดือน / ทั้งปีบนเว็บ)
-  if (o.heat) addHeatSlide(pres, o.heat.title, o.a);
+  if (o.heat) {
+    // หน้าละตัวชี้วัด เหมือนตัวเลือกในเว็บ: ขายดี (GMV) → ออเดอร์ → คนดู → Impressions (เฉพาะเมื่อมีไลฟ์ TikTok)
+    const titled = (word: string) => o.heat!.title.replace(/^ช่วงเวลาไหนขายดี/, `ช่วงเวลาไหน${word}`);
+    addHeatSlide(pres, o.heat.title, o.a);
+    addHeatSlide(pres, titled("ออเดอร์เยอะ"), o.a, "orders");
+    addHeatSlide(pres, titled("คนดูเยอะ"), o.a, "viewers");
+    if (o.a.some((x) => x.impressions !== null)) addHeatSlide(pres, titled("Impressions เยอะ"), o.a, "impressions");
+  }
   if (o.dayKinds) addDayKindSlide(pres, o.dayKinds.title, o.a, o.dayKinds.tags);
 
   // 8) Top 5 ไลฟ์ของช่วงหลัก

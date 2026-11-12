@@ -19,7 +19,10 @@ import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown"
 import { PLAN_FULL, planVsActual, type PlanGroupCheck } from "@/lib/live-plan";
 import { isShopeePlatform, slotPlatformOf } from "@/lib/platform";
 import { DAY_KINDS, dayKindLabel, dayKindStats, liveDay, tagKey, type DayTag } from "@/lib/live-days";
-import { HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatPerHour, heatTop, type HeatCell } from "@/lib/live-heat";
+import {
+  HEAT_METRICS, HEAT_MIN_SEC, HEAT_WEEKDAY_NAMES, HEAT_WEEKDAYS, heatGrid, heatHour, heatImpressionsPerHour, heatOrdersPerHour, heatPerHour, heatSecOf, heatTop, heatValue,
+  heatViewersPerHour, type HeatCell, type HeatMetric,
+} from "@/lib/live-heat";
 import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
 import { ownerText } from "@/lib/plan-clash";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
@@ -1161,26 +1164,38 @@ function LineSection({ month, sessions, replay, spans }: { month: string; sessio
 
 /**
  * ช่วงเวลาไหนขายดี: ตาราง ชั่วโมง (แถว เริ่ม 06:00) × วันในสัปดาห์ (คอลัมน์) สีเดียวไล่ระดับ เข้ม = ค่าสูง (src/lib/live-heat.ts)
- *   GMV/ชม. (ค่าเริ่ม) หรือ GMV รวม · กรองกลุ่มได้ (ทีมเรา / Agency) · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. สีจาง ไม่จัดอันดับ
+ *   GMV/ชม. (ค่าเริ่ม) / GMV รวม / ออเดอร์ / Viewers / Impressions (ต่อชั่วโมง + รวม · ผู้ใช้ขอ 2026-11-12)
+ *     Impressions มีเฉพาะ TikTok: ต่อชั่วโมงหารด้วยชั่วโมงไลฟ์ TikTok (heatSecOf)
+ *   กรองกลุ่มได้ (ทีมเรา / Agency) · ค่าต่อชั่วโมง: ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. สีจาง ไม่จัดอันดับ
  *   แตะ / ชี้ช่องเพื่อดูตัวเลข · ตารางตัวเลขเต็มอยู่ใน "ดูเป็นตาราง"
  */
 function HeatSection({ title, sessions, spans }: { title: string; sessions: LiveSession[]; spans?: OwnerSpan[] }) {
-  const [metric, setMetric] = useState<"perHour" | "gmv">("perHour");
+  const [metric, setMetric] = useState<HeatMetric>("perHour");
   const [group, setGroup] = useState("all");
   const [pick, setPick] = useState<{ day: number; hour: number } | null>(null);
   const shares = spans ? agencySharesOf(sessions, spans) : null;
   const groups = shares ? [...new Set([...shares.values()].flatMap((m) => [...m.keys()]))].sort((a, b) => Number(a !== AGENCY_OURS) - Number(b !== AGENCY_OURS) || a.localeCompare(b)) : [];
   const active = groups.includes(group) ? group : "all";
-  const grid = heatGrid(sessions.map((s) => ({ startedAt: s.startedAt, durationSec: s.durationSec, gmv: s.gmv, weight: active === "all" ? 1 : shares?.get(s)?.get(active) ?? 0 })));
-  const value = (c: HeatCell) => (metric === "perHour" ? heatPerHour(c) : c.gmv > 0 ? c.gmv : null);
-  const enough = (c: HeatCell) => metric === "gmv" || c.sec >= HEAT_MIN_SEC;
+  const grid = heatGrid(sessions.map((s) => ({
+    startedAt: s.startedAt, durationSec: s.durationSec, gmv: s.gmv, orders: s.orders, viewers: s.viewers, impressions: s.impressions,
+    weight: active === "all" ? 1 : shares?.get(s)?.get(active) ?? 0,
+  })));
+  const def = HEAT_METRICS.find((m) => m.key === metric)!;
+  const value = (c: HeatCell) => heatValue(metric, c);
+  // ชั่วโมงไลฟ์ของค่าที่เลือก (Impressions = เฉพาะไลฟ์ TikTok)
+  const secOf = (c: HeatCell) => heatSecOf(metric, c);
+  const enough = (c: HeatCell) => !def.perHour || secOf(c) >= HEAT_MIN_SEC;
   // สเกลสีจากช่องที่ข้อมูลพอ (ช่องตัวอย่างน้อยค่าแกว่ง ไม่ให้กินสเกล)
   const max = Math.max(0, ...grid.flat().filter(enough).map((c) => value(c) ?? 0));
-  const top = heatTop(grid, value, 5);
+  const top = heatTop(grid, value, 5, secOf);
+  const noTikTok = !!def.tiktok && !grid.flat().some((c) => c.impSec > 0);
   const rank = new Map(top.slice(0, 3).map((x, i) => [`${x.day}|${x.hour}`, i + 1]));
   const sel = pick ?? (top[0] ? { day: top[0].day, hour: top[0].hour } : null);
   const selCell = sel ? grid[sel.day][sel.hour] : null;
   const baht = (v: number | null) => fmtMetric("baht", v);
+  const int = (v: number | null) => fmtMetric("int", v === null ? null : Math.round(v));
+  /** ค่าของตัวชี้วัดที่เลือก + หน่วย (ต่อชั่วโมง = "/ชม.") */
+  const shown = (v: number | null) => `${def.kind === "baht" ? baht(v) : int(v)}${def.perHour && v !== null ? "/ชม." : ""}`;
   const slotText = (day: number, hour: number) => `${HEAT_WEEKDAY_NAMES[day]} ${heatHour(hour)}–${heatHour(hour + 1)}`;
   const groupLabel = (k: string) => (k === AGENCY_OURS ? "ทีมเรา (ของเรา / In house)" : ownerText(k));
   const pctOf = (v: number) => Math.round(12 + 88 * Math.min(1, max ? v / max : 0));
@@ -1199,11 +1214,13 @@ function HeatSection({ title, sessions, spans }: { title: string; sessions: Live
               </SelectContent>
             </Select>
           ) : null}
-          <ToggleGroup type="single" spacing={1} value={metric} onValueChange={(v) => { if (v) setMetric(v as "perHour" | "gmv"); }} aria-label="ค่าในตาราง" className="rounded-full border bg-card p-0.5">
-            {[["perHour", "GMV/ชม."], ["gmv", "GMV รวม"]].map(([id, text]) => (
-              <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+          {/* ตัวชี้วัด: dropdown (4 แบบ · GMV / Viewers ทั้งต่อชั่วโมงและรวม) */}
+          <Select value={metric} onValueChange={(v) => { setMetric(v as HeatMetric); setPick(null); }}>
+            <SelectTrigger aria-label="ค่าในตาราง" className="h-8 min-w-32 rounded-full bg-card text-[13px]"><SelectValue /></SelectTrigger>
+            <SelectContent position="popper">
+              {HEAT_METRICS.map((m) => <SelectItem key={m.key} value={m.key}>{m.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -1214,15 +1231,16 @@ function HeatSection({ title, sessions, spans }: { title: string; sessions: Live
               <span className="w-4 shrink-0 text-right font-bold tabular-nums">{i + 1}</span>
               <span className="min-w-0">
                 <span className="font-semibold">{slotText(x.day, x.hour)}</span>{" "}
-                <span className="tabular-nums text-muted-foreground">{baht(x.v)}{metric === "perHour" ? "/ชม." : ""} · ไลฟ์รวม {(x.cell.sec / 3600).toFixed(1)} ชม.</span>
+                <span className="tabular-nums text-muted-foreground">{shown(x.v)} · ไลฟ์{def.tiktok ? " TikTok" : ""}รวม {(secOf(x.cell) / 3600).toFixed(1)} ชม.</span>
               </span>
             </li>
           ))}
         </ol>
-      ) : <p className="mb-3 text-sm text-muted-foreground">ยังไม่มีช่วงเวลาที่ไลฟ์รวมถึง 2 ชม. ลองดูช่วงที่ยาวขึ้น (ทั้งปี)</p>}
+      ) : noTikTok ? <p className="mb-3 text-sm text-muted-foreground">Impressions มีเฉพาะไลฟ์ TikTok — ช่วงนี้ / ตัวกรองนี้ไม่มีไลฟ์ TikTok</p>
+        : <p className="mb-3 text-sm text-muted-foreground">ยังไม่มีช่วงเวลาที่ไลฟ์รวมถึง 2 ชม. ลองดูช่วงที่ยาวขึ้น (ทั้งปี)</p>}
 
       <div
-        role="img" aria-label={`ตาราง${title} แถว = ชั่วโมง คอลัมน์ = วัน${top[0] ? ` ขายดีสุด ${slotText(top[0].day, top[0].hour)}` : ""}`}
+        role="img" aria-label={`ตาราง${title} (${def.label}) แถว = ชั่วโมง คอลัมน์ = วัน${top[0] ? ` สูงสุด ${slotText(top[0].day, top[0].hour)}` : ""}`}
         className="grid grid-cols-[2.75rem_repeat(7,minmax(0,1fr))] gap-0.5 text-[11px] select-none"
       >
         <div />
@@ -1253,22 +1271,43 @@ function HeatSection({ title, sessions, spans }: { title: string; sessions: Live
       <div className="mt-2 rounded-lg border bg-muted/30 px-2.5 py-2 text-xs tabular-nums" aria-live="polite">
         {sel && selCell ? (
           <>
-            <span className="font-semibold">{slotText(sel.day, sel.hour)}</span>
-            {" · "}GMV/ชม. {baht(heatPerHour(selCell))} · GMV {baht(selCell.gmv || null)} · ไลฟ์รวม {(selCell.sec / 3600).toFixed(1)} ชม. ({selCell.lives} ไลฟ์)
-            {selCell.sec && selCell.sec < HEAT_MIN_SEC ? <span className="text-muted-foreground"> · ตัวอย่างน้อย</span> : null}
+            <div>
+              <span className="font-semibold">{slotText(sel.day, sel.hour)}</span>
+              <span className="text-muted-foreground"> · ไลฟ์รวม {(selCell.sec / 3600).toFixed(1)} ชม. ({selCell.lives} ไลฟ์)</span>
+              {secOf(selCell) && secOf(selCell) < HEAT_MIN_SEC ? <span className="text-muted-foreground"> · ตัวอย่างน้อย</span> : null}
+            </div>
+            {/* ทุกตัวชี้วัดของช่องนี้: ต่อชั่วโมง / รวม (ตัวที่เลือกอยู่เป็นตัวหนา) */}
+            <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+              {([
+                ["GMV", "perHour", baht(heatPerHour(selCell)), baht(selCell.gmv || null)],
+                ["ออเดอร์", "ordersPerHour", int(heatOrdersPerHour(selCell)), int(selCell.orders || null)],
+                ["Viewers", "viewersPerHour", int(heatViewersPerHour(selCell)), int(selCell.viewers || null)],
+                ...(selCell.impSec ? [["Impressions", "impressionsPerHour", int(heatImpressionsPerHour(selCell)), int(selCell.impressions || null)] as const] : []),
+              ] as const).map(([name, key, perHour, total]) => {
+                const on = metric === key || metric === HEAT_METRICS[HEAT_METRICS.findIndex((m) => m.key === key) + 1]?.key;
+                return (
+                  <div key={name} className={cn("min-w-0", on && "font-semibold text-foreground")}>
+                    <dt className="inline text-muted-foreground">{name} </dt>
+                    <dd className="inline">{perHour}/ชม. · {total}</dd>
+                  </div>
+                );
+              })}
+            </dl>
           </>
         ) : "แตะช่องในตารางเพื่อดูตัวเลข"}
       </div>
       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
         <span>น้อย</span>
         <span aria-hidden className="h-2 w-28 rounded-full" style={{ background: "linear-gradient(to right, color-mix(in srgb, var(--viz-cur) 12%, var(--card)), var(--viz-cur))" }} />
-        <span>มาก{max ? ` (${baht(max)}${metric === "perHour" ? "/ชม." : ""})` : ""}</span>
+        <span>มาก{max ? ` (${shown(max)})` : ""}</span>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        ไฟล์ Export ไม่มียอดรายชั่วโมง จึงกระจาย GMV ของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ตัวเลขประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน
-        {metric === "perHour" ? " · ช่องสีจาง = ไลฟ์รวมไม่ถึง 2 ชม. (ตัวอย่างน้อย ไม่จัดอันดับ)" : ""}
+        ไฟล์ Export ไม่มียอดรายชั่วโมง จึงกระจายยอดของแต่ละไลฟ์ (GMV / ออเดอร์ / Viewers / Impressions) เท่าๆ กันตามเวลาไลฟ์ (ตัวเลขประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน
+        {metric === "viewers" || metric === "viewersPerHour" ? " · Viewers = คนดูของแต่ละไลฟ์รวมกัน (คนเดียวดูหลายไลฟ์นับซ้ำ)" : ""}
+        {def.tiktok ? " · Impressions มีเฉพาะ TikTok (Shopee ไม่มีในไฟล์) ต่อชั่วโมงคิดจากชั่วโมงไลฟ์ TikTok" : ""}
+        {def.perHour ? ` · ช่องสีจาง = ไลฟ์${def.tiktok ? " TikTok" : ""}รวมไม่ถึง 2 ชม. (ตัวอย่างน้อย ไม่จัดอันดับ)` : ""}
       </p>
-      <TableView title="ดูเป็นตาราง">
+      <TableView title={`ดูเป็นตาราง (${def.label})`}>
         <Table>
           <TableHeader>
             <TableRow>
@@ -1280,7 +1319,7 @@ function HeatSection({ title, sessions, spans }: { title: string; sessions: Live
             {Array.from({ length: 24 }, (_, h) => (grid.some((col) => value(col[h]) !== null) ? (
               <TableRow key={h}>
                 <TableCell className="tabular-nums">{heatHour(h)}–{heatHour(h + 1)}</TableCell>
-                {grid.map((col, d) => <TableCell key={d} className="text-right tabular-nums">{baht(value(col[h]))}</TableCell>)}
+                {grid.map((col, d) => <TableCell key={d} className="text-right tabular-nums">{def.kind === "baht" ? baht(value(col[h])) : int(value(col[h]))}</TableCell>)}
               </TableRow>
             ) : null))}
           </TableBody>

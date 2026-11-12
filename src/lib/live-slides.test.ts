@@ -185,6 +185,8 @@ describe("ส่วนเสริมเหมือนหน้าเว็บ 
       expect(titled(slides, "Agency TDH")).toBe(true);
       expect(titled(slides, "ขาที่ทำให้ GMV เปลี่ยนมากสุด")).toBe(true);
       expect(titled(slides, "ช่วงเวลาไหนขายดี พ.ย.")).toBe(true);
+      expect(titled(slides, "ช่วงเวลาไหนคนดูเยอะ พ.ย.")).toBe(true);
+      expect(titled(slides, "ช่วงเวลาไหนออเดอร์เยอะ พ.ย.")).toBe(true);
       expect(titled(slides, "วันปกติ vs วันแคมเปญ พ.ย.")).toBe(true);
     }
   });

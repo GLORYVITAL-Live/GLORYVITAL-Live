@@ -4,7 +4,9 @@
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
 import { dayKindLabel, dayKindStats, liveDay, type DayTag } from "@/lib/live-days";
-import { HEAT_WEEKDAY_NAMES, heatGrid, heatHour, heatPerHour, type HeatCell } from "@/lib/live-heat";
+import {
+  HEAT_WEEKDAY_NAMES, heatGrid, heatHour, heatImpressionsPerHour, heatOrdersPerHour, heatPerHour, heatViewersPerHour, type HeatCell,
+} from "@/lib/live-heat";
 import { splitByOwner, type AgencyTrend, type OwnerSpan } from "@/lib/live-owners";
 import { planVsActual, type PlanGroupCheck } from "@/lib/live-plan";
 import { accountLabel, accountsOf, bkkParts, changeOf, crewKey, METRICS, totalsOf, type LiveCrew, type LiveSession, type Platform, type Totals } from "@/lib/live-stats";
@@ -292,21 +294,32 @@ function agencySheet(o: NonNullable<ExportExtras["agency"]>[number]): ExportShee
   };
 }
 
-/** ช่วงเวลาไหนขายดี: ตาราง ชั่วโมง × วัน (GMV/ชม. · GMV · ชั่วโมงไลฟ์) เฉพาะชั่วโมงที่มีไลฟ์ */
+/** ช่วงเวลาไหนขายดี: ตาราง ชั่วโมง × วัน (GMV · ออเดอร์ · Viewers · Impressions ทั้งต่อชั่วโมง + รวม · ชั่วโมงไลฟ์) เฉพาะชั่วโมงที่มีไลฟ์ */
 function heatSheet(sessions: LiveSession[]): ExportSheet | null {
-  const grid = heatGrid(sessions.map((s) => ({ startedAt: s.startedAt, durationSec: s.durationSec, gmv: s.gmv })));
+  const grid = heatGrid(sessions.map((s) => ({
+    startedAt: s.startedAt, durationSec: s.durationSec, gmv: s.gmv, orders: s.orders, viewers: s.viewers, impressions: s.impressions,
+  })));
   const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => grid.some((col) => col[h].sec || col[h].gmv));
   if (!hours.length) return null;
+  const intCell = (v: number | null): Cell => (v === null ? null : { v: Math.round(v), f: "int" });
   const block = (title: string, cell: (c: HeatCell) => Cell): Cell[][] => [
     [title, ...HEAT_WEEKDAY_NAMES],
     ...hours.map((h): Cell[] => [`${heatHour(h)}–${heatHour(h + 1)}`, ...grid.map((col) => cell(col[h]))]),
     [],
   ];
   const rows: Cell[][] = [
-    ["ไฟล์ Export ไม่มียอดรายชั่วโมง: กระจาย GMV ของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. เป็นตัวอย่างน้อย"],
+    ["ไฟล์ Export ไม่มียอดรายชั่วโมง: กระจายยอดของแต่ละไลฟ์เท่าๆ กันตามเวลาไลฟ์ (ประมาณ) · ไลฟ์หลังเที่ยงคืนนับเป็นคืนของวันก่อน · ช่องที่ไลฟ์รวมไม่ถึง 2 ชม. เป็นตัวอย่างน้อย · Viewers = คนดูของแต่ละไลฟ์รวมกัน (นับซ้ำได้) · Impressions มีเฉพาะ TikTok (ต่อชั่วโมงคิดจากชั่วโมงไลฟ์ TikTok)"],
     [],
     ...block("GMV/ชม.", (c) => num("baht", heatPerHour(c))),
     ...block("GMV รวม", (c) => (c.gmv ? { v: c.gmv, f: "money" } : null)),
+    ...block("ออเดอร์/ชม.", (c) => intCell(heatOrdersPerHour(c))),
+    ...block("ออเดอร์รวม", (c) => intCell(c.orders || null)),
+    ...block("Viewers/ชม.", (c) => intCell(heatViewersPerHour(c))),
+    ...block("Viewers รวม", (c) => intCell(c.viewers || null)),
+    ...(grid.some((col) => col.some((c) => c.impSec)) ? [
+      ...block("Impressions/ชม. (TikTok)", (c) => intCell(heatImpressionsPerHour(c))),
+      ...block("Impressions รวม (TikTok)", (c) => intCell(c.impressions || null)),
+    ] : []),
     ...block("ชั่วโมงไลฟ์", (c) => (c.sec ? { v: c.sec / 3600, f: "dec" } : null)),
   ];
   return { name: "ช่วงเวลาขายดี", rows, colWidths: [14, ...HEAT_WEEKDAY_NAMES.map(() => 13)] };
