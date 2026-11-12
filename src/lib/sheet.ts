@@ -32,15 +32,17 @@ export const isMcTab = (tab: TabKey) => tab !== "admin";
 export const SHOPEE_FROM = "2026-11-01";
 
 /**
- * คอลัมน์ (เริ่ม 0 = A) — V เก็บรหัส slot ในระบบใหม่ (ระบบเขียนเอง ห้ามแก้)
- * late = ช่องที่ทีมบันทึกเวลามาสาย (Mc ใช้ช่อง Remark (L) / Admin ใช้คอลัมน์ M / Shopee ใช้ช่อง remark (N)) ระบบอ่านอย่างเดียว
+ * คอลัมน์ (เริ่ม 0 = A) — Deal Mc / Admin เสริม: V เก็บรหัส slot ในระบบใหม่ (ระบบเขียนเอง ห้ามแก้)
+ * late = ช่องที่ทีมบันทึกเวลามาสาย (Mc ใช้ช่อง Remark (L) / Admin ใช้คอลัมน์ M / Shopee ใช้ช่อง remark (K)) ระบบอ่านอย่างเดียว
  * ช่องเดียวกันใช้บันทึกไลฟ์ชดเชยด้วย ถ้ามี + นำหน้า เช่น "+10" (ดู parseBonusMinutes)
- * แท็บ MC Shopee: H-J เป็นคอลัมน์เก่าที่ซ่อนไว้ (ระบบไม่แตะ) K = ชื่อ Mc, L = ติ๊กยืนยัน, M = Status, N = remark
+ * แท็บ MC Shopee: H = ชื่อ Mc ("Confirm / MC"), I = ติ๊กยืนยัน, J = Status, K = remark, S = รหัส slot
+ *   (ทีมลบคอลัมน์เก่า H-J ที่เคยซ่อนไว้ คอลัมน์จึงเลื่อนซ้าย 3 ช่องจากเดิม K / L / M / N / V — พบ 2026-11-12
+ *    ตอนนั้นเว็บยังอ่านชื่อจาก K = ได้ชื่อจากช่อง remark เช่น "Stu" และหา slot เดิมไม่เจอ = สร้าง slot ซ้ำ)
  */
 export const COLS = {
   mc: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, campaign: 7, person: 8, confirm: 9, status: 10, remark: 11, late: 11, id: 21 },
   admin: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, person: 7, confirm: 8, remark: 9, status: 10, late: 12, id: 21 },
-  shopee: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, person: 10, confirm: 11, status: 12, remark: 13, late: 13, id: 21 },
+  shopee: { no: 0, platform: 1, date: 2, start: 3, end: 4, hourF: 5, hourG: 6, person: 7, confirm: 8, status: 9, remark: 10, late: 10, id: 18 },
 } as const;
 /** คอลัมน์สุดท้ายที่ระบบเขียนตอนแทรกแถวใหม่ (แท็บ Admin: คอลัมน์ L เป็นของทีม ไม่แตะ) */
 export const LAST_WRITE_COL: Record<TabKey, number> = { mc: COLS.mc.remark, admin: COLS.admin.status, shopee: COLS.shopee.remark };
