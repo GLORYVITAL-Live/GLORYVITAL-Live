@@ -12,11 +12,12 @@ import { fmtDayMonth, parseKey, todayKey } from "@/lib/format";
 import { briefKey } from "@/lib/frames";
 import { shrinkImage } from "@/lib/image";
 import { platformLabel } from "@/lib/platform";
-import type { BriefView, FrameView, FramesResponse } from "@/lib/types";
+import { LOOK_GENDERS, type BriefView, type FrameView, type FramesResponse, type LookGender, type LooksResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
  * เทรนนิ่ง > เฟรมไลฟ์ (Owner ที่จัดการ Mc ได้ + Admin ที่ติ๊กสิทธิ์บรีฟการแต่งตัว)
+ *   Look แต่งหน้า/แต่งตัว (รูป Ref ผู้หญิง / ผู้ชาย ใช้ทุกไลฟ์) อยู่บนสุด → Mc / Admin เห็นในโปรไฟล์ (src/components/LookGuide.tsx)
  *   เฟรมจากแท็บ "Frame live" ในชีตวางแผน (แก้เฟรมที่ชีต — เว็บอ่านใหม่ทุก 10 นาที / กดรีเฟรช)
  *   บรีฟการแต่งตัว (ข้อความ + รูปชุดตัวอย่าง) 1 ชุดต่อช่วงวัน ใช้กับทุกช่อง (ส่วนใหญ่แคมเปญเดียวกัน เฟรมคล้ายกัน)
  *     → Mc / Admin เห็นในรายละเอียด slot ของตัวเอง
@@ -35,6 +36,10 @@ function rangeText(from: string, to: string) {
 }
 
 export function LiveFrames() {
+  return <><LookEditors /><FramesList /></>;
+}
+
+function FramesList() {
   const [data, setData] = useState<FramesResponse | null>(null);
   const [error, setError] = useState("");
   const [past, setPast] = useState(false);
@@ -70,6 +75,7 @@ export function LiveFrames() {
 
   return (
     <div>
+      <h2 className="mb-1 text-base font-bold">เฟรมไลฟ์ + บรีฟการแต่งตัว</h2>
       <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
         เฟรมมาจากแท็บ &quot;Frame live&quot; ในชีตวางแผน (แก้ / เพิ่มเฟรมที่ชีต) · เขียนบรีฟการแต่งตัว + แนบรูปชุดตัวอย่าง 1 ชุดต่อช่วงวัน ใช้กับทุกช่อง
         — Mc / Admin เห็นเฟรมและบรีฟในรายละเอียด slot ของตัวเอง (ตารางของฉัน)
@@ -132,8 +138,73 @@ function FrameCard({ f }: { f: FrameView }) {
   );
 }
 
-/** บรีฟการแต่งตัวของช่วงวัน (ข้อความ / รูปชุดตัวอย่าง) ใช้กับทุกช่องในช่วงนี้ · count = จำนวนช่องที่มีเฟรมช่วงนี้ */
-function BriefEditor({ apiKey, brief, count, onChanged }: { apiKey: string; brief: BriefView | null; count: number; onChanged: () => void }) {
+/** ข้อความในกล่องแก้บรีฟ (บรีฟการแต่งตัวของช่วงวัน = ค่าเริ่มต้น / Look แต่งหน้า-แต่งตัว ใช้ข้อความของตัวเอง) */
+type EditorText = { title: string; hint: string; placeholder: string; save: string; images: string; alt: string; remove: string };
+const BRIEF_TEXT: EditorText = {
+  title: "บรีฟการแต่งตัว", hint: "ใช้กับทุกช่องในช่วงนี้", save: "บันทึกบรีฟ", images: "รูปชุดตัวอย่าง", alt: "ชุดตัวอย่าง",
+  remove: "ลบรูปชุดตัวอย่างนี้?", placeholder: "เช่น โทนสีชมพู-ขาว ให้เข้ากับเฟรม · เสื้อแขนยาว ไม่มีลาย · ห้ามสีเขียว",
+};
+const LOOK_TEXT: Record<LookGender, EditorText> = {
+  female: {
+    title: "Look ผู้หญิง", hint: "แต่งหน้า + แต่งตัว ใช้ทุกไลฟ์", save: "บันทึก", images: "รูป Ref", alt: "Look ผู้หญิง",
+    remove: "ลบรูป Ref นี้?", placeholder: "เช่น ผิวฉ่ำ บลัชกลางแก้ม ปากแดงเบลอๆ · ชุดโทนขาว / สีอ่อน",
+  },
+  male: {
+    title: "Look ผู้ชาย", hint: "แต่งหน้า + แต่งตัว ใช้ทุกไลฟ์", save: "บันทึก", images: "รูป Ref", alt: "Look ผู้ชาย",
+    remove: "ลบรูป Ref นี้?", placeholder: "เช่น ผิวใสเป็นธรรมชาติ ปากชมพูอ่อน · ชุดโทนขาว",
+  },
+};
+
+/** Look แต่งหน้า/แต่งตัว (รูป Ref) ผู้หญิง / ผู้ชาย — Mc / Admin เห็นในโปรไฟล์ของตัวเอง */
+function LookEditors() {
+  const [data, setData] = useState<LooksResponse | null>(null);
+  const [error, setError] = useState("");
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    api<LooksResponse>("/api/looks")
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) { setData(res); setError(""); }
+      })
+      .catch((err) => { if (alive) setError((err as Error).message); });
+    return () => { alive = false; };
+  }, [tick]);
+  const reload = () => setTick((n) => n + 1);
+
+  return (
+    <section className="mb-6">
+      <h2 className="mb-1 text-base font-bold">Look แต่งหน้า / แต่งตัว</h2>
+      <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+        โทนการแต่งหน้าแต่งตัวที่ใช้ทุกไลฟ์ (ไม่ขึ้นกับเฟรม) — Mc / Admin เห็นในโปรไฟล์ของตัวเอง (ตารางของฉัน → Look แต่งหน้า/แต่งตัว)
+      </p>
+      {!data ? (
+        error ? <LoadError title="โหลด Look ไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock className="h-24" />
+      ) : !data.ready ? (
+        <Notice variant="warning" icon title="ยังเปิด Look ไม่ได้">{data.message}</Notice>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {LOOK_GENDERS.map((g) => (
+            <BriefEditor
+              key={g} apiKey={g} brief={data.looks[g]} onChanged={reload}
+              endpoint="/api/looks" text={LOOK_TEXT[g]}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * กล่องแก้ข้อความ + รูป
+ *   บรีฟการแต่งตัวของช่วงวัน (/api/frames) ใช้กับทุกช่องในช่วงนี้ · count = จำนวนช่องที่มีเฟรมช่วงนี้
+ *   Look แต่งหน้า/แต่งตัว (/api/looks · apiKey = female / male)
+ */
+function BriefEditor({ apiKey, brief, count = 0, onChanged, endpoint = "/api/frames", text = BRIEF_TEXT }: {
+  apiKey: string; brief: BriefView | null; count?: number; onChanged: () => void; endpoint?: string; text?: EditorText;
+}) {
   const toast = useToast();
   const confirm = useConfirm();
   const saved = brief?.note ?? "";
@@ -146,7 +217,7 @@ function BriefEditor({ apiKey, brief, count, onChanged }: { apiKey: string; brie
   async function saveNote() {
     setBusy(true);
     try {
-      const res = await api<{ message: string }>("/api/frames", { key: apiKey, note }, "PATCH");
+      const res = await api<{ message: string }>(endpoint, { key: apiKey, note }, "PATCH");
       if (!res.ok) throw new Error(res.message);
       toast(res.message);
       onChanged();
@@ -168,7 +239,7 @@ function BriefEditor({ apiKey, brief, count, onChanged }: { apiKey: string; brie
         const fd = new FormData();
         fd.append("key", apiKey);
         fd.append("photo", await shrinkImage(p, 1600), "brief.jpg");
-        const res = await fetch("/api/frames", { method: "POST", body: fd });
+        const res = await fetch(endpoint, { method: "POST", body: fd });
         const json = await res.json().catch(() => null) as { ok?: boolean; message?: string } | null;
         if (!json?.ok) throw new Error(json?.message ?? `เพิ่มรูปไม่สำเร็จ (HTTP ${res.status})`);
         done++;
@@ -184,10 +255,10 @@ function BriefEditor({ apiKey, brief, count, onChanged }: { apiKey: string; brie
   }
 
   async function removeImage(path: string) {
-    if (!(await confirm({ title: "ลบรูปชุดตัวอย่างนี้?", confirmText: "ลบรูป", destructive: true }))) return;
+    if (!(await confirm({ title: text.remove, confirmText: "ลบรูป", destructive: true }))) return;
     setBusy(true);
     try {
-      const res = await api<{ message: string }>("/api/frames", { key: apiKey, path }, "DELETE");
+      const res = await api<{ message: string }>(endpoint, { key: apiKey, path }, "DELETE");
       if (!res.ok) throw new Error(res.message);
       toast(res.message);
       onChanged();
@@ -201,25 +272,22 @@ function BriefEditor({ apiKey, brief, count, onChanged }: { apiKey: string; brie
   return (
     <div className="rounded-xl border bg-card p-3">
       <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
-        <label htmlFor={id} className="text-sm font-semibold">บรีฟการแต่งตัว</label>
-        <span className="text-xs text-muted-foreground">ใช้กับทุกช่องในช่วงนี้{count > 1 ? ` (${count} ช่อง)` : ""}</span>
+        <label htmlFor={id} className="text-sm font-semibold">{text.title}</label>
+        <span className="text-xs text-muted-foreground">{text.hint}{count > 1 ? ` (${count} ช่อง)` : ""}</span>
         {brief?.updatedBy ? <span className="ml-auto truncate text-[11px] text-muted-foreground">แก้ล่าสุด {brief.updatedBy}</span> : null}
       </div>
-      <Textarea
-        id={id} value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={2000}
-        placeholder="เช่น โทนสีชมพู-ขาว ให้เข้ากับเฟรม · เสื้อแขนยาว ไม่มีลาย · ห้ามสีเขียว"
-      />
+      <Textarea id={id} value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={2000} placeholder={text.placeholder} />
       <div className="mt-1.5 flex justify-end">
-        <Button size="sm" disabled={busy || note.trim() === saved.trim()} onClick={saveNote}>บันทึกบรีฟ</Button>
+        <Button size="sm" disabled={busy || note.trim() === saved.trim()} onClick={saveNote}>{text.save}</Button>
       </div>
 
-      <span className="mt-2 mb-1 block text-sm font-semibold">รูปชุดตัวอย่าง <span className="font-normal text-muted-foreground">({images.length}/{MAX_IMAGES})</span></span>
+      <span className="mt-2 mb-1 block text-sm font-semibold">{text.images} <span className="font-normal text-muted-foreground">({images.length}/{MAX_IMAGES})</span></span>
       <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
         {images.map((img) => (
           <div key={img.path} className="relative">
             <a href={img.url} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded-lg border">
               {/* eslint-disable-next-line @next/next/no-img-element -- ลิงก์ชั่วคราวจาก Supabase Storage */}
-              <img src={img.url} alt="ชุดตัวอย่าง" loading="lazy" className="aspect-square w-full object-cover" />
+              <img src={img.url} alt={text.alt} loading="lazy" className="aspect-square w-full object-cover" />
             </a>
             <button
               type="button" disabled={busy} onClick={() => removeImage(img.path)} aria-label="ลบรูปนี้"

@@ -42,6 +42,12 @@ export type FramesResponse = {
   briefs: Record<string, BriefView | null>;
 };
 
+/** Look แต่งหน้า + แต่งตัว (รูป Ref) ใช้ทุกไลฟ์ — แยกผู้หญิง / ผู้ชาย */
+export const LOOK_GENDERS = ["female", "male"] as const;
+export type LookGender = (typeof LOOK_GENDERS)[number];
+/** GET /api/looks · ready false = ยังไม่ได้รัน SQL · canEdit = จัดการบรีฟการแต่งตัวได้ · ยังไม่ได้ใส่ = null */
+export type LooksResponse = { ready: boolean; message: string | null; canEdit: boolean; looks: Record<LookGender, BriefView | null> };
+
 export const EQUIPMENT_STATUSES = ["ใช้งานได้", "ชำรุด", "ส่งซ่อม", "หาย", "เลิกใช้"] as const;
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 /** อุปกรณ์ 1 รายการ (photoUrl = ลิงก์ชั่วคราวของรูป หมดอายุใน 1 ชม.) */

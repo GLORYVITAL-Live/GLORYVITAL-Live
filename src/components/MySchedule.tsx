@@ -7,10 +7,11 @@ import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabe
 import { NIGHT_CANCEL_TEXT, cancelContact, isNightCancel } from "@/lib/cancel-rule";
 import Link from "next/link";
 import {
-  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ReceiptTextIcon, ShirtIcon, UserIcon,
+  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ReceiptTextIcon, ShirtIcon, SparklesIcon, UserIcon,
   WalletIcon,
 } from "lucide-react";
 import { FrameMedia } from "@/components/FrameMedia";
+import { LookDialog } from "@/components/LookGuide";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
@@ -42,6 +43,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const [now, setNow] = useState(() => Date.now());
   const [cancelItem, setCancelItem] = useState<MyItem | null>(null);
   const [detail, setDetail] = useState<MyItem | null>(null);
+  // Look แต่งหน้า/แต่งตัว (รูป Ref ผู้หญิง / ผู้ชาย)
+  const [look, setLook] = useState(false);
   // แร็งค์ของ Mc (ป้ายข้างชื่อ + กล่องท้ายรายการคิว)
   const rank = useMyRank(open && role === "mc");
 
@@ -114,7 +117,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
 
   return (
     <>
-      <AppDialog open={open && !cancelItem && !detail} onClose={onClose} title="ตารางของฉัน">
+      <AppDialog open={open && !cancelItem && !detail && !look} onClose={onClose} title="ตารางของฉัน">
         <div className="flex items-center gap-3 rounded-xl border px-3 py-2">
           <Avatar size="lg" aria-hidden>
             <AvatarFallback className="bg-primary text-base font-bold text-primary-foreground">
@@ -211,6 +214,9 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
             </Button>
             <Button variant="link" onClick={onOpenPayDocs} className="h-auto px-0 font-semibold">
               <IdCardIcon />เอกสารทำเบิก
+            </Button>
+            <Button variant="link" onClick={() => setLook(true)} className="h-auto px-0 font-semibold">
+              <SparklesIcon />Look แต่งหน้า/แต่งตัว
             </Button>
             {/* หน้าวิธีใช้ (/guide): วิดีโอเพิ่มเว็บไว้หน้าจอโฮม + แชร์ปฏิทิน */}
             <Button variant="link" className="h-auto px-0 font-semibold" asChild>
@@ -321,6 +327,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
           {rank ? <div className="mt-3"><MyRank data={rank} /></div> : null}
         </DialogBody>
       </AppDialog>
+
+      <LookDialog open={open && look} onClose={() => setLook(false)} />
 
       <SlotDetail
         item={detail}
