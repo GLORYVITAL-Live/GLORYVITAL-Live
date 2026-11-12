@@ -13,6 +13,7 @@ import {
   heatViewersPerHour, type HeatCell,
 } from "@/lib/live-heat";
 import { PLAN_FULL, planVsActual } from "@/lib/live-plan";
+import { FUNNEL_STEPS, funnelCause, funnelCauseText } from "@/lib/live-funnel";
 import { AGENCY_OURS, mergePlatforms, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
 import { accountLabel, accountsOf, changeOf, fmtMetric, METRICS, metricOf, totalsOf, type LiveSession, type MetricKey, type Platform, type Totals } from "@/lib/live-stats";
 import type { targetReport } from "@/lib/live-targets";
@@ -42,10 +43,22 @@ export type CompareDeckInput = {
    *   ช่วงเทียบใช้กับตัวเลขหลัก / ตาราง / วิเคราะห์ ส่วนกราฟรายวันเป็นแท่งซ้อน + เส้นแยกแพลตฟอร์ม (ไม่มีเส้นรวม)
    */
   platformTime?: boolean;
-  /** กราฟแท่งหลายเดือนย้อนหลัง (หน้ารายเดือน = 13 เดือน) */
-  months?: { short: string; a: LiveSession[] }[];
-  /** หน้าเป้าหมาย GMV (src/lib/live-targets.ts) · names = ชื่อช่องตาม key */
-  target?: { report: ReturnType<typeof targetReport>; lastDay: number; names: Map<string, string> };
+  /** กราฟแท่งหลายเดือนย้อนหลัง (หน้ารายเดือน = 13 เดือน) · b = ฐานของ MoM (เดือนที่ยังไม่จบ = เดือนก่อนถึงวันเดียวกัน) */
+  months?: { short: string; a: LiveSession[]; b?: LiveSession[] }[];
+  /** หน้าเป้าหมาย GMV (src/lib/live-targets.ts) · names = ชื่อช่องตาม key · noTarget = ช่องที่มียอดแต่ยังไม่ตั้งเป้า */
+  target?: { report: ReturnType<typeof targetReport>; lastDay: number; names: Map<string, string>; noTarget?: string[] };
+  /** การ์ดตัวชี้วัดเทียบอีกช่วง (หน้ารายเดือน = YoY) เหมือนการ์ดบนเว็บ */
+  yoy?: { name: string; sessions: LiveSession[] };
+  /** เส้นแนวโน้มเล็กในการ์ดตัวชี้วัด (รายเดือน = รายวัน · ทั้งปี = รายเดือน) */
+  spark?: LiveSession[][];
+  /** หน้า "ยอดมาจากไหน" (ขั้นการขาย a เทียบ b · src/lib/live-funnel.ts) */
+  funnel?: { prevLabel: string };
+  /** หน้า "สรุปเทียบทุกตัวชี้วัด" แท่งคู่ทุกตัวชี้วัด (หน้าเทียบ 2 ช่วงบนเว็บ) */
+  pairs?: boolean;
+  /** % achieve ของวันเดียว (เทียบรายวัน) */
+  dayTarget?: { title: string; pct: number | null; gmv: number; target: number };
+  /** รายการไลฟ์ของแต่ละช่วง (เหมือน "ไลฟ์ใน ..." บนเว็บ) · ช่วงที่ไลฟ์เกิน LIVE_LIST_MAX ไม่ใส่ (ดู Top 5 แทน) */
+  liveList?: boolean;
   /** หน้าแยกตามกลุ่มผู้ไลฟ์ (src/lib/live-owners.ts) */
   owners?: ChannelSplit[];
   /** หน้า GMV แยก Agency (แท่งคู่ TikTok | Shopee ซ้อนตามกลุ่ม เหมือนแท็บ "แยก Agency" บนเว็บ) */
@@ -292,6 +305,26 @@ function lineChart(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, o: 
   }
 }
 
+/**
+ * เส้นแนวโน้มเล็กในการ์ด (เหมือน Sparkline บนเว็บ · src/components/kpi.tsx): ลากเชื่อมจุดที่มีค่า + จุดท้าย
+ *   วาดด้วยรูปทรงทั้ง PowerPoint และ Google Slides · มีค่าไม่ถึง 2 จุด = ไม่วาด
+ */
+function sparkline(pres: PptxGenJS, s: PptxGenJS.Slide, box: ChartBox, values: (number | null)[], color: string) {
+  const pts = values.flatMap((v, i) => (v === null || !Number.isFinite(v) ? [] : [{ i, v }]));
+  if (pts.length < 2) return;
+  const min = Math.min(...pts.map((p) => p.v)), max = Math.max(...pts.map((p) => p.v));
+  const n = values.length;
+  const xOf = (i: number) => box.x + (i / Math.max(1, n - 1)) * box.w;
+  const yOf = (v: number) => (max === min ? box.y + box.h / 2 : box.y + box.h - ((v - min) / (max - min)) * box.h);
+  s.addShape(pres.ShapeType.line, { x: box.x, y: box.y + box.h, w: box.w, h: 0, line: { color: C.grid, width: 0.75 } });
+  pts.slice(1).forEach((b, k) => {
+    const a = pts[k], y1 = yOf(a.v), y2 = yOf(b.v);
+    s.addShape(pres.ShapeType.line, { x: xOf(a.i), y: Math.min(y1, y2), w: xOf(b.i) - xOf(a.i), h: Math.abs(y2 - y1), flipV: y2 < y1, line: { color, width: 1.5 } });
+  });
+  const last = pts[pts.length - 1];
+  s.addShape(pres.ShapeType.ellipse, { x: xOf(last.i) - 0.045, y: yOf(last.v) - 0.045, w: 0.09, h: 0.09, fill: { color }, line: { color: C.white, width: 0.75 } });
+}
+
 /** หน้ากราฟเส้นเต็มหน้า · มีช่วงที่ไม่มีค่า = บอกไว้ว่าเส้นตรงนั้นลากข้าม */
 function addTrendSlide(pres: PptxGenJS, target: ChartTarget, title: string, labels: string[], series: LineSeries[]) {
   if (!series.some((sr) => sr.values.some((v) => v !== null))) return;
@@ -481,41 +514,59 @@ function addPerHourSlide(pres: PptxGenJS, title: string, cards: PerHourCard[]) {
   });
 }
 
-/** หน้าเป้าหมาย GMV: % achieve เดือน / ถึงวันล่าสุด (แถบ + ทำได้ / เป้า) + ยอดที่เหลือต่อวัน + แยกช่อง */
+/** การ์ด % achieve (เหมือน AchieveTile บนเว็บ): % ตัวใหญ่ + แถบ + ทำได้ / เป้า + บรรทัดเสริม */
+function achieveTile(pres: PptxGenJS, s: PptxGenJS.Slide, box: ChartBox, tile: { label: string; pct: number | null; gmv: number; target: number; note?: string; noteColor?: string; big?: boolean }) {
+  const { x, y, w, h } = box, inner = w - 0.6;
+  const pctOf = (v: number | null) => (v === null ? "-" : `${(v * 100).toFixed(1)}%`);
+  const big = tile.big ? 1.4 : 1;
+  s.addShape(pres.ShapeType.roundRect, { x, y, w, h, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
+  s.addText(tile.label, { x: x + 0.3, y: y + 0.15, w: inner, h: 0.35, fontSize: 13, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+  s.addText(pctOf(tile.pct), { x: x + 0.3, y: y + 0.5, w: inner, h: 0.65 * big, fontSize: Math.round(32 * big), bold: true, color: C.pink, fontFace: FONT, margin: 0, isTextBox: true });
+  const by = y + 0.5 + 0.7 * big;
+  s.addShape(pres.ShapeType.rect, { x: x + 0.3, y: by, w: inner, h: 0.12, fill: { color: C.white }, line: { color: C.white } });
+  if (tile.pct) s.addShape(pres.ShapeType.rect, { x: x + 0.3, y: by, w: Math.max(0.03, inner * Math.min(1, tile.pct)), h: 0.12, fill: { color: C.pink }, line: { color: C.pink } });
+  s.addText(`${fmt("gmv", tile.gmv)} / เป้า ${fmt("gmv", tile.target)}`, { x: x + 0.3, y: by + 0.2, w: inner, h: 0.32, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+  if (tile.note) s.addText(tile.note, { x: x + 0.3, y: by + 0.52, w: inner, h: 0.32, fontSize: 13, bold: true, color: tile.noteColor ?? C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+}
+
+/** หน้าเป้าหมาย GMV (เหมือนเว็บ): % achieve เดือน / ถึงวันล่าสุด / วันล่าสุด + คาดการณ์สิ้นเดือน + แยกช่อง */
 function addTargetSlide(pres: PptxGenJS, title: string, t: NonNullable<CompareDeckInput["target"]>) {
   const { report: r, lastDay, names } = t;
   const s = pres.addSlide({ masterName: "CONTENT" });
   s.addText(title, { placeholder: "title" });
   const pctOf = (v: number | null) => (v === null ? "-" : `${(v * 100).toFixed(1)}%`);
   const baht = (v: number) => fmt("gmv", v);
+  // วันในการ์ดที่ 3 = วันล่าสุดที่มีข้อมูล (เดือนที่จบแล้ว = วันสุดท้ายที่มียอด) เหมือนค่าเริ่มต้นบนเว็บ
+  const day = (lastDay ? r.days[lastDay - 1] : [...r.days].reverse().find((d) => d.gmv > 0)) ?? null;
   const tiles = [
-    { label: `% Achieve เดือน${r.toDate ? " (เทียบเป้าทั้งเดือน)" : ""}`, pct: r.pct, target: r.monthly, note: "", color: C.muted },
+    { label: `% Achieve เดือน${r.toDate ? " (เทียบเป้าทั้งเดือน)" : ""}`, pct: r.pct, gmv: r.gmv, target: r.monthly },
     ...(r.toDate ? [{
-      label: `% Achieve ถึงวันที่ ${lastDay}`, pct: r.toDate.pct, target: r.toDate.target,
+      label: `% Achieve ถึงวันที่ ${lastDay}`, pct: r.toDate.pct, gmv: r.gmv, target: r.toDate.target,
       note: r.toDate.gap >= 0 ? `เกินเป้าถึงวันนี้ ${baht(r.toDate.gap)}` : `ขาดจากเป้าถึงวันนี้ ${baht(-r.toDate.gap)}`,
-      color: r.toDate.gap >= 0 ? C.up : C.down,
+      noteColor: r.toDate.gap >= 0 ? C.up : C.down,
     }] : []),
+    ...(day ? [{ label: `% Achieve วันที่ ${Number(day.date.slice(8))}${day.manual ? " · เป้าใส่เอง" : ""}`, pct: day.pct, gmv: day.gmv, target: day.target }] : []),
   ];
-  const gap = 0.35, w = (W - 2 * M - gap * (tiles.length - 1)) / tiles.length, y0 = 1.4, h = 2.25;
-  tiles.forEach((tile, i) => {
-    const x = M + i * (w + gap), inner = w - 0.6;
-    s.addShape(pres.ShapeType.roundRect, { x, y: y0, w, h, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
-    s.addText(tile.label, { x: x + 0.3, y: y0 + 0.15, w: inner, h: 0.35, fontSize: 13, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
-    s.addText(pctOf(tile.pct), { x: x + 0.3, y: y0 + 0.5, w: inner, h: 0.65, fontSize: 32, bold: true, color: C.pink, fontFace: FONT, margin: 0, isTextBox: true });
-    s.addShape(pres.ShapeType.rect, { x: x + 0.3, y: y0 + 1.2, w: inner, h: 0.12, fill: { color: C.white }, line: { color: C.white } });
-    if (tile.pct) s.addShape(pres.ShapeType.rect, { x: x + 0.3, y: y0 + 1.2, w: Math.max(0.03, inner * Math.min(1, tile.pct)), h: 0.12, fill: { color: C.pink }, line: { color: C.pink } });
-    s.addText(`${baht(r.gmv)} / เป้า ${baht(tile.target)}`, { x: x + 0.3, y: y0 + 1.4, w: inner, h: 0.32, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
-    if (tile.note) s.addText(tile.note, { x: x + 0.3, y: y0 + 1.72, w: inner, h: 0.32, fontSize: 13, bold: true, color: tile.color, fontFace: FONT, margin: 0, isTextBox: true });
-  });
-  if (r.perDayLeft !== null || r.projection) {
+  const gap = 0.35, w = (W - 2 * M - gap * (tiles.length - 1)) / tiles.length;
+  tiles.forEach((tile, i) => achieveTile(pres, s, { x: M + i * (w + gap), y: 1.4, w, h: 2.25 }, tile));
+  // คาดการณ์ (บรรทัดบน) + ยอดที่เหลือ (บรรทัดล่าง) เหมือนกล่องคาดการณ์บนเว็บ
+  let tableY = 4.2;
+  if (r.projection) {
     s.addText([
-      ...(r.projection ? [
-        { text: `คาดการณ์สิ้นเดือน ${baht(r.projection.value)} (${pctOf(r.projection.pct)} ของเป้า · `, options: { bold: true, color: C.text } },
-        { text: r.projection.gap >= 0 ? `เกินเป้า ${baht(r.projection.gap)}` : `ขาดเป้า ${baht(-r.projection.gap)}`, options: { bold: true, color: r.projection.gap >= 0 ? C.up : C.down } },
-        { text: ")   ", options: { bold: true, color: C.text } },
-      ] : []),
-      ...(r.perDayLeft !== null ? [{ text: `เหลืออีก ${baht(r.remaining)} ใน ${r.daysLeft} วัน · เฉลี่ยวันละ ${baht(r.perDayLeft)}`, options: { color: C.muted } }] : []),
-    ], { x: M, y: 3.75, w: W - 2 * M, h: 0.35, fontSize: 14, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      { text: `คาดการณ์สิ้นเดือน ${baht(r.projection.value)} (${pctOf(r.projection.pct)} ของเป้า · `, options: { bold: true, color: C.text } },
+      { text: r.projection.gap >= 0 ? `เกินเป้า ${baht(r.projection.gap)}` : `ขาดเป้า ${baht(-r.projection.gap)}`, options: { bold: true, color: r.projection.gap >= 0 ? C.up : C.down } },
+      { text: ")", options: { bold: true, color: C.text } },
+    ], { x: M, y: 3.75, w: W - 2 * M, h: 0.32, fontSize: 14, fontFace: FONT, margin: 0, valign: "middle", isTextBox: true });
+  }
+  if (r.perDayLeft !== null) {
+    const y = r.projection ? 4.07 : 3.75;
+    s.addText(`${r.remaining > 0 ? `เหลืออีก ${baht(r.remaining)} ใน ${r.daysLeft} วัน · เฉลี่ยวันละ ${baht(r.perDayLeft)}` : "ถึงเป้าเดือนแล้ว"}${r.projection ? ` · คิดตามเป้ารายวันที่เหลือ · ถ้าเฉลี่ยเท่ากันทุกวัน = ${baht(r.projection.runRate)}` : ""}`, {
+      x: M, y, w: W - 2 * M, h: 0.3, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, valign: "middle", isTextBox: true,
+    });
+    tableY = y + 0.45;
+  }
+  if (t.noTarget?.length) {
+    s.addText(`ยังไม่ตั้งเป้า (ไม่นับใน % นี้): ${t.noTarget.join(", ")}`, { x: M, y: 6.55, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
   }
   const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
   const rows = r.accounts.slice(0, 6);
@@ -530,10 +581,70 @@ function addTargetSlide(pres: PptxGenJS, title: string, t: NonNullable<CompareDe
         ...(r.toDate ? [{ text: pctOf(a.toDatePct), options: { align: "right" as const } }] : []),
       ]),
     ], {
-      x: M, y: 4.2, w: W - 2 * M, colW: r.toDate ? [4.533, 1.95, 1.95, 1.7, 2] : [5.133, 2.4, 2.4, 2.2], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.36,
+      x: M, y: tableY, w: W - 2 * M, colW: r.toDate ? [4.533, 1.95, 1.95, 1.7, 2] : [5.133, 2.4, 2.4, 2.2], fontSize: 13, fontFace: FONT, color: C.text,
+      rowH: Math.min(0.36, ((t.noTarget?.length ? 6.45 : 6.7) - tableY) / (rows.length + 1)),
       border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
     });
   }
+}
+
+/**
+ * เป้า vs GMV รายวัน (เหมือน "ดูรายวัน" ใต้เป้าหมายบนเว็บ): แท่งคู่ GMV (ชมพู) vs เป้ารายวัน (ฟ้า) + แถว % achieve ทุกวัน
+ *   วันที่ยังไม่ถึง (เดือนที่ยังไม่จบ) = มีแต่แท่งเป้า ไม่มี % · * = วันที่ใส่เป้าเอง
+ */
+function addTargetDaysSlide(pres: PptxGenJS, title: string, t: NonNullable<CompareDeckInput["target"]>) {
+  const { report: r, lastDay } = t;
+  if (!r.days.length || !r.days.some((d) => d.target > 0)) return;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  const future = (date: string) => lastDay > 0 && Number(date.slice(8)) > lastDay;
+  const labels = r.days.map((d) => `${Number(d.date.slice(8))}${d.manual ? "*" : ""}`);
+  shapeBars(pres, s, {
+    labels, box: { x: M, y: 1.3, w: W - 2 * M, h: 3.35 }, showValue: false, change: false,
+    series: [
+      { name: "GMV", color: C.pink, values: r.days.map((d) => (future(d.date) ? 0 : d.gmv)) },
+      { name: "เป้ารายวัน", color: C.blue, values: r.days.map((d) => d.target) },
+    ],
+  });
+  // % achieve ทุกวัน: 2 แถบ แถบละไม่เกิน 16 วัน
+  const half = Math.ceil(r.days.length / 2);
+  const parts = [r.days.slice(0, half), r.days.slice(half)];
+  const colW = (W - 2 * M - 1.1) / half;
+  parts.forEach((part, i) => {
+    const cell = (text: string, opts: PptxGenJS.TableCellProps = {}) => ({ text, options: { align: "center" as const, ...opts } });
+    s.addTable([
+      [cell("วันที่", { bold: true, color: C.white, fill: { color: C.pink }, align: "left" }), ...part.map((d) => cell(`${Number(d.date.slice(8))}${d.manual ? "*" : ""}`, { bold: true, color: C.white, fill: { color: C.pink } }))],
+      [cell("% Achieve", { bold: true, align: "left" }), ...part.map((d) => {
+        const off = future(d.date) || d.pct === null;
+        return cell(off ? "-" : `${Math.round(d.pct! * 100)}%`, { bold: !off, color: off ? C.muted : d.pct! >= 1 ? C.up : C.down });
+      })],
+    ], {
+      x: M, y: 4.8 + i * 0.78, w: 1.1 + colW * part.length, colW: [1.1, ...part.map(() => colW)], fontSize: 10, fontFace: FONT, color: C.text, rowH: 0.3,
+      border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.04, 0, 0.04],
+    });
+  });
+  s.addText("เป้ารายวัน = เป้าเดือนเฉลี่ยทุกวัน · * = วันที่ใส่เป้าเอง (เช่น วันแคมเปญ) วันที่เหลือเฉลี่ยจากยอดที่เหลือ · % สีเขียว = ถึงเป้าของวันนั้น", {
+    x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+  });
+}
+
+/** % achieve ของวันเดียว (เทียบรายวัน · เหมือน DayTarget บนเว็บ): การ์ดใหญ่ + แท่ง GMV เทียบเป้า */
+function addDayTargetSlide(pres: PptxGenJS, t: NonNullable<CompareDeckInput["dayTarget"]>) {
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(`เป้าหมาย GMV ${t.title}`, { placeholder: "title" });
+  const gapV = t.gmv - t.target;
+  achieveTile(pres, s, { x: M, y: 1.5, w: 6.0, h: 3.0 }, {
+    label: `% Achieve ${t.title} (ช่องที่ตั้งเป้า)`, pct: t.pct, gmv: t.gmv, target: t.target, big: true,
+    note: gapV >= 0 ? `เกินเป้า ${fmt("gmv", gapV)}` : `ขาดเป้า ${fmt("gmv", -gapV)}`, noteColor: gapV >= 0 ? C.up : C.down,
+  });
+  shapeBars(pres, s, {
+    // ซ้อน = แท่งละชุดอยู่กลางช่อง (อีกชุดเป็น 0)
+    labels: ["GMV", "เป้า"], box: { x: 7.0, y: 1.5, w: W - M - 7.0, h: 4.6 }, showValue: true, change: false, legend: false, stacked: true,
+    series: [{ name: "GMV", color: C.pink, values: [t.gmv, 0] }, { name: "เป้า", color: C.blue, values: [0, t.target] }],
+  });
+  s.addText("นับเฉพาะช่องที่ตั้งเป้าในเดือนนั้น · เป้ารายวัน = เป้าเดือนเฉลี่ยทุกวัน (วันที่ใส่เป้าเองใช้ค่าที่ใส่)", {
+    x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true,
+  });
 }
 
 /**
@@ -971,6 +1082,142 @@ function addTop5Slide(pres: PptxGenJS, lives: LiveSession[], name: string) {
     { x: M, y: 5.1, w: W - 2 * M, h: 0.5, fontSize: 14, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
 }
 
+/** ป้าย "สาเหตุหลัก" (ชมพูทึบ ตัวขาว) */
+function causeTag(pres: PptxGenJS, s: PptxGenJS.Slide, x: number, y: number) {
+  s.addShape(pres.ShapeType.roundRect, { x, y, w: 0.85, h: 0.24, fill: { color: C.pink }, line: { color: C.pink }, rectRadius: 0.12 });
+  s.addText("สาเหตุหลัก", { x, y, w: 0.85, h: 0.24, fontSize: 9, bold: true, color: C.white, align: "center", valign: "middle", fontFace: FONT, margin: 0, isTextBox: true });
+}
+
+/**
+ * ยอดมาจากไหน (เหมือนเว็บ · src/lib/live-funnel.ts): แพลตฟอร์มละแถว ขั้นหลักเป็นการ์ด อัตราระหว่างขั้นอยู่บนลูกศร
+ *   % เทียบช่วงก่อน · ขั้นที่ทำให้ GMV เปลี่ยนมากที่สุด = กรอบชมพู + ป้าย "สาเหตุหลัก" + ประโยคสรุปใต้แถว
+ */
+function addFunnelSlide(pres: PptxGenJS, title: string, a: LiveSession[], b: LiveSession[], prevLabel: string) {
+  const platforms = (["TikTok", "Shopee"] as Platform[]).filter((p) => a.some((x) => x.platform === p));
+  if (!platforms.length) return;
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(title, { placeholder: "title" });
+  const text = (t: string | PptxGenJS.TextProps[], opts: PptxGenJS.TextPropsOptions) => s.addText(t, { fontFace: FONT, margin: 0, isTextBox: true, ...opts });
+  text(`GMV = จำนวนคนขั้นแรก × อัตราแต่ละขั้น · % เทียบ ${prevLabel} · ขั้นที่ทำให้ยอดเปลี่ยนมากที่สุดมีป้าย "สาเหตุหลัก"`, { x: M, y: 1.2, w: W - 2 * M, h: 0.3, fontSize: 12, color: C.muted, fit: "shrink" });
+  const rw = 1.45;
+  platforms.forEach((p, row) => {
+    const steps = FUNNEL_STEPS[p];
+    const cur = totalsOf(a.filter((x) => x.platform === p)), prev = totalsOf(b.filter((x) => x.platform === p));
+    const cause = prev.lives ? funnelCause(steps, cur, prev) : null;
+    const cards = steps.filter((st) => !st.rate).length, rates = steps.length - cards;
+    const cw = Math.min(2.6, (W - 2 * M - rates * rw) / cards);
+    const y0 = 1.65 + row * 2.5, y = y0 + 0.35, h = 1.3;
+    text(p, { x: M, y: y0, w: 4, h: 0.3, fontSize: 15, bold: true, color: C.text });
+    let x = M;
+    steps.forEach((st) => {
+      const v = st.value(cur), main = cause?.main.s === st;
+      const c = prev.lives ? changeOf(v, st.value(prev)) : null;
+      const change = prev.lives ? { text: c === null ? "-" : pctText(c), options: { bold: c !== null, color: pctColor(c) } } : null;
+      if (st.rate) {
+        s.addShape(pres.ShapeType.rightArrow, { x: x + (rw - 0.5) / 2, y: y + 0.52, w: 0.5, h: 0.26, fill: { color: C.pinkOnDark }, line: { color: C.pinkOnDark, width: 0 } });
+        text([
+          { text: st.label, options: { color: main ? C.text : C.muted, bold: main, breakLine: true } },
+          { text: fmtMetric(st.kind, v), options: { color: C.text, bold: true } },
+        ], { x, y: y + 0.02, w: rw, h: 0.48, fontSize: 10, align: "center", valign: "bottom", fit: "shrink" });
+        if (change) text([change], { x, y: y + 0.82, w: rw, h: 0.24, fontSize: 10, align: "center", valign: "middle" });
+        if (main) causeTag(pres, s, x + (rw - 0.85) / 2, y + 1.06);
+        x += rw;
+        return;
+      }
+      s.addShape(pres.ShapeType.roundRect, { x, y, w: cw, h, fill: { color: C.white }, line: { color: main ? C.pink : C.grid, width: main ? 2 : 1 }, rectRadius: 0.1 });
+      text(st.label, { x: x + 0.15, y: y + 0.12, w: cw - 0.3, h: 0.28, fontSize: 11, color: C.muted, wrap: false });
+      const big = fmtMetric(st.kind, v);
+      text(big, { x: x + 0.15, y: y + 0.42, w: cw - 0.3, h: 0.45, fontSize: big.length > 11 ? 16 : 20, bold: true, color: C.text, fit: "shrink" });
+      // ป้ายสาเหตุหลักอยู่บรรทัดเดียวกับ % (ชื่อขั้นยาว เช่น Product Impressions ไม่ต้องตัดบรรทัด)
+      if (change) text([change], { x: x + 0.15, y: y + 0.92, w: cw - (main ? 1.1 : 0.3), h: 0.28, fontSize: main ? 11 : 12, valign: "middle", wrap: false });
+      if (main) causeTag(pres, s, x + cw - 0.95, y + 0.94);
+      x += cw;
+    });
+    if (cause) {
+      const t = funnelCauseText(cause);
+      s.addShape(pres.ShapeType.roundRect, { x: M, y: y + h + 0.1, w: W - 2 * M, h: 0.36, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.08 });
+      text([
+        { text: `${t.lead} `, options: { color: C.text } },
+        { text: t.why, options: { bold: true, color: C.text } },
+        { text: ` ${t.tail}`, options: { color: C.text } },
+      ], { x: M + 0.15, y: y + h + 0.1, w: W - 2 * M - 0.3, h: 0.36, fontSize: 12, valign: "middle", fit: "shrink" });
+    }
+  });
+}
+
+/** ส่วนต่าง (มีเครื่องหมาย) ตามหน่วยของตัวชี้วัด · ค่าที่เป็น % = pp (เหมือนเว็บ) */
+const gapOf = (kind: (typeof METRICS)[number]["kind"], g: number) =>
+  `${g > 0 ? "+" : g < 0 ? "−" : "±"}${kind === "pct" ? `${Math.abs(g * 100).toFixed(2)}pp` : fmtMetric(kind, Math.abs(g))}`;
+
+/**
+ * สรุปเทียบทุกตัวชี้วัด (เหมือนการ์ดแท่งคู่บนหน้าเทียบ 2 ช่วง · PairBars): ตัวชี้วัดละช่อง 3 คอลัมน์
+ *   ชมพู = ช่วงหลัก / ฟ้า = ช่วงเทียบ · % ที่เปลี่ยน + ส่วนต่างมุมขวา
+ */
+function addPairsSlide(pres: PptxGenJS, ta: Totals, tb: Totals, aName: string, bName: string) {
+  const s = pres.addSlide({ masterName: "CONTENT" });
+  s.addText(`สรุปเทียบทุกตัวชี้วัด: ${aName} vs ${bName}`, { placeholder: "title" });
+  shapeLegend(pres, s, { x: M, y: 1.18, w: W - 2 * M }, [{ name: aName, color: C.pink }, { name: bName, color: C.blue }]);
+  const text = (t: string | PptxGenJS.TextProps[], opts: PptxGenJS.TextPropsOptions) => s.addText(t, { fontFace: FONT, margin: 0, isTextBox: true, ...opts });
+  const cols = 3, gap = 0.22, top = 1.6, rows = Math.ceil(METRICS.length / cols);
+  const cw = (W - 2 * M - gap * (cols - 1)) / cols, ch = (6.6 - top - gap * (rows - 1)) / rows;
+  METRICS.forEach((m, i) => {
+    const x = M + (i % cols) * (cw + gap), y = top + Math.floor(i / cols) * (ch + gap);
+    const a = val(ta, m.key), b = val(tb, m.key), c = changeOf(a, b);
+    s.addShape(pres.ShapeType.roundRect, { x, y, w: cw, h: ch, fill: { color: C.white }, line: { color: C.grid, width: 1 }, rectRadius: 0.08 });
+    text([
+      { text: m.label, options: { bold: true, color: C.text } },
+      ...(m.note ? [{ text: `  ${m.note}`, options: { color: C.muted, fontSize: 8 } }] : []),
+    ], { x: x + 0.12, y: y + 0.05, w: cw - (c === null ? 0.5 : 1.85), h: 0.28, fontSize: 11, valign: "middle", fit: "shrink" });
+    if (c !== null) {
+      text([
+        { text: pctText(c), options: { bold: true, color: pctColor(c) } },
+        ...(a !== null && b !== null ? [{ text: `  ${gapOf(m.kind, a - b)}`, options: { color: C.muted } }] : []),
+      ], { x: x + cw - 1.75, y: y + 0.05, w: 1.63, h: 0.28, fontSize: 10, align: "right", valign: "middle", fit: "shrink" });
+    }
+    const max = Math.max(a ?? 0, b ?? 0) || 1;
+    const bw = cw - 0.24 - 1.2;
+    ([[a, C.pink, true], [b, C.blue, false]] as const).forEach(([v, color, main], j) => {
+      const by = y + 0.38 + j * 0.2;
+      s.addShape(pres.ShapeType.rect, { x: x + 0.12, y: by, w: bw, h: 0.13, fill: { color: "F7EEF2" }, line: { color: "F7EEF2", width: 0 } });
+      if (v) s.addShape(pres.ShapeType.rect, { x: x + 0.12, y: by, w: Math.max(0.03, (bw * Math.max(0, v)) / max), h: 0.13, fill: { color }, line: { color, width: 0 } });
+      text(fmtMetric(m.kind, v), { x: x + 0.12 + bw + 0.05, y: by - 0.05, w: 1.1, h: 0.23, fontSize: 10, bold: main, color: main ? C.text : C.muted, align: "right", valign: "middle", fit: "shrink" });
+    });
+  });
+}
+
+/** ไลฟ์ต่อช่วงที่ใส่เป็นรายการได้ (เกินนี้ = หน้าเยอะเกิน ดู Top 5 / ไฟล์ส่งออกแทน) */
+const LIVE_LIST_MAX = 45;
+
+/** รายการไลฟ์ (เหมือน "ไลฟ์ใน ..." บนเว็บ): เรียงตามเวลาเริ่ม หน้าละ 15 ไลฟ์ */
+function addLiveListSlides(pres: PptxGenJS, name: string, lives: LiveSession[]) {
+  if (!lives.length || lives.length > LIVE_LIST_MAX) return;
+  const list = lives.slice().sort((x, y) => Date.parse(x.startedAt) - Date.parse(y.startedAt));
+  const when = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+  const dur = (sec: number) => `${Math.floor(sec / 3600)}:${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")}`;
+  const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
+  const PER = 15;
+  for (let start = 0; start < list.length; start += PER) {
+    const part = list.slice(start, start + PER);
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText(`ไลฟ์ใน ${name} (${list.length})${start ? " (ต่อ)" : ""}`, { placeholder: "title" });
+    s.addTable([
+      [head("เริ่ม", "left"), head("บัญชี", "left"), head("นาน"), head("GMV"), head("ออเดอร์"), head("Viewers"), head("GMV/ชม.")],
+      ...part.map((x): PptxGenJS.TableRow => [
+        { text: when.format(new Date(x.startedAt)), options: { align: "left" } },
+        { text: accountLabel({ platform: x.platform, name: x.accountName }), options: { align: "left" } },
+        { text: dur(x.durationSec), options: { align: "right" } },
+        { text: fmt("gmv", x.gmv), options: { align: "right", bold: true } },
+        { text: x.orders.toLocaleString("th-TH"), options: { align: "right" } },
+        { text: x.viewers.toLocaleString("th-TH"), options: { align: "right" } },
+        { text: fmt("gmvPerHour", x.durationSec ? x.gmv / (x.durationSec / 3600) : null), options: { align: "right" } },
+      ]),
+    ], {
+      x: M, y: 1.4, w: W - 2 * M, colW: [2.3, 3.033, 1.0, 1.7, 1.3, 1.3, 1.5], fontSize: 12, fontFace: FONT, color: C.text, rowH: Math.min(0.33, 5.2 / (part.length + 1)),
+      border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
+    });
+  }
+}
+
 export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gslides" = "pptx"): Promise<Blob> {
   const pres = await newDeck(o.single ? `${o.report}: ${o.aName}` : `${o.report}: ${o.aName} vs ${o.bName}`, `GLORY VITAL · ${o.report}: ${o.aName}${o.b.length ? ` vs ${o.bName}` : ""}`);
 
@@ -1017,35 +1264,71 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     }
   }
 
-  // 2) ตัวเลขหลัก 8 การ์ด
+  // 1.5) % achieve ของวันนั้น (เทียบรายวัน · บนเว็บอยู่บนสุด)
+  if (o.dayTarget) addDayTargetSlide(pres, o.dayTarget);
+
+  // 2) ตัวเลขหลัก 8 การ์ด (เหมือนการ์ดบนเว็บ): % เทียบช่วงก่อน (+ YoY) + เส้นแนวโน้มเล็กรายวัน / รายเดือน
+  const ty = o.yoy ? totalsOf(o.yoy.sessions) : null;
   {
     const s = pres.addSlide({ masterName: "CONTENT" });
     s.addText(hasB ? `ตัวเลขหลัก: ${o.aName} เทียบ ${o.bName}` : `ตัวเลขหลัก: ${o.aName}`, { placeholder: "title" });
     const keys: MetricKey[] = ["gmv", "orders", "viewers", "gmvPerHour", "duration", "lives", "ctr", "co"];
     const cw = (W - 2 * M - 3 * 0.3) / 4, ch = 2.45;
+    const sparkTotals = o.spark && o.spark.length > 1 ? o.spark.map(totalsOf) : null;
     keys.forEach((k, i) => {
       const x = M + (i % 4) * (cw + 0.3), y = 1.5 + Math.floor(i / 4) * (ch + 0.3);
       const m = metricOf(k), va = val(ta, k), vb = val(tb, k), c = changeOf(va, vb);
       // CO รวมสองแพลตฟอร์มคำนวณไม่ได้ (สูตรต่างกัน)
       const mixedCo = k === "co" && ta.coBase === null;
       s.addShape(pres.ShapeType.roundRect, { x, y, w: cw, h: ch, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
-      s.addText(m.note ? `${m.label} · ${m.note}` : m.label, { x: x + 0.25, y: y + 0.2, w: cw - 0.5, h: 0.4, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      s.addText(m.note ? `${m.label} · ${m.note}` : m.label, { x: x + 0.25, y: y + 0.15, w: cw - 0.5, h: 0.35, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
       // ตัวเลขยาวลดขนาด ไม่ให้ตัดบรรทัด (เช่น ฿222,128,756)
       const big = fmt(k, va);
-      s.addText(big, { x: x + 0.25, y: y + 0.6, w: cw - 0.5, h: 0.7, fontSize: big.length > 13 ? 18 : big.length > 10 ? 22 : 26, bold: true, color: C.text, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
-      // ไม่มีช่วงเทียบ: แสดงเฉลี่ยต่อเดือนแทน (เฉพาะค่าที่บวกกันได้)
-      if (!hasB && activeMonths > 1 && va !== null && ["gmv", "orders", "viewers", "duration", "lives"].includes(k)) {
-        s.addText(`เฉลี่ย ${fmt(k, va / activeMonths)} / เดือน`, { x: x + 0.25, y: y + 1.45, w: cw - 0.5, h: 0.4, fontSize: 13, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      s.addText(big, { x: x + 0.25, y: y + 0.5, w: cw - 0.5, h: 0.6, fontSize: big.length > 13 ? 18 : big.length > 10 ? 22 : 26, bold: true, color: C.text, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      // บรรทัดเทียบ: ▲ % vs ช่วงก่อน · YoY (ค่าของช่วงก่อนอยู่ในหน้าตาราง "ทุกตัวชี้วัด") · ไม่มีช่วงเทียบ = เฉลี่ยต่อเดือน (เฉพาะค่าที่บวกกันได้)
+      const lines: PptxGenJS.TextProps[][] = [];
+      const vsLine = (cc: number | null, label: string) => [
+        { text: pctText(cc), options: { bold: cc !== null, color: pctColor(cc) } },
+        { text: `  ${label}`, options: { color: C.muted } },
+      ];
+      if (mixedCo) lines.push([{ text: "ดูแยก TikTok / Shopee", options: { color: C.muted } }]);
+      else {
+        if (hasB) lines.push(vsLine(c, `${o.yoy ? "MoM " : ""}vs ${o.bName}`));
+        if (ty && o.yoy) lines.push(vsLine(changeOf(va, val(ty, k)), `YoY vs ${o.yoy.name}`));
+        if (!hasB && activeMonths > 1 && va !== null && ["gmv", "orders", "viewers", "duration", "lives"].includes(k)) {
+          lines.push([{ text: `เฉลี่ย ${fmt(k, va / activeMonths)} / เดือน`, options: { color: C.muted } }]);
+        }
       }
-      if (mixedCo || hasB) {
-        s.addText(mixedCo ? "ดูแยก TikTok / Shopee" : pctText(c), { x: x + 0.25, y: y + 1.35, w: cw - 0.5, h: 0.4, fontSize: mixedCo ? 13 : 15, bold: !mixedCo, color: mixedCo ? C.muted : pctColor(c), fontFace: FONT, margin: 0, isTextBox: true });
+      if (lines.length) {
+        // บรรทัดละ 1 แถว (กล่องแยก ไม่ตัดบรรทัดเข้าไปทับเส้นแนวโน้ม)
+        //   ชื่อช่วงยาว (เช่น ชื่อแคมเปญ) = ตัวเล็กลงแทนการตัดบรรทัด
+        //   ทุกบรรทัดในการ์ดใช้ขนาดเดียวกัน (ตามบรรทัดที่ยาวสุด)
+        const shown = lines.slice(0, 2);
+        const len = Math.max(...shown.map((ln) => ln.reduce((a, r) => a + (r.text ?? "").length, 0)));
+        const size = len <= 26 ? 12 : len <= 30 ? 11 : len <= 36 ? 10 : 8;
+        shown.forEach((ln, j) => s.addText(ln, {
+          x: x + 0.25, y: y + 1.12 + j * 0.3, w: cw - 0.5, h: 0.3, fontSize: size, fontFace: FONT, margin: 0, valign: "middle", wrap: false, isTextBox: true,
+        }));
       }
-      if (hasB) s.addText(`${o.bName}: ${fmt(k, vb)}`, { x: x + 0.25, y: y + 1.8, w: cw - 0.5, h: 0.4, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      if (sparkTotals) sparkline(pres, s, { x: x + 0.25, y: y + 1.8, w: cw - 0.5, h: 0.45 }, sparkTotals.map((t) => (t.lives ? m.value(t) : null)), C.pink);
+      // ไม่มีเส้นแนวโน้ม (หน้าเทียบ 2 ช่วง) = ค่าของช่วงเทียบใต้ % เหมือนเดิม
+      else if (hasB && !mixedCo && lines.length < 2) {
+        s.addText(`${o.bName}: ${fmt(k, vb)}`, { x: x + 0.25, y: y + 1.5, w: cw - 0.5, h: 0.32, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      }
     });
+    if (sparkTotals) {
+      s.addText(`เส้นในการ์ด = ค่า${o.timeName === "รายเดือน" ? "รายเดือน" : "รายวัน"}ของ ${o.aName}`, { x: M, y: 6.75, w: 8, h: 0.25, fontSize: 10, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+    }
   }
 
-  // 2.2) เป้าหมาย GMV (หน้ารายเดือน)
-  if (o.target) addTargetSlide(pres, `เป้าหมาย GMV ${o.aName}`, o.target);
+  // 2.1) สรุปเทียบทุกตัวชี้วัด: แท่งคู่ (หน้าเทียบ 2 ช่วงบนเว็บ)
+  if (o.pairs && hasB) addPairsSlide(pres, ta, tb, o.aName, o.bName);
+
+  // 2.2) เป้าหมาย GMV (หน้ารายเดือน) + เป้า vs GMV รายวัน
+  if (o.target) {
+    addTargetSlide(pres, `เป้าหมาย GMV ${o.aName}`, o.target);
+    addTargetDaysSlide(pres, `เป้า vs GMV รายวัน ${o.aName}`, o.target);
+  }
 
   // 2.5) ยอดต่อชั่วโมง: GMV / Viewers / Impressions ต่อชั่วโมงไลฟ์
   addPerHourSlide(pres, hasB ? `ยอดต่อชั่วโมง: ${o.aName} เทียบ ${o.bName}` : `ยอดต่อชั่วโมง: ${o.aName}`, PER_HOUR_KEYS.map((k) => {
@@ -1062,29 +1345,38 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     const s = pres.addSlide({ masterName: "CONTENT" });
     s.addText("ทุกตัวชี้วัด", { placeholder: "title" });
     const head = (text: string, align: "left" | "right" = "right") => ({ text, options: { bold: true, color: C.white, fill: { color: C.pink }, align } });
-    const rows: PptxGenJS.TableRow[] = [hasB
-      ? [head("ตัวชี้วัด", "left"), head(o.aName), head(o.bName), head("เปลี่ยน")]
-      : [head("ตัวชี้วัด", "left"), head(o.aName)]];
+    // หน้ารายเดือนมี YoY ด้วย (เหมือนการ์ดบนเว็บ: MoM + YoY)
+    const change = (c: number | null) => ({ text: c === null ? "-" : pctText(c), options: { align: "right" as const, bold: true, color: pctColor(c) } });
+    const rows: PptxGenJS.TableRow[] = [[
+      head("ตัวชี้วัด", "left"), head(o.aName),
+      ...(hasB ? [head(o.bName), head(ty ? "MoM" : "เปลี่ยน")] : []),
+      ...(ty && o.yoy ? [head(o.yoy.name), head("YoY")] : []),
+    ]];
     for (const m of METRICS) {
-      const va = val(ta, m.key), vb = val(tb, m.key), c = changeOf(va, vb);
+      const va = val(ta, m.key), vb = val(tb, m.key), vy = ty ? val(ty, m.key) : null;
       rows.push([
         { text: m.label, options: { align: "left" } },
         { text: fmt(m.key, va), options: { align: "right", bold: true } },
-        ...(hasB ? [
-          { text: fmt(m.key, vb), options: { align: "right" as const, color: C.muted } },
-          { text: c === null ? "-" : pctText(c), options: { align: "right" as const, bold: true, color: pctColor(c) } },
-        ] : []),
+        ...(hasB ? [{ text: fmt(m.key, vb), options: { align: "right" as const, color: C.muted } }, change(changeOf(va, vb))] : []),
+        ...(ty ? [{ text: fmt(m.key, vy), options: { align: "right" as const, color: C.muted } }, change(changeOf(va, vy))] : []),
       ]);
     }
+    const tableW = ty ? 8.65 : 7.9;
+    const widths = [2.5, 1.9, ...(hasB ? [1.9, 1.6] : []), ...(ty ? [1.9, 1.6] : [])];
+    const scale = (hasB || ty ? tableW : 7.9) / widths.reduce((a, b) => a + b, 0);
     s.addTable(rows, {
-      x: M, y: 1.45, w: 7.9, colW: hasB ? [2.5, 1.9, 1.9, 1.6] : [4.4, 3.5], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.37,
-      border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
+      x: M, y: 1.45, w: tableW, colW: hasB || ty ? widths.map((w) => w * scale) : [4.4, 3.5], fontSize: ty ? 12 : 13, fontFace: FONT, color: C.text,
+      rowH: Math.min(0.37, 5.15 / rows.length), border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
     });
-    s.addShape(pres.ShapeType.roundRect, { x: 8.9, y: 1.45, w: W - M - 8.9, h: 4.75, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
-    s.addText("ข้อสังเกต", { x: 9.15, y: 1.65, w: 3.3, h: 0.45, fontSize: 18, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+    const nx = M + tableW + 0.4;
+    s.addShape(pres.ShapeType.roundRect, { x: nx, y: 1.45, w: W - M - nx, h: 4.75, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
+    s.addText("ข้อสังเกต", { x: nx + 0.25, y: 1.65, w: W - M - nx - 0.5, h: 0.45, fontSize: 18, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
     s.addText(notes.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < notes.length - 1 } })),
-      { x: 9.15, y: 2.15, w: 3.35, h: 3.9, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, valign: "top", paraSpaceAfter: 8, fit: "shrink", isTextBox: true });
+      { x: nx + 0.25, y: 2.15, w: W - M - nx - 0.45, h: 3.9, fontSize: 13, color: C.text, fontFace: FONT, margin: 0, valign: "top", paraSpaceAfter: 8, fit: "shrink", isTextBox: true });
   }
+
+  // 3.5) ยอดมาจากไหน (หน้ารายเดือนบนเว็บ): ขั้นการขาย + สาเหตุหลัก
+  if (o.funnel) addFunnelSlide(pres, `ยอดมาจากไหน: ${o.aName}`, o.a, o.b, o.funnel.prevLabel);
 
   // 4) อะไรทำให้ GMV เปลี่ยน: แยกผลจากชั่วโมงไลฟ์ / ยอดต่อชั่วโมง + กรวยการขายแต่ละแพลตฟอร์ม
   addDriversSlide(pres, analysis, ta, tb, o.aName, o.bName, "อะไรทำให้ GMV เปลี่ยน");
@@ -1171,9 +1463,22 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     const s = pres.addSlide({ masterName: "CONTENT" });
     const title = `GMV รายเดือน (${o.months.length} เดือน)`;
     s.addText(title, { placeholder: "title" });
-    platformBars(pres, s, target, { title, labels: o.months.map((m) => m.short), groups: o.months.map((m) => m.a), box: { x: M, y: 1.4, w: W - 2 * M, h: 5.25 }, showValue: true });
-    if (o.months.some((m) => m.short.endsWith("*"))) {
-      s.addText("* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)", { x: M, y: 6.7, w: 6, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+    // MoM ใต้กราฟ (เหมือนตารางบนเว็บ) · เดือนที่ยังไม่จบเทียบเดือนก่อนถึงวันเดียวกัน (b)
+    const months = o.months;
+    const mom = months.slice(1).map((m, i) => ({ m, c: changeOf(totalsOf(m.a).gmv || null, totalsOf(m.b ?? months[i].a).gmv || null) }));
+    const hasMom = mom.some((x) => x.c !== null);
+    platformBars(pres, s, target, { title, labels: months.map((m) => m.short), groups: months.map((m) => m.a), box: { x: M, y: 1.4, w: W - 2 * M, h: hasMom ? 4.75 : 5.25 }, showValue: true });
+    if (hasMom) {
+      s.addText([
+        { text: "MoM:  ", options: { bold: true, color: C.text } },
+        ...mom.flatMap(({ m, c }) => [
+          { text: `${m.short} `, options: { color: C.muted } },
+          { text: `${c === null ? "-" : pctText(c)}    `, options: { bold: c !== null, color: pctColor(c) } },
+        ]),
+      ], { x: M, y: 6.2, w: W - 2 * M, h: 0.45, fontSize: 11, fontFace: FONT, margin: 0, valign: "middle", fit: "shrink", isTextBox: true });
+    }
+    if (months.some((m) => m.short.endsWith("*"))) {
+      s.addText(`* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)${months.some((m) => m.b) ? " · MoM ของเดือนนี้เทียบเดือนก่อนถึงวันเดียวกัน" : ""}`, { x: M, y: 6.7, w: 9, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
     }
   }
 
@@ -1251,8 +1556,12 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
   }
   if (o.dayKinds) addDayKindSlide(pres, o.dayKinds.title, o.a, o.dayKinds.tags);
 
-  // 8) Top 5 ไลฟ์ของช่วงหลัก
+  // 8) Top 5 ไลฟ์ของช่วงหลัก + รายการไลฟ์ (หน้าเทียบบนเว็บ · เฉพาะช่วงที่ไลฟ์ไม่เยอะ)
   addTop5Slide(pres, o.a, o.aName);
+  if (o.liveList) {
+    addLiveListSlides(pres, o.aName, o.a);
+    if (hasB) addLiveListSlides(pres, o.bName, o.b);
+  }
 
   // 9) วิเคราะห์: อะไรดรอป / ทำได้ดี / ข้อเสนอแนะ
   addAnalysisSlide(pres, analysis, f ? `วิเคราะห์และข้อเสนอแนะ: ${f.aName} เทียบ ${f.bName}` : "วิเคราะห์และข้อเสนอแนะ");
@@ -1596,4 +1905,4 @@ function thaiThemeFont(pptx: Uint8Array) {
 }
 
 // ใช้ร่วมกับสไลด์อื่น (src/lib/campaign-slides.ts)
-export { C as SLIDE_C, FONT as SLIDE_FONT, W as SLIDE_W, H as SLIDE_H, M as SLIDE_M, newDeck, finish, shapeBars, pctText, pctColor, lineChart };
+export { C as SLIDE_C, FONT as SLIDE_FONT, W as SLIDE_W, H as SLIDE_H, M as SLIDE_M, newDeck, finish, shapeBars, shapeLegend, sparkline, pctText, pctColor, lineChart };

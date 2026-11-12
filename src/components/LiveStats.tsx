@@ -17,6 +17,7 @@ import { bkkStamp, compareBook, deltaOf, filterText, monthBook, MULTI_ORDER, mul
 import { dailyByPlatform, isStackable, platformSeries, totalSeries } from "@/lib/live-lines";
 import { breakdownRows, mainLeg, type BreakdownRow } from "@/lib/live-breakdown";
 import { PLAN_FULL, planVsActual, type PlanGroupCheck } from "@/lib/live-plan";
+import { FUNNEL_STEPS, funnelCause } from "@/lib/live-funnel";
 import { isShopeePlatform, slotPlatformOf } from "@/lib/platform";
 import { DAY_KINDS, dayKindLabel, dayKindStats, liveDay, tagKey, type DayTag } from "@/lib/live-days";
 import {
@@ -26,7 +27,7 @@ import {
 import { AGENCY_OURS, agencySharesOf, agencyTrend, mergePlatforms, splitByOwner, type AgencyTrend, type ChannelSplit, type OwnerSpan } from "@/lib/live-owners";
 import { ownerText } from "@/lib/plan-clash";
 import { buildCompareDeck, buildMultiDeck } from "@/lib/live-slides";
-import { monthDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
+import { monthDays, targetKey, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
@@ -432,6 +433,9 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
     const scope = targetsInScope(targets, filter.platform, filter.account);
     const names = new Map(accountsOf(data).map((a) => [a.key, accountLabel(a)]));
     const prevName = `${shortMonth(prevKey)}${cutText}`;
+    // ชื่อ YoY แบบเดียวกับการ์ดบนเว็บ (ม.ค. มีปีในชื่อแล้ว)
+    const yoyName = `${shortMonth(yoyKey).includes(" ") ? shortMonth(yoyKey) : `${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}`}${cutText}`;
+    const scoped = new Set(scope.map(targetKey));
     return buildCompareDeck({
       report: "รายเดือน", aName: monthLabel(month), bName: prevName, aRange: ongoing && lastDay ? `1–${lastDay} ${shortMonth(month)}` : monthLabel(month), bRange: prevName,
       a: curList, b: prevList, timeName: "รายวัน",
@@ -443,8 +447,16 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       exportedAt: bkkStamp(new Date().toISOString()),
       cover: { kicker: `รายเดือน${ongoing ? " (ยังไม่จบเดือน)" : ""}`, headline: monthLabel(month) },
       platformTime: true,
-      months: months13.map((m) => ({ short: `${shortMonth(m)}${ongoing && m === month ? "*" : ""}`, a: byMonth.get(m)! })),
-      target: scope.length ? { report: targetReport(scope, list, month, lastDay), lastDay, names } : undefined,
+      // เดือนที่ยังไม่จบ: MoM เทียบเดือนก่อนถึงวันเดียวกัน (เหมือนตารางบนเว็บ)
+      months: months13.map((m) => ({ short: `${shortMonth(m)}${ongoing && m === month ? "*" : ""}`, a: byMonth.get(m)!, ...(ongoing && m === month ? { b: prevList } : {}) })),
+      target: scope.length ? {
+        report: targetReport(scope, list, month, lastDay), lastDay, names,
+        noTarget: accountsOf(curList).filter((a) => !scoped.has(a.key)).map(accountLabel),
+      } : undefined,
+      // เหมือนการ์ดบนเว็บ: MoM + YoY + เส้นรายวัน · ยอดมาจากไหน
+      yoy: yoy.lives ? { name: yoyName, sessions: upTo(byMonth.get(yoyKey)!) } : undefined,
+      spark: dayGroups,
+      funnel: { prevLabel: prevName },
       owners: splitByOwner(curList, owners),
       agency: [
         { title: "GMV รายวัน แยก Agency", labels: monthDays(month).map((d) => String(Number(d.slice(8)))), trend: agencyTrend(dayGroups, owners), lineTitle: "GMV/ชม. รายวัน แยก Agency" },
@@ -581,44 +593,7 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
 
 // ---------- Funnel: ยอดมาจากไหน ----------
 
-type FunnelStep = { label: string; value: (t: Totals) => number | null; kind: "int" | "pct" | "baht"; rate?: boolean; why?: [string, string] };
-const ratioOf = (a: number | null, b: number | null) => (a === null || b === null || !b ? null : a / b);
-/** ขั้นของแต่ละแพลตฟอร์ม: ขั้นหลัก (จำนวน) สลับกับอัตรา (rate) · why = คำอธิบายเมื่อขั้นนั้นทำให้ยอดเปลี่ยน [ลดลง, เพิ่มขึ้น] */
-const FUNNEL_STEPS: Record<Platform, FunnelStep[]> = {
-  TikTok: [
-    { label: "Product Impressions", value: (t) => t.impressions, kind: "int", why: ["คนเห็นสินค้าน้อยลง", "คนเห็นสินค้ามากขึ้น"] },
-    { label: "CTR", value: (t) => ratioOf(t.clicks, t.impressions), kind: "pct", rate: true, why: ["คนคลิกสินค้าน้อยลง", "คนคลิกสินค้ามากขึ้น"] },
-    { label: "คลิก", value: (t) => t.clicks, kind: "int" },
-    { label: "CO", value: (t) => ratioOf(t.orders, t.clicks), kind: "pct", rate: true, why: ["คลิกแล้วซื้อน้อยลง", "คลิกแล้วซื้อมากขึ้น"] },
-    { label: "ออเดอร์", value: (t) => t.orders, kind: "int" },
-    { label: "มูลค่าต่อออเดอร์", value: (t) => ratioOf(t.gmv, t.orders), kind: "baht", rate: true, why: ["มูลค่าต่อออเดอร์ลดลง", "มูลค่าต่อออเดอร์เพิ่มขึ้น"] },
-    { label: "GMV", value: (t) => t.gmv, kind: "baht" },
-  ],
-  Shopee: [
-    { label: "Viewers", value: (t) => t.viewers, kind: "int", why: ["คนดูน้อยลง", "คนดูมากขึ้น"] },
-    { label: "CO", value: (t) => ratioOf(t.orders, t.viewers), kind: "pct", rate: true, why: ["คนดูแล้วซื้อน้อยลง", "คนดูแล้วซื้อมากขึ้น"] },
-    { label: "ออเดอร์", value: (t) => t.orders, kind: "int" },
-    { label: "มูลค่าต่อออเดอร์", value: (t) => ratioOf(t.gmv, t.orders), kind: "baht", rate: true, why: ["มูลค่าต่อออเดอร์ลดลง", "มูลค่าต่อออเดอร์เพิ่มขึ้น"] },
-    { label: "GMV", value: (t) => t.gmv, kind: "baht" },
-  ],
-};
-
-/**
- * GMV = ขั้นแรก × อัตราทุกขั้น → การเปลี่ยนของ GMV แยกเป็นผลของแต่ละตัวได้ด้วย log ของอัตราส่วน (ผลรวมทุกตัว = การเปลี่ยนของ GMV)
- *   ตัวที่ผลมากที่สุดในทิศเดียวกับ GMV = สาเหตุหลัก · ข้อมูลไม่ครบ (มีค่า 0 / ไม่มีช่วงเทียบ) = ไม่บอก
- */
-function funnelCause(steps: FunnelStep[], cur: Totals, prev: Totals) {
-  const g1 = cur.gmv, g0 = prev.gmv;
-  if (!g1 || !g0) return null;
-  const parts = steps.filter((s) => s.why).map((s) => ({ s, a: s.value(cur), b: s.value(prev) }));
-  if (parts.some((p) => !p.a || !p.b)) return null;
-  const total = Math.log(g1 / g0);
-  const effects = parts.map((p) => ({ s: p.s, e: Math.log(p.a! / p.b!), change: p.a! / p.b! - 1 }));
-  const same = effects.filter((x) => Math.sign(x.e) === Math.sign(total));
-  const main = (same.length ? same : effects).reduce((m, x) => (Math.abs(x.e) > Math.abs(m.e) ? x : m));
-  return { up: total > 0, change: g1 / g0 - 1, main };
-}
-
+// ขั้นการขาย + สาเหตุหลักอยู่ใน src/lib/live-funnel.ts (ใช้ร่วมกับสไลด์)
 function Funnel({ cur, prev, prevLabel }: { cur: LiveSession[]; prev: LiveSession[]; prevLabel: string }) {
   const platforms = (["TikTok", "Shopee"] as const).filter((p) => cur.some((s) => s.platform === p));
   if (!platforms.length) return null;
@@ -797,6 +772,8 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
       // เหมือนหน้าเว็บ: กลุ่มผู้ไลฟ์ + รายกลุ่ม / รายบัญชี (เทียบปีก่อนเมื่อมีข้อมูล) + ช่วงเวลาขายดี + วันปกติ vs วันแคมเปญ
       owners: owners.spans ? splitByOwner(curList, owners.spans) : undefined,
       breakdown: { spans: owners.spans ?? null },
+      // เส้นแนวโน้มในการ์ด = รายเดือน (เหมือนเว็บ)
+      spark: doneKeys.map((k) => byMonth.get(k) ?? []),
       heat: { title: `ช่วงเวลาไหนขายดี ${aName}` },
       dayKinds: dayTags.tags ? { title: `วันปกติ vs วันแคมเปญ ${aName}`, tags: dayTags.tags } : undefined,
     }, target);
@@ -2992,7 +2969,7 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
       <FilterBar filter={filter} sessions={allData}>
         <div className="flex flex-wrap gap-2">
           <ExportMenu size="sm" label="ส่งออก" build={exportBook} />
-          <SlidesMenu label="สไลด์" title={title} build={(target) => buildCompareDeck({
+          <SlidesMenu label="สไลด์" title={title} build={async (target) => buildCompareDeck({
             report, aName: curName, bName: prevName, aRange: windowText(pc.from, pc.to), bRange: pp ? windowText(pp.from, pp.to) : "",
             a: cur, b: prev, timeName: timeText, time: timeGroups,
             filterText: filterText(exportFilter).join(" · "),
@@ -3001,6 +2978,10 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
             // เทียบ 2 ช่วง: หน้าเทียบรายกลุ่ม (แท่งคู่ช่วงนี้ vs ช่วงก่อน เหมือนเว็บ) แทนแท่งซ้อนแยก Agency · ช่วงเดียว = แยก Agency ตามเวลา
             agency: single ? agencySlides : undefined,
             breakdown: single ? undefined : { spans: owners.spans ?? null },
+            // เหมือนหน้าเว็บ: แท่งคู่ทุกตัวชี้วัด + รายการไลฟ์ (ช่วงที่ไลฟ์ไม่เยอะ) + % achieve ของวันนั้น (เทียบรายวัน)
+            pairs: !single,
+            liveList: true,
+            dayTarget: targetDay ? await dayTargetOf(targetDay, curData, filter.platform, filter.account, curName) : undefined,
           }, target)} />
         </div>
       </FilterBar>
@@ -3117,6 +3098,16 @@ export function PeriodCompare({ report, cur: pc, prev: pp, unit, dataMonths, ver
       )}
     </>
   );
+}
+
+/** % achieve ของวันเดียวสำหรับสไลด์ (ตัวเลขเดียวกับ DayTarget) · ช่องในตัวกรองยังไม่ตั้งเป้า / โหลดเป้าไม่ได้ = ไม่มีหน้านั้น */
+async function dayTargetOf(date: string, sessions: LiveSession[], platform: Platform | "", account: string, title: string) {
+  const month = date.slice(0, 7);
+  const targets = await api<{ targets: LiveTarget[] }>(`/api/live-stats/targets?month=${month}`).then((r) => (r.ok ? r.targets : [])).catch(() => [] as LiveTarget[]);
+  const scope = targetsInScope(targets, platform, account);
+  if (!scope.length) return undefined;
+  const row = targetReport(scope, filterSessions(sessions, platform, account), month).days.find((d) => d.date === date);
+  return row && row.target > 0 ? { title, pct: row.pct, gmv: row.gmv, target: row.target } : undefined;
 }
 
 function SessionList({ title, sessions }: { title: string; sessions: LiveSession[] }) {

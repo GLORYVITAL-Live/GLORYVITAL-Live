@@ -130,6 +130,57 @@ describe("รายเดือน", () => {
     expect(titled(slides, "เป้าหมาย GMV")).toBe(false);
     expect(titled(slides, "แยกตามกลุ่มผู้ไลฟ์")).toBe(false);
   });
+  test("เหมือนการ์ดบนเว็บ: MoM + YoY + เส้นรายวัน · ยอดมาจากไหน + สาเหตุหลัก · เป้ารายวัน · MoM ใต้ 13 เดือน", async () => {
+    const yoy = days.map((t) => t.b.map((x) => ({ ...x, startedAt: x.startedAt.replace("2026-10", "2025-11"), gmv: x.gmv / 2 }))).flat();
+    const report = {
+      ...month.target!.report,
+      days: [1, 2, 3, 4].map((d) => ({ date: `2026-11-0${d}`, target: 1000, gmv: d <= 3 ? 1500 * d : 0, pct: d <= 3 ? 1.5 * d : 0, manual: d === 2 })),
+    };
+    for (const target of ["pptx", "gslides"] as const) {
+      const { slides } = await open(await buildCompareDeck({
+        ...month, yoy: { name: "พ.ย. 25 1–3", sessions: yoy }, spark: days.map((t) => t.a), funnel: { prevLabel: "ต.ค. 1–3" },
+        target: { ...month.target!, report, noTarget: ["Shopee · Shopee"] },
+        months: [{ short: "ต.ค.", a: days.flatMap((t) => t.b) }, { short: "พ.ย.*", a: days.flatMap((t) => t.a), b: days.flatMap((t) => t.b) }],
+      }, target));
+      const kpi = slides.find((s) => s.includes("ตัวเลขหลัก: พฤศจิกายน 2026"))!;
+      expect(kpi).toContain("MoM vs ต.ค. 1–3");
+      expect(kpi).toContain("YoY vs พ.ย. 25 1–3");
+      // เส้นแนวโน้มในการ์ด (ฐาน + 2 ช่วง) · CO รวมสองแพลตฟอร์มไม่มีค่า = ไม่มีเส้น
+      expect((kpi.match(/prst="line"/g) ?? []).length).toBe(7 * 3);
+      expect(titled(slides, "YoY<")).toBe(true); // คอลัมน์ YoY ในตารางทุกตัวชี้วัด
+      const funnel = slides.find((s) => s.includes("ยอดมาจากไหน: พฤศจิกายน 2026"))!;
+      expect(funnel).toContain("Product Impressions");
+      expect(funnel).toContain("สาเหตุหลัก");
+      expect(funnel).toContain("มูลค่าต่อออเดอร์เพิ่มขึ้น"); // GMV โต ทั้งที่จำนวนคน / คลิก / ออเดอร์เท่าเดิม
+      expect(titled(slides, "เป้า vs GMV รายวัน พฤศจิกายน 2026")).toBe(true);
+      expect(titled(slides, "% Achieve วันที่ 3")).toBe(true);
+      expect(titled(slides, "ยังไม่ตั้งเป้า (ไม่นับใน % นี้): Shopee · Shopee")).toBe(true);
+      expect(titled(slides, "MoM:")).toBe(true);
+    }
+  });
+});
+
+describe("หน้าเทียบ 2 ช่วง: เหมือนเว็บ", () => {
+  test("แท่งคู่ทุกตัวชี้วัด + รายการไลฟ์ทั้งสองช่วง + % achieve ของวัน", async () => {
+    for (const target of ["pptx", "gslides"] as const) {
+      const { slides } = await open(await buildCompareDeck({ ...base, pairs: true, liveList: true, dayTarget: { title: "5 พ.ย.", pct: 0.8, gmv: 16000, target: 20000 } }, target));
+      const pairs = slides.find((s) => s.includes("สรุปเทียบทุกตัวชี้วัด: 5 พ.ย. vs 4 พ.ย."))!;
+      expect(pairs).toContain("มูลค่าต่อออเดอร์");
+      expect(pairs).toContain("จำนวนไลฟ์");
+      expect(titled(slides, "ไลฟ์ใน 5 พ.ย. (3)")).toBe(true);
+      expect(titled(slides, "ไลฟ์ใน 4 พ.ย. (1)")).toBe(true);
+      const day = slides.find((s) => s.includes("เป้าหมาย GMV 5 พ.ย."))!;
+      expect(day).toContain("80.0%");
+      expect(day).toContain("ขาดเป้า ฿4,000");
+    }
+  });
+  test("ไม่ส่ง = ไม่มีหน้าเหล่านี้ · ไลฟ์เยอะเกินไม่ใส่รายการ", async () => {
+    const { slides } = await open(await buildCompareDeck(base));
+    expect(titled(slides, "สรุปเทียบทุกตัวชี้วัด")).toBe(false);
+    expect(titled(slides, "ไลฟ์ใน")).toBe(false);
+    const many = Array.from({ length: 46 }, (_, i) => live("2026-11-05", `${String(i % 24).padStart(2, "0")}:00`, 100));
+    expect(titled((await open(await buildCompareDeck({ ...base, a: many, liveList: true }))).slides, "ไลฟ์ใน 5 พ.ย.")).toBe(false);
+  });
 });
 
 describe("แยก Agency", () => {

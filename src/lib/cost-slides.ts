@@ -1,5 +1,6 @@
 // สไลด์หน้า Analytics > Cost / ROI: ตัวเลขเดียวกับหน้าเว็บ (src/components/CostPage.tsx) -> PowerPoint / Google Slides
-//   ปก / ตัวเลขหลัก / แยกตามแพลตฟอร์มและกลุ่ม / Cost รายเดือน (แท่งซ้อนตามประเภท) / ROI รายเดือน / ตารางรายเดือน / แยกกลุ่มทั้งปี / ความคุ้มค่า Mc
+//   ปก / ตัวเลขหลัก (+ เส้นแนวโน้มในการ์ด) / แยกตามแพลตฟอร์มและกลุ่ม / เรท Agency / เทียบ MoM (Cost · GMV · ROI · Cost ต่อ GMV + ตาราง)
+//   / Cost รายเดือน (แท่งซ้อนตามประเภท) / ROI รายเดือน / ตารางรายเดือน / แยกกลุ่มทั้งปี / ความคุ้มค่า Mc
 //   แสดงเฉพาะส่วนที่บัญชีนี้ดูได้ (see) เหมือนหน้าเว็บ
 
 import type PptxGenJS from "pptxgenjs";
@@ -7,7 +8,7 @@ import { costMoM, costRatio, costTotals, roiOf, rowCost, rowSource, yearRows, ty
 import { hasBudget } from "@/lib/agency-budget";
 import { MC_COST_DIMS, mcCostRows, type CostReport as McCostReport } from "@/lib/mc-cost-calc";
 import {
-  finish, lineChart, newDeck, pctColor, pctText, shapeBars,
+  finish, lineChart, newDeck, pctColor, pctText, shapeBars, shapeLegend, sparkline,
   SLIDE_C as C, SLIDE_FONT as FONT, SLIDE_H as H, SLIDE_M as M, SLIDE_W as W,
 } from "@/lib/live-slides";
 
@@ -72,31 +73,53 @@ export async function buildCostDeck(o: CostDeckInput, target: "pptx" | "gslides"
   }
 
   // 2) ตัวเลขหลัก (เหมือนการ์ดบนเว็บ) · Cost ไม่ระบายเขียว/แดง (เพิ่มไม่ได้แปลว่าแย่) · Cost/GMV ลด = ดี
+  //   เส้นแนวโน้มเล็กในการ์ด = ยอดรายเดือนของปีนี้ถึงเดือนที่เลือก (เหมือนเว็บ)
   {
     const s = pres.addSlide({ masterName: "CONTENT" });
     s.addText(`ตัวเลขหลัก ${o.monthName} เทียบ ${o.prevName}`, { placeholder: "title" });
-    const kpis: { label: string; value: string; c: number | null; tone: "neutral" | "up" | "down"; sub: string }[] = [
-      { label: "Cost รวม", value: baht(totals.cost), c: changeOf(totals.cost, prev.cost), tone: "neutral", sub: [open && totals.full !== totals.cost ? `ทั้งเดือนตามแผน ${baht(totals.full)}` : "", totals.forecast ? `ประมาณการ ${baht(totals.forecast)}` : ""].filter(Boolean).join(" · ") },
+    const upTo = (trend ?? []).filter((p) => p.month <= report.month);
+    const sparkOf = (f: (p: CostPoint) => number | null) => (upTo.length > 1 ? upTo.map(f) : undefined);
+    type Kpi = { label: string; value: string; c: number | null; tone: "neutral" | "up" | "down"; sub: string; spark?: (number | null)[] };
+    const kpis: Kpi[] = [
+      {
+        label: "Cost รวม", value: baht(totals.cost), c: changeOf(totals.cost, prev.cost), tone: "neutral", spark: sparkOf((p) => p.cost),
+        sub: [open && totals.full !== totals.cost ? `ทั้งเดือนตามแผน ${baht(totals.full)}` : "", totals.forecast ? `ประมาณการ ${baht(totals.forecast)}` : ""].filter(Boolean).join(" · "),
+      },
       ...(see.gmv ? [
-        { label: "Cost ต่อ GMV", value: pctOf(costRatio(totals.cost, totals.gmv)), c: changeOf(costRatio(totals.cost, totals.gmv), costRatio(prev.cost, prev.gmv)), tone: "down" as const, sub: totals.gmv === null ? "ยังไม่มีไฟล์ Export" : `GMV ${baht(totals.gmv)}` },
-        { label: "ROI (GMV ÷ Cost)", value: roiText(roi), c: changeOf(roi, prevRoi), tone: "up" as const, sub: roi === null ? "" : `จ่าย ฿1 ได้ยอดขาย ${baht(roi)}` },
+        {
+          label: "Cost ต่อ GMV", value: pctOf(costRatio(totals.cost, totals.gmv)), c: changeOf(costRatio(totals.cost, totals.gmv), costRatio(prev.cost, prev.gmv)), tone: "down" as const,
+          sub: totals.gmv === null ? "ยังไม่มีไฟล์ Export" : `GMV ${baht(totals.gmv)}`, spark: sparkOf((p) => costRatio(p.cost, p.gmv)),
+        },
+        { label: "ROI (GMV ÷ Cost)", value: roiText(roi), c: changeOf(roi, prevRoi), tone: "up" as const, sub: roi === null ? "" : `จ่าย ฿1 ได้ยอดขาย ${baht(roi)}`, spark: sparkOf((p) => roiOf(p.gmv, p.cost)) },
       ] : []),
-      ...(see.mc ? [{ label: "ค่าจ้าง Mc", value: baht(totals.mc), c: changeOf(totals.mc, prev.mc), tone: "neutral" as const, sub: "" }] : []),
-      ...(see.admin ? [{ label: "Admin + ค่ารถ", value: baht(totals.admin + totals.travel), c: changeOf(totals.admin + totals.travel, prev.admin + prev.travel), tone: "neutral" as const, sub: totals.travel ? `ค่ารถ ${baht(totals.travel)}` : "" }] : []),
-      ...(see.agency ? [{ label: "งบ Agency", value: baht(totals.agency), c: changeOf(totals.agency, prev.agency), tone: "neutral" as const, sub: "" }] : []),
+      ...(see.mc ? [{ label: "ค่าจ้าง Mc", value: baht(totals.mc), c: changeOf(totals.mc, prev.mc), tone: "neutral" as const, sub: "", spark: sparkOf((p) => p.mc) }] : []),
+      ...(see.admin ? [{
+        label: "Admin + ค่ารถ", value: baht(totals.admin + totals.travel), c: changeOf(totals.admin + totals.travel, prev.admin + prev.travel), tone: "neutral" as const,
+        sub: totals.travel ? `ค่ารถ ${baht(totals.travel)}` : "", spark: sparkOf((p) => p.admin + p.travel),
+      }] : []),
+      ...(see.agency ? [{ label: "งบ Agency", value: baht(totals.agency), c: changeOf(totals.agency, prev.agency), tone: "neutral" as const, sub: "", spark: sparkOf((p) => p.agency) }] : []),
     ];
-    const cols = 3, cw = (W - 2 * M - (cols - 1) * 0.3) / cols, ch = 2.35;
+    // ไม่เกิน 3 การ์ดต่อแถว · 5 การ์ด = Cost รวมกว้าง 2 ช่อง (เต็ม 2 แถว เหมือนเว็บ) · 4 การ์ด = 2 × 2
+    const cols = kpis.length === 4 ? 2 : 3, gap = 0.3, cw = (W - 2 * M - (cols - 1) * gap) / cols, ch = 2.35;
+    let slot = 0;
     kpis.forEach((k, i) => {
-      const x = M + (i % cols) * (cw + 0.3), y = 1.45 + Math.floor(i / cols) * (ch + 0.3);
-      s.addShape(pres.ShapeType.roundRect, { x, y, w: cw, h: ch, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
-      s.addText(k.label, { x: x + 0.25, y: y + 0.2, w: cw - 0.5, h: 0.4, fontSize: 13, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
-      s.addText(k.value, { x: x + 0.25, y: y + 0.6, w: cw - 0.5, h: 0.7, fontSize: 28, bold: true, color: C.text, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      const span = i === 0 && kpis.length === 5 ? 2 : 1;
+      const x = M + (slot % cols) * (cw + gap), y = 1.45 + Math.floor(slot / cols) * (ch + gap), w = cw * span + gap * (span - 1);
+      slot += span;
+      s.addShape(pres.ShapeType.roundRect, { x, y, w, h: ch, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
+      s.addText(k.label, { x: x + 0.25, y: y + 0.15, w: w - 0.5, h: 0.35, fontSize: 13, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+      s.addText(k.value, { x: x + 0.25, y: y + 0.5, w: w - 0.5, h: 0.6, fontSize: 28, bold: true, color: C.text, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
       const flat = k.c !== null && Math.abs(k.c) < 0.0005;
       const color = k.c === null || flat || k.tone === "neutral" ? C.muted : (k.c > 0) === (k.tone === "up") ? C.up : C.down;
-      s.addText(k.c === null ? "ไม่มีข้อมูลเทียบ" : `${flat ? "เท่าเดิม" : pctText(k.c)} vs ${o.prevName}`, { x: x + 0.25, y: y + 1.35, w: cw - 0.5, h: 0.4, fontSize: 14, bold: k.c !== null, color, fontFace: FONT, margin: 0, isTextBox: true });
-      if (k.sub) s.addText(k.sub, { x: x + 0.25, y: y + 1.8, w: cw - 0.5, h: 0.4, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      s.addText(k.c === null ? "ไม่มีข้อมูลเทียบ" : `${flat ? "เท่าเดิม" : pctText(k.c)} vs ${o.prevName}`, { x: x + 0.25, y: y + 1.1, w: w - 0.5, h: 0.32, fontSize: 14, bold: k.c !== null, color, fontFace: FONT, margin: 0, isTextBox: true });
+      if (k.sub) s.addText(k.sub, { x: x + 0.25, y: y + 1.42, w: w - 0.5, h: 0.3, fontSize: 12, color: C.muted, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
+      if (k.spark) sparkline(pres, s, { x: x + 0.25, y: y + 1.78, w: w - 0.5, h: 0.4 }, k.spark, C.pink);
     });
-    if (totals.agency && !prev.agency) note(s, `${o.prevName} ยังไม่มีงบ Agency ในยอด Cost ที่เทียบกันจึงดูเพิ่มขึ้นมากกว่าจริง`);
+    const kpiNote = [
+      upTo.length > 1 ? `เส้นในการ์ด = ยอดรายเดือน ${o.shortMonth(upTo[0].month)}–${o.shortMonth(upTo[upTo.length - 1].month)}` : "",
+      totals.agency && !prev.agency ? `${o.prevName} ยังไม่มีงบ Agency ในยอด Cost ที่เทียบกันจึงดูเพิ่มขึ้นมากกว่าจริง` : "",
+    ].filter(Boolean).join(" · ");
+    if (kpiNote) note(s, kpiNote);
   }
 
   // 3) แยกตามแพลตฟอร์มและกลุ่ม
@@ -131,49 +154,120 @@ export async function buildCostDeck(o: CostDeckInput, target: "pptx" | "gslides"
     const widths = [2.6, 3.4, 1.4, ...(see.gmv ? [1.5, 1.1, 1.0] : []), ...(open ? [1.6] : [])];
     const scale = (W - 2 * M) / widths.reduce((a, b) => a + b, 0);
     s.addTable(rows, {
-      x: M, y: 1.4, w: W - 2 * M, colW: widths.map((c) => c * scale), fontSize: 12, fontFace: FONT, color: C.text, rowH: Math.min(0.42, 5.0 / rows.length),
+      x: M, y: 1.4, w: W - 2 * M, colW: widths.map((c) => c * scale), fontSize: 12, fontFace: FONT, color: C.text, rowH: Math.min(0.42, 4.75 / rows.length),
       border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
     });
     note(s, "ไม่รวมเงินเดือน Mc / Admin ประจำ · งบ Agency = เรท × ชั่วโมงในแพลน ไม่ใช่ยอดที่จ่ายจริง · GMV แยกตามเวลาในแพลน ไลฟ์ที่คร่อมหลายกลุ่มแบ่งตามนาที (ประมาณ)");
+    // คำเตือนเหมือนบนเว็บ: ยังไม่ตั้งเรท / ยังไม่ตั้งค่าจ้าง / อ่านชีตค่าใช้จ่ายไม่ได้
+    const noRate = report.rows.filter((r) => r.owner && hasBudget(r.owner) && !r.rate && !r.sources.agency).map((r) => r.label);
+    const warn = [
+      report.sheet.error ? "ยังใช้ยอดจากชีตค่าใช้จ่ายไม่ได้ แสดงเฉพาะตัวเลขที่ระบบคำนวณ" : "",
+      noRate.length ? `ยังไม่ตั้งเรท ${noRate.join(", ")} (งบของกลุ่มนี้ยังไม่อยู่ในยอด)` : "",
+      report.unrated ? `มี ${report.unrated.toLocaleString("th-TH")} คิวที่ยังไม่ได้ตั้งค่าจ้าง จึงยังไม่อยู่ในยอด` : "",
+    ].filter(Boolean).join(" · ");
+    if (warn) s.addText(warn, { x: M, y: 6.25, w: W - 2 * M, h: 0.3, fontSize: 11, bold: true, color: C.down, fontFace: FONT, margin: 0, fit: "shrink", isTextBox: true });
   }
 
-  // 3.5) เทียบ MoM รายกลุ่ม: Cost (และ ROI ถ้าเห็น GMV) เดือนนี้ vs เดือนก่อน + ตาราง
+  // 3.2) เรท Agency ของเดือนนี้ (เหมือนส่วน "เรท Agency" บนเว็บ · ดูอย่างเดียว)
+  if (see.agency && report.agencies.length) {
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText(`เรท Agency ${o.monthName}`, { placeholder: "title" });
+    const rows = report.agencies.map((g): PptxGenJS.TableRow => [
+      { text: g.label, options: { align: "left", bold: true } },
+      { text: g.rate ? `${baht(g.rate)} / ชม.` : "ยังไม่ตั้งเรท", options: { align: "right", color: g.rate ? C.text : C.down, bold: !g.rate } },
+      { text: `${(Math.round(g.hours * 10) / 10).toLocaleString("th-TH")} ชม.`, options: { align: "right" } },
+      { text: g.rate ? baht(g.rate * g.hours) : "-", options: { align: "right", bold: true } },
+    ]);
+    s.addTable([[head("กลุ่ม", "left"), head("เรทต่อชั่วโมง"), head("ชม. ในแพลน"), head("งบ (เรท × ชม.)")], ...rows], {
+      x: M, y: 1.45, w: 7.2, colW: [2.5, 1.6, 1.4, 1.7], fontSize: 13, fontFace: FONT, color: C.text, rowH: 0.45,
+      border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.1, 0, 0.1],
+    });
+    // งบแต่ละกลุ่ม (ขวา)
+    shapeBars(pres, s, {
+      labels: report.agencies.map((g) => g.label.replace(/^Agency /, "")), box: { x: 8.2, y: 1.3, w: W - M - 8.2, h: 5.1 }, showValue: true, legend: false,
+      series: [{ name: "งบ", color: COST_HEX.agency, values: report.agencies.map((g) => (g.rate ?? 0) * g.hours) }],
+    });
+    note(s, "ตั้งเรทแยกแต่ละเดือนในหน้าเว็บ · งบเปลี่ยนตามชั่วโมงที่ติ๊กในหน้าแพลน · เป็นงบประมาณ ไม่ใช่ยอดที่จ่ายจริง");
+  }
+
+  // 3.5) เทียบ MoM รายกลุ่ม (เหมือนเว็บ: ดรอปดาวน์ 4 ตัวชี้วัด → กราฟครบทุกตัว) + ตารางครบทุกค่า
   if (report.prevRows && (report.rows.length || report.prevRows.length)) {
     const mom = costMoM(report.rows, report.prevRows);
     const groups = mom.filter((r) => r.level === "group");
-    const s = pres.addSlide({ masterName: "CONTENT" });
     const prevShort = `${o.prevName}${open ? " (ถึงเวลาเดียวกัน)" : ""}`;
-    s.addText(`เทียบ MoM: ${o.monthName} vs ${prevShort}`, { placeholder: "title" });
+    const momNote = `ชมพู = ${o.monthName} · ฟ้า = ${prevShort}${open ? " · เดือนก่อนนับถึงเวลาเดียวกัน ใช้ตัวเลขที่ระบบคำนวณ" : ""}${report.totals.agency && !report.prev.agency ? ` · ${o.prevName} ยังไม่มีงบ Agency` : ""}`;
+    type MomKey = "cost" | "gmv" | "roi" | "ratio";
+    const momValue = (x: { cost: number; gmv: number | null }, k: MomKey) =>
+      k === "cost" ? x.cost : k === "gmv" ? x.gmv : k === "roi" ? roiOf(x.gmv, x.cost) : x.cost ? costRatio(x.cost, x.gmv) : null;
+    const charts: { key: MomKey; label: string; format?: (v: number) => string; change: boolean }[] = [
+      { key: "cost", label: "Cost", change: false },
+      ...(see.gmv ? [
+        { key: "gmv" as const, label: "GMV", change: true },
+        { key: "roi" as const, label: "ROI (GMV ÷ Cost)", format: (v: number) => `×${v.toFixed(1)}`, change: true },
+        { key: "ratio" as const, label: "Cost ต่อ GMV (ต่ำ = ดี)", format: (v: number) => `${(v * 100).toFixed(v && v < 0.1 ? 1 : 0)}%`, change: false },
+      ] : []),
+    ];
+    const cur = o.shortMonth(report.month), before = o.shortMonth(report.prevMonth);
+    const vsText = `${cur} vs ${before}${open ? " (ถึงเวลาเดียวกัน)" : ""}`;
+    // กราฟเต็มความกว้าง หน้าละ 2 ตัวชี้วัด (กราฟเล็ก 4 ช่องตัวเลขบนแท่งแคบจนตัดบรรทัด)
     if (groups.length) {
-      shapeBars(pres, s, {
-        labels: groups.map((r) => r.label.replace(/^Agency /, "")), box: { x: M, y: 1.3, w: 6.2, h: 5.1 }, showValue: true,
-        series: [{ name: o.monthName, color: C.pink, values: groups.map((r) => r.cur.cost) }, { name: prevShort, color: C.blue, values: groups.map((r) => r.prev.cost) }],
-      });
+      const labels = groups.map((r) => r.label.replace(/^Agency /, ""));
+      for (let p = 0; p < charts.length; p += 2) {
+        const pair = charts.slice(p, p + 2);
+        const s = pres.addSlide({ masterName: "CONTENT" });
+        s.addText(`เทียบ MoM แยกกลุ่ม: ${pair.map((c) => c.label.replace(/ \(.*\)$/, "")).join(" / ")}`, { placeholder: "title" });
+        shapeLegend(pres, s, { x: M, y: 1.15, w: W - 2 * M }, [{ name: `${cur}`, color: C.pink }, { name: `${before}${open ? " (ถึงเวลาเดียวกัน)" : ""}`, color: C.blue }]);
+        const gh = pair.length > 1 ? 2.45 : 4.9;
+        pair.forEach((c, i) => {
+          const y = 1.55 + i * (gh + 0.1);
+          s.addText(c.label, { x: M, y, w: W - 2 * M, h: 0.28, fontSize: 13, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
+          shapeBars(pres, s, {
+            labels, box: { x: M, y: y + 0.1, w: W - 2 * M, h: gh - 0.1 }, showValue: true, legend: false, change: c.change, format: c.format,
+            series: [
+              { name: o.monthName, color: C.pink, values: groups.map((r) => momValue(r.cur, c.key) ?? 0) },
+              { name: prevShort, color: C.blue, values: groups.map((r) => momValue(r.prev, c.key) ?? 0) },
+            ],
+          });
+        });
+        note(s, `${momNote}${pair.some((c) => c.change) ? " · % เหนือแท่ง = เปลี่ยนจากเดือนก่อน" : ""}`);
+      }
     }
-    const roiCell = (x: { cost: number; gmv: number | null }) => roiText(roiOf(x.gmv, x.cost));
+
+    // ตาราง: Cost / GMV / ROI ของทั้งสองเดือน + MoM (Cost เพิ่ม = ไม่ระบายสี · ROI / GMV เพิ่ม = เขียว)
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText(`เทียบ MoM (ตาราง): ${vsText}`, { placeholder: "title" });
     const chg = (a: number | null, b: number | null, tone: "neutral" | "up") => {
       const c = changeOf(a, b);
       return { text: c === null ? "-" : pctText(c), options: { align: "right" as const, bold: c !== null, color: c === null || tone === "neutral" ? C.muted : pctColor(c) } };
     };
     s.addTable([
-      [head("กลุ่ม", "left"), head("Cost"), head("MoM"), ...(see.gmv ? [head("ROI"), head("MoM")] : [])],
+      [
+        head("กลุ่ม", "left"), head(`Cost ${cur}`), head(`Cost ${before}`), head("MoM"),
+        ...(see.gmv ? [head(`GMV ${cur}`), head(`GMV ${before}`), head("MoM"), head(`ROI ${cur}`), head(`ROI ${before}`), head("MoM")] : []),
+      ],
       ...mom.map((r): PptxGenJS.TableRow => {
         const band = r.level !== "group" ? { bold: true, fill: { color: C.tint } } : {};
+        const cell = (c: ReturnType<typeof chg>) => ({ text: c.text, options: { ...band, ...c.options } });
         return [
           { text: r.level === "group" ? `   ${r.label}` : r.label, options: { ...band, align: "left" } },
           { text: baht(r.cur.cost), options: { ...band, align: "right" } },
-          { ...chg(r.cur.cost, r.prev.cost, "neutral"), options: { ...band, ...chg(r.cur.cost, r.prev.cost, "neutral").options } },
+          { text: baht(r.prev.cost), options: { ...band, align: "right", color: C.muted } },
+          cell(chg(r.cur.cost, r.prev.cost, "neutral")),
           ...(see.gmv ? [
-            { text: roiCell(r.cur), options: { ...band, align: "right" as const, bold: true } },
-            { ...chg(roiOf(r.cur.gmv, r.cur.cost), roiOf(r.prev.gmv, r.prev.cost), "up"), options: { ...band, ...chg(roiOf(r.cur.gmv, r.cur.cost), roiOf(r.prev.gmv, r.prev.cost), "up").options } },
+            { text: baht(r.cur.gmv), options: { ...band, align: "right" as const } },
+            { text: baht(r.prev.gmv), options: { ...band, align: "right" as const, color: C.muted } },
+            cell(chg(r.cur.gmv, r.prev.gmv, "up")),
+            { text: roiText(momValue(r.cur, "roi")), options: { ...band, align: "right" as const, bold: true } },
+            { text: roiText(momValue(r.prev, "roi")), options: { ...band, align: "right" as const, color: C.muted } },
+            cell(chg(momValue(r.cur, "roi"), momValue(r.prev, "roi"), "up")),
           ] : []),
         ];
       }),
     ], {
-      x: 7.1, y: 1.4, w: W - M - 7.1, colW: see.gmv ? [1.9, 1.2, 0.85, 0.75, 0.933] : [2.6, 1.6, 1.433], fontSize: 10, fontFace: FONT, color: C.text,
+      x: M, y: 1.4, w: W - 2 * M, colW: see.gmv ? [2.233, 1.2, 1.2, 0.9, 1.25, 1.25, 0.9, 0.8, 0.8, 0.9] : [4.133, 2.8, 2.8, 2.4], fontSize: 10, fontFace: FONT, color: C.text,
       rowH: Math.min(0.36, 5.0 / (mom.length + 1)), border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.05, 0, 0.05],
     });
-    note(s, `แท่ง = Cost แยกกลุ่ม (ชมพู = ${o.monthName} · ฟ้า = ${prevShort})${open ? " · เดือนก่อนนับถึงเวลาเดียวกัน ใช้ตัวเลขที่ระบบคำนวณ" : ""}${report.totals.agency && !report.prev.agency ? ` · ${o.prevName} ยังไม่มีงบ Agency` : ""}`);
+    note(s, momNote);
   }
 
   if (trend?.length) {
@@ -266,19 +360,21 @@ export async function buildCostDeck(o: CostDeckInput, target: "pptx" | "gslides"
       const s = pres.addSlide({ masterName: "CONTENT" });
       s.addText(`Cost แยกกลุ่ม ปี ${year}`, { placeholder: "title" });
       shapeBars(pres, s, {
-        labels: groups.map((r) => `${r.app === "Shopee" ? "SP" : "TT"} ${r.label}`.slice(0, 16)), box: { x: M, y: 1.35, w: 7.4, h: 5.1 }, showValue: true,
+        labels: groups.map((r) => `${r.app === "Shopee" ? "SP" : "TT"} ${r.label.replace(/^Agency /, "")}`.slice(0, 14)), box: { x: M, y: 1.35, w: 6.6, h: 5.0 }, showValue: true,
         series: [{ name: "Cost", color: C.pink, values: groups.map(rowCost) }], legend: false,
       });
+      // เหมือนตาราง "แยกกลุ่มทั้งปี" บนเว็บ: + ในนี้เป็นประมาณการ (Forecast)
       s.addTable([
-        [head("กลุ่ม", "left"), head("Cost"), head("สัดส่วน"), ...(see.gmv ? [head("ROI")] : [])],
+        [head("กลุ่ม", "left"), head("Cost"), head("สัดส่วน"), ...(see.gmv ? [head("ROI")] : []), head("ประมาณการ")],
         ...groups.map((r): PptxGenJS.TableRow => [
           { text: `${r.app} · ${r.label}`, options: { align: "left" } },
           { text: baht(rowCost(r)), options: { align: "right", bold: true } },
           { text: pctOf(costRatio(rowCost(r), yearCost)), options: { align: "right" } },
           ...(see.gmv ? [{ text: roiText(roiOf(r.gmv, rowCost(r))), options: { align: "right" as const } }] : []),
+          { text: r.forecast ? baht(r.forecast) : "-", options: { align: "right", color: r.forecast ? C.down : C.muted } },
         ]),
       ], {
-        x: 8.2, y: 1.4, w: W - M - 8.2, colW: see.gmv ? [2.0, 1.15, 0.85, 0.533] : [2.4, 1.3, 0.833], fontSize: 10, fontFace: FONT, color: C.text,
+        x: 7.4, y: 1.4, w: W - M - 7.4, colW: see.gmv ? [1.85, 1.1, 0.75, 0.6, 1.033] : [2.25, 1.2, 0.85, 1.033], fontSize: 10, fontFace: FONT, color: C.text,
         rowH: Math.min(0.36, 5.0 / (groups.length + 1)), border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.05, 0, 0.05],
       });
       note(s, `TT = TikTok · SP = Shopee · ${legend}`);
