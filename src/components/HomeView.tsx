@@ -2,10 +2,11 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  AlertTriangleIcon, CalendarClockIcon, ChartColumnIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, DatabaseBackupIcon, FileTextIcon, RadioIcon,
-  ReceiptTextIcon, RefreshCwIcon, UserXIcon,
+  AlertTriangleIcon, BanknoteIcon, CalendarClockIcon, ChartColumnIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, ClockIcon, DatabaseBackupIcon,
+  FileTextIcon, RadioIcon, ReceiptTextIcon, RefreshCwIcon, UserXIcon, WalletIcon, type LucideIcon,
 } from "lucide-react";
 import { windowText } from "@/lib/campaign";
+import { changeOf } from "@/lib/live-stats";
 import { fmtDayMonth, fmtDayShort, fmtMonthShort, money, monthLabel, num, parseKey } from "@/lib/format";
 import { SLOT_VIEW_KEY, writeLocal } from "@/lib/hooks";
 import { lateCut } from "@/lib/pay";
@@ -15,7 +16,8 @@ import type { DashboardData, HomeData, HomeSlot } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BarChart, ChangeText, Legend, fadedColor } from "@/components/LiveCharts";
 import { AdminLateDialog, type AdminLateTarget } from "@/components/AdminLateDialog";
-import { CountUp, MotionProvider, Reveal } from "@/components/motion";
+import { MotionProvider, Reveal } from "@/components/motion";
+import { KpiCard, type KpiChange } from "@/components/kpi";
 import { LoadError, LoadingBlock, api, useToast } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 
@@ -121,7 +123,7 @@ export function HomeView({ go }: { go: Go }) {
             <button
               type="button" onClick={() => jump(s.target)}
               // ทุกช่องพื้นขาว: สีอยู่ที่ตัวเลขเท่านั้น (ส้ม = ต้องจัดการ / เขียว = ครบ / ดำ = ข้อมูล) หน้าจะไม่เป็นกล่องสีเต็มจอ
-              className="size-full cursor-pointer rounded-xl border bg-card px-3 py-2.5 text-left transition-colors hover:border-primary"
+              className="lift press size-full cursor-pointer rounded-xl border bg-card px-3 py-2.5 text-left hover:border-primary"
             >
               <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 {s.tone === "warn" ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning-foreground" /> : null}
@@ -502,20 +504,25 @@ function DashboardBody({ d, go }: { d: DashboardData; go: Go }) {
   const vs = `เทียบ ${rangeText(d.prevUpTo)}`;
   // GMV: เดือนก่อนนับถึงเวลาเดียวกับไลฟ์ล่าสุดในไฟล์ (หน้าสถิติไลฟ์นับทั้งวัน ตัวเลข % จึงต่างกันได้ — บอกเวลาไว้)
   const gmvVs = d.gmv?.upTo ? `เทียบ ${rangeText(sameDayPrev(d.gmv.upTo, d.prevMonth))} ถึง ${d.gmv.time} น.` : "";
-  const kpis: { label: string; value: number | null; format: (n: number) => string; unit?: string; delta: ReactNode; note?: string }[] = [
-    { label: "ชั่วโมงไลฟ์", value: d.hours.cur, format: (n) => num(Math.round(n * 100) / 100), unit: "ชม.", delta: <ChangeText cur={d.hours.cur} prev={d.hours.prev} suffix={vs} /> },
-    { label: "คิวที่ไลฟ์", value: d.slots.cur, format: (n) => Math.round(n).toLocaleString("th-TH"), unit: "คิว", delta: <ChangeText cur={d.slots.cur} prev={d.slots.prev} suffix={vs} /> },
+  const todayIndex = d.daily.findIndex((x) => x.date === d.upTo);
+  // เส้นแนวโน้มชั่วโมงไลฟ์รายวัน (ถึงวันนี้ ไม่รวมคิวที่จองไว้ข้างหน้า)
+  const hoursSpark = d.daily.slice(0, todayIndex >= 0 ? todayIndex + 1 : d.daily.length).map((x) => (x.planned ? null : x.hours));
+  const kpis: {
+    label: string; icon: LucideIcon; value: number | null; format: (n: number) => string; unit?: string;
+    change: KpiChange | null; vs: string; note?: string; spark?: (number | null)[];
+  }[] = [
+    { label: "ชั่วโมงไลฟ์", icon: ClockIcon, value: d.hours.cur, format: (n) => num(Math.round(n * 100) / 100), unit: "ชม.", change: { cur: d.hours.cur, prev: d.hours.prev }, vs, spark: hoursSpark },
+    { label: "คิวที่ไลฟ์", icon: RadioIcon, value: d.slots.cur, format: (n) => Math.round(n).toLocaleString("th-TH"), unit: "คิว", change: { cur: d.slots.cur, prev: d.slots.prev }, vs },
     ...(d.gmv ? [{
-      label: "GMV (ไฟล์ Export)", value: d.gmv.cur, format: baht,
+      label: "GMV (ไฟล์ Export)", icon: BanknoteIcon, value: d.gmv.cur, format: baht,
       note: d.gmv.upTo ? (d.gmv.upTo < d.upTo ? `ข้อมูลถึง ${fmtDayMonth.format(parseKey(d.gmv.upTo))}` : undefined) : "ยังไม่มีไฟล์ของเดือนนี้",
-      delta: d.gmv.cur === null ? null : <ChangeText cur={d.gmv.cur} prev={d.gmv.prev} suffix={gmvVs} />,
+      change: d.gmv.cur === null ? null : { cur: d.gmv.cur, prev: d.gmv.prev }, vs: d.gmv.cur === null ? "" : gmvVs,
     }] : []),
     ...(d.pay ? [{
       label: d.pay.sides.length === 2 ? "ค่าจ้างสะสม Mc + Admin" : d.pay.sides[0] === "admin" ? "ค่าจ้างสะสม Admin" : "ค่าจ้างสะสม Mc",
-      value: d.pay.cur, format: baht, delta: <ChangeText cur={d.pay.cur} prev={d.pay.prev} suffix={vs} neutral />,
+      icon: WalletIcon, value: d.pay.cur, format: baht, change: { cur: d.pay.cur, prev: d.pay.prev, neutral: true }, vs,
     }] : []),
   ];
-  const todayIndex = d.daily.findIndex((x) => x.date === d.upTo);
   const planned = d.daily.some((x) => x.planned && x.hours > 0);
   const curName = shortMonthOf(d.month), prevName = shortMonthOf(d.prevMonth);
 
@@ -525,24 +532,21 @@ function DashboardBody({ d, go }: { d: DashboardData; go: Go }) {
         {rangeText(d.upTo)} ถึงตอนนี้ {vs} ถึงเวลาเดียวกัน · นับคิวที่ถึงเวลาเริ่มไลฟ์แล้ว{d.mcCount ? ` · Mc ${d.mcCount} คน` : ""}
       </p>
 
-      {/* ตัวเลขหลัก: กล่องเดียวแบ่งช่องด้วยเส้นบาง (มือถือ 2 คอลัมน์ · 3 ช่อง = ช่องสุดท้ายเต็มแถว) */}
-      <Reveal>
-        <dl className={cn("mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border", kpis.length === 4 ? "sm:grid-cols-4" : kpis.length === 3 ? "sm:grid-cols-3" : "")}>
-          {kpis.map((k, i) => (
-            <div key={k.label} className={cn("min-w-0 bg-card px-3 py-2.5", kpis.length === 3 && i === 2 && "col-span-2 sm:col-span-1")}>
-              <dt className="truncate text-xs text-muted-foreground">{k.label}</dt>
-              <dd className="text-xl font-semibold">
-                {k.value === null ? <span className="text-muted-foreground">—</span> : <CountUp value={k.value} format={k.format} />}
-                {k.unit && k.value !== null ? <span className="ml-1 text-xs font-normal text-muted-foreground">{k.unit}</span> : null}
-              </dd>
-              <dd className="mt-0.5 text-xs leading-snug">
-                {k.delta}
-                {k.note ? <span className="block text-muted-foreground">{k.note}</span> : null}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </Reveal>
+      {/* ตัวเลขหลัก: การ์ดแยกใบ ไอคอน + ป้าย % + เส้นแนวโน้ม (มือถือ 2 คอลัมน์ · 3 ช่อง = ช่องสุดท้ายเต็มแถว) */}
+      <div className={cn("mt-2 grid grid-cols-2 gap-2", kpis.length === 4 ? "sm:grid-cols-4" : kpis.length === 3 ? "sm:grid-cols-3" : "")}>
+        {kpis.map((k, i) => (
+          <KpiCard
+            key={k.label} index={i} icon={k.icon} label={k.label} value={k.value} format={k.format} unit={k.unit} empty="—"
+            change={k.change} spark={k.spark} className={cn(kpis.length === 3 && i === 2 && "max-sm:col-span-2")}
+          >
+            {/* ป้าย % อยู่มุมขวาบน · บรรทัดนี้บอกว่าเทียบกับอะไร (ไม่มีฐานเทียบ = ข้อความแจ้ง) */}
+            {k.change ? (changeOf(k.change.cur, k.change.prev) === null
+              ? <ChangeText cur={k.change.cur} prev={k.change.prev} suffix={k.vs} />
+              : <span className="block text-muted-foreground">{k.vs}</span>) : null}
+            {k.note ? <span className="block text-muted-foreground">{k.note}</span> : null}
+          </KpiCard>
+        ))}
+      </div>
 
       <Reveal index={1} className="mt-4">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">

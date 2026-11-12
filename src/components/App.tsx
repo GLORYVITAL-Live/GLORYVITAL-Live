@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
@@ -346,39 +346,30 @@ function Shell({ me }: { me: Me | null }) {
 
       {showNav ? (
         <nav aria-label="เมนูหน้า" className={cn("no-scrollbar -mx-1 mt-1 overflow-x-auto px-1", bottomNav && "max-sm:hidden")}>
-          <div className="flex w-max gap-1 rounded-full border bg-card p-1 shadow-card">
-            {pages.map((p) => {
-              const Icon = PAGE_ICON[p];
-              const on = p === page;
-              return (
-                <button
-                  key={p} type="button" onClick={() => setRole(p)} aria-current={on ? "page" : undefined}
-                  className={cn(
-                    // มือถือ: ช่องไฟแคบลง (Mc + Admin + หลักฐานไลฟ์ + เทรนนิ่ง พอดีจอ 375px ไม่ต้องเลื่อน)
-                    "flex cursor-pointer items-center gap-1 rounded-full px-2 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors sm:gap-1.5 sm:px-3 [&_svg]:size-4",
-                    // หน้าที่เปิดอยู่: พื้นชมพูอ่อน + ตัวหนังสือชมพูเข้ม (ชมพูเต็มเก็บไว้ให้ปุ่มหลัก)
-                    on ? "bg-tint text-tint-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                >
-                  <Icon />{navLabel(p)}
-                </button>
-              );
-            })}
-          </div>
+          <TopNav page={page} pages={pages} onPick={setRole} label={navLabel} />
         </nav>
       ) : null}
       {bottomNav ? (
         <nav aria-label="เมนูหน้า" className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden">
-          <div className="mx-auto flex max-w-[760px]">
+          <div className="relative mx-auto flex max-w-[760px]">
+            {/* เส้นชมพูด้านบนเลื่อนตามหน้าที่เลือก */}
+            {page && pages.includes(page) ? (
+              <span
+                aria-hidden className="absolute top-0 left-0 h-0.5 rounded-full bg-primary transition-transform duration-300 ease-out motion-reduce:transition-none"
+                style={{ width: `${100 / pages.length}%`, transform: `translateX(${pages.indexOf(page) * 100}%)` }}
+              />
+            ) : null}
             {pages.map((p) => {
               const Icon = PAGE_ICON[p];
               const on = p === page;
               return (
                 <button
                   key={p} type="button" onClick={() => setRole(p)} aria-current={on ? "page" : undefined}
-                  className={cn("flex min-w-0 flex-1 cursor-pointer flex-col items-center gap-0.5 py-2 text-[11px] font-semibold [&_svg]:size-5", on ? "text-primary" : "text-muted-foreground")}
+                  className={cn("press flex min-w-0 flex-1 cursor-pointer flex-col items-center gap-0.5 py-1.5 text-[11px] font-semibold [&_svg]:size-5", on ? "text-primary" : "text-muted-foreground")}
                 >
-                  <Icon /><span className="max-w-full truncate px-0.5">{navLabel(p)}</span>
+                  {/* หน้าที่เลือก: พื้นชมพูอ่อนรอบไอคอน */}
+                  <span className={cn("rounded-full px-3.5 py-0.5 transition-colors duration-300", on && "bg-tint")}><Icon /></span>
+                  <span className="max-w-full truncate px-0.5">{navLabel(p)}</span>
                 </button>
               );
             })}
@@ -415,9 +406,11 @@ function Shell({ me }: { me: Me | null }) {
 
       {mode?.rule ? <Notice>{mode.rule}</Notice> : null}
 
-      {me?.owner && role === "owner" ? <OwnerTabs me={me} /> : null}
-      {/* เอกสารทำเบิก: ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้ (เปิดจาก "ตารางของฉัน" ได้ด้วย) */}
+      {/* เอกสารทำเบิก: ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้ (เปิดจาก "ตารางของฉัน" ได้ด้วย) · อยู่นอกกล่องเปลี่ยนหน้า สลับ Mc ↔ Admin ไม่ต้องโหลดใหม่ */}
       {me && (role === "mc" || role === "admin") && !preview ? <PayDocs open={docsOpen} onOpenChange={setDocsOpen} /> : null}
+      {/* เปลี่ยนหน้า = เนื้อหาจางเข้า (globals.css .page-in) */}
+      <div key={page ?? "none"} className="page-in">
+      {me?.owner && role === "owner" ? <OwnerTabs me={me} /> : null}
       {me && noBoard ? <NoBoard onOpenMine={() => setMyOpen(true)} /> : null}
       {me && (role === "mc" || role === "admin") && board ? (
         <>
@@ -436,6 +429,7 @@ function Shell({ me }: { me: Me | null }) {
       {!me || !registered ? (
         <StateBox title="เข้าสู่ระบบเพื่อดูตาราง">Mc จะเห็น slot ที่เปิดให้จอง ส่วน Admin จะเห็น slot ที่รอ Admin</StateBox>
       ) : null}
+      </div>
 
       {me && (role === "mc" || role === "admin") && !preview ? (
         <>
@@ -452,6 +446,53 @@ function Shell({ me }: { me: Me | null }) {
         </>
       ) : null}
       <ToTop raised={bottomNav} />
+    </div>
+  );
+}
+
+/**
+ * แถบเมนูบน: พื้นชมพูอ่อนเลื่อนตามหน้าที่เลือก (แบบคลิปตัวอย่าง 2026-11-12)
+ *   วัดตำแหน่งปุ่มที่เลือกด้วย ResizeObserver (เรียกครั้งแรกทันทีที่เริ่มดู + ทุกครั้งที่แถบเปลี่ยนขนาด เช่น ฟอนต์โหลดเสร็จ)
+ *   ยังวัดไม่ได้ = ปุ่มที่เลือกมีพื้นของตัวเองแบบเดิม
+ */
+function TopNav({ page, pages, onPick, label }: { page: Page | null; pages: Page[]; onPick: (p: Page) => void; label: (p: Page) => string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [pill, setPill] = useState<{ left: number; width: number } | null>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const on = el.querySelector<HTMLElement>('[aria-current="page"]');
+      setPill(on ? { left: on.offsetLeft, width: on.offsetWidth } : null);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [page, pages.length]);
+  return (
+    <div ref={box} className="relative flex w-max gap-1 rounded-full border bg-card p-1 shadow-card">
+      {pill ? (
+        <span
+          aria-hidden className="absolute inset-y-1 rounded-full bg-tint transition-[left,width] duration-300 ease-out motion-reduce:transition-none"
+          style={{ left: pill.left, width: pill.width }}
+        />
+      ) : null}
+      {pages.map((p) => {
+        const Icon = PAGE_ICON[p];
+        const on = p === page;
+        return (
+          <button
+            key={p} type="button" onClick={() => onPick(p)} aria-current={on ? "page" : undefined}
+            className={cn(
+              // มือถือ: ช่องไฟแคบลง (Mc + Admin + หลักฐานไลฟ์ + เทรนนิ่ง พอดีจอ 375px ไม่ต้องเลื่อน)
+              "press relative flex cursor-pointer items-center gap-1 rounded-full px-2 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors duration-300 sm:gap-1.5 sm:px-3 [&_svg]:size-4",
+              // หน้าที่เปิดอยู่: พื้นชมพูอ่อน (แถบที่เลื่อนได้) + ตัวหนังสือชมพูเข้ม (ชมพูเต็มเก็บไว้ให้ปุ่มหลัก)
+              on ? cn("text-tint-foreground", !pill && "bg-tint") : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <Icon />{label(p)}
+          </button>
+        );
+      })}
     </div>
   );
 }

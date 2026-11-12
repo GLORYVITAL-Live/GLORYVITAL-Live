@@ -350,6 +350,74 @@ export function ChangeText({ cur, prev, suffix, className, neutral = false, good
 }
 
 /**
+ * ป้าย % ที่เปลี่ยนแบบเม็ดยา (มุมขวาบนของการ์ดตัวเลข) — สีและความหมายเดียวกับ ChangeText · ไม่มีฐานเทียบ = ไม่แสดง
+ *   บอกว่าเทียบกับอะไรในบรรทัดใต้ตัวเลขเสมอ (ป้ายไม่มีคำอธิบายในตัว)
+ */
+export function ChangeBadge({ cur, prev, neutral = false, goodDown = false, className }: {
+  cur: number | null; prev: number | null; neutral?: boolean; goodDown?: boolean; className?: string;
+}) {
+  const c = changeOf(cur, prev);
+  if (c === null) return null;
+  const up = c > 0, flat = Math.abs(c) < 0.0005;
+  const Icon = up ? ArrowUpIcon : ArrowDownIcon;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] leading-none font-semibold tabular-nums",
+        flat || neutral ? "bg-muted text-muted-foreground" : up !== goodDown ? "bg-success/12 text-success" : "bg-destructive/10 text-destructive",
+        className,
+      )}
+    >
+      {flat ? "เท่าเดิม" : <><Icon className="size-3" aria-label={up ? "เพิ่มขึ้น" : "ลดลง"} />{(Math.abs(c) * 100).toFixed(1)}%</>}
+    </span>
+  );
+}
+
+/**
+ * โดนัทสัดส่วน (เช่น GMV แยกกลุ่มผู้ไลฟ์) · ช่องว่างสีพื้นคั่นแต่ละส่วน · ตรงกลาง = ยอดรวม
+ *   แต่ละส่วนวาดตามเข็มนาฬิกา (globals.css .donut-arc) · ตัวเลขจริงอยู่ใน legend / ตารางคู่กันเสมอ
+ */
+export function Donut({ parts, size = 112, label, center, sub }: {
+  parts: { key: string; value: number; color: string }[];
+  size?: number;
+  label: string;
+  center?: ReactNode;
+  sub?: ReactNode;
+}) {
+  const total = parts.reduce((a, p) => a + Math.max(0, p.value), 0);
+  const stroke = 14, r = (size - stroke) / 2;
+  // ช่องว่างระหว่างส่วน (หน่วย pathLength 100) · ส่วนเดียว = วงเต็มไม่เว้น
+  const shown = parts.filter((p) => p.value > 0);
+  const gap = shown.length > 1 ? 1.2 : 0;
+  let at = 0;
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} className="stroke-muted" />
+        {total > 0 ? shown.map((p, i) => {
+          const len = (p.value / total) * 100;
+          const from = at;
+          at += len;
+          return (
+            <circle
+              key={p.key} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={p.color} strokeWidth={stroke} pathLength={100}
+              strokeDasharray={`${Math.max(0.01, len - gap)} ${100 - Math.max(0.01, len - gap)}`} strokeDashoffset={-from}
+              className="donut-arc" style={{ animationDelay: `${i * 80}ms` }}
+            />
+          );
+        }) : null}
+      </svg>
+      {center !== undefined ? (
+        <div className="absolute inset-0 grid place-content-center text-center leading-tight">
+          <span className="text-sm font-bold tabular-nums">{center}</span>
+          {sub ? <span className="text-[10px] text-muted-foreground">{sub}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * การ์ดเทียบตัวชี้วัด: แท่งแนวนอน ช่วงนี้ vs ช่วงก่อน (ยาวตามค่าที่มากกว่า)
  *   diff = ส่วนต่างเป็นหน่วยจริง (ช่วงนี้ − ช่วงก่อน) ใต้ % ที่เปลี่ยน เช่น +฿1,303,474 · ค่าที่เป็น % ส่งมาเป็น pp
  */

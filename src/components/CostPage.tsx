@@ -1,7 +1,10 @@
 "use client";
 
 import { Fragment, useEffect, useId, useState } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import {
+  Building2Icon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, HeadsetIcon, MicIcon, PercentIcon, TrendingUpIcon, WalletIcon, type LucideIcon,
+} from "lucide-react";
+import { changeOf } from "@/lib/live-stats";
 import { hasBudget, parseRate } from "@/lib/agency-budget";
 import { costBook, costMoM, costRatio, costTotals, roiOf, rowCost, rowSource, yearRows, type CostApp, type CostPoint, type CostReport, type CostRow } from "@/lib/cost-calc";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,7 +18,7 @@ import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { BarChart, ChangeText, Legend, LineChart, TableView } from "@/components/LiveCharts";
 import { McCostView } from "@/components/McCostView";
 import { MonthPicker } from "@/components/MonthPicker";
-import { CountUp } from "@/components/motion";
+import { KpiCard, type KpiChange } from "@/components/kpi";
 import { IconButton, LoadError, LoadingBlock, Notice, StateBox, api, useToast } from "@/components/shared";
 import { STICKY_CELL, STICKY_HEAD } from "@/components/SortHead";
 import { Button } from "@/components/ui/button";
@@ -111,27 +114,37 @@ export function CostPage() {
   const open = report.upTo !== null;
   const prevName = shortMonth(report.prevMonth);
   const vs = `vs ${prevName}`;
-  const kpis = [
+  // เส้นแนวโน้มในการ์ด = ยอดรายเดือนของปีนี้ถึงเดือนที่เลือก (โหลดยอดทั้งปีไม่ได้ = ไม่มีเส้น)
+  const upToMonth = (trend ?? []).filter((p) => p.month <= report.month);
+  const sparkOf = (f: (t: CostPoint) => number | null) => (upToMonth.length > 1 ? upToMonth.map(f) : undefined);
+  type Kpi = { label: string; icon: LucideIcon; value: number | null; format: (n: number) => string; change: KpiChange; note: string; spark?: (number | null)[] };
+  const kpis: Kpi[] = [
     {
-      label: "Cost รวม", value: totals.cost, format: baht, delta: <ChangeText cur={totals.cost} prev={prev.cost} suffix={vs} neutral />,
+      label: "Cost รวม", icon: WalletIcon, value: totals.cost, format: baht, change: { cur: totals.cost, prev: prev.cost, neutral: true },
       note: [open && totals.full !== totals.cost ? `ทั้งเดือนตามแผน ${baht(totals.full)}` : "", totals.forecast ? `ประมาณการ ${baht(totals.forecast)}` : ""].filter(Boolean).join(" · "),
+      spark: sparkOf((t) => t.cost),
     },
     ...(see.gmv ? [{
-      label: "Cost ต่อ GMV", value: costRatio(totals.cost, totals.gmv), format: pct,
-      delta: <ChangeText cur={costRatio(totals.cost, totals.gmv)} prev={costRatio(prev.cost, prev.gmv)} suffix={vs} goodDown />,
+      label: "Cost ต่อ GMV", icon: PercentIcon, value: costRatio(totals.cost, totals.gmv), format: pct,
+      change: { cur: costRatio(totals.cost, totals.gmv), prev: costRatio(prev.cost, prev.gmv), goodDown: true },
       note: totals.gmv === null ? "ยังไม่มีไฟล์ Export ของเดือนนี้" : `GMV ${baht(totals.gmv)}`,
+      spark: sparkOf((t) => costRatio(t.cost, t.gmv)),
     }, {
-      label: "ROI (GMV ÷ Cost)", value: roiOf(totals.gmv, totals.cost), format: roiText,
-      delta: <ChangeText cur={roiOf(totals.gmv, totals.cost)} prev={roiOf(prev.gmv, prev.cost)} suffix={vs} />,
+      label: "ROI (GMV ÷ Cost)", icon: TrendingUpIcon, value: roiOf(totals.gmv, totals.cost), format: roiText,
+      change: { cur: roiOf(totals.gmv, totals.cost), prev: roiOf(prev.gmv, prev.cost) },
       note: roiOf(totals.gmv, totals.cost) === null ? "" : `จ่าย ฿1 ได้ยอดขาย ${baht(roiOf(totals.gmv, totals.cost))}`,
+      spark: sparkOf((t) => roiOf(t.gmv, t.cost)),
     }] : []),
-    ...(see.mc ? [{ label: "ค่าจ้าง Mc", value: totals.mc, format: baht, delta: <ChangeText cur={totals.mc} prev={prev.mc} suffix={vs} neutral />, note: "" }] : []),
+    ...(see.mc ? [{ label: "ค่าจ้าง Mc", icon: MicIcon, value: totals.mc, format: baht, change: { cur: totals.mc, prev: prev.mc, neutral: true }, note: "", spark: sparkOf((t) => t.mc) }] : []),
     ...(see.admin ? [{
-      label: "Admin + ค่ารถ", value: totals.admin + totals.travel, format: baht,
-      delta: <ChangeText cur={totals.admin + totals.travel} prev={prev.admin + prev.travel} suffix={vs} neutral />,
-      note: totals.travel ? `ค่ารถ ${baht(totals.travel)}` : "",
+      label: "Admin + ค่ารถ", icon: HeadsetIcon, value: totals.admin + totals.travel, format: baht,
+      change: { cur: totals.admin + totals.travel, prev: prev.admin + prev.travel, neutral: true },
+      note: totals.travel ? `ค่ารถ ${baht(totals.travel)}` : "", spark: sparkOf((t) => t.admin + t.travel),
     }] : []),
-    ...(see.agency ? [{ label: "งบ Agency", value: totals.agency, format: baht, delta: <ChangeText cur={totals.agency} prev={prev.agency} suffix={vs} neutral />, note: "" }] : []),
+    ...(see.agency ? [{
+      label: "งบ Agency", icon: Building2Icon, value: totals.agency, format: baht, change: { cur: totals.agency, prev: prev.agency, neutral: true }, note: "",
+      spark: sparkOf((t) => t.agency),
+    }] : []),
   ];
 
   const noRate = report.rows.filter((r) => r.owner && hasBudget(r.owner) && !r.rate && !r.sources.agency);
@@ -169,19 +182,22 @@ export function CostPage() {
         </Notice>
       ) : null}
 
-      <dl className={cn("mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border", kpis.length === 5 ? "sm:grid-cols-5" : kpis.length === 4 ? "sm:grid-cols-4" : kpis.length === 6 ? "sm:grid-cols-3 lg:grid-cols-6" : "sm:grid-cols-3")}>
+      {/* หน้านี้กว้างไม่เกิน ~700px: ไม่เกิน 3 การ์ดต่อแถว (6 การ์ดแถวเดียวแคบจนตัวหนังสือทับกัน) · มือถือ 2 คอลัมน์ */}
+      <div className={cn("mt-3 grid grid-cols-2 gap-2", kpis.length === 4 ? "sm:grid-cols-4" : kpis.length > 2 ? "sm:grid-cols-3" : "")}>
         {kpis.map((k, i) => (
-          // จำนวนช่องคี่ (มือถือ 2 คอลัมน์): ช่องแรก Cost รวมเต็มแถว
-          <div key={k.label} className={cn("min-w-0 bg-card px-3 py-2.5", i === 0 && kpis.length % 2 === 1 && "col-span-2 sm:col-span-1")}>
-            <dt className="truncate text-xs text-muted-foreground">{k.label}</dt>
-            <dd className="text-lg font-bold tabular-nums">{k.value === null ? "-" : <CountUp value={k.value} format={k.format} />}</dd>
-            <dd className="mt-0.5 text-xs leading-snug">
-              {k.delta}
-              {k.note ? <span className="block text-muted-foreground">{k.note}</span> : null}
-            </dd>
-          </div>
+          // ช่องว่างท้ายแถว: มือถือจำนวนคี่ = Cost รวมเต็มแถว · จอกว้าง 5 การ์ด = Cost รวมกว้าง 2 ช่อง (3 + 2 → 2 แถวเต็ม)
+          <KpiCard
+            key={k.label} index={i} icon={k.icon} label={k.label} value={k.value} format={k.format} empty="-" change={k.change} spark={k.spark}
+            className={cn(i === 0 && kpis.length % 2 === 1 && "max-sm:col-span-2", i === 0 && kpis.length === 5 && "sm:col-span-2")}
+          >
+            {/* ป้าย % มุมขวาบน · บรรทัดนี้บอกว่าเทียบกับอะไร (ไม่มีฐานเทียบ = ข้อความแจ้ง) */}
+            {changeOf(k.change.cur, k.change.prev) === null
+              ? <ChangeText cur={k.change.cur} prev={k.change.prev} suffix={vs} />
+              : <span className="block text-muted-foreground">{vs}</span>}
+            {k.note ? <span className="block text-muted-foreground">{k.note}</span> : null}
+          </KpiCard>
         ))}
-      </dl>
+      </div>
 
       {report.rows.length ? (
         <section className="my-4 rounded-2xl border bg-card p-3">

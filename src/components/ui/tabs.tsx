@@ -80,7 +80,8 @@ function TabsContent({
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
-      className={cn("flex-1 text-sm outline-none", className)}
+      // เปลี่ยนแท็บ = เนื้อหาจางเข้า (globals.css .page-in · แท็บที่ไม่ได้เลือกไม่ถูกวาด จึงเล่นทุกครั้งที่สลับ)
+      className={cn("page-in flex-1 text-sm outline-none", className)}
       {...props}
     />
   )

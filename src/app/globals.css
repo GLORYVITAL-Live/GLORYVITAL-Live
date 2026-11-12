@@ -177,10 +177,47 @@
 .dot-pop { transform-box: fill-box; transform-origin: center; animation: dot-pop 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.5s both; }
 @keyframes dot-pop { from { opacity: 0; transform: scale(0.4); } }
 
+/*
+ * Motion ทั้งเว็บ (ผู้ใช้ขอ 2026-11-12 ตามคลิปตัวอย่าง Dashboard)
+ *   page-in = เปลี่ยนหน้าแล้วจางเข้า (เฉพาะความทึบ: transform ทำให้แถบที่ fixed ในหน้า เช่น แถบจองคิว ขยับตาม)
+ *   rise / stagger = การ์ดทยอยขึ้นทีละใบ (backwards: จบแล้วไม่ค้างค่า transform ให้ hover ขยับต่อได้)
+ *   lift = การ์ดลอยตอนชี้ (เฉพาะเครื่องที่มีเมาส์ · ใช้ translate แยกจาก transform ของ rise) · press = ยุบเล็กน้อยตอนกด (มือถือ)
+ */
+.page-in { animation: page-in 0.28s ease-out both; }
+@keyframes page-in { from { opacity: 0; } }
+.rise, .stagger > * { animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+.stagger > :nth-child(2) { animation-delay: 40ms; }
+.stagger > :nth-child(3) { animation-delay: 80ms; }
+.stagger > :nth-child(4) { animation-delay: 120ms; }
+.stagger > :nth-child(5) { animation-delay: 160ms; }
+.stagger > :nth-child(6) { animation-delay: 200ms; }
+.stagger > :nth-child(7) { animation-delay: 240ms; }
+.stagger > :nth-child(8) { animation-delay: 280ms; }
+.stagger > :nth-child(9) { animation-delay: 320ms; }
+.stagger > :nth-child(n + 10) { animation-delay: 360ms; }
+/* lift / press ทับ transition ของ Tailwind (CSS นอก layer ชนะ) จึงใส่สีพื้น / ขอบ / ตัวหนังสือไว้ด้วย ไม่ให้การเปลี่ยนสีกระตุก */
+.lift, .press {
+  transition: translate 0.2s cubic-bezier(0.22, 1, 0.36, 1), scale 0.15s ease, box-shadow 0.2s ease,
+    border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .lift:hover { translate: 0 -3px; box-shadow: 0 12px 24px -16px rgb(29 26 27 / 0.28); }
+  :root.dark .lift:hover { box-shadow: 0 12px 24px -12px rgb(0 0 0 / 0.7); }
+}
+.press:active { scale: 0.98; }
+/* โดนัท: แต่ละส่วนวาดตามเข็มนาฬิกา (LiveCharts Donut · pathLength = 100) */
+.donut-arc { animation: donut-arc 0.8s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes donut-arc { from { stroke-dasharray: 0 100; } }
+.fade-in { animation: page-in 0.6s ease-out 0.25s both; }
+
 @media (prefers-reduced-motion: reduce) {
   .refresh-bar { animation: none; background: var(--brand-glow); opacity: 0.5; }
-  .bar-grow, .bar-fill, .line-draw, .dot-pop { animation: none; }
+  .bar-grow, .bar-fill, .line-draw, .dot-pop, .page-in, .rise, .stagger > *, .donut-arc, .fade-in { animation: none; }
   .line-draw { stroke-dasharray: none; }
+  .lift, .press { transition: none; }
+  .lift:hover { translate: none; }
+  .press:active { scale: none; }
 }
 
 /* แถบเลื่อนบางๆ สีเข้ากับธีม (เนื้อหาในหน้าต่าง) */

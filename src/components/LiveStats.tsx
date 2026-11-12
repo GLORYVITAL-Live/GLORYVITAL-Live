@@ -1,7 +1,11 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FileSpreadsheetIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
+import {
+  ArrowDownIcon, ArrowRightIcon, BanknoteIcon, CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CoinsIcon, EyeIcon,
+  FileSpreadsheetIcon, GaugeIcon, MousePointerClickIcon, PackageIcon, PencilIcon, PlusIcon, RadioIcon, ReceiptIcon, ScanEyeIcon, ShoppingBagIcon,
+  ShoppingCartIcon, TimerIcon, Trash2Icon, UploadIcon, UsersIcon, UsersRoundIcon, type LucideIcon,
+} from "lucide-react";
 import {
   accountLabel, accountsOf, bkkIso, bkkLocal, bkkParts, filterSessions, fmtMetric, fromBkkLocal, METRICS, metricOf, monthOf, monthWindow, parseRows,
   previousWindow, readXlsx, totalsOf, type Campaign, type LiveSession, type MetricKey, type ParsedFile, type Platform, type Totals,
@@ -23,8 +27,8 @@ import { monthDays, targetReport, targetsInScope, type LiveTarget } from "@/lib/
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
-import { BarChart, ChangeText, Legend, LineChart, PairBars, TableView } from "@/components/LiveCharts";
-import { CountUp } from "@/components/motion";
+import { BarChart, ChangeBadge, ChangeText, Donut, Legend, LineChart, PairBars, TableView } from "@/components/LiveCharts";
+import { KpiCard } from "@/components/kpi";
 import { CeoLive } from "@/components/CeoLive";
 import { STICKY_CELL, STICKY_HEAD } from "@/components/SortHead";
 import dynamic from "next/dynamic";
@@ -255,26 +259,44 @@ const shortMonth = (key: string) => {
 /** ส่วนต่างตามหน่วยของตัวชี้วัด (ไม่ใส่เครื่องหมาย) · ค่าที่เป็น % = pp */
 const gapText = (kind: (typeof METRICS)[number]["kind"], g: number) => (kind === "pct" ? `${(g * 100).toFixed(2)}pp` : fmtMetric(kind, g));
 
-/** การ์ดตัวชี้วัด + % เทียบกับช่วงอื่น (เช่น MoM / YoY) */
-function KpiGrid({ cur, compare }: { cur: Totals; compare: { totals: Totals; label: string }[] }) {
+/** ไอคอนของการ์ดตัวชี้วัด */
+const METRIC_ICON: Record<MetricKey, LucideIcon> = {
+  gmv: BanknoteIcon, orders: ShoppingBagIcon, aov: ReceiptIcon, items: PackageIcon, duration: ClockIcon, gmvPerHour: GaugeIcon,
+  viewers: UsersIcon, viewersPerHour: UsersRoundIcon, gmvPerViewer: CoinsIcon, views: EyeIcon, impressions: ScanEyeIcon,
+  impressionsPerHour: TimerIcon, ctr: MousePointerClickIcon, co: ShoppingCartIcon, lives: RadioIcon,
+};
+
+/**
+ * การ์ดตัวชี้วัด + % เทียบกับช่วงอื่น (เช่น MoM / YoY)
+ *   ป้ายมุมขวาบน = เทียบช่วงแรก (บรรทัดใต้ตัวเลขบอกว่าเทียบกับอะไร) · ช่วงถัดไปเป็นบรรทัด ▲▼ ตามเดิม
+ *   trend = ยอดของแต่ละวัน / เดือนในช่วง (เส้นแนวโน้มเล็กในการ์ด · ไม่ใส่ = ไม่มีเส้น)
+ */
+function KpiGrid({ cur, compare, trend }: { cur: Totals; compare: { totals: Totals; label: string }[]; trend?: Totals[] }) {
   return (
     <div className="my-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
       {METRICS.map((m, i) => {
         const v = m.value(cur);
+        const [first, ...rest] = compare;
+        const prevOf = (c: { totals: Totals }) => (c.totals.lives ? m.value(c.totals) : null);
         return (
-          // มือถือ 2 คอลัมน์: จำนวนช่องเป็นเลขคี่ = ช่องสุดท้ายเต็มแถว (ไม่เหลือช่องว่าง)
-          <div key={m.key} className={cn("rounded-xl border bg-card px-3 py-2.5", METRICS.length % 2 && i === METRICS.length - 1 && "col-span-2 sm:col-span-1")}>
-            <div className="text-xs text-muted-foreground">{m.label}{m.note ? <span className="opacity-80"> · {m.note}</span> : null}</div>
-            {/* ตัวเลขนับจากค่าเดิมไปค่าใหม่ (ตอนโหลด / เปลี่ยนตัวกรอง) */}
-            <div className="text-lg font-bold">{v === null ? fmtMetric(m.kind, v) : <CountUp value={v} format={(n) => fmtMetric(m.kind, n)} />}</div>
+          <KpiCard
+            key={m.key} index={i} icon={METRIC_ICON[m.key]} label={m.label} note={m.note}
+            // ตัวเลขนับจากค่าเดิมไปค่าใหม่ (ตอนโหลด / เปลี่ยนตัวกรอง)
+            value={v} format={(n) => fmtMetric(m.kind, n)} empty={fmtMetric(m.kind, null)}
+            change={v !== null && first ? { cur: v, prev: prevOf(first) } : null}
+            spark={trend?.map((t) => (t.lives ? m.value(t) : null))}
+            // มือถือ 2 คอลัมน์: จำนวนช่องเป็นเลขคี่ = ช่องสุดท้ายเต็มแถว (ไม่เหลือช่องว่าง)
+            className={cn(METRICS.length % 2 && i === METRICS.length - 1 && "max-sm:col-span-2")}
+          >
             {v === null && m.key === "co" && cur.coBase === null ? (
-              <div className="text-xs text-muted-foreground">สูตรต่างกัน เลือก TikTok หรือ Shopee เพื่อดู</div>
-            ) : v === null ? null : (
-              <div className="mt-0.5 flex flex-col">
-                {compare.map((c) => <ChangeText key={c.label} cur={v} prev={c.totals.lives ? m.value(c.totals) : null} suffix={c.label} />)}
-              </div>
+              <span className="text-muted-foreground">สูตรต่างกัน เลือก TikTok หรือ Shopee เพื่อดู</span>
+            ) : v === null || !first ? null : (
+              <span className="flex flex-col">
+                {prevOf(first) === null ? <ChangeText cur={v} prev={null} suffix={first.label} /> : <span className="text-muted-foreground">{first.label}</span>}
+                {rest.map((c) => <ChangeText key={c.label} cur={v} prev={prevOf(c)} suffix={c.label} />)}
+              </span>
             )}
-          </div>
+          </KpiCard>
         );
       })}
     </div>
@@ -468,10 +490,15 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
               ข้อมูลถึงวันที่ {lastDay} {shortMonth(month).split(" ")[0]} (ยังไม่จบเดือน) · MoM / YoY เทียบวันที่ 1–{lastDay} ของเดือนก่อน / ปีก่อน
             </p>
           ) : null}
-          <KpiGrid cur={cur} compare={[
-            { totals: prev, label: `MoM vs ${shortMonth(prevKey)}${cutText}` },
-            { totals: yoy, label: `YoY vs ${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}${cutText}` },
-          ]} />
+          <KpiGrid
+            cur={cur}
+            compare={[
+              { totals: prev, label: `MoM vs ${shortMonth(prevKey)}${cutText}` },
+              { totals: yoy, label: `YoY vs ${shortMonth(yoyKey)} ${yoyKey.slice(2, 4)}${cutText}` },
+            ]}
+            // เส้นแนวโน้มในการ์ด = ค่ารายวันของเดือนนี้ (วันที่ยังไม่มีไลฟ์ไม่มีจุด)
+            trend={monthDays(month).map((d) => totalsOf(byMonth.get(month)!.filter((s) => bkkParts(s.startedAt).d === Number(d.slice(8)))))}
+          />
           <Funnel cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} />
           <DailySection
             month={month} sessions={byMonth.get(month)!} metric={metric} onMetric={setMetric} replay={replay} spans={owners.spans}
@@ -595,8 +622,8 @@ function Funnel({ cur, prev, prevLabel }: { cur: LiveSession[]; prev: LiveSessio
   return (
     <section className="my-4 rounded-2xl border bg-card p-3">
       <h2 className="font-bold">ยอดมาจากไหน</h2>
-      <p className="text-xs text-muted-foreground">GMV = จำนวนคนขั้นแรก × อัตราแต่ละขั้น · เทียบ {prevLabel} · ขั้นที่ทำให้ยอดเปลี่ยนมากที่สุดเป็นตัวหนา</p>
-      <div className={cn("mt-3 grid gap-x-6 gap-y-5", platforms.length === 2 && "sm:grid-cols-2")}>
+      <p className="text-xs text-muted-foreground">GMV = จำนวนคนขั้นแรก × อัตราแต่ละขั้น · % เทียบ {prevLabel} · ขั้นที่ทำให้ยอดเปลี่ยนมากที่สุดมีป้าย &ldquo;สาเหตุหลัก&rdquo;</p>
+      <div className="mt-3 space-y-5">
         {platforms.map((p) => (
           <FunnelColumn key={p} platform={p} cur={totalsOf(cur.filter((s) => s.platform === p))} prev={totalsOf(prev.filter((s) => s.platform === p))} />
         ))}
@@ -605,26 +632,59 @@ function Funnel({ cur, prev, prevLabel }: { cur: LiveSession[]; prev: LiveSessio
   );
 }
 
+/**
+ * Pipeline ของ 1 แพลตฟอร์ม (แบบคลิปตัวอย่าง): ขั้นหลักเป็นการ์ด · อัตราระหว่างขั้นอยู่บนลูกศรคั่น
+ *   ดูความกว้างของกล่องเอง (container query ไม่ใช่ขนาดจอ — หน้านี้กว้างไม่เกิน ~700px แม้บนคอม)
+ *     กล่องกว้างตั้งแต่ 42rem = เรียงแนวนอน → การ์ดซ้อน ชื่อ / ตัวเลข / ป้าย % คนละบรรทัด (การ์ดแคบ ไม่ให้ทับกัน)
+ *     แคบกว่านั้น = เรียงลง ↓ การ์ดเต็มความกว้าง ป้าย % อยู่ขวา
+ */
 function FunnelColumn({ platform, cur, prev }: { platform: Platform; cur: Totals; prev: Totals }) {
   const steps = FUNNEL_STEPS[platform];
   const cause = prev.lives ? funnelCause(steps, cur, prev) : null;
   const pct = (n: number) => `${n > 0 ? "+" : "−"}${Math.abs(n * 100).toFixed(1)}%`;
+  const mainTag = <span className="rounded-full bg-tint px-1.5 text-[10px] leading-4 font-semibold whitespace-nowrap text-tint-foreground">สาเหตุหลัก</span>;
   return (
-    <div>
-      <h3 className="text-sm font-semibold">{platform}</h3>
-      <ol className="mt-1">
-        {steps.map((s) => {
+    <div className="@container">
+      <h3 className="mb-1.5 text-sm font-semibold">{platform}</h3>
+      <ol className="flex flex-col gap-1 @2xl:flex-row @2xl:items-stretch @2xl:gap-0">
+        {steps.map((s, i) => {
           const v = s.value(cur), main = cause?.main.s === s;
-          return (
+          const change = prev.lives ? { cur: v, prev: s.value(prev) } : null;
+          const delay = { animationDelay: `${i * 45}ms` };
+          return s.rate ? (
             <li
-              key={s.label}
-              className={cn("flex items-baseline justify-between gap-3", s.rate ? "py-0.5 pl-4 text-xs text-muted-foreground" : "border-b py-1.5 text-sm last:border-b-0", main && "font-semibold text-foreground")}
+              key={s.label} style={delay}
+              className="rise flex flex-wrap items-center gap-x-2 gap-y-1 px-3 text-xs text-muted-foreground @2xl:w-[5.25rem] @2xl:shrink-0 @2xl:flex-col @2xl:flex-nowrap @2xl:justify-center @2xl:px-1 @2xl:text-center @2xl:text-[11px] @2xl:leading-tight"
             >
-              <span className="min-w-0 truncate">{s.rate ? <ChevronDownIcon className="mr-1 inline size-3 align-[-2px]" aria-hidden /> : null}{s.label}</span>
-              <span className="flex shrink-0 items-baseline gap-2">
-                <span className={cn("tabular-nums", !s.rate && "font-semibold")}>{fmtMetric(s.kind, v)}</span>
-                <span className="w-16 text-right">{prev.lives ? <ChangeText cur={v} prev={s.value(prev)} /> : null}</span>
-              </span>
+              <ArrowDownIcon aria-hidden className="size-3.5 text-primary/70 @2xl:hidden" />
+              <ArrowRightIcon aria-hidden className="hidden size-4 text-primary/70 @2xl:order-last @2xl:block" />
+              <span className={cn(main && "font-semibold text-foreground")}>{s.label} <b className="font-semibold whitespace-nowrap tabular-nums text-foreground">{fmtMetric(s.kind, v)}</b></span>
+              {change ? <ChangeBadge {...change} /> : null}
+              {main ? mainTag : null}
+            </li>
+          ) : (
+            <li
+              key={s.label} style={delay}
+              className={cn(
+                "rise lift flex min-w-0 items-start justify-between gap-2 rounded-xl border bg-background px-3 py-2",
+                "@2xl:flex-1 @2xl:flex-col @2xl:justify-start @2xl:gap-1 @2xl:px-2.5",
+                main && "border-primary/60 ring-2 ring-primary/15",
+              )}
+            >
+              <div className="min-w-0">
+                <div className="text-xs leading-tight text-muted-foreground @2xl:text-[11px]">{s.label}</div>
+                {/* แนวนอนการ์ดแคบ: ตัวเลขแบบสั้น (฿4.81M) ชี้ดูเต็มได้ · ตัวเลขเต็มอยู่ในการ์ดตัวชี้วัดด้านบน / แบบเรียงลง */}
+                <div className="text-lg leading-tight font-bold whitespace-nowrap tabular-nums @2xl:text-base">
+                  <span className="@2xl:hidden">{fmtMetric(s.kind, v)}</span>
+                  <span className="hidden @2xl:inline" title={fmtMetric(s.kind, v)}>{compactMetric(s.kind, v)}</span>
+                </div>
+              </div>
+              {change || main ? (
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 @2xl:justify-start">
+                  {change ? <ChangeBadge {...change} /> : null}
+                  {main ? mainTag : null}
+                </div>
+              ) : null}
             </li>
           );
         })}
@@ -765,7 +825,7 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
           <p className="mt-2 text-xs text-muted-foreground">
             ยอดรวม {ongoing ? `${rangeText} (ยังไม่จบช่วง)` : aName} · YoY เทียบกับ {bName} ช่วงเดียวกัน
           </p>
-          <KpiGrid cur={cur} compare={[{ totals: prev, label: `YoY vs ${bName}` }]} />
+          <KpiGrid cur={cur} compare={[{ totals: prev, label: `YoY vs ${bName}` }]} trend={doneKeys.map(totalsAt)} />
         </>
       )}
 
@@ -1826,8 +1886,8 @@ function PlanSection({ title, sessions, spans, range, replay }: { title: string;
 }
 
 /**
- * แถบสัดส่วน GMV ของแต่ละกลุ่มในช่องเดียว (ผู้ใช้ขอ 2026-11-10) · สีตามกลุ่มแบบเดียวกับกราฟแยก Agency
- *   ช่องว่าง 2px สีพื้นคั่นแต่ละส่วน · ชื่อ + % อยู่ใต้แถบ (ไม่ใช้สีอย่างเดียว)
+ * สัดส่วน GMV ของแต่ละกลุ่มในช่องเดียว (ผู้ใช้ขอ 2026-11-10 · เป็นโดนัทตามคลิปตัวอย่าง 2026-11-12) · สีตามกลุ่มแบบเดียวกับกราฟแยก Agency
+ *   ตรงกลาง = GMV รวมของช่อง · ชื่อ + % + ยอด อยู่ข้างโดนัท (ไม่ใช้สีอย่างเดียว)
  */
 function ShareBar({ c }: { c: ChannelSplit }) {
   const parts = c.rows.filter((r) => r.gmv > 0);
@@ -1835,29 +1895,34 @@ function ShareBar({ c }: { c: ChannelSplit }) {
   const color = (owner: string | null) => agencyColor(!owner || owner === "In house" ? AGENCY_OURS : owner);
   return (
     <div className="min-w-0">
-      <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <span className="text-sm font-semibold">{c.label}</span>
-        <span className="text-xs text-muted-foreground tabular-nums">GMV {fmtMetric("baht", c.gmv)}</span>
+      <span className="mb-2 block text-sm font-semibold">{c.label}</span>
+      <div className="flex items-center gap-4">
+        <Donut
+          label={`สัดส่วน GMV ${c.label}: ${parts.map((r) => `${r.label} ${pct(r.gmv)}`).join(", ")}`}
+          parts={parts.map((r) => ({ key: r.owner ?? "", value: r.gmv, color: color(r.owner) }))}
+          center={fmtCompactBaht(c.gmv)} sub="GMV รวม"
+        />
+        <ul className="min-w-0 flex-1 space-y-1.5 text-xs">
+          {parts.map((r) => (
+            <li key={r.owner ?? ""} className="flex items-center gap-1.5">
+              <span className="size-2.5 shrink-0 rounded-[3px]" style={{ background: color(r.owner) }} aria-hidden />
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">{r.label}</span>
+              <span className="font-semibold tabular-nums">{pct(r.gmv)}</span>
+              <span className="hidden w-24 text-right text-muted-foreground tabular-nums sm:inline">{fmtMetric("baht", r.gmv)}</span>
+            </li>
+          ))}
+        </ul>
       </div>
-      <div
-        role="img" aria-label={`สัดส่วน GMV ${c.label}: ${parts.map((r) => `${r.label} ${pct(r.gmv)}`).join(", ")}`}
-        className="flex h-4 w-full gap-0.5 overflow-hidden rounded-full"
-      >
-        {parts.map((r) => (
-          <div key={r.owner ?? ""} className="h-full min-w-0.5" style={{ width: `${(r.gmv / c.gmv) * 100}%`, background: color(r.owner) }} title={`${r.label} ${fmtMetric("baht", r.gmv)} · ${pct(r.gmv)}`} />
-        ))}
-      </div>
-      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-        {parts.map((r) => (
-          <li key={r.owner ?? ""} className="inline-flex items-center gap-1.5">
-            <span className="size-2 shrink-0 rounded-[2px]" style={{ background: color(r.owner) }} aria-hidden />
-            <span className="text-muted-foreground">{r.label}</span><span className="font-semibold tabular-nums">{pct(r.gmv)}</span>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
+
+/** ยอดเงินแบบสั้นกลางโดนัท เช่น ฿13.3M */
+const fmtCompactBaht = (n: number) => `฿${new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n)}`;
+const compact2 = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 });
+/** ตัวเลขแบบสั้นในการ์ด Pipeline แนวนอน เช่น 2.07M / ฿4.81M (ค่า % แสดงเต็มตามเดิม) */
+const compactMetric = (kind: "int" | "pct" | "baht", v: number | null) =>
+  v === null || kind === "pct" ? fmtMetric(kind, v) : `${kind === "baht" ? "฿" : ""}${compact2.format(v)}`;
 
 function OwnerTable({ owners, sessions }: { owners: { spans?: OwnerSpan[]; error?: string }; sessions: LiveSession[] }) {
   if (owners.error) return <Notice variant="warning">โหลดแพลนของกลุ่มไม่สำเร็จ จึงยังแยก GMV ตามกลุ่มไม่ได้: {owners.error}</Notice>;

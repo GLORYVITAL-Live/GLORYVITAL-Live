@@ -570,7 +570,7 @@ export function SlotBoard({ me, role, board = "tiktok", preview = false }: { me:
                 </Button>
               </div>
             ) : null}
-            <div className={cn(view === "card" ? "grid grid-cols-1 gap-2 sm:grid-cols-2" : "overflow-hidden rounded-xl border bg-card", folded && "hidden")}>
+            <div className={cn(view === "card" ? "stagger grid grid-cols-1 gap-2 sm:grid-cols-2" : "overflow-hidden rounded-xl border bg-card", folded && "hidden")}>
               {list.map((s) => {
                 const isSel = selected.has(s.id);
                 const reason = isSel || preview ? "" : blockReason(s).short;
@@ -584,9 +584,10 @@ export function SlotBoard({ me, role, board = "tiktok", preview = false }: { me:
                     aria-label={`${platformOf(s)} ${s.start} ถึง ${s.end}`}
                     onClick={() => toggle(s)}
                     className={cn(
-                      "flex w-full items-center gap-3 text-left transition outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                      // กดแล้วยุบเล็กน้อย / การ์ดลอยตอนชี้เมาส์ (CSS ล้วน หน้าจองไม่ต้องโหลดไลบรารี motion · globals.css .press / .lift)
+                      "press flex w-full items-center gap-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                       view === "card"
-                        ? cn("rounded-xl border bg-card px-4 py-3 shadow-card", isSel ? "border-primary bg-tint/50" : "hover:border-primary/50")
+                        ? cn("lift rounded-xl border bg-card px-4 py-3 shadow-card", isSel ? "border-primary bg-tint/50" : "hover:border-primary/50")
                         : cn("border-b px-3 py-2.5 last:border-b-0", isSel ? "bg-secondary" : "hover:bg-muted"),
                       blocked && "opacity-60",
                     )}
