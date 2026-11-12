@@ -625,7 +625,7 @@ export function SlotBoard({ me, role, board = "tiktok", preview = false }: { me:
         aria-hidden={!barOpen}
         inert={!barOpen}
         className={cn(
-          "fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur transition-transform duration-200",
+          "app-bar fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur transition-transform duration-200",
           barOpen ? "slot-bar-open translate-y-0" : "translate-y-full",
         )}
       >

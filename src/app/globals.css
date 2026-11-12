@@ -206,6 +206,10 @@
   :root.dark .lift:hover { box-shadow: 0 12px 24px -12px rgb(0 0 0 / 0.7); }
 }
 .press:active { scale: 0.98; }
+/* แถบล่างที่ fixed (แถบจองคิว / แนบหลักฐาน / แพลน): จอคอมที่มีเมนูด้านซ้าย เริ่มถัดจากเมนู (--side-w ตั้งที่ App) */
+@media (width >= 64rem) {
+  .app-bar { left: var(--side-w, 0px); }
+}
 /* โดนัท: แต่ละส่วนวาดตามเข็มนาฬิกา (LiveCharts Donut · pathLength = 100) */
 .donut-arc { animation: donut-arc 0.8s cubic-bezier(0.22, 1, 0.36, 1) both; }
 @keyframes donut-arc { from { stroke-dasharray: 0 100; } }

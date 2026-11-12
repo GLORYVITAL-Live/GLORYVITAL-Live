@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { computeGmv, fmtGmv, type GmvSlot } from "@/lib/gmv";
 import { shrinkImage } from "@/lib/image";
 import { cn } from "@/lib/utils";
@@ -323,17 +324,28 @@ export function ProofPage() {
           </span>
         ) : null}
       </h2>
+      {/* แท็บกรองพร้อมจำนวน (แบบคลิปตัวอย่าง 2026-11-12 แทนช่องติ๊ก 2 ช่อง) — เลือกได้ทีละแบบ */}
       {day?.slots.length ? (
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-          <Label className="cursor-pointer font-normal text-muted-foreground pointer-coarse:min-h-9">
-            <Checkbox checked={onlyMissing} onCheckedChange={(v) => setOnlyMissing(v === true)} />
-            เฉพาะที่ยังไม่มีหลักฐาน
-          </Label>
-          <Label className="cursor-pointer font-normal text-muted-foreground pointer-coarse:min-h-9">
-            <Checkbox checked={onlyNoGmv} onCheckedChange={(v) => setOnlyNoGmv(v === true)} />
-            เฉพาะที่ยังไม่กรอก GMV
-          </Label>
-        </div>
+        <ToggleGroup
+          type="single" spacing={1} aria-label="กรอง slot"
+          value={onlyMissing ? "missing" : onlyNoGmv ? "nogmv" : "all"}
+          onValueChange={(v) => { if (!v) return; setOnlyMissing(v === "missing"); setOnlyNoGmv(v === "nogmv"); }}
+          className="no-scrollbar mt-2 max-w-full overflow-x-auto rounded-full border bg-card p-1"
+        >
+          {([
+            ["all", "ทั้งหมด", day.slots.length],
+            ["missing", "ยังไม่มีหลักฐาน", day.slots.filter((s) => !s.salaried && !s.proof && ended(s)).length],
+            ["nogmv", "ยังไม่กรอก GMV", day.slots.filter(noGmv).length],
+          ] as const).map(([id, text, n]) => (
+            <ToggleGroupItem
+              key={id} value={id}
+              className="gap-1.5 rounded-full! px-3 text-[13px] font-semibold whitespace-nowrap text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!"
+            >
+              {text}
+              <span className={cn("rounded-full px-1.5 text-[11px] leading-[18px] tabular-nums", id !== "all" && n ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{n}</span>
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       ) : null}
 
       {error && !day ? (
@@ -427,7 +439,7 @@ export function ProofPage() {
       )}
 
       {picked.length ? (
-        <div className="slot-bar-open fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
+        <div className="slot-bar-open app-bar fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
           <div className="mx-auto flex max-w-[760px] items-center gap-2">
             <div className="min-w-0 flex-1 text-sm">
               <strong>เลือก {picked.length} slot</strong>

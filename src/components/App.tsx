@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
   GraduationCapIcon, PackageIcon, PackageOpenIcon, ShoppingBagIcon, SunIcon, type LucideIcon,
 } from "lucide-react";
 import { boardsOf, type Board } from "@/lib/live-team";
-import type { Me, OwnerScope, Role } from "@/lib/types";
+import type { Badges, Me, OwnerScope, Role } from "@/lib/types";
 import dynamic from "next/dynamic";
 import { BrandLogo } from "@/components/BrandLogo";
 import type { Go } from "@/components/HomeView";
 import { NotificationBell } from "@/components/Notifications";
 import { SlotBoard } from "@/components/SlotBoard";
 import { WorkLocationButton } from "@/components/WorkLocation";
-import { AppProviders, IconButton, LoadingBlock, Notice, StateBox, useToast } from "@/components/shared";
+import { AppProviders, IconButton, LoadingBlock, Notice, StateBox, api, useToast } from "@/components/shared";
+import { CountBadge, SIDE_W, SideNav } from "@/components/SideNav";
 
 // หน้าอื่นโหลดแยกเมื่อเปิดใช้ (แต่ละคนใช้แค่ 1–2 หน้า ไม่ต้องโหลดทั้งเว็บตอนเปิดครั้งแรก)
 // หน้าจองคิว (SlotBoard) โหลดมาเลย เพราะเป็นหน้าหลักของ Mc / Admin
@@ -120,6 +121,36 @@ const PAGE_ICON: Record<Page, LucideIcon> = {
   home: HouseIcon, owner: BriefcaseIcon, stats: ChartColumnIcon, ceo: CrownIcon, plan: CalendarRangeIcon, mc: MicIcon, admin: HeadsetIcon, proof: CameraIcon, equipment: PackageIcon,
   training: GraduationCapIcon, borrow: PackageOpenIcon,
 };
+/** กลุ่มในเมนูด้านซ้าย (จอคอม) */
+const PAGE_GROUP: Record<Page, string> = {
+  home: "ภาพรวม", stats: "ภาพรวม", ceo: "ภาพรวม",
+  owner: "งานไลฟ์", plan: "งานไลฟ์", mc: "งานไลฟ์", admin: "งานไลฟ์", proof: "งานไลฟ์",
+  equipment: "อื่นๆ", borrow: "อื่นๆ", training: "อื่นๆ",
+};
+/** ความหมายของป้ายตัวเลขบนเมนู (src/lib/badges.ts) */
+const BADGE_TITLE: Record<keyof Badges, string> = {
+  home: "slot ที่ยังไม่มีคน (7 วันข้างหน้า)", proof: "slot ที่ยังไม่แนบหลักฐาน (7 วันล่าสุด)", equipment: "คำขอยืมรออนุมัติ",
+};
+const badgeOf = (badges: Badges, p: Page) => (p in BADGE_TITLE ? badges[p as keyof Badges] ?? 0 : 0);
+const SIDE_KEY = "glory_side_collapsed";
+
+/** ป้ายตัวเลขงานค้าง: โหลดตอนเปิด / เปลี่ยนหน้า / กลับมาที่แท็บ / ทุก 5 นาที · โหลดไม่ได้ = ใช้ค่าเดิม (ไม่มีป้าย) */
+function useBadges(on: boolean, page: Page | null) {
+  const [badges, setBadges] = useState<Badges>({});
+  useEffect(() => {
+    if (!on) return;
+    let alive = true;
+    const load = () => api<{ badges: Badges }>("/api/badges")
+      .then((r) => { if (alive && r.ok) setBadges(r.badges); })
+      .catch(() => {});
+    load();
+    const timer = setInterval(load, 5 * 60_000);
+    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { alive = false; clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [on, page]);
+  return badges;
+}
 
 const ROLE_KEY = PAGE_KEY;
 const THEME_KEY = "glory_booking_theme";
@@ -294,13 +325,31 @@ function Shell({ me }: { me: Me | null }) {
   const bottomNav = showNav && role !== "mc" && role !== "admin";
   const navLabel = (p: Page) => `${PAGE_SHORT[p]}${(p === "mc" || p === "admin") && isPreview(me, p) ? " (ดู)" : ""}`;
 
+  // ป้ายตัวเลขงานค้างบนเมนู + เมนูด้านซ้ายบนจอคอม (ตั้งแต่ 1024px · ย่อได้ จำไว้ในเครื่อง)
+  const badges = useBadges(registered && showNav, page);
+  const sideCollapsed = useLocal(SIDE_KEY) === "1";
+  const sideW = showNav ? (sideCollapsed ? SIDE_W.closed : SIDE_W.open) : 0;
+
   // หน้าหลักฐานไลฟ์ไม่มีบทบาท (role = null) จึงเปิดตารางของฉันไม่ได้
   const canOpenMine = registered && !!role && role !== "owner" && !preview;
   return (
+    // --side-w = ความกว้างเมนูด้านซ้าย: เนื้อหาเว้นที่ให้ + แถบล่างที่ fixed (globals.css .app-bar) ไม่ไปทับเมนู
+    <div
+      className={cn(showNav && "transition-[padding] duration-300 ease-out motion-reduce:transition-none lg:pl-(--side-w)")}
+      style={{ "--side-w": `${sideW}px` } as CSSProperties}
+    >
+    {showNav ? (
+      <SideNav
+        items={pages.map((p) => ({ id: p, label: navLabel(p), icon: PAGE_ICON[p], group: PAGE_GROUP[p], badge: badgeOf(badges, p), badgeTitle: BADGE_TITLE[p as keyof Badges] }))}
+        active={page} onPick={(id) => setRole(id as Page)} sub={mode?.sub}
+        collapsed={sideCollapsed} onToggle={() => writeLocal(SIDE_KEY, sideCollapsed ? "0" : "1")}
+      />
+    ) : null}
     <div className={cn("mx-auto px-4", wide ? "max-w-[1200px]" : "max-w-[760px]", bottomNav && "pb-20 sm:pb-0")}>
       {/* มือถือ: ปุ่มหัวเว็บเล็กลง (36px) + ช่องไฟแคบลง ให้โลโก้กับปุ่มอยู่แถวเดียวกันได้ถึงจอ 360px */}
       <header className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 pt-[calc(14px+env(safe-area-inset-top))] pb-2 sm:gap-x-3">
-        <div className="flex min-w-0 items-center gap-2 whitespace-nowrap">
+        {/* จอคอมที่มีเมนูด้านซ้าย: โลโก้อยู่บนเมนูแล้ว (เว้นที่ไว้ ปุ่มด้านขวาไม่ขยับ) */}
+        <div className={cn("flex min-w-0 items-center gap-2 whitespace-nowrap", showNav && "lg:invisible")}>
           <BrandLogo />
           <span className="hidden text-[13px] font-medium text-muted-foreground sm:inline">{mode?.sub ?? "Live booking"}</span>
         </div>
@@ -345,8 +394,9 @@ function Shell({ me }: { me: Me | null }) {
       </header>
 
       {showNav ? (
-        <nav aria-label="เมนูหน้า" className={cn("no-scrollbar -mx-1 mt-1 overflow-x-auto px-1", bottomNav && "max-sm:hidden")}>
-          <TopNav page={page} pages={pages} onPick={setRole} label={navLabel} />
+        // จอคอม (ตั้งแต่ 1024px) ใช้เมนูด้านซ้ายแทน
+        <nav aria-label="เมนูหน้า" className={cn("no-scrollbar -mx-1 mt-1 overflow-x-auto px-1 lg:hidden", bottomNav && "max-sm:hidden")}>
+          <TopNav page={page} pages={pages} onPick={setRole} label={navLabel} badges={badges} />
         </nav>
       ) : null}
       {bottomNav ? (
@@ -367,8 +417,11 @@ function Shell({ me }: { me: Me | null }) {
                   key={p} type="button" onClick={() => setRole(p)} aria-current={on ? "page" : undefined}
                   className={cn("press flex min-w-0 flex-1 cursor-pointer flex-col items-center gap-0.5 py-1.5 text-[11px] font-semibold [&_svg]:size-5", on ? "text-primary" : "text-muted-foreground")}
                 >
-                  {/* หน้าที่เลือก: พื้นชมพูอ่อนรอบไอคอน */}
-                  <span className={cn("rounded-full px-3.5 py-0.5 transition-colors duration-300", on && "bg-tint")}><Icon /></span>
+                  {/* หน้าที่เลือก: พื้นชมพูอ่อนรอบไอคอน · ป้ายตัวเลขงานค้างมุมขวาบนของไอคอน */}
+                  <span className={cn("relative rounded-full px-3.5 py-0.5 transition-colors duration-300", on && "bg-tint")}>
+                    <Icon />
+                    {badgeOf(badges, p) ? <CountBadge n={badgeOf(badges, p)} className="absolute -top-1 right-0.5 h-4 min-w-4 text-[10px]" /> : null}
+                  </span>
                   <span className="max-w-full truncate px-0.5">{navLabel(p)}</span>
                 </button>
               );
@@ -447,6 +500,7 @@ function Shell({ me }: { me: Me | null }) {
       ) : null}
       <ToTop raised={bottomNav} />
     </div>
+    </div>
   );
 }
 
@@ -455,7 +509,9 @@ function Shell({ me }: { me: Me | null }) {
  *   วัดตำแหน่งปุ่มที่เลือกด้วย ResizeObserver (เรียกครั้งแรกทันทีที่เริ่มดู + ทุกครั้งที่แถบเปลี่ยนขนาด เช่น ฟอนต์โหลดเสร็จ)
  *   ยังวัดไม่ได้ = ปุ่มที่เลือกมีพื้นของตัวเองแบบเดิม
  */
-function TopNav({ page, pages, onPick, label }: { page: Page | null; pages: Page[]; onPick: (p: Page) => void; label: (p: Page) => string }) {
+function TopNav({ page, pages, onPick, label, badges }: {
+  page: Page | null; pages: Page[]; onPick: (p: Page) => void; label: (p: Page) => string; badges: Badges;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState<{ left: number; width: number } | null>(null);
   useEffect(() => {
@@ -490,6 +546,7 @@ function TopNav({ page, pages, onPick, label }: { page: Page | null; pages: Page
             )}
           >
             <Icon />{label(p)}
+            {badgeOf(badges, p) ? <CountBadge n={badgeOf(badges, p)} className="ml-0.5" /> : null}
           </button>
         );
       })}

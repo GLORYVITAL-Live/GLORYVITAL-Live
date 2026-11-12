@@ -348,6 +348,7 @@ export function LoanManager() {
   const now = data.now;
   const count = (s: LoanStatus) => data.loans.filter((l) => l.status === s).length;
   const late = data.loans.filter((l) => isOverdue(l, now)).length;
+  const todo = data.loans.filter((l) => OPEN.includes(l.status)).length;
   // ต้องจัดการ: รออนุมัติก่อน แล้วรอรับของ ยืมอยู่ (เลยกำหนดก่อน)
   const order: LoanStatus[] = ["pending", "approved", "borrowed"];
   const list = filter === "todo"
@@ -365,8 +366,14 @@ export function LoanManager() {
         <Badge className={STATUS_CLASS.borrowed}>ยืมอยู่ {count("borrowed")}</Badge>
         {late ? <Badge className={STATUS_CLASS.rejected}>เลยกำหนดคืน {late}</Badge> : null}
         <ToggleGroup type="single" variant="outline" size="sm" spacing={0} value={filter} onValueChange={(v) => { if (v) setFilter(v as ManageFilter); }} aria-label="แสดง" className="ml-auto bg-card">
-          <ToggleGroupItem value="todo" className="text-xs">ต้องจัดการ</ToggleGroupItem>
-          <ToggleGroupItem value="all" className="text-xs">ทั้งหมด</ToggleGroupItem>
+          {/* แท็บกรองพร้อมจำนวน (แบบคลิปตัวอย่าง 2026-11-12) */}
+          <ToggleGroupItem value="todo" className="gap-1.5 text-xs">
+            ต้องจัดการ
+            <span className={cn("rounded-full px-1.5 text-[11px] leading-4 tabular-nums", todo ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{todo}</span>
+          </ToggleGroupItem>
+          <ToggleGroupItem value="all" className="gap-1.5 text-xs">
+            ทั้งหมด<span className="rounded-full bg-muted px-1.5 text-[11px] leading-4 text-muted-foreground tabular-nums">{data.loans.length}</span>
+          </ToggleGroupItem>
         </ToggleGroup>
       </div>
       <Notice>

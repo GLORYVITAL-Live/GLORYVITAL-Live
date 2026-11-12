@@ -42,6 +42,9 @@ export type FramesResponse = {
   briefs: Record<string, BriefView | null>;
 };
 
+/** ป้ายตัวเลขงานค้างบนเมนู (GET /api/badges · src/lib/badges.ts) ไม่มี key = ไม่มีป้ายหน้านั้น */
+export type Badges = Partial<Record<"home" | "proof" | "equipment", number>>;
+
 /** Look แต่งหน้า + แต่งตัว (รูป Ref) ใช้ทุกไลฟ์ — แยกผู้หญิง / ผู้ชาย */
 export const LOOK_GENDERS = ["female", "male"] as const;
 export type LookGender = (typeof LOOK_GENDERS)[number];
