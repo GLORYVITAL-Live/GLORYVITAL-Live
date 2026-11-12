@@ -4,7 +4,7 @@ import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySu
 import { sendLoanLiveAlerts, sendLoanReminders } from "@/lib/loans-db";
 import { withSyncLock } from "@/lib/lock";
 import { sendReceiptReminders } from "@/lib/receipts-db";
-import { processSheetJobs } from "@/lib/sheet-sync";
+import { applySheetEdits, processSheetJobs } from "@/lib/sheet-sync";
 import { scanSlips } from "@/lib/slips-db";
 import { scanTawi } from "@/lib/tawi";
 
@@ -52,8 +52,14 @@ async function run() {
   const loanLive = await sendLoanLiveAlerts().then((sent) => ({ sent })).catch(fail);
   // งานเขียนชีตที่ค้าง (เช่น แท็บเปิดตัวกรองอยู่ตอนเพิ่ม slot) → ลองใหม่ทุก 15 นาที
   const sheet = await processSheetJobs().catch(fail);
+  // แท็บ MC Shopee: อ่านทั้งแท็บชั่วโมงละครั้ง (ผู้ใช้ขอ 2026-11-12) — ตัวกันพลาดของการซิงค์ตอนแก้ชีต (Apps Script onEdit)
+  //   เช่น แก้ตอนเว็บกำลัง deploy / ค่าที่เปลี่ยนจากสูตร · ทำหลังเขียนงานค้างลงชีตแล้ว (slot ที่เว็บเพิ่งแก้แต่ยังเขียนไม่สำเร็จจะถูกข้าม)
+  //   ซิงค์ทั้งแท็บไม่ส่งแจ้งเตือน (กันแจ้งรัว) · ล็อกชนกับการซิงค์อื่น = ข้ามรอบนี้
+  const shopee = onTheHour
+    ? await applySheetEdits("shopee").then((x) => ({ updated: x.updated, created: x.created, removed: x.removed })).catch(fail)
+    : null;
   // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
   const calendar = await processCalendarJobs(30, 15_000).catch(fail);
   await pruneNotifications().catch(() => undefined);
-  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, calendar });
+  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, shopee, calendar });
 }
