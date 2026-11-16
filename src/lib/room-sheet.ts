@@ -220,6 +220,78 @@ export function buildRoomSheet(month: string, slots: RoomSlot[]): RoomSheet {
   return { title: roomTabTitle(month), rows, merges, heights, colCount: ROOM_COLS, placed, skipped };
 }
 
+// ---------- สรุปวันหยุดแอดมินใต้ตาราง (ทีมทำเอง · ผู้ใช้ขอให้เว็บกรอกจำนวนคิว 2026-11-16) ----------
+//   ทีมวางบล็อกรายสัปดาห์ไว้ใต้ตาราง: แถวหัว "Date" | ชื่อแอดมิน... | Adminเสริม แล้วแถววันที่ (MM/DD เช่น 12/01)
+//   เว็บกรอกจำนวนคิวของแอดมินคนนั้นในวันนั้น (นับจากคิวที่ลงตารางด้านบน) · Adminเสริม = รวมคิวของแอดมินเสริมทุกคนที่ไม่มีคอลัมน์ของตัวเอง
+//   ช่องที่พิมพ์ข้อความไว้ (off / Holiday / Sick leave ฯลฯ) ไม่แตะ · สูตรสรุปของทีมคำนวณต่อเอง
+//   ในเว็บยังไม่มีคิวของคนนั้นในวันนั้น = ไม่แตะ (คงตัวเลขที่ทีมพิมพ์ไว้ล่วงหน้า · ผู้ใช้เลือก 2026-11-16)
+
+/** ชื่อไว้จับคู่ (ไม่สนช่องว่าง / ตัวพิมพ์) */
+export const nameKey = (s: string) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
+
+/** จำนวนคิวต่อวัน (แถวของตาราง) ต่อแอดมิน: วัน -> ชื่อ (nameKey) -> จำนวน */
+export function adminDayCounts(month: string, slots: RoomSlot[]) {
+  const out = new Map<string, Map<string, number>>();
+  for (const s of slots) {
+    if (isShopeePlatform(s.platform)) continue;
+    const { day } = roomPlace(s);
+    if (!day.startsWith(`${month}-`)) continue;
+    const m = out.get(day) ?? new Map<string, number>();
+    out.set(day, m);
+    for (const a of new Set(s.admins.map(nameKey).filter(Boolean))) m.set(a, (m.get(a) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** "12/01" (เดือน/วัน แบบที่ทีมใช้) หรือ "01/12" (วัน/เดือน) -> YYYY-MM-DD ของเดือนนี้ · เดือนอื่น / ไม่ใช่วันที่ = null */
+export function summaryDate(text: string, month: string) {
+  const m = String(text ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?$/);
+  if (!m) return null;
+  const [y, mm] = month.split("-").map(Number);
+  const a = Number(m[1]), b = Number(m[2]);
+  const day = a === mm ? b : b === mm ? a : 0;
+  const last = new Date(Date.UTC(y, mm, 0)).getUTCDate();
+  return day >= 1 && day <= last ? `${month}-${String(day).padStart(2, "0")}` : null;
+}
+
+export type SummaryEdit = { row: number; col: number; value: number };
+
+/**
+ * ช่องที่ต้องกรอกใหม่ในสรุปวันหยุด
+ *   grid = ข้อความที่เห็นในแท็บตั้งแต่แถวใต้ตาราง (row ที่คืน = ลำดับใน grid) · extra = ชื่อแอดมินเสริม (nameKey)
+ */
+export function adminSummaryEdits(grid: string[][], month: string, counts: Map<string, Map<string, number>>, extra: Set<string>): SummaryEdit[] {
+  const out: SummaryEdit[] = [];
+  const text = (r: number, c: number) => String(grid[r]?.[c] ?? "").trim();
+  for (let r = 0; r < grid.length; r++) {
+    for (let c = 0; c < (grid[r]?.length ?? 0); c++) {
+      if (text(r, c).toLowerCase() !== "date") continue;
+      // คอลัมน์ทางขวาของหัว Date จนเจอช่องว่าง
+      const cols: { col: number; key: string; extra: boolean }[] = [];
+      for (let k = c + 1; text(r, k); k++) cols.push({ col: k, key: nameKey(text(r, k)), extra: /^admin\s*เสริม$/i.test(text(r, k)) });
+      const own = new Set(cols.filter((x) => !x.extra).map((x) => x.key));
+      for (let rr = r + 1; rr < grid.length; rr++) {
+        const date = summaryDate(text(rr, c), month);
+        if (!date) {
+          if (/^\d{1,2}\/\d{1,2}/.test(text(rr, c))) continue; // วันที่ของเดือนอื่นในบล็อกเดียวกัน = ข้าม
+          break;
+        }
+        const day = counts.get(date) ?? new Map<string, number>();
+        for (const x of cols) {
+          const cur = text(rr, x.col);
+          if (cur && !/^\d+(\.\d+)?$/.test(cur)) continue; // off / Holiday / Sick leave ฯลฯ ที่ทีมพิมพ์
+          const n = x.extra
+            ? [...day].filter(([name]) => extra.has(name) && !own.has(name)).reduce((t, [, v]) => t + v, 0)
+            : day.get(x.key) ?? 0;
+          // ในเว็บยังไม่มีคิว = คงตัวเลขที่ทีมพิมพ์ไว้ (ผู้ใช้เลือก: แพลนล่วงหน้าก่อนแอดมินลงคิว)
+          if (n && String(n) !== cur) out.push({ row: rr, col: x.col, value: n });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 /** ข้อความทั้งตาราง (ตัดช่องว่างท้ายแถว / แถวว่างท้ายตาราง แบบที่ Sheets API คืนมา) ไว้เทียบว่าต้องเขียนใหม่ไหม */
 export function roomSheetText(rows: (RoomCell | null)[][]) {
   const out = rows.map((row) => {

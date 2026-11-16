@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { HOUR_COL, ROOM_COLS, buildRoomSheet, pairRoomSlots, roomMonths, roomPlace, roomSheetText, roomTabTitle, type RawSide, type RoomSlot } from "@/lib/room-sheet";
+import {
+  HOUR_COL, ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, pairRoomSlots, roomMonths, roomPlace, roomSheetText, roomTabTitle, summaryDate,
+  type RawSide, type RoomSlot,
+} from "@/lib/room-sheet";
 
 const slot = (x: Partial<RoomSlot>): RoomSlot => ({
   platform: "GLORY MALL", date: "2026-11-01", start: "09:30", end: "11:30", mc: "เอ", admins: ["บี"], campaign: "", ...x,
@@ -80,6 +83,50 @@ describe("ตารางห้องไลฟ์ (แท็บ Live <เดื�
   test("ข้อความไว้เทียบกับชีต: ตัดช่องว่างท้ายแถว + แถวว่างท้ายตาราง", () => {
     expect(roomSheetText([[{ text: "a", bg: "" }, null], [null, { text: "", bg: "" }]])).toEqual([["a"]]);
     expect(roomSheetText([[null, { text: "b", bg: "" }]])).toEqual([["", "b"]]);
+  });
+});
+
+describe("สรุปวันหยุดแอดมินใต้ตาราง", () => {
+  test("วันที่ในบล็อก: เดือน/วัน แบบที่ทีมใช้ · วัน/เดือน · เดือนอื่น = null", () => {
+    expect(summaryDate("12/01", "2026-12")).toBe("2026-12-01");
+    expect(summaryDate("12/13", "2026-12")).toBe("2026-12-13");
+    expect(summaryDate("13/12", "2026-12")).toBe("2026-12-13");
+    expect(summaryDate("1/01", "2026-12")).toBeNull();
+    expect(summaryDate("12/32", "2026-12")).toBeNull();
+    expect(summaryDate("Date", "2026-12")).toBeNull();
+  });
+
+  test("นับคิวต่อแอดมินต่อวัน · Adminเสริม = แอดมินเสริมที่ไม่มีคอลัมน์ของตัวเอง · ข้อความของทีมไม่แตะ", () => {
+    const slots = [
+      slot({ date: "2026-12-01", admins: ["แพรวา"] }),
+      slot({ date: "2026-12-01", start: "11:30", end: "13:30", admins: ["แพรวา"] }),
+      slot({ date: "2026-12-01", platform: "Cherry Glory", start: "19:30", end: "21:30", admins: ["ภู"] }),
+      slot({ date: "2026-12-01", platform: "Skin Expert", admins: ["เตย"] }),
+      slot({ date: "2026-12-02", admins: ["เตย"] }),
+      slot({ date: "2026-12-02", platform: "Shopee", admins: ["เตย"] }),
+    ];
+    const counts = adminDayCounts("2026-12", slots);
+    const grid = [
+      [],
+      ["", "", "", "", "", "Date", "แพรวา", "เตย", "สิง", "Adminเสริม"],
+      ["", "", "", "", "อังคาร", "12/01", "", "", "off", ""],
+      ["", "", "", "", "พุธ", "12/02", "5", "Holiday", "", ""],
+      [],
+      ["", "", "", "", "total/slot", "", "0", "0", "0", "0"],
+    ];
+    const edits = adminSummaryEdits(grid, "2026-12", counts, new Set(["ภู", "เตย"]));
+    expect(edits).toEqual([
+      { row: 2, col: 6, value: 2 },
+      { row: 2, col: 7, value: 1 },
+      { row: 2, col: 9, value: 1 },
+      // 2 ธ.ค.: แพรวาไม่มีคิวในเว็บ = คง 5 ที่ทีมพิมพ์ · เตย "Holiday" ไม่แตะ · Shopee ไม่นับ
+    ]);
+    // ตัวเลขที่ทีมพิมพ์ไม่ตรงกับคิวในเว็บ = ใช้ของเว็บ
+    expect(adminSummaryEdits([grid[1], ["", "", "", "", "", "12/01", "3", "1"]], "2026-12", counts, new Set())).toEqual([{ row: 1, col: 6, value: 2 }]);
+    // กรอกแล้วรอบหน้าไม่ต้องกรอกซ้ำ
+    const filled = grid.map((r) => [...r]);
+    for (const e of edits) filled[e.row][e.col] = String(e.value);
+    expect(adminSummaryEdits(filled, "2026-12", counts, new Set(["ภู", "เตย"]))).toEqual([]);
   });
 });
 

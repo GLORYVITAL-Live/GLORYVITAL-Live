@@ -7,7 +7,7 @@ import { openWhenReady } from "@/components/ExportMenu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type Res = { url: string; title: string; placed: number; written: boolean; skipped: string[] };
+type Res = { url: string; title: string; placed: number; written: boolean; summary: number; skipped: string[] };
 
 /**
  * ปุ่ม "ลงตารางห้องไลฟ์" (หน้า Plan Slot Live): เขียนแท็บ "Live <เดือน> <ปี> (เว็บ)" ในชีตตารางไลฟ์ของแอดมินประจำทันที
@@ -28,7 +28,8 @@ export function RoomSheetButton({ month, className }: { month: string; className
       });
       const r = res as Res | null;
       if (r) {
-        toast(`${r.written ? "อัปเดต" : "ไม่มีอะไรเปลี่ยน —"} แท็บ "${r.title}" (${r.placed} คิว)`
+        toast(`${r.written || r.summary ? "อัปเดต" : "ไม่มีอะไรเปลี่ยน —"} แท็บ "${r.title}" (${r.placed} คิว)`
+          + (r.summary ? ` · กรอกจำนวนคิวในสรุปวันหยุดแอดมิน ${r.summary} ช่อง` : "")
           + (r.skipped.length ? ` · ลงไม่ได้ ${r.skipped.length} คิว (เวลาทับกันในห้องเดียวกัน): ${r.skipped.join(", ")}` : ""), r.skipped.length ? "error" : undefined);
       }
     } catch (err) {

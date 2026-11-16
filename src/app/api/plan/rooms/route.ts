@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const res = await syncRoomSheet([key], { createEmpty: true, waitMs: 20_000 });
     if ("skipped" in res) return fail(res.skipped);
     const x = res[0];
-    return ok({ url: x.url, title: x.title, placed: x.placed, written: x.written, skipped: x.skipped });
+    return ok({ url: x.url, title: x.title, placed: x.placed, written: x.written, summary: x.summary, skipped: x.skipped });
   } catch (err) {
     return fail((err as Error).message, 500);
   }

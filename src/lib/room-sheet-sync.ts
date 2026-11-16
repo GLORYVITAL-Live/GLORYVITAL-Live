@@ -3,7 +3,7 @@ import type { sheets_v4 } from "googleapis";
 import { spreadsheetIdOf } from "@/lib/frames";
 import { withSyncLock } from "@/lib/lock";
 import {
-  ROOM_COLS, buildRoomSheet, pairRoomSlots, roomSheetText, teamTabTitle,
+  ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, nameKey, pairRoomSlots, roomSheetText, teamTabTitle,
   type RawSide, type RoomCell, type RoomSheet,
 } from "@/lib/room-sheet";
 import { sheetsApi } from "@/lib/sheet";
@@ -15,16 +15,19 @@ import { createAdminClient } from "@/lib/supabase/server";
 //   เขียนเฉพาะเมื่อข้อความ / ช่องที่รวมไว้ต่างจากในแท็บ (ไม่มีอะไรเปลี่ยน = ไม่แตะชีต) · แท็บเดิมที่ทีมทำมือไม่ถูกแตะ
 //   เขียนเฉพาะช่วงตาราง (แถว 1 ถึงวันสุดท้าย) — แถวใต้ตารางที่ทีมเพิ่มเอง (สรุปวันหยุดแอดมิน) ไม่ถูกแตะ (META_KEY)
 //   เดือนที่ยังไม่มีคิวเลยและยังไม่มีแท็บ = ไม่สร้างแท็บว่าง (ยกเว้นกดปุ่มเอง)
+//   สรุปวันหยุดแอดมินที่ทีมทำไว้ใต้ตาราง: กรอกเฉพาะจำนวนคิว (src/lib/room-sheet.ts adminSummaryEdits)
 
 export type RoomSyncResult = {
   month: string; title: string; url: string; placed: number; skipped: string[];
   /** true = เขียนแท็บใหม่ · false = ไม่มีอะไรเปลี่ยน / ไม่มีคิว */
   written: boolean;
   created: boolean;
+  /** จำนวนช่องในสรุปวันหยุดแอดมินที่กรอกจำนวนคิวใหม่ */
+  summary: number;
 };
 
-const NOTE = "แท็บนี้เว็บสร้างให้อัตโนมัติจากคิว Mc + Admin ในเว็บ (อัปเดตทุกชั่วโมง หรือกดปุ่ม \"ลงตารางห้องไลฟ์\" ในหน้า Plan Slot Live)"
-  + " — แก้ในแท็บนี้จะถูกเขียนทับ ให้แก้คิวที่เว็บแทน";
+const NOTE = "ตาราง (แถว 1 ถึงวันสุดท้าย) เว็บสร้างให้อัตโนมัติจากคิว Mc + Admin ในเว็บ (อัปเดตทุกชั่วโมง หรือกดปุ่ม \"ลงตารางห้องไลฟ์\" ในหน้า Plan Slot Live)"
+  + " — แก้ในตารางจะถูกเขียนทับ ให้แก้คิวที่เว็บแทน · แถวใต้ตารางเป็นของทีม เว็บไม่แตะ ยกเว้นกรอกจำนวนคิวในสรุปวันหยุด (ช่องที่พิมพ์ off / Holiday / Sick leave ไม่แตะ)";
 
 const rgb = (hex: string) => ({
   red: parseInt(hex.slice(1, 3), 16) / 255, green: parseInt(hex.slice(3, 5), 16) / 255, blue: parseInt(hex.slice(5, 7), 16) / 255,
@@ -182,6 +185,76 @@ function googleError(err: unknown) {
   return `เขียนตารางห้องไลฟ์ไม่สำเร็จ: ${msg.slice(0, 200)}`;
 }
 
+type Api = ReturnType<typeof sheetsApi>;
+
+/**
+ * ตารางของเดือน: เทียบกับในแท็บ แล้วเขียนเมื่อเปลี่ยน (ยังไม่มีแท็บ = สร้าง)
+ *   หลังเขียน: อัปเดตจำนวนแถวของแท็บ / ความสูงตารางใน tabs ให้ตรง (ใช้ต่อในรอบเดียวกัน)
+ */
+async function ensureTable(api: Api, spreadsheetId: string, tabs: TabInfo[], month: string, built: RoomSheet) {
+  const rows = built.rows.length;
+  let tab = tabs.find((t) => t.props.title === built.title);
+  if (tab) {
+    // แท็บที่เขียนก่อนมีค่าความสูงตาราง (ห้อง 1–3 เสมอ) = ตาราง 3 ห้องของเดือนนั้น
+    const old = tab.oldRows ?? buildRoomSheet(month, []).rows.length;
+    tab.oldRows = old;
+    // เทียบเฉพาะช่วงตาราง: ข้อความทุกช่อง + ช่องที่รวมไว้ + ความสูงตาราง เหมือนเดิม = ไม่ต้องเขียน
+    const [vals, merged] = await Promise.all([
+      api.spreadsheets.values.get({ spreadsheetId, range: `'${built.title}'!A1:AC${Math.min(old, tab.props.gridProperties?.rowCount ?? 1)}` }),
+      api.spreadsheets.get({ spreadsheetId, ranges: [`'${built.title}'`], fields: "sheets(merges)" }),
+    ]);
+    const sameText = JSON.stringify(vals.data.values ?? []) === JSON.stringify(roomSheetText(built.rows));
+    const have = (merged.data.sheets?.[0]?.merges ?? []).filter((m) => (m.startRowIndex ?? 0) < old).map((m) => mergeKey({
+      r0: m.startRowIndex ?? 0, r1: m.endRowIndex ?? 0, c0: m.startColumnIndex ?? 0, c1: m.endColumnIndex ?? 0,
+    })).sort();
+    const sameMerges = JSON.stringify(have) === JSON.stringify(built.merges.map(mergeKey).sort());
+    // ยังไม่มีค่าความสูงตารางในแท็บ = เขียนรอบนี้เพื่อจดไว้
+    if (sameText && sameMerges && old === rows && tab.metaId !== null) return { tab, written: false, created: false };
+  }
+  let created = false;
+  if (!tab) {
+    // วางต่อจากแท็บของทีมเดือนเดียวกัน (ไม่มี = ต่อจากแท็บแรก)
+    const team = tabs.find((t) => t.props.title === teamTabTitle(month));
+    const added = await api.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{
+          addSheet: {
+            properties: {
+              title: built.title, index: (team?.props.index ?? 0) + 1,
+              gridProperties: { rowCount: rows, columnCount: ROOM_COLS, frozenRowCount: 2, frozenColumnCount: 3 },
+            },
+          },
+        }],
+      },
+    });
+    const props = added.data.replies?.[0]?.addSheet?.properties;
+    if (props?.sheetId === undefined || props.sheetId === null) throw new Error("สร้างแท็บไม่สำเร็จ");
+    // แท็บที่อยู่ถัดไปเลื่อนไป 1 ลำดับ (เดือนถัดไปจะได้วางต่อจากแท็บของทีมถูกที่)
+    const at = props.index ?? 0;
+    for (const t of tabs) if ((t.props.index ?? 0) >= at) t.props.index = (t.props.index ?? 0) + 1;
+    tab = { props, metaId: null, oldRows: rows };
+    tabs.push(tab);
+    created = true;
+  }
+  await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: writeRequests(tab, built, created) } });
+  // แทรก / ลบแถวท้ายตาราง = จำนวนแถวของแท็บเปลี่ยนเท่ากัน
+  const grid = tab.props.gridProperties?.rowCount ?? rows;
+  tab.props.gridProperties = { ...tab.props.gridProperties, rowCount: grid + rows - (tab.oldRows ?? rows) };
+  tab.oldRows = rows;
+  tab.metaId ??= -1; // จดค่าแล้ว (id จริงไม่ต้องใช้ในรอบนี้)
+  return { tab, written: true, created };
+}
+
+/** ชื่อแอดมินเสริม (Admin เสริม) ทั้งหมด (nameKey) — ใช้รวมคอลัมน์ "Adminเสริม" ในสรุปวันหยุด */
+async function loadExtraAdmins() {
+  const { data, error } = await createAdminClient().from("staff").select("name").eq("role", "admin").eq("is_extra_admin", true);
+  if (error) throw new Error(error.message);
+  return new Set((data ?? []).map((x) => nameKey(String(x.name ?? ""))).filter(Boolean));
+}
+
+const colName = (i: number) => (i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
+
 async function run(months: string[], createEmpty: boolean, idOverride?: string): Promise<RoomSyncResult[] | { skipped: string }> {
   const target = idOverride ? { id: idOverride } : await roomSheetId();
   if ("skipped" in target) return target;
@@ -199,63 +272,36 @@ async function run(months: string[], createEmpty: boolean, idOverride?: string):
       return { props: s.properties!, metaId: d?.metadataId ?? null, oldRows: Number.isInteger(n) && n > 0 ? n : null };
     });
     const out: RoomSyncResult[] = [];
+    let extra: Set<string> | null = null;
     for (const month of months) {
-      const built = buildRoomSheet(month, await loadRoomSlots(month));
+      const slots = await loadRoomSlots(month);
+      const built = buildRoomSheet(month, slots);
       const rows = built.rows.length;
       const base = { month, title: built.title, placed: built.placed, skipped: built.skipped };
-      let tab = tabs.find((t) => t.props.title === built.title);
-      if (!tab && !built.placed && !createEmpty) {
-        out.push({ ...base, url: "", written: false, created: false });
+      if (!tabs.some((t) => t.props.title === built.title) && !built.placed && !createEmpty) {
+        out.push({ ...base, url: "", written: false, created: false, summary: 0 });
         continue;
       }
-      if (tab) {
-        // แท็บที่เขียนก่อนมีค่าความสูงตาราง (ห้อง 1–3 เสมอ) = ตาราง 3 ห้องของเดือนนั้น
-        const old = tab.oldRows ?? buildRoomSheet(month, []).rows.length;
-        tab.oldRows = old;
-        // เทียบเฉพาะช่วงตาราง: ข้อความทุกช่อง + ช่องที่รวมไว้ + ความสูงตาราง เหมือนเดิม = ไม่ต้องเขียน
-        const [vals, merged] = await Promise.all([
-          api.spreadsheets.values.get({ spreadsheetId, range: `'${built.title}'!A1:AC${Math.min(old, tab.props.gridProperties?.rowCount ?? 1)}` }),
-          api.spreadsheets.get({ spreadsheetId, ranges: [`'${built.title}'`], fields: "sheets(merges)" }),
-        ]);
-        const sameText = JSON.stringify(vals.data.values ?? []) === JSON.stringify(roomSheetText(built.rows));
-        const have = (merged.data.sheets?.[0]?.merges ?? []).filter((m) => (m.startRowIndex ?? 0) < old).map((m) => mergeKey({
-          r0: m.startRowIndex ?? 0, r1: m.endRowIndex ?? 0, c0: m.startColumnIndex ?? 0, c1: m.endColumnIndex ?? 0,
-        })).sort();
-        const sameMerges = JSON.stringify(have) === JSON.stringify(built.merges.map(mergeKey).sort());
-        // ยังไม่มีค่าความสูงตารางในแท็บ = เขียนรอบนี้เพื่อจดไว้
-        if (sameText && sameMerges && old === rows && tab.metaId !== null) {
-          out.push({ ...base, url: url(tab.props.sheetId!), written: false, created: false });
-          continue;
+      const { tab, written, created } = await ensureTable(api, spreadsheetId, tabs, month, built);
+      // สรุปวันหยุดแอดมินใต้ตาราง (มีแถวใต้ตารางเท่านั้น): กรอกจำนวนคิวเฉพาะช่องที่ต่างจากเดิม
+      let summary = 0;
+      const grid = tab.props.gridProperties?.rowCount ?? rows;
+      if (grid > rows) {
+        extra ??= await loadExtraAdmins();
+        const below = await api.spreadsheets.values.get({ spreadsheetId, range: `'${built.title}'!A${rows + 1}:AC${grid}` });
+        const edits = adminSummaryEdits((below.data.values ?? []) as string[][], month, adminDayCounts(month, slots), extra);
+        if (edits.length) {
+          await api.spreadsheets.values.batchUpdate({
+            spreadsheetId,
+            requestBody: {
+              valueInputOption: "RAW",
+              data: edits.map((e) => ({ range: `'${built.title}'!${colName(e.col)}${rows + 1 + e.row}`, values: [[e.value]] })),
+            },
+          });
         }
+        summary = edits.length;
       }
-      let created = false;
-      if (!tab) {
-        // วางต่อจากแท็บของทีมเดือนเดียวกัน (ไม่มี = ต่อจากแท็บแรก)
-        const team = tabs.find((t) => t.props.title === teamTabTitle(month));
-        const added = await api.spreadsheets.batchUpdate({
-          spreadsheetId,
-          requestBody: {
-            requests: [{
-              addSheet: {
-                properties: {
-                  title: built.title, index: (team?.props.index ?? 0) + 1,
-                  gridProperties: { rowCount: rows, columnCount: ROOM_COLS, frozenRowCount: 2, frozenColumnCount: 3 },
-                },
-              },
-            }],
-          },
-        });
-        const props = added.data.replies?.[0]?.addSheet?.properties;
-        if (props?.sheetId === undefined || props.sheetId === null) throw new Error("สร้างแท็บไม่สำเร็จ");
-        // แท็บที่อยู่ถัดไปเลื่อนไป 1 ลำดับ (เดือนถัดไปจะได้วางต่อจากแท็บของทีมถูกที่)
-        const at = props.index ?? 0;
-        for (const t of tabs) if ((t.props.index ?? 0) >= at) t.props.index = (t.props.index ?? 0) + 1;
-        tab = { props, metaId: null, oldRows: rows };
-        tabs.push(tab);
-        created = true;
-      }
-      await api.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: writeRequests(tab, built, created) } });
-      out.push({ ...base, url: url(tab.props.sheetId!), written: true, created });
+      out.push({ ...base, url: url(tab.props.sheetId!), written, created, summary });
     }
     return out;
   } catch (err) {

@@ -63,7 +63,7 @@ async function run() {
   // ตารางห้องไลฟ์ของแอดมินประจำ (แท็บ "Live <เดือน> <ปี> (เว็บ)") เดือนนี้ + เดือนหน้า · ชั่วโมงละครั้ง เขียนเฉพาะที่เปลี่ยน
   const rooms = onTheHour
     ? await syncRoomSheet(roomMonths(Date.now()))
-      .then((x) => ("skipped" in x ? x : x.map((m) => ({ month: m.month, placed: m.placed, written: m.written, skipped: m.skipped.length }))))
+      .then((x) => ("skipped" in x ? x : x.map((m) => ({ month: m.month, placed: m.placed, written: m.written, summary: m.summary, skipped: m.skipped.length }))))
       .catch(fail)
     : null;
   // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
