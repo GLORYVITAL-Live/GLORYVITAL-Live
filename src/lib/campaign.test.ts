@@ -74,6 +74,16 @@ describe("GMV ต่อ slot (ไลฟ์ต่อกันหลาย slot �
     expect(y.warning).toBeUndefined();
   });
 
+  test("Shopee ไม่ติ๊กหักยอด: ยอดที่กรอก = ยอดของคิว ไม่เตือนนับซ้ำ (เริ่มไลฟ์ใหม่ทุกคิว) · ติ๊กเองยังหักได้", () => {
+    const sp = (id: number, from: number, to: number, gmv: number | null, who: string): GmvSlot => ({ ...slot(id, from, to, gmv, who), platform: "Shopee" });
+    const [x] = computeGmv([{ slot: sp(2, 2, 4, null, "B"), input: "47295", auto: false }], [sp(1, 0, 2, 36238, "A")]);
+    expect(x.gmv).toBe(47295);
+    expect(x.minus).toBeNull();
+    expect(x.warning).toBeUndefined();
+    const [y] = computeGmv([{ slot: sp(2, 2, 4, null, "B"), input: "58220", auto: true }], [sp(1, 0, 2, 30924, "A")]);
+    expect(y.gmv).toBe(27296);
+  });
+
   test("แก้ยอด slot ก่อนหน้า -> slot ถัดไปที่หักยอดอัตโนมัติคิดใหม่ตาม (ที่กรอกเองไม่แตะ)", () => {
     const stored = (id: number, from: number, to: number, gmv: number | null, input: string | null, minus: number | null, who: string) =>
       ({ ...slot(id, from, to, gmv, who), input, minus });

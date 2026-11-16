@@ -200,7 +200,10 @@ async function sheetStuck(db: ReturnType<typeof createAdminClient>, roles: Set<s
  *   odd  = slot ที่ยอดที่กรอกสูงกว่า 3 เท่า หรือต่ำกว่า 1/4 ของยอดประมาณ (ยอดไลฟ์แบ่งตามนาทีที่ซ้อนกับ slot)
  *          เช่น พิมพ์เลขเกินหลัก (7 ต.ค. 293,769 แทน 193,769) / กรอกตัวเลขอื่นที่ไม่ใช่ GMV (10 ต.ค. 4,792 แต่ไลฟ์จริง 19,263)
  *          ยอดประมาณต่ำกว่า 8,000 = ไม่ตรวจ (ไลฟ์เล็ก ยอดแกว่งง่าย) · Mc คนเดียวไลฟ์ต่อกันแล้วกรอกที่ slot สุดท้าย = รวมเวลาทั้งช่วง
+ *   ไฟล์ Export มีไลฟ์ไม่ถึง EXPORT_COVER ของเวลาที่ตรวจ = ไม่ตรวจ (ยังอัปโหลดไม่ครบ / ไฟล์ดึงตอนไลฟ์ยังไม่จบ — ผู้ใช้ขอ 2026-11-16
+ *   เช่น 12 พ.ย. Shopee ไฟล์มีไลฟ์แค่ถึง 09:00 แต่ยอดที่กรอกทั้งวัน = เตือนผิด)
  */
+const EXPORT_COVER = 0.8;
 async function gmvChecks(rows: McRow[], now: number): Promise<{ over: HomeData["issues"]["gmvOver"]; odd: HomeData["issues"]["gmvOdd"] }> {
   const done = rows.filter((r) => ms(r.ends_at) <= now).sort((a, b) => ms(a.starts_at) - ms(b.starts_at));
   const entered = done.filter((r) => r.gmv !== null);
@@ -209,6 +212,15 @@ async function gmvChecks(rows: McRow[], now: number): Promise<{ over: HomeData["
   const sessions = (await loadSessions(new Date(a0 - 20 * 3600_000).toISOString(), new Date(b0).toISOString()))
     .map((s) => ({ ...s, ch: (slotPlatformOf(s.platform, s.accountId) ?? "").toUpperCase(), s0: Date.parse(s.startedAt), s1: Date.parse(s.startedAt) + s.durationSec * 1000 }));
   const lives = (ch: string, a: number, b: number) => sessions.filter((s) => s.ch === ch && s.s0 < b && s.s1 > a);
+  /** สัดส่วนเวลา a–b ที่มีไลฟ์ในไฟล์ Export (รวมช่วงที่ซ้อนกันครั้งเดียว) */
+  const cover = (ch: string, a: number, b: number) => {
+    let at = a, sum = 0;
+    for (const s of lives(ch, a, b).sort((x, y) => x.s0 - y.s0)) {
+      const from = Math.max(at, s.s0), to = Math.min(b, s.s1);
+      if (to > from) { sum += to - from; at = to; }
+    }
+    return b > a ? sum / (b - a) : 0;
+  };
 
   // สายไลฟ์
   const chains: McRow[][] = [];
@@ -221,6 +233,7 @@ async function gmvChecks(rows: McRow[], now: number): Promise<{ over: HomeData["
   const over: HomeData["issues"]["gmvOver"] = [];
   for (const c of chains.filter((x) => x.some((r) => r.gmv !== null))) {
     const a = ms(c[0].starts_at), b = ms(c[c.length - 1].ends_at);
+    if (cover(c[0].platform.toUpperCase(), a, b) < EXPORT_COVER) continue;
     const actual = lives(c[0].platform.toUpperCase(), a, b).reduce((sum, s) => sum + s.gmv, 0);
     const sum = c.reduce((t, r) => t + (r.gmv === null ? 0 : Number(r.gmv)), 0);
     if (!actual || sum <= actual * 1.3) continue;
@@ -239,6 +252,7 @@ async function gmvChecks(rows: McRow[], now: number): Promise<{ over: HomeData["
   const odd: HomeData["issues"]["gmvOdd"] = [];
   for (const r of entered) {
     const a = startOf.get(Number(r.id)) ?? ms(r.starts_at), b = ms(r.ends_at);
+    if (cover(r.platform.toUpperCase(), a, b) < EXPORT_COVER) continue;
     const est = lives(r.platform.toUpperCase(), a, b)
       .reduce((sum, s) => sum + (s.durationSec ? ((Math.min(b, s.s1) - Math.max(a, s.s0)) / 1000 / s.durationSec) * s.gmv : 0), 0);
     const gmv = Number(r.gmv);

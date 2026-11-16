@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { computeGmv, fmtGmv, type GmvSlot } from "@/lib/gmv";
 import { shrinkImage } from "@/lib/image";
+import { isShopeePlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type { ProofSlot, SlotGmv } from "@/lib/types";
 
@@ -34,6 +35,12 @@ const hm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit"
 // ---------- ยอด GMV ----------
 
 type GmvDraft = { input: string; auto: boolean };
+/**
+ * ติ๊ก "หักยอดสะสม" ไว้ให้ตั้งแต่แรกไหม: TikTok ไลฟ์ยาวต่อกันหลาย slot (แดชบอร์ด = ยอดสะสม) = ติ๊ก
+ *   Shopee เริ่มไลฟ์ใหม่ทุกคิว แดชบอร์ด = ยอดของคิวนั้นเลย = ไม่ติ๊ก (ผู้ใช้ขอ 2026-11-16: ยอดในไฟล์เบิก = ยอดที่กรอกจากแดชบอร์ด Shopee)
+ *   ไลฟ์ต่อจากคิวก่อนหน้าจริง Admin ติ๊กเองได้
+ */
+const autoDefault = (s: ProofSlot) => !isShopeePlatform(s.platform);
 const gmvSlot = (s: ProofSlot): GmvSlot => ({
   id: s.mcSlotId, platform: s.platform, startMs: s.startMs, endMs: s.endMs, gmv: null, who: s.mcName || null,
 });
@@ -59,7 +66,7 @@ function previewGmv(slots: ProofSlot[], drafts: Record<number, GmvDraft>) {
   const known: GmvSlot[] = slots
     .filter((s) => s.gmvBefore)
     .map((s) => ({ id: -s.mcSlotId, platform: s.platform, startMs: s.gmvBefore!.fromMs, endMs: s.startMs, gmv: s.gmvBefore!.amount }));
-  const res = computeGmv(slots.map((s) => ({ slot: gmvSlot(s), ...(drafts[s.mcSlotId] ?? { input: "", auto: true }) })), known);
+  const res = computeGmv(slots.map((s) => ({ slot: gmvSlot(s), ...(drafts[s.mcSlotId] ?? { input: "", auto: autoDefault(s) }) })), known);
   return new Map(res.map((r) => [r.id, r]));
 }
 
@@ -74,10 +81,10 @@ function gmvText(g: SlotGmv) {
   return `${fmtGmv(g.value)}${detail && detail !== fmtGmv(g.value) ? ` (${detail})` : ""}`;
 }
 
-/** ค่าเริ่มต้นในช่องกรอก: ค่าที่บันทึกไว้ (ไม่มี = ว่าง ติ๊กหักยอดไว้) */
+/** ค่าเริ่มต้นในช่องกรอก: ค่าที่บันทึกไว้ (ไม่มี = ว่าง · ติ๊กหักยอดไว้เฉพาะ TikTok) */
 const draftOf = (s: ProofSlot): GmvDraft => (s.gmv
   ? { input: s.gmv.input ?? String(s.gmv.value), auto: s.gmv.minus !== null }
-  : { input: "", auto: true });
+  : { input: "", auto: autoDefault(s) });
 
 /** ช่องกรอก GMV ของ slot หนึ่ง: บวก/ลบกันได้ + ติ๊กหักยอดสะสมของ slot ก่อนหน้า + แสดงผลลัพธ์ */
 function GmvField({ slot, draft, result, before, disabled, onChange, showSlot, block }: {
@@ -118,7 +125,9 @@ function GmvField({ slot, draft, result, before, disabled, onChange, showSlot, b
             หักยอดสะสม {hm.format(before.fromMs)}–{hm.format(before.toMs)}{" "}
             <strong className="tabular-nums">{fmtGmv(before.amount)}</strong> ให้อัตโนมัติ
             <span className="block text-xs text-muted-foreground">
-              ติ๊กไว้ = ตัวเลขนี้เป็นยอดสะสมจากแดชบอร์ด (ไลฟ์ต่อจาก slot ก่อนหน้า) · เอาติ๊กออกถ้าเป็นยอดของ slot นี้อย่างเดียว หรือเริ่มไลฟ์ใหม่
+              {isShopeePlatform(slot.platform)
+                ? "Shopee เริ่มไลฟ์ใหม่ทุกคิว ยอดในแดชบอร์ด = ยอดของคิวนี้ ไม่ต้องติ๊ก · ติ๊กเฉพาะคิวที่ไลฟ์ต่อจากคิวก่อนหน้าโดยไม่ได้ปิดไลฟ์"
+                : "ติ๊กไว้ = ตัวเลขนี้เป็นยอดสะสมจากแดชบอร์ด (ไลฟ์ต่อจาก slot ก่อนหน้า) · เอาติ๊กออกถ้าเป็นยอดของ slot นี้อย่างเดียว หรือเริ่มไลฟ์ใหม่"}
             </span>
           </span>
         </Label>
@@ -553,7 +562,7 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
   const lastOf = new Map(blocks.flatMap((b) => b.map((s) => [s.mcSlotId, b] as const)));
   const isHidden = (s: ProofSlot) => !split && lastOf.get(s.mcSlotId)!.at(-1) !== s;
   // slot ที่ซ่อนไว้ (ยอดรวมอยู่ใน slot สุดท้ายของช่วง) = ไม่มี GMV ของตัวเอง
-  const drafts = Object.fromEntries(slots.map((s) => [s.mcSlotId, isHidden(s) ? { input: "", auto: true } : gmv[s.mcSlotId]]));
+  const drafts = Object.fromEntries(slots.map((s) => [s.mcSlotId, isHidden(s) ? { input: "", auto: autoDefault(s) } : gmv[s.mcSlotId]]));
   const preview = previewGmv(slots, drafts);
   const gmvError = [...preview.values()].find((g) => g.error);
 
