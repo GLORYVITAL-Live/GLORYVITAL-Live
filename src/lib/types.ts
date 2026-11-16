@@ -304,6 +304,19 @@ export type MyItem = {
   travel?: number;
 };
 
+/** คิวของ Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้ (staff.pay_to_id) — คนรับเงินดูแทน ดูได้อย่างเดียว · ไม่รวมคิวที่ยกเลิก */
+export type MySubItem = {
+  id: number;
+  date: string;
+  start: string;
+  end: string;
+  platform: string;
+  hours: number;
+  endMs: number;
+  /** ค่าตัวของคิวนี้ (หักมาสาย / ชดเชยแล้ว · เรทของ Mc ในเครือ) */
+  pay: number;
+};
+
 /** เอกสารทำเบิกที่ส่งแล้ว (ข้อมูลกรอก + มีไฟล์หรือยัง) — เห็นเฉพาะเจ้าตัว และ Owner ที่ดูเอกสารทำเบิกได้ */
 export type PayDocsView = {
   fullName: string;
@@ -427,7 +440,7 @@ export type MyResponse = {
   /** การโอนค่าจ้างของเดือนนี้ (ยังไม่มี / ยังไม่ได้รัน SQL = ว่าง) */
   payments?: { amount: number; paidOn: string }[];
   /** Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้: ยอดของเดือนนี้ (รวมอยู่ในยอดที่ต้องได้ / การโอน) */
-  subs?: { name: string; slots: number; hours: number; pay: number }[];
+  subs?: { name: string; slots: number; hours: number; pay: number; items?: MySubItem[] }[];
   /** สลิปโอนเงินล่าสุดของคนนี้ (ทุกรอบ ไม่ขึ้นกับเดือนที่เลือก · ยังไม่ได้ตั้งระบบ / ไม่มี = ว่าง) */
   slips?: MySlip[];
 };

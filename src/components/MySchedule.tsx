@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import type { MyItem, MyResponse, MySlip } from "@/lib/types";
+import type { MyItem, MyResponse, MySlip, MySubItem } from "@/lib/types";
 import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabel } from "@/lib/pay";
 import { NIGHT_CANCEL_TEXT, cancelContact, isNightCancel } from "@/lib/cancel-rule";
@@ -165,6 +165,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                   {subs.map((s) => (
                     <span key={s.name} className="block">
                       รวมค่าตัว {s.name} (จ่ายผ่านคุณ) {s.slots} คิว · {hoursText(s.hours)} ชม. · <b className="text-foreground">{money(s.pay)} บาท</b>
+                      {s.items?.length ? " · ดูคิวด้านล่าง" : ""}
                     </span>
                   ))}
                 </div>
@@ -323,6 +324,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
               </section>
             ))
           )}
+          {/* คิวของ Mc ในเครือที่จ่ายผ่านคุณ ใต้คิวของตัวเอง — ดูได้อย่างเดียว */}
+          {items ? subs.map((s) => (s.items?.length ? <SubQueues key={s.name} sub={s} now={now} /> : null)) : null}
           {/* แร็งค์อยู่ในส่วนที่เลื่อนได้ (กาง "แร็งค์คิดยังไง?" แล้วยาว) · ป้ายข้างชื่อกดแล้วเลื่อนมาที่นี่ */}
           {rank ? <div className="mt-3"><MyRank data={rank} /></div> : null}
         </DialogBody>
@@ -359,6 +362,42 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
 }
 
 const telOf = (phone: string) => phone.replace(/[^0-9+]/g, "");
+
+/**
+ * คิวของ Mc ในเครือที่จ่ายค่าตัวผ่านคุณ (staff.pay_to_id) เรียงตามวัน — ดูได้อย่างเดียว ไม่มีปุ่มยกเลิก / รายละเอียด
+ *   ผู้ใช้ขอ 2026-11-16: Mc ในเครือที่ไม่มีอีเมลล็อกอินดูคิวเองไม่ได้ คนรับเงินดูคิวให้
+ */
+export function SubQueues({ sub, now }: { sub: { name: string; slots: number; hours: number; pay: number; items?: MySubItem[] }; now: number }) {
+  const byDate = new Map<string, MySubItem[]>();
+  for (const i of sub.items ?? []) byDate.set(i.date, [...(byDate.get(i.date) ?? []), i]);
+  const hours = Number.isInteger(sub.hours) ? String(sub.hours) : sub.hours.toFixed(1);
+  return (
+    <section className="mt-4 mb-3 rounded-xl border border-dashed px-3 py-2.5">
+      <h3 className="flex items-center gap-1.5 text-sm font-bold"><UserIcon aria-hidden className="size-4 text-muted-foreground" />คิวของ {sub.name} (จ่ายผ่านคุณ)</h3>
+      <p className="mb-2 text-xs text-muted-foreground tabular-nums">
+        {sub.slots} คิว · {hours} ชม. · {money(sub.pay)} บาท — รวมอยู่ในยอดรวมทั้งเดือนของคุณแล้ว
+      </p>
+      {[...byDate.entries()].map(([k, list]) => (
+        <div key={k} className="mb-2">
+          <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
+            {fmtDayLong.format(parseKey(k))}
+            <DayBadge label={relLabel(k)} />
+          </div>
+          {list.map((i) => (
+            <div key={i.id} className={cn("mb-1 flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm", i.endMs < now ? "bg-muted" : "bg-card")}>
+              <span className="font-semibold tabular-nums">{i.start} – {i.end}</span>
+              <PlatformBadge name={platformOf(i)} index={0} />
+              <span className="ml-auto text-muted-foreground tabular-nums">
+                {fmtHours(i.hours)}
+                {i.pay ? <span className="ml-1.5 font-semibold text-foreground">{money(i.pay)} บาท</span> : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </section>
+  );
+}
 
 /** ช่วงกลางคืน: แทนปุ่มยกเลิก — ทัก LINE คนดูแลฝ่ายนั้น (ยังไม่ได้ตั้งลิงก์ = บอกให้ติดต่อเอง) */
 function NightCancel({ contact, className }: { contact: { url: string; who: string }; className?: string }) {

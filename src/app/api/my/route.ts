@@ -9,7 +9,7 @@ import { paymentsOf } from "@/lib/pay-months";
 import { lockedRates } from "@/lib/pay-rates";
 import { mySlips } from "@/lib/slips-db";
 import { createAdminClient } from "@/lib/supabase/server";
-import type { BriefView, FrameFile } from "@/lib/types";
+import type { BriefView, FrameFile, MySubItem } from "@/lib/types";
 
 /**
  * Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้ (staff.pay_to_id — SQL 20261117000000_pay_to): ยอดของเดือนนี้ (สูตรเดียวกับสรุปของเจ้าของ)
@@ -34,8 +34,13 @@ async function subsPay(payeeId: number, key: string, first: string, last: string
       salaried ? 0 : lock ? lock.rate : Number(s.hourly_rate) || defaultRate, salaried ? [] : lock ? lock.tiers : cleanTiers(s.commit_tiers),
       salaried ? null : lock ? lock.shopeeRate : shopeeOf.get(Number(s.id)) ?? null, hours - shopeeHours, shopeeHours,
     );
-    const pay = items.reduce((a, i) => a + slotPay(i.hours, i.lateMinutes, i.bonusMinutes, i.shopee ? m.shopeeRate : m.rate), 0);
-    return { name: `Mc ${s.name}`, slots: items.length, hours: r2(hours), pay };
+    // รายการคิวให้คนรับเงินดูแทน (ผู้ใช้ขอ 2026-11-16: Mc ในเครือที่ไม่มีอีเมล ล็อกอินดูคิวเองไม่ได้) · เงินต่อคิวสูตรเดียวกับยอดรวม
+    const list: MySubItem[] = items.map((i) => ({
+      id: i.id, date: i.date, start: i.start, end: i.end, platform: i.platform, hours: i.hours, endMs: i.endMs,
+      pay: slotPay(i.hours, i.lateMinutes, i.bonusMinutes, i.shopee ? m.shopeeRate : m.rate),
+    }));
+    const pay = list.reduce((a, i) => a + i.pay, 0);
+    return { name: `Mc ${s.name}`, slots: items.length, hours: r2(hours), pay, items: list };
   }));
 }
 
@@ -108,7 +113,8 @@ export async function GET(request: Request) {
       shopeeRate: salaried || role !== "mc" ? null : lock ? lock.shopeeRate : Number(extraRow.data?.shopee_rate) || null,
     },
     payments: (paid.map.get(person.id) ?? []).map((p) => ({ amount: p.amount, paidOn: p.paidOn })),
-    ...(subs.length ? { subs } : {}),
+    // ชื่อช่องในรายการคิวของ Mc ในเครือ = ชื่อที่แสดง (เหมือน items)
+    ...(subs.length ? { subs: withPlatformLabels(subs) } : {}),
     ...(slips.length ? { slips } : {}),
   });
 }
