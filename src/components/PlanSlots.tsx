@@ -11,6 +11,7 @@ import {
 } from "@/components/shared";
 import { DatePicker, DateRangePicker, MonthPicker, TimePicker } from "@/components/date-picker";
 import { ExportMenu } from "@/components/ExportMenu";
+import { RoomSheetButton } from "@/components/RoomSheetButton";
 import { agencyCampaign, agencySheet, agencyStatus, clock, dayEn, hmText, mergeRanges } from "@/lib/agency-sheet";
 import type { Cell, ExportBook, ExportSheet, RowStyle } from "@/lib/export";
 import { Badge } from "@/components/ui/badge";
@@ -1040,6 +1041,7 @@ export function PlanSlots({ readOnly = false, release = NO_RELEASE }: { readOnly
             className={cn("bg-card", mode === "shopee" && "ml-auto")}
           />
         ) : null}
+        {plan && mode === "tiktok" && !readOnly ? <RoomSheetButton month={month} /> : null}
       </div>
 
       {error?.month === month && !plan ? (

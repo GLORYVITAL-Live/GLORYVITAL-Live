@@ -56,7 +56,7 @@ function Menu({ label, icon, busyText, options, variant, size, className }: {
  * เปิดแท็บใหม่ทันทีตอนกด (ถ้ารอให้สร้างเสร็จก่อน เบราว์เซอร์จะบล็อกป๊อปอัป) แล้วพาไปลิงก์เมื่อเสร็จ
  *   create = สร้างไฟล์ใน Google แล้วคืนลิงก์
  */
-async function openWhenReady(what: string, create: () => Promise<string>) {
+export async function openWhenReady(what: string, create: () => Promise<string>) {
   const tab = window.open("", "_blank");
   if (tab) {
     tab.document.title = `กำลังสร้าง ${what}…`;

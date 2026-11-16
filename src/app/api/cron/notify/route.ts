@@ -4,6 +4,8 @@ import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySu
 import { sendLoanLiveAlerts, sendLoanReminders } from "@/lib/loans-db";
 import { withSyncLock } from "@/lib/lock";
 import { sendReceiptReminders } from "@/lib/receipts-db";
+import { roomMonths } from "@/lib/room-sheet";
+import { syncRoomSheet } from "@/lib/room-sheet-sync";
 import { applySheetEdits, processSheetJobs } from "@/lib/sheet-sync";
 import { scanSlips } from "@/lib/slips-db";
 import { scanTawi } from "@/lib/tawi";
@@ -58,8 +60,14 @@ async function run() {
   const shopee = onTheHour
     ? await applySheetEdits("shopee").then((x) => ({ updated: x.updated, created: x.created, removed: x.removed })).catch(fail)
     : null;
+  // ตารางห้องไลฟ์ของแอดมินประจำ (แท็บ "Live <เดือน> <ปี> (เว็บ)") เดือนนี้ + เดือนหน้า · ชั่วโมงละครั้ง เขียนเฉพาะที่เปลี่ยน
+  const rooms = onTheHour
+    ? await syncRoomSheet(roomMonths(Date.now()))
+      .then((x) => ("skipped" in x ? x : x.map((m) => ({ month: m.month, placed: m.placed, written: m.written, skipped: m.skipped.length }))))
+      .catch(fail)
+    : null;
   // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
   const calendar = await processCalendarJobs(30, 15_000).catch(fail);
   await pruneNotifications().catch(() => undefined);
-  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, shopee, calendar });
+  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, shopee, rooms, calendar });
 }
