@@ -1,9 +1,9 @@
 import { fail, ok, requireOwner } from "@/lib/api";
 import { rankReport } from "@/lib/campaign-report";
 import { withPlatformLabels } from "@/lib/platform";
-import type { RankPeriod } from "@/lib/mc-rank";
+import type { RankChannel, RankPeriod } from "@/lib/mc-rank";
 
-// อันดับ Mc ตามช่วง (?period=month|30|90&month=YYYY-MM) — Owner ฝั่ง Mc
+// อันดับ Mc ตามช่วง (?period=month|30|90&month=YYYY-MM&channel=tiktok|shopee) — Owner ฝั่ง Mc
 //   month = เดือนที่เลือก (เทียบเดือนก่อน) / 30 · 90 = ย้อนหลังจากวันนี้ (เทียบช่วงยาวเท่ากันก่อนหน้า)
 export async function GET(request: Request) {
   const r = await requireOwner("บัญชีนี้ไม่มีสิทธิ์ดูอันดับ Mc", "read");
@@ -14,8 +14,11 @@ export async function GET(request: Request) {
   if (!["month", "30", "90"].includes(period)) return fail("ช่วงไม่ถูกต้อง");
   const month = sp.get("month") ?? new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 7);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail("เดือนไม่ถูกต้อง");
+  // แยกอันดับ TikTok / Shopee (ไม่ส่ง = รวมทุกช่อง)
+  const channel = (sp.get("channel") ?? "all") as RankChannel;
+  if (!["all", "tiktok", "shopee"].includes(channel)) return fail("ช่องไม่ถูกต้อง");
   try {
-    return ok({ report: withPlatformLabels(await rankReport(period, month)) });
+    return ok({ report: withPlatformLabels(await rankReport(period, month, channel)) });
   } catch (err) {
     return fail((err as Error).message, 500);
   }

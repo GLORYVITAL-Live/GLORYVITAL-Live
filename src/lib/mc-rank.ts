@@ -20,6 +20,9 @@ export const TIER_B = 0.95;
 export type Tier = "A" | "B" | "C";
 export type Confidence = "สูง" | "กลาง" | "ต่ำ";
 export type RankPeriod = "month" | "30" | "90";
+/** ช่องที่จัดอันดับ: แยก TikTok / Shopee (หน้าผลงาน Mc) · all = รวม (แร็งค์โควตาจอง) */
+export type RankChannel = "all" | "tiktok" | "shopee";
+export const RANK_CHANNELS: [RankChannel, string][] = [["tiktok", "TikTok"], ["shopee", "Shopee"]];
 
 /** ยอดของ Mc แยก แคมเปญ x ช่อง x ที่มา (จากเซิร์ฟเวอร์) */
 export type RankCellRaw = {
@@ -29,7 +32,7 @@ export type RankCellRaw = {
 /** ค่าที่คาดหวัง (GMV/ชม.) ของแต่ละแคมเปญ x ช่อง x ช่วงเวลา */
 export type ExpectRow = { label: string; platform: string; rates: Record<string, number | null>; slots: number };
 export type RankReport = {
-  period: RankPeriod; month: string;
+  period: RankPeriod; month: string; channel: RankChannel;
   from: string; to: string; prevFrom: string; prevTo: string; today: string;
   /** ช่วงนี้ยังไม่จบ (มีวันที่ยังไม่ถึง) */
   partial: boolean;

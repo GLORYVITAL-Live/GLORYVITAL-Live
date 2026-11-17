@@ -7,7 +7,9 @@ import type { Cell, ExportBook } from "@/lib/export";
 import { monthKey, monthLabel, money, num } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { bkkStamp } from "@/lib/live-export";
-import { MIN_RANK_HOURS, rankCells, type McRank, type RankPart, type RankPeriod, type RankReport, type Tier } from "@/lib/mc-rank";
+import {
+  MIN_RANK_HOURS, RANK_CHANNELS, rankCells, type McRank, type RankChannel, type RankPart, type RankPeriod, type RankReport, type Tier,
+} from "@/lib/mc-rank";
 import { cn } from "@/lib/utils";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { LoadError, LoadingBlock, MonthNav, Notice, api } from "@/components/shared";
@@ -29,7 +31,11 @@ const RANK_PERIOD_KEY = "glory_rank_period";
 // [ช่วง, ชื่อเต็ม, ชื่อสั้นบนมือถือ (ชื่อเต็มยาวเกินจอ 375px)]
 const RANK_PERIODS: [RankPeriod, string, string][] = [["month", "เดือนที่เลือก", "รายเดือน"], ["30", "30 วันล่าสุด", "30 วัน"], ["90", "90 วันล่าสุด", "90 วัน"]];
 
+const RANK_CHANNEL_KEY = "glory_rank_channel";
+const channelText = (r: RankReport) => RANK_CHANNELS.find(([id]) => id === r.channel)?.[1] ?? "";
 const periodText = (r: RankReport) => (r.period === "month" ? monthLabel(r.month) : `${r.period} วันล่าสุด (${windowText(r.from, r.to)})`);
+/** ช่วง + ช่อง เช่น "TikTok พฤศจิกายน 2026" (ชื่อไฟล์ / สไลด์) */
+const titleText = (r: RankReport) => `${channelText(r) ? `${channelText(r)} ` : ""}${periodText(r)}`;
 const prevPeriodText = (r: RankReport) => (r.period === "month" ? monthLabel(monthKey(-1, r.month)) : `${r.period} วันก่อนหน้า`);
 /** undefined = ช่วงก่อนไม่มีข้อมูลให้เทียบ (ไม่แสดง) / null = ไม่มีอันดับในช่วงก่อน */
 const moveText = (m: number | null | undefined) => (m === undefined ? "" : m === null ? "ใหม่" : m > 0 ? `▲${m}` : m < 0 ? `▼${-m}` : "–");
@@ -65,7 +71,7 @@ function rankBook(r: RankReport, rows: McRank[], moves: Map<string, number | nul
   }
   const note = partialNote(r);
   return {
-    title: `GLORY อันดับ Mc ${periodText(r)}`,
+    title: `GLORY อันดับ Mc ${titleText(r)}`,
     sheets: [
       { name: "อันดับ Mc", rows: [...(note ? [[`อันดับชั่วคราว: ${note}`], []] : []), ...ranking] as Cell[][] },
       { name: "ค่าที่คาดหวัง", rows: expect as Cell[][] },
@@ -99,8 +105,10 @@ export function McRankPanel() {
   const [month, setMonth] = useState(() => monthKey());
   const saved = useLocal(RANK_PERIOD_KEY);
   const period: RankPeriod = saved === "month" || saved === "30" ? saved : "90";
+  // แยกอันดับ TikTok / Shopee (ผู้ใช้ขอ 2026-11-17) · จำช่องที่เลือกไว้
+  const channel: RankChannel = useLocal(RANK_CHANNEL_KEY) === "shopee" ? "shopee" : "tiktok";
   // 30 / 90 วันล่าสุด ไม่ขึ้นกับเดือนที่เลือก
-  const key = period === "month" ? `month|${month}` : period;
+  const key = `${channel}|${period === "month" ? `month|${month}` : period}`;
   const [cache, setCache] = useState<Record<string, RankReport>>({});
   const [failed, setFailed] = useState<{ key: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -112,14 +120,14 @@ export function McRankPanel() {
 
   useEffect(() => {
     if (report) return;
-    api<{ report: RankReport }>(`/api/owner/rank?period=${period}&month=${month}`)
+    api<{ report: RankReport }>(`/api/owner/rank?period=${period}&month=${month}&channel=${channel}`)
       .then((res) => {
         if (!res.ok) throw new Error(res.message);
         setCache((c) => ({ ...c, [key]: res.report }));
         setFailed(null);
       })
       .catch((err) => setFailed({ key, message: (err as Error).message }));
-  }, [key, report, period, month, attempt]);
+  }, [key, report, period, month, channel, attempt]);
 
   const all = useMemo(() => (report ? rankCells(report.cells, { excludeCeo }) : []), [report, excludeCeo]);
   const moves = useMemo(() => {
@@ -165,11 +173,11 @@ export function McRankPanel() {
             <ExportMenu label="อันดับ Mc" size="sm" build={() => rankBook(report, all, moves)} />
             <SlidesMenu
               label="สไลด์"
-              title={`GLORY อันดับ Mc ${periodText(report)}`}
+              title={`GLORY อันดับ Mc ${titleText(report)}`}
               build={async () => {
                 const { buildRankDeck } = await import("@/lib/campaign-slides");
                 return buildRankDeck({
-                  periodText: periodText(report), prevText: prevPeriodText(report), partialNote: note, exactShare: exact,
+                  periodText: titleText(report), prevText: prevPeriodText(report), partialNote: note, exactShare: exact,
                   exportedAt: bkkStamp(new Date().toISOString()), rows: all, moves, expect: report.expect, excludeCeo,
                 });
               }}
@@ -178,6 +186,17 @@ export function McRankPanel() {
         ) : null}
       </div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="single" spacing={1} value={channel}
+          onValueChange={(v) => { if (v) writeLocal(RANK_CHANNEL_KEY, v); }}
+          aria-label="ช่องที่จัดอันดับ" className="rounded-full border bg-card p-1"
+        >
+          {RANK_CHANNELS.map(([id, text]) => (
+            <ToggleGroupItem key={id} value={id} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">
+              {text}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
         <ToggleGroup
           type="single" spacing={1} value={period}
           onValueChange={(v) => { if (v) writeLocal(RANK_PERIOD_KEY, v); }}

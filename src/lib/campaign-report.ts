@@ -2,7 +2,8 @@ import "server-only";
 import { instLabel, previousInstance, type CampCell, type CampInstance, type CampaignReport, type CampPlatformRow } from "@/lib/campaign";
 import { loadCampaignContext, type CtxSlot } from "@/lib/campaign-data";
 import { gmvCoverage } from "@/lib/gmv";
-import { CAP, type ExpectRow, type RankCellRaw, type RankPeriod, type RankReport } from "@/lib/mc-rank";
+import { CAP, type ExpectRow, type RankCellRaw, type RankChannel, type RankPeriod, type RankReport } from "@/lib/mc-rank";
+import { isShopeePlatform } from "@/lib/platform";
 import { addDays } from "@/lib/window";
 
 /**
@@ -159,7 +160,11 @@ function toRankCells(units: Unit[]): RankCellRaw[] {
   return [...m.values()];
 }
 
-export async function rankReport(period: RankPeriod, month: string): Promise<RankReport> {
+/**
+ * channel = แยกอันดับ TikTok / Shopee (ผู้ใช้ขอ 2026-11-17 · หน้าผลงาน Mc) · all = รวมทุกช่อง (แร็งค์โควตาจอง mc-quota-db)
+ *   กรอง slot ก่อนคิดทุกอย่าง: คะแนน / ความคืบหน้า / ค่าที่คาดหวัง / อันดับช่วงก่อน เป็นของช่องนั้นทั้งหมด
+ */
+export async function rankReport(period: RankPeriod, month: string, channel: RankChannel = "all"): Promise<RankReport> {
   const now = Date.now(), today = bkkDate(now);
   let from: string, to: string, prevFrom: string, prevTo: string;
   if (period === "month") {
@@ -172,7 +177,7 @@ export async function rankReport(period: RankPeriod, month: string): Promise<Ran
     prevTo = addDays(from, -1); prevFrom = addDays(prevTo, -(n - 1));
   }
   const ctx = await loadCampaignContext(prevFrom, to);
-  const all = [...ctx.values()];
+  const all = [...ctx.values()].filter((s) => channel === "all" || (channel === "shopee") === isShopeePlatform(s.platform));
   const cur = all.filter((s) => s.date >= from && s.date <= to);
   const prev = all.filter((s) => s.date >= prevFrom && s.date <= prevTo);
   const u = slotUnits(cur, now);
@@ -205,7 +210,7 @@ export async function rankReport(period: RankPeriod, month: string): Promise<Ran
   }
 
   return {
-    period, month, from, to, prevFrom, prevTo, today,
+    period, month, channel, from, to, prevFrom, prevTo, today,
     partial: to >= today,
     cells: toRankCells(u.units), prevCells: toRankCells(slotUnits(prev, now).units), skipped: u.skipped, standby: u.standby,
     expect: [...expect.values()].sort((a, b) => Number(a.label === "วันปกติ") - Number(b.label === "วันปกติ") || a.label.localeCompare(b.label) || a.platform.localeCompare(b.platform)),
