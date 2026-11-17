@@ -3,7 +3,7 @@ import { monthRange } from "@/lib/api";
 import { loadCampaignContext } from "@/lib/campaign-data";
 import { ownerSummary } from "@/lib/data";
 import { monthKey } from "@/lib/format";
-import { costCells, type CostReport } from "@/lib/mc-cost-calc";
+import { MC_COST_APPS, costCells, type CostReport } from "@/lib/mc-cost-calc";
 import { platformLabel } from "@/lib/platform";
 
 /**
@@ -27,5 +27,7 @@ export async function mcCostReport(month: string | null): Promise<CostReport> {
     // ชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
     cells: c.cells.map((x) => ({ ...x, platform: platformLabel(x.platform) })),
     prev: p.totals, unknown: c.unknown, salaried: c.salaried,
+    // แยก TikTok / Shopee: เดือนก่อน (totals ของช่องนั้น) + คิวที่ยังไม่มียอด / Mc ประจำ ของเดือนนี้
+    byApp: Object.fromEntries(MC_COST_APPS.map((a) => [a, { prev: p.byApp[a].totals, unknown: c.byApp[a].unknown, salaried: c.byApp[a].salaried }])) as CostReport["byApp"],
   };
 }

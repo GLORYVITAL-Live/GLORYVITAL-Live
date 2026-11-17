@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { fmtMonthShort, money, num } from "@/lib/format";
 import { useLocal, writeLocal } from "@/lib/hooks";
-import { MC_COST_DIMS as DIMS, mcCostRows as groupBy, type CostReport, type McCostDim as Dim } from "@/lib/mc-cost-calc";
+import { MC_COST_APPS, MC_COST_DIMS, mcCostRows as groupBy, type CostReport, type McCostApp, type McCostDim as Dim } from "@/lib/mc-cost-calc";
 import { cn } from "@/lib/utils";
 import { ChangeText } from "@/components/LiveCharts";
 import { CountUp } from "@/components/motion";
@@ -14,10 +14,14 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
  * หน้า Cost > ความคุ้มค่า Mc: ค่าจ้าง Mc เทียบยอดขายของคิวเดียวกัน (ไม่นับ Mc ประจำ) — src/lib/mc-cost-calc.ts
- *   แยกดูตาม ช่วงเวลา / ช่อง / Mc / แคมเปญ / แพลตฟอร์ม · เฉพาะคนที่เห็นค่าจ้าง Mc
+ *   แยก TikTok / Shopee (ผู้ใช้ขอ 2026-11-17 · จำที่เลือกไว้) แล้วแยกดูตาม ช่วงเวลา / ช่อง / Mc / แคมเปญ · เฉพาะคนที่เห็นค่าจ้าง Mc
+ *   ไฟล์ส่งออก / สไลด์ของหน้า Cost ยังรวมทั้งสองแพลตฟอร์ม (มีแผ่น "แพลตฟอร์ม" แยกให้)
  */
 
 const DIM_KEY = "glory_cost_dim";
+const APP_KEY = "glory_cost_app";
+/** เลือกแพลตฟอร์มแล้ว มุม "แพลตฟอร์ม" ไม่มีประโยชน์ */
+const DIMS = MC_COST_DIMS.filter(([k]) => k !== "app");
 
 const shortMonth = (key: string) => fmtMonthShort.format(new Date(`${key}-01T12:00:00Z`));
 const baht = (n: number) => `฿${money(n)}`;
@@ -28,6 +32,7 @@ const ratio = (a: number, b: number) => (b ? a / b : null);
 export function McCostView({ month }: { month: string }) {
   const saved = useLocal(DIM_KEY);
   const dim: Dim = DIMS.some(([k]) => k === saved) ? (saved as Dim) : "band";
+  const app: McCostApp = useLocal(APP_KEY) === "Shopee" ? "Shopee" : "TikTok";
   const [sort, setSort] = useState<SortState>(null);
   const [state, setState] = useState<{ month: string; report?: CostReport; error?: string }>({ month: "" });
   const [attempt, setAttempt] = useState(0);
@@ -48,10 +53,13 @@ export function McCostView({ month }: { month: string }) {
     return state.month === month && state.error ? <LoadError title="โหลดความคุ้มค่า Mc ไม่สำเร็จ" message={state.error} onRetry={() => setAttempt((n) => n + 1)} /> : <LoadingBlock />;
   }
 
-  const total = r.cells.reduce((a, c) => ({ slots: a.slots + c.slots, hours: a.hours + c.hours, cost: a.cost + c.cost, gmv: a.gmv + c.gmv }), { slots: 0, hours: 0, cost: 0, gmv: 0 });
+  // แพลตฟอร์มที่เลือก (รายงานจากเซิร์ฟเวอร์รุ่นเก่ายังไม่มี byApp = ใช้ตัวเลขรวม)
+  const cells = r.cells.filter((c) => c.app === app);
+  const part = r.byApp?.[app] ?? { prev: r.prev, unknown: r.unknown, salaried: r.salaried };
+  const total = cells.reduce((a, c) => ({ slots: a.slots + c.slots, hours: a.hours + c.hours, cost: a.cost + c.cost, gmv: a.gmv + c.gmv }), { slots: 0, hours: 0, cost: 0, gmv: 0 });
   const prevLabel = `${shortMonth(r.prevMonth)}${r.upTo ? ` 1–${Number(r.upTo.slice(8))}` : ""}`;
   const avg = ratio(total.cost, total.gmv);
-  const rows = sortRows(groupBy(r.cells, dim), sort, (x, k) => {
+  const rows = sortRows(groupBy(cells, dim), sort, (x, k) => {
     if (k === "label") return x.label;
     if (k === "pct") return ratio(x.cost, x.gmv);
     if (k === "roi") return ratio(x.gmv, x.cost);
@@ -60,33 +68,44 @@ export function McCostView({ month }: { month: string }) {
     return x[k as "hours" | "cost" | "gmv"];
   });
   const kpis = [
-    { label: "ค่าจ้าง Mc (คิวที่มียอด)", value: total.cost, format: baht, delta: <ChangeText cur={total.cost} prev={r.prev.cost} suffix={`vs ${prevLabel}`} neutral /> },
-    { label: "GMV ของคิวเหล่านี้", value: total.gmv, format: baht, delta: <ChangeText cur={total.gmv} prev={r.prev.gmv} suffix={`vs ${prevLabel}`} /> },
+    { label: "ค่าจ้าง Mc (คิวที่มียอด)", value: total.cost, format: baht, delta: <ChangeText cur={total.cost} prev={part.prev.cost} suffix={`vs ${prevLabel}`} neutral /> },
+    { label: "GMV ของคิวเหล่านี้", value: total.gmv, format: baht, delta: <ChangeText cur={total.gmv} prev={part.prev.gmv} suffix={`vs ${prevLabel}`} /> },
     {
       label: "ค่าจ้างต่อยอดขาย", value: avg, format: (n: number) => pctText(n),
-      delta: <ChangeText cur={avg} prev={ratio(r.prev.cost, r.prev.gmv)} suffix={`vs ${prevLabel}`} goodDown />,
+      delta: <ChangeText cur={avg} prev={ratio(part.prev.cost, part.prev.gmv)} suffix={`vs ${prevLabel}`} goodDown />,
     },
     {
       label: "จ่ายค่าจ้าง ฿1 ได้ยอด", value: ratio(total.gmv, total.cost), format: (n: number) => perBaht(n),
-      delta: <ChangeText cur={ratio(total.gmv, total.cost)} prev={ratio(r.prev.gmv, r.prev.cost)} suffix={`vs ${prevLabel}`} />,
+      delta: <ChangeText cur={ratio(total.gmv, total.cost)} prev={ratio(part.prev.gmv, part.prev.cost)} suffix={`vs ${prevLabel}`} />,
     },
   ];
 
   return (
     <>
+      <ToggleGroup
+        type="single" spacing={1} value={app} aria-label="แพลตฟอร์ม"
+        onValueChange={(v) => { if (v) { writeLocal(APP_KEY, v); setSort(null); } }}
+        className="mt-1 w-fit rounded-full border bg-card p-1"
+      >
+        {MC_COST_APPS.map((a) => (
+          <ToggleGroupItem key={a} value={a} className="rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">
+            {a}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-        ค่าจ้าง Mc (สูตรเดียวกับสรุปรายเดือน) เทียบยอดขายของคิวเดียวกัน · ไม่นับ Mc ประจำ{r.salaried ? ` (${r.salaried} คิว)` : ""}
+        ค่าจ้าง Mc {app} (สูตรเดียวกับสรุปรายเดือน) เทียบยอดขายของคิวเดียวกัน · ไม่นับ Mc ประจำ{part.salaried ? ` (${part.salaried} คิว)` : ""}
         {r.upTo ? ` · เดือนนี้ยังไม่จบ นับคิวถึงตอนนี้ เทียบ ${prevLabel}` : ""}
         <br />ยอดต่อคิว = GMV ที่กรอกใน slot ก่อน ไม่มีใช้ยอดจากไฟล์ Export แบ่งตามนาที (≈ ค่าประมาณ)
       </p>
-      {r.unknown.slots ? (
+      {part.unknown.slots ? (
         <p className="mt-1 text-xs text-warning-foreground">
-          ยังไม่นับ {r.unknown.slots} คิว (ค่าจ้าง {baht(r.unknown.cost)}) เพราะยังไม่มียอด — ยังไม่ได้กรอก GMV และยังไม่มีไฟล์ Export ของช่วงนั้น
+          ยังไม่นับ {part.unknown.slots} คิว (ค่าจ้าง {baht(part.unknown.cost)}) เพราะยังไม่มียอด — ยังไม่ได้กรอก GMV และยังไม่มีไฟล์ Export ของช่วงนั้น
         </p>
       ) : null}
 
-      {!r.cells.length ? (
-        <StateBox title="ยังไม่มีคิวที่มีทั้งค่าจ้างและยอดขายในเดือนนี้">ลองเลือกเดือนอื่น หรืออัปโหลดไฟล์ Export ของเดือนนี้ที่หน้าอัปโหลด</StateBox>
+      {!cells.length ? (
+        <StateBox title={`ยังไม่มีคิว ${app} ที่มีทั้งค่าจ้างและยอดขายในเดือนนี้`}>ลองเลือกเดือนอื่น หรืออัปโหลดไฟล์ Export ของเดือนนี้ที่หน้าอัปโหลด</StateBox>
       ) : (
         <>
           <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-4">

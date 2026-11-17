@@ -1,5 +1,6 @@
 import { BANDS, instLabel, type Band, type CampInfo } from "@/lib/campaign";
 import { gmvCoverage } from "@/lib/gmv";
+import { isShopeePlatform } from "@/lib/platform";
 import { itemRate, type PayData } from "@/lib/owner-pay";
 import { slotPay } from "@/lib/pay";
 import type { OwnerDetail } from "@/lib/types";
@@ -24,6 +25,10 @@ export type CostCell = {
   slots: number; hours: number; cost: number; gmv: number; estHours: number;
 };
 export type CostTotals = { slots: number; hours: number; cost: number; gmv: number };
+export type McCostApp = CostCell["app"];
+export const MC_COST_APPS: McCostApp[] = ["TikTok", "Shopee"];
+/** ตัวเลขประกอบแยกแพลตฟอร์ม (หน้าเว็บแยกดู TikTok / Shopee · ผู้ใช้ขอ 2026-11-17) */
+export type CostAppPart = { prev: CostTotals; unknown: { slots: number; cost: number }; salaried: number };
 export type CostReport = {
   month: string; prevMonth: string;
   /** เดือนที่ยังไม่จบ: วันนี้ (เดือนก่อนนับถึงวันที่เดียวกัน) · เดือนที่จบแล้ว = null */
@@ -34,6 +39,8 @@ export type CostReport = {
   unknown: { slots: number; cost: number };
   /** คิวของ Mc ประจำที่ไม่นับ */
   salaried: number;
+  /** prev / unknown / salaried แยก TikTok / Shopee (cells แยกด้วย app อยู่แล้ว) */
+  byApp: Record<McCostApp, CostAppPart>;
 };
 
 /** มุมที่แยกดูได้ (หน้าเว็บ / ไฟล์ส่งออก / สไลด์ใช้ชุดเดียวกัน) */
@@ -78,26 +85,33 @@ export function costCells(summary: Summary, slots: CostSlot[], { now, upToDay }:
   for (const s of done) if (!gmvOf.has(s.id) && s.exp && s.exp.hours >= 0.5) gmvOf.set(s.id, { gmv: s.exp.gmv, est: true });
 
   const cells = new Map<string, CostCell>();
-  const totals: CostTotals = { slots: 0, hours: 0, cost: 0, gmv: 0 };
-  const unknown = { slots: 0, cost: 0 };
-  let salaried = 0;
+  const part = (): CostAppPart & { totals: CostTotals } => ({
+    totals: { slots: 0, hours: 0, cost: 0, gmv: 0 }, prev: { slots: 0, hours: 0, cost: 0, gmv: 0 }, unknown: { slots: 0, cost: 0 }, salaried: 0,
+  });
+  const all = part();
+  const byApp: Record<McCostApp, ReturnType<typeof part>> = { TikTok: part(), Shopee: part() };
   for (const s of done) {
-    if (salariedNames.has(s.mc)) { salaried++; continue; }
+    if (salariedNames.has(s.mc)) {
+      all.salaried++; byApp[isShopeePlatform(s.platform) ? "Shopee" : "TikTok"].salaried++;
+      continue;
+    }
     // ไม่อยู่ในสรุปรายเดือน (บัญชีทดสอบ / ยังไม่ยืนยัน) = ไม่นับ
     const d = detailOf.get(keyOf(s.mc, s.platform, s.startMs));
     if (!d) continue;
+    const app: McCostApp = d.shopee ? "Shopee" : "TikTok";
     const cost = slotPay(d.hours, d.lateMinutes, d.bonusMinutes, itemRate(summary, "Mc", d));
     const g = gmvOf.get(s.id);
-    if (!g) { unknown.slots++; unknown.cost += cost; continue; }
-    const cell = {
-      mc: s.mc, platform: s.platform, band: s.band, camp: s.camp ? instLabel(s.camp) : "วันปกติ", app: d.shopee ? "Shopee" as const : "TikTok" as const,
-    };
+    if (!g) {
+      for (const p of [all, byApp[app]]) { p.unknown.slots++; p.unknown.cost += cost; }
+      continue;
+    }
+    const cell = { mc: s.mc, platform: s.platform, band: s.band, camp: s.camp ? instLabel(s.camp) : "วันปกติ", app };
     const k = Object.values(cell).join("|");
     const c = cells.get(k) ?? { ...cell, slots: 0, hours: 0, cost: 0, gmv: 0, estHours: 0 };
     c.slots++; c.hours += d.hours; c.cost += cost; c.gmv += g.gmv;
     if (g.est) c.estHours += d.hours;
     cells.set(k, c);
-    totals.slots++; totals.hours += d.hours; totals.cost += cost; totals.gmv += g.gmv;
+    for (const p of [all, byApp[app]]) { p.totals.slots++; p.totals.hours += d.hours; p.totals.cost += cost; p.totals.gmv += g.gmv; }
   }
-  return { cells: [...cells.values()], totals, unknown, salaried };
+  return { cells: [...cells.values()], totals: all.totals, unknown: all.unknown, salaried: all.salaried, byApp };
 }

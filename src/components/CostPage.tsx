@@ -271,7 +271,7 @@ export function CostPage() {
           <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between gap-2 rounded text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
             <span>
               <span className="block font-bold">ความคุ้มค่า Mc</span>
-              <span className="block text-xs text-muted-foreground">ค่าจ้าง Mc เทียบยอดขายของคิวเดียวกัน แยกตามช่วงเวลา / ช่อง / Mc / แคมเปญ / แพลตฟอร์ม</span>
+              <span className="block text-xs text-muted-foreground">ค่าจ้าง Mc เทียบยอดขายของคิวเดียวกัน แยก TikTok / Shopee แล้วแยกตามช่วงเวลา / ช่อง / Mc / แคมเปญ</span>
             </span>
             <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/mc:rotate-180" />
           </CollapsibleTrigger>

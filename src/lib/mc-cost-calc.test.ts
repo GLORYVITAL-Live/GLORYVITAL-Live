@@ -46,6 +46,14 @@ describe("ความคุ้มค่า Mc", () => {
     expect(r.unknown).toEqual({ slots: 1, cost: 600 });
   });
 
+  test("แยก TikTok / Shopee: ยอดรวม · คิวที่ยังไม่มียอด · Mc ประจำ", () => {
+    expect(r.byApp.TikTok.totals).toEqual({ slots: 2, hours: 4, cost: 2000, gmv: 20000 });
+    expect(r.byApp.Shopee.totals).toEqual({ slots: 1, hours: 2, cost: 600, gmv: 6000 });
+    expect(r.byApp.Shopee.unknown).toEqual({ slots: 1, cost: 600 });
+    expect(r.byApp.TikTok.unknown).toEqual({ slots: 0, cost: 0 });
+    expect([r.byApp.TikTok.salaried, r.byApp.Shopee.salaried]).toEqual([1, 0]);
+  });
+
   test("เดือนก่อนนับถึงวันที่เดียวกัน", () => {
     const p = costCells(summary, slots, { now, upToDay: 1 });
     expect(p.totals).toEqual({ slots: 3, hours: 6, cost: 2600, gmv: 26000 });
