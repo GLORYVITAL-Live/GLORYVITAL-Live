@@ -3,8 +3,9 @@ import { monthRange, requireOwner } from "@/lib/api";
 import { ownerSummary } from "@/lib/data";
 import { payDocsScope } from "@/lib/pay-docs-db";
 import { PAY_SYNC_SQL, paymentsOf } from "@/lib/pay-months";
+import { loadDrops } from "@/lib/drops-db";
 import { applyPeriods, canClosePeriods } from "@/lib/periods";
-import { withPlatformLabels } from "@/lib/platform";
+import { platformLabel, withPlatformLabels } from "@/lib/platform";
 
 // สรุปรายเดือนสำหรับเจ้าของ (?month=YYYY-MM) — แทน action "ownerSummary"
 // ส่งเฉพาะฝั่งที่ Owner คนนี้มีสิทธิ์ (Mc / Admin) · ฝั่งที่ดูได้อย่างเดียว = ไม่ส่งค่าจ้าง (อัตรา / Commit)
@@ -19,11 +20,13 @@ export async function GET(request: Request) {
   // id ของแต่ละคน (ตัวเลขตอนปิดงวดเก่าไม่มี id → เติมจากชื่อ)
   const ids = new Map([...s.mc.map((p) => [`Mc|${p.name}`, p.staffId] as const), ...s.admin.map((p) => [`Admin|${p.name}`, p.staffId] as const)]);
   // ฝั่งที่ปิดงวดแล้ว: ใช้ตัวเลขตอนปิด + ส่วนต่างของข้อมูลจริง
-  const [{ periods, changes, periodLog }, canClose, paid, docs] = await Promise.all([
+  const [{ periods, changes, periodLog }, canClose, paid, docs, drops] = await Promise.all([
     applyPeriods(s, key, [...(mc ? ["mc" as const] : []), ...(admin ? ["admin" as const] : [])]),
     canClosePeriods(r.me),
     paymentsOf(key),
     payDocsScope(r.me).catch(() => ({ mc: false, admin: false })),
+    // คิวหลุด + ใครรับต่อ (ฝั่ง Mc · โหลดไม่ได้ = ไม่แสดง ส่วนอื่นของหน้าใช้ได้ตามปกติ)
+    mc ? loadDrops(first, last).catch(() => undefined) : Promise.resolve(undefined),
   ]);
   for (const [type, list] of [["Mc", s.mc], ["Admin", s.admin]] as const) {
     for (const p of list) p.staffId ??= ids.get(`${type}|${p.name}`);
@@ -42,6 +45,7 @@ export async function GET(request: Request) {
     // ส่วนต่างมีค่าจ้าง/ชม. ด้วย: ฝั่งที่ดูได้อย่างเดียวไม่ส่ง
     changes: Object.fromEntries(Object.entries(changes).filter(([side]) => !hide[side as "mc" | "admin"])),
     payHidden: hide,
+    ...(drops ? { drops: drops.map((d) => ({ ...d, platform: platformLabel(d.platform) })) } : {}),
     mc: mc ? people(s.mc, hide.mc) : [],
     admin: admin ? people(s.admin, hide.admin) : [],
     // ชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม) ไฟล์ส่งออกใช้ข้อมูลชุดนี้ · ค่ารถเป็นเงิน: ฝั่งที่ดูได้อย่างเดียวไม่ส่ง

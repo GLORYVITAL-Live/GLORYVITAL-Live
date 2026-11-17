@@ -552,9 +552,21 @@ export type OwnerSlip = {
 export type OwnerSlips = { configured: boolean; slips: OwnerSlip[]; people: { id: number; role: "mc" | "admin"; label: string }[] };
 export type SlipScan = { configured: boolean; files: number; added: number; removed: number; matched: number; unmatched: number; notified: number };
 
+/**
+ * คิว Mc ที่หลุด (Mc กดยกเลิกเอง / Owner เอาคนออก) ของเดือน แล้วจบยังไง (src/lib/drops.ts · หน้าสรุปรายเดือน "รับคิวหลุด")
+ *   web = Mc อีกคนจองต่อในเว็บ · owner = Owner ใส่คนแทน (ในเว็บ / ชีต) · open = ยังไม่มีคนรับ (หรือคิวถูกแคน)
+ *   by = คนที่ได้คิวไป · from = คนที่ปล่อยคิว (รู้เฉพาะที่กดยกเลิกเอง / จองผ่านเว็บไว้ก่อน)
+ */
+export type DropRow = {
+  date: string; start: string; end: string; platform: string; shopee: boolean;
+  outcome: "web" | "owner" | "open"; by: string | null; from: string | null;
+};
+
 export type OwnerSummary = {
   ok: true;
   month: string;
+  /** คิวหลุดของเดือน (เฉพาะคนที่เห็นฝั่ง Mc · คำนวณสดทุกครั้ง ไม่ขึ้นกับการปิดงวด) */
+  drops?: DropRow[];
   scope: OwnerScope; // ฝั่งที่ Owner คนนี้เห็นได้ (ฝั่งที่ไม่มีสิทธิ์ส่งมาเป็นรายการว่าง)
   /** ฝั่งที่ดูได้อย่างเดียว = ไม่ส่งค่าจ้างมา (ซ่อนคอลัมน์ยอดเงิน) */
   payHidden?: { mc: boolean; admin: boolean };

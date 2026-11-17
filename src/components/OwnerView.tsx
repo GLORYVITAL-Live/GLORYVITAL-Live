@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import type { OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
+import type { DropRow, OwnerDetail, OwnerPerson, OwnerSummary, ProofInfo } from "@/lib/types";
 import { fmtDayMonth, fmtDayShort, monthKey, monthLabel, money, num, parseKey, todayKey } from "@/lib/format";
 import { fmtGmv } from "@/lib/gmv";
 import { bonusPaidMinutes, lateCut, slotPaidHours, slotPay, tiersLabel } from "@/lib/pay";
@@ -573,8 +573,49 @@ function platformView(data: OwnerSummary, p: Exclude<Platform, "all">): OwnerSum
     .filter((r) => r.slots || r.cancelled);
   return {
     ...data, details, mc: people("Mc", data.mc), admin: people("Admin", data.admin),
+    drops: data.drops?.filter((d) => (p === "shopee") === d.shopee),
     payments: {}, paySides: { mc: false, admin: false }, periods: undefined, changes: undefined, periodLog: undefined, canClose: false,
   };
+}
+
+/** คิวหลุดที่ Mc คนนี้จองต่อในเว็บ (ยังถือคิวอยู่) */
+const pickupsOf = (data: OwnerSummary, name: string) => (data.drops ?? []).filter((d) => d.outcome === "web" && d.by === name);
+
+/**
+ * คิวหลุดของเดือน (Mc กดยกเลิกเอง / Owner เอาคนออก) แล้วจบยังไง: Mc รับต่อในเว็บ / Owner ใส่คนแทน / ยังไม่มีคนรับ
+ *   ผู้ใช้ขอ 2026-11-17 · กดดูรายการคิวได้
+ */
+function DropsLine({ data }: { data: OwnerSummary }) {
+  const list = data.drops ?? [];
+  if (!list.length) return null;
+  const n = (o: DropRow["outcome"]) => list.filter((d) => d.outcome === o).length;
+  const OUT: Record<DropRow["outcome"], string> = { web: "Mc รับต่อในเว็บ", owner: "Owner ใส่คนแทน", open: "ยังไม่มีคนรับ" };
+  return (
+    <details className="mb-2 rounded-xl border bg-card px-3 py-2 text-sm">
+      <summary className="cursor-pointer">
+        <b>คิวหลุด {list.length} คิว</b>
+        <span className="text-muted-foreground"> → </span>
+        <span className="font-semibold text-success">Mc รับต่อในเว็บ {n("web")}</span>
+        <span className="text-muted-foreground"> · Owner ใส่คนแทน {n("owner")}</span>
+        {n("open") ? <span className="font-semibold text-destructive"> · ยังไม่มีคนรับ {n("open")}</span> : null}
+        <span className="text-xs text-muted-foreground"> · กดดูรายการ</span>
+      </summary>
+      <ul className="mt-2 space-y-0.5 text-xs">
+        {list.map((d, i) => (
+          <li key={i} className="tabular-nums">
+            <b className="font-semibold">{fmtDayShort.format(parseKey(d.date))} {d.start}–{d.end}</b>
+            <span className="text-muted-foreground"> {d.platform}{d.from ? ` · ปล่อยโดย ${d.from}` : ""} → </span>
+            <span className={cn(d.outcome === "web" ? "text-success" : d.outcome === "open" ? "text-destructive" : "")}>
+              {OUT[d.outcome]}{d.by ? ` (${d.by})` : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        คิวหลุด = Mc กดยกเลิกเองในเว็บ หรือ Owner เอาคนออก · ยกเลิกแล้วจองคืนเอง ไม่นับ · ดูจากประวัติในเว็บ (คิวที่แก้ในชีตโดยตรงไม่มีประวัติ)
+      </p>
+    </details>
+  );
 }
 
 export function OwnerView({ requester = "" }: { requester?: string }) {
@@ -681,6 +722,7 @@ export function OwnerView({ requester = "" }: { requester?: string }) {
               กดที่ชื่อเพื่อดูรายวัน · ไม่นับคิวที่ยกเลิก · {payHiddenOf(view, type) ? "ดูได้อย่างเดียว ไม่แสดงค่าจ้าง" : "ยอดเงินหักมาสาย + รวมไลฟ์ชดเชยแล้ว"}
             </span>
           </h2>
+          {type === "Mc" ? <DropsLine data={view} /> : null}
           <PeriodBar data={view} side={type === "Mc" ? "mc" : "admin"} onChanged={reloadMonth} />
           <PayBar data={view} type={type} rows={rows} onChanged={reloadMonth} />
           <SumTable data={view} type={type} rows={rows} onChanged={reloadMonth} />
@@ -996,7 +1038,9 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
   if (!base.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
   const showPay = !payHiddenOf(data, type);
   const canLate = type === "Admin" && data.scope.admin && !data.payHidden?.admin;
-  const cols = showPay ? SUM_COLS : SUM_COLS.filter(([k]) => k !== "pay");
+  // Mc: "รับคิวหลุด" = คิวที่คนอื่นปล่อยแล้วคนนี้จองต่อในเว็บ (ต่อจากคอลัมน์ยกเลิก · มีข้อมูลคิวหลุดเท่านั้น)
+  const cols = (showPay ? SUM_COLS : SUM_COLS.filter(([k]) => k !== "pay"))
+    .flatMap((c) => (c[0] === "cancelled" && type === "Mc" && data.drops ? [c, ["pickup", "รับคิวหลุด"] as [string, string]] : [c]));
   const valueOf = (r: OwnerPerson, k: string): number | string | null => {
     const items = slotsOf(data, type, r.name);
     switch (k) {
@@ -1005,6 +1049,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
       case "hours": return r.hours;
       case "days": return r.days;
       case "cancelled": return r.cancelled;
+      case "pickup": return pickupsOf(data, r.name).length;
       case "late": return r.lateSlots;
       case "bonus": return r.bonusMinutes;
       case "proof": {
@@ -1061,6 +1106,7 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
             const need = items.filter((d) => !d.noProof); // ไม่นับคิวของ Mc ประจำ (ไม่ต้องแนบ)
             const proved = need.filter((d) => d.proof).length;
             const gmv = gmvOf(items);
+            const pickups = type === "Mc" ? pickupsOf(data, r.name) : [];
             return (
               <Fragment key={r.name}>
                 <TableRow
@@ -1122,6 +1168,14 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                   >
                     {r.cancelled || "–"}
                   </TableCell>
+                  {cols.some(([k]) => k === "pickup") ? (
+                    <TableCell
+                      title="คิวที่คนอื่นปล่อย (ยกเลิก / ถูกเอาออก) แล้วคนนี้จองต่อในเว็บ กดที่ชื่อเพื่อดูว่าคิวไหน"
+                      className={cn(num_, pickups.length && "font-semibold text-success")}
+                    >
+                      {pickups.length || "–"}
+                    </TableCell>
+                  ) : null}
                   <TableCell className={cn(num_, r.lateSlots && "font-semibold text-destructive")}>{r.lateSlots || "–"}</TableCell>
                   <TableCell className={cn(num_, r.bonusMinutes && "font-semibold text-success")}>
                     {r.bonusMinutes ? `+${r.bonusMinutes} น.` : "–"}
@@ -1240,6 +1294,17 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
                               </span>
                               <span className="text-muted-foreground">{d.platform}</span>
                               <span className="font-semibold text-destructive">{cancelText(d)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {pickups.length ? (
+                        <ul className="mt-2 space-y-1 border-t pt-2 text-xs">
+                          {pickups.map((d) => (
+                            <li key={`p${d.date}|${d.start}|${d.platform}`} className="flex flex-wrap items-baseline gap-x-2">
+                              <span className="font-semibold tabular-nums">{fmtDayShort.format(parseKey(d.date))} {d.start}–{d.end}</span>
+                              <span className="text-muted-foreground">{d.platform}</span>
+                              <span className="font-semibold text-success">รับคิวหลุด{d.from ? ` แทน ${d.from}` : ""} (จองในเว็บ)</span>
                             </li>
                           ))}
                         </ul>
