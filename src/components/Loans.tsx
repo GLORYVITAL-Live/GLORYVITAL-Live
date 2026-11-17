@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PhoneIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import {
-  LOAN_STATUS_TEXT, OPEN, canAct, companionsFor, isOverdue, leftOf, lightRole, loanLiveClashes, roomInfo, shortages,
+  LOAN_STATUS_TEXT, OPEN, canAct, companionsFor, isOverdue, leftOf, lightRole, loanLiveClashes, pickRole, roomInfo, shortages,
   type CatalogItem, type Hold, type LiveBlock, type Loan, type LoanAction, type LoanStatus, type Stock,
 } from "@/lib/loans";
 import { todayKey } from "@/lib/format";
@@ -120,12 +120,25 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
   };
 
   const q = search.trim().toLowerCase();
-  const groups = useMemo(() => {
+  // เรียงให้หาง่าย (คนที่ไม่รู้จักชื่ออุปกรณ์): หมวดที่มีตัวไฟก่อน แล้วในหมวด ตัวไฟ → Softbox → ขาไฟ → สายไฟ (src/lib/loans.ts pickRole)
+  //   หน้าที่เดียวกัน: ตัวที่ว่างในช่วงที่เลือกขึ้นก่อน · นอกนั้นตามลำดับเดิม
+  // (ไม่ใช้ useMemo: React Compiler จำค่าให้เอง · ขึ้นกับช่วงวันเวลาที่เลือกด้วย)
+  const groups = (() => {
     const list = data.catalog.filter((c) => !q || [c.name, c.code, c.category].some((v) => v.toLowerCase().includes(q)));
     const m = new Map<string, CatalogItem[]>();
     for (const c of list) m.set(c.category || "อื่นๆ", [...(m.get(c.category || "อื่นๆ") ?? []), c]);
-    return [...m];
-  }, [data.catalog, q]);
+    const rank = (c: CatalogItem) => pickRole(c).rank;
+    // ว่างไหมในช่วงที่เลือก (ไม่นับที่เลือกไว้ในฟอร์ม รายการจะได้ไม่กระโดดตอนกด +)
+    const busy = (c: CatalogItem) => {
+      if (!validRange) return 0;
+      const room = roomInfo(stock, c, startMs, endMs);
+      return Math.min(leftOf(stock, c, startMs, endMs), room ? room.left : Infinity) > 0 ? 0 : 1;
+    };
+    return [...m]
+      .map(([cat, items]) => [cat, items.map((c, i) => ({ c, i, r: rank(c), b: busy(c) }))
+        .sort((a, b) => a.r - b.r || a.b - b.b || a.i - b.i).map((x) => x.c)] as const)
+      .sort((a, b) => Math.min(...a[1].map(rank)) - Math.min(...b[1].map(rank)));
+  })();
   const items = [...picked].filter(([, n]) => n > 0).map(([equipmentId, quantity]) => ({ equipmentId, quantity }));
   const short = validRange ? shortages(items, stock, startMs, endMs) : [];
   const byId = useMemo(() => new Map(data.catalog.map((c) => [c.id, c])), [data.catalog]);
@@ -244,13 +257,20 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
               <div key={cat}>
                 <div className="mb-1 text-xs font-semibold text-muted-foreground">{cat}</div>
                 <ul className="space-y-1">
-                  {list.map((c) => {
+                  {list.map((c, i) => {
                     const n = picked.get(c.id) ?? 0, free = left(c);
                     const room = validRange ? roomInfo(stock, c, startMs, endMs) : null;
                     // ของที่เพิ่มคู่กับไฟดวงนี้ (แสดงใต้ชื่อ)
                     const mates = [...new Set((links.get(c.id) ?? []).flat())].map((id) => byId.get(id)?.name).filter(Boolean);
+                    // หัวข้อย่อยเมื่อเปลี่ยนหน้าที่ (ตัวไฟ / Softbox / ขาไฟ / สายไฟ …) — หมวดที่ไม่มีของแยกหน้าที่ไม่ต้องมี
+                    const role = pickRole(c).label;
+                    const head = list.some((x) => pickRole(x).label) && (i === 0 || pickRole(list[i - 1]).label !== role)
+                      ? role === "ตัวไฟ" && asSet ? "ตัวไฟ — กด + ที่ไฟ ได้ขาไฟ + Softbox ให้อัตโนมัติ" : role || "อื่นๆ"
+                      : "";
                     return (
-                      <li key={c.id} className={cn("flex items-center gap-2 rounded-lg px-1.5 py-1", n > 0 && "bg-secondary")}>
+                      <Fragment key={c.id}>
+                      {head ? <li aria-hidden className={cn("px-1.5 pt-1 text-[11px] font-semibold", role === "ตัวไฟ" ? "text-primary" : "text-muted-foreground")}>{head}</li> : null}
+                      <li className={cn("flex items-center gap-2 rounded-lg px-1.5 py-1", n > 0 && "bg-secondary")}>
                         {c.photoUrl
                           // eslint-disable-next-line @next/next/no-img-element
                           ? <img src={c.photoUrl} alt="" className="size-10 shrink-0 rounded-md object-cover" loading="lazy" />
@@ -276,6 +296,7 @@ function LoanForm({ data, onSent }: { data: LoansData & { now: number }; onSent:
                           <Button size="icon-sm" variant="outline" aria-label={`เพิ่ม ${c.name}`} disabled={n >= free} onClick={() => add(c)} className="pointer-coarse:size-9"><PlusIcon /></Button>
                         </span>
                       </li>
+                      </Fragment>
                     );
                   })}
                 </ul>

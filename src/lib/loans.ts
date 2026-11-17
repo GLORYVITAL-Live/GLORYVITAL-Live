@@ -85,6 +85,17 @@ const ROLE_TEXT: Record<RoomRole, string> = {
   camera: "กล้อง", cameraPower: "แบตดัมมี่ / อะแดปเตอร์กล้อง", tripod: "ขาตั้งกล้อง", capture: "Capture Card", captureCable: "สาย Capture Card",
 };
 
+/**
+ * ลำดับ + หัวข้อย่อยในหน้าขอยืม (ผู้ใช้ขอ 2026-11-17: คนที่ไม่รู้จักชื่ออุปกรณ์หาไฟยาก)
+ *   ตัวไฟขึ้นก่อน (กด + ได้ทั้งชุด) → Softbox → ขาไฟ → สายไฟ · ตัวกล้อง → ขาตั้งกล้อง → Capture Card → สาย → แบต · อื่นๆ ต่อท้าย
+ */
+const PICK_ORDER: RoomRole[] = ["light", "softbox", "stand", "cable", "camera", "tripod", "capture", "captureCable", "cameraPower"];
+const PICK_TEXT: Partial<Record<RoomRole, string>> = { light: "ตัวไฟ", camera: "ตัวกล้อง" };
+export function pickRole(c: Pick<CatalogItem, "name" | "category">): { rank: number; label: string } {
+  const r = lightRole(c) ?? cameraRole(c);
+  return r ? { rank: PICK_ORDER.indexOf(r), label: PICK_TEXT[r] ?? ROLE_TEXT[r] } : { rank: PICK_ORDER.length, label: "" };
+}
+
 /** ตัวกล้อง (หมวดกล้อง ไม่ใช่แบตดัมมี่ / สาย / อะแดปเตอร์ / เลนส์) */
 export const isCameraBody = (c: Pick<CatalogItem, "name" | "category">) =>
   /กล้อง|camera/i.test(c.category) && !/ขาตั้ง/.test(c.category) && !/dummy|coupler|adapter|battery|แบต|สาย|lens|เลนส์/i.test(c.name);

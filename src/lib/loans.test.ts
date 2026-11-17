@@ -1,7 +1,7 @@
 // เทสขอยืมอุปกรณ์ (bun test)
 import { describe, expect, test } from "bun:test";
 import {
-  availableQty, cameraRole, canAct, cleanLoanInput, companionsFor, isCameraBody, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, loanLiveClashes, peakHeld, roomForPlatform, roomInfo, shortages, type Hold,
+  availableQty, cameraRole, canAct, cleanLoanInput, companionsFor, isCameraBody, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, loanLiveClashes, peakHeld, pickRole, roomForPlatform, roomInfo, shortages, type Hold,
 } from "@/lib/loans";
 
 const H = 3600_000;
@@ -181,5 +181,18 @@ describe("สถานะ", () => {
   test("คืนเลยกำหนด", () => {
     expect(isOverdue({ status: "borrowed", endAt: new Date(T0).toISOString() }, T0 + H)).toBe(true);
     expect(isOverdue({ status: "returned", endAt: new Date(T0).toISOString() }, T0 + H)).toBe(false);
+  });
+});
+
+describe("ลำดับในหน้าขอยืม", () => {
+  test("ตัวไฟก่อน → Softbox → ขาไฟ → สายไฟ · ตัวกล้องก่อนขาตั้งกล้อง · อื่นๆ ต่อท้าย", () => {
+    const at = (name: string, category: string) => pickRole({ name, category });
+    const order = [
+      at("สายไฟ leones haven 200bi", "ไฟ"), at("ขา leones haven 200bi", "ไฟ"), at("Lakrone Lantern 65 Softbox", "ไฟ"), at("leones haven 200bi", "ไฟ"),
+    ].map((x) => x.label);
+    expect(order).toEqual(["สายไฟ", "ขาไฟ", "Softbox", "ตัวไฟ"]);
+    expect(at("leones haven 200bi", "ไฟ").rank).toBeLessThan(at("Lakrone Lantern 65 Softbox", "ไฟ").rank);
+    expect(at("Panasonic GH5", "กล้อง").rank).toBeLessThan(at("ขาตั้ง Manfrotto", "ขาตั้งกล้อง").rank);
+    expect(at("ไมค์ Rode", "เสียง")).toEqual({ rank: 9, label: "" });
   });
 });
