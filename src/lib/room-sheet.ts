@@ -45,6 +45,8 @@ export type RoomSheet = {
   colCount: number;
   /** จำนวนคิวที่ลงตาราง */
   placed: number;
+  /** ช่องแอดมินของแต่ละคิว (แถว + คอลัมน์ c0 ถึงก่อน c1) · web = เว็บมีชื่อแอดมินของคิวนี้ */
+  adminCells: { r: number; c0: number; c1: number; web: boolean }[];
   /** คิวที่ลงไม่ได้ (เวลาทับคิวอื่นในห้องเดียวกันจนไม่มีช่องว่าง) */
   skipped: string[];
 };
@@ -61,6 +63,11 @@ const DAY_START = FIRST_HOUR * 60;
 
 const DARK = "#302502", CREAM = "#fff2cc", PRIME = "#cc4125", WHITE = "#ffffff";
 const TIME_BG = "#ff9900", ADMIN_BG = "#9fc5e8", CEO_BG = "#ff0000";
+/**
+ * สีตัวอักษรของชื่อแอดมินที่เว็บเขียน: ดำเกือบสนิท (ตาเปล่าแยกไม่ออก) ไว้แยกจากชื่อที่ทีมพิมพ์เอง
+ *   ทีมพิมพ์ในช่องว่าง = ได้สีดำปกติ → เว็บเก็บไว้ไม่ลบ · สีนี้ = ชื่อจากเว็บ → เว็บไม่มีชื่อแล้ว (แอดมินยกเลิก) = ล้างออก
+ */
+export const WEB_ADMIN_FG = "#000001";
 /** ชั่วโมงไพรม์ไทม์ (หัวคอลัมน์สีแดง) 10:00–14:00 และ 18:00–22:00 */
 const isPrime = (h: number) => (h >= 10 && h <= 13) || (h >= 18 && h <= 21);
 
@@ -182,6 +189,7 @@ export function buildRoomSheet(month: string, slots: RoomSlot[]): RoomSheet {
   });
 
   // คิว
+  const adminCells: RoomSheet["adminCells"] = [];
   const used = new Map<string, Set<number>>();
   const skipped: string[] = [];
   let placed = 0;
@@ -212,12 +220,36 @@ export function buildRoomSheet(month: string, slots: RoomSlot[]): RoomSheet {
       rows[r + 1][c0] = { text: s.start, bg: TIME_BG, border: true };
       rows[r + 1][c0 + w - 1] = { text: s.end, bg: TIME_BG, border: true };
     }
-    rows[r + 2][c0] = { text: s.admins.filter(Boolean).join(" / "), bg: ADMIN_BG, border: true };
+    const admins = s.admins.filter(Boolean).join(" / ");
+    rows[r + 2][c0] = { text: admins, bg: ADMIN_BG, border: true, ...(admins ? { fg: WEB_ADMIN_FG } : {}) };
     merge(r + 2, r + 3, c0, c0 + w);
+    adminCells.push({ r: r + 2, c0, c1: c0 + w, web: !!admins });
     placed++;
   }
 
-  return { title: roomTabTitle(month), rows, merges, heights, colCount: ROOM_COLS, placed, skipped };
+  return { title: roomTabTitle(month), rows, merges, heights, colCount: ROOM_COLS, placed, skipped, adminCells };
+}
+
+/**
+ * ชื่อแอดมินที่ทีมพิมพ์เองในแท็บ (เว็บ) — ไม่ลบตอนเว็บเขียนตารางใหม่ (ผู้ใช้ขอ 2026-11-18)
+ *   เก็บเมื่อ: เว็บยังไม่มีชื่อแอดมินของคิวนั้น + ในแท็บเป็นคิวเดียวกันที่ตำแหน่งเดิม (ช่องเวลาเริ่ม / จบแถวบนตรงกัน)
+ *     + ชื่อในแท็บไม่ใช่ชื่อที่เว็บเขียนไว้เอง (webWritten — สี WEB_ADMIN_FG) ซึ่งแปลว่าแอดมินยกเลิกในเว็บแล้ว
+ *   คิวย้ายเวลา / ย้ายช่อง = ชื่อเดิมไม่ตามไป · เว็บมีชื่อแล้ว = ใช้ของเว็บ
+ *   old = ข้อความในแท็บตอนนี้ (ช่องที่รวมไว้ ข้อความอยู่ช่องซ้ายบน) · คืนจำนวนช่องที่เก็บไว้
+ */
+export function keepTeamAdmins(built: RoomSheet, old: string[][], webWritten: (r: number, c: number) => boolean) {
+  const at = (r: number, c: number) => String(old[r]?.[c] ?? "").trim();
+  let kept = 0;
+  for (const a of built.adminCells) {
+    if (a.web) continue;
+    const text = at(a.r, a.c0);
+    if (!text || webWritten(a.r, a.c0)) continue;
+    const time = built.rows[a.r - 1];
+    if ((time[a.c0]?.text ?? "") !== at(a.r - 1, a.c0) || (time[a.c1 - 1]?.text ?? "") !== at(a.r - 1, a.c1 - 1)) continue;
+    built.rows[a.r][a.c0] = { ...built.rows[a.r][a.c0]!, text };
+    kept++;
+  }
+  return kept;
 }
 
 // ---------- สรุปวันหยุดแอดมินใต้ตาราง (ทีมทำเอง · ผู้ใช้ขอให้เว็บกรอกจำนวนคิว 2026-11-16) ----------
