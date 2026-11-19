@@ -16,6 +16,7 @@ import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { BarChart, ChangeText, Legend, LineChart, TableView } from "@/components/LiveCharts";
+import { CostForecast } from "@/components/CostForecast";
 import { McCostView } from "@/components/McCostView";
 import { MonthPicker } from "@/components/MonthPicker";
 import { KpiCard, type KpiChange } from "@/components/kpi";
@@ -264,6 +265,9 @@ export function CostPage() {
       {see.agency && report.agencies.length ? (
         <AgencyRates key={`${month}|${attempt}`} report={report} onSaved={() => setAttempt((n) => n + 1)} />
       ) : null}
+
+      {/* Forecast ในแท็บ Sum 2: อัปเดตตามแพลนจนถึงวันที่ 20 ของเดือนก่อน แล้วล็อค (ผู้ใช้ขอ 2026-11-19) */}
+      {report.sheet.ready ? <CostForecast month={month} canEdit={see.agency} onChanged={() => setAttempt((n) => n + 1)} /> : null}
 
       {/* มี GMV จากไฟล์ Export: ต้องเห็นค่าจ้าง Mc และดูสถิติไลฟ์ได้ทั้งคู่ */}
       {see.mc && see.gmv ? (

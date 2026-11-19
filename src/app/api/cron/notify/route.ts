@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { processCalendarJobs } from "@/lib/calendar";
+import { forecastCron } from "@/lib/cost-forecast-sync";
 import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySummary, sendWorkReminders } from "@/lib/notifications";
 import { sendLoanLiveAlerts, sendLoanReminders } from "@/lib/loans-db";
 import { withSyncLock } from "@/lib/lock";
@@ -66,8 +67,10 @@ async function run() {
       .then((x) => ("skipped" in x ? x : x.map((m) => ({ month: m.month, placed: m.placed, written: m.written, summary: m.summary, skipped: m.skipped.length }))))
       .catch(fail)
     : null;
+  // Forecast ค่าใช้จ่ายเดือนหน้า (แท็บ "Sum 2"): 23:00 น. อัปเดตตามแพลนจนถึงวันที่ 20 · เลยวันที่ 20 = ล็อค (src/lib/cost-forecast.ts)
+  const forecast = onTheHour ? await forecastCron().catch(fail) : null;
   // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
   const calendar = await processCalendarJobs(30, 15_000).catch(fail);
   await pruneNotifications().catch(() => undefined);
-  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, shopee, rooms, calendar });
+  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, shopee, rooms, forecast, calendar });
 }

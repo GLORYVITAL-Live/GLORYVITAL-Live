@@ -2,6 +2,8 @@ import "server-only";
 import { hasBudget } from "@/lib/agency-budget";
 import { monthRange } from "@/lib/api";
 import { costCut, costRows, costTotals, type CostPlanSlot, type CostPoint, type CostReport, type CostSee } from "@/lib/cost-calc";
+import { withLockedForecasts } from "@/lib/cost-forecast";
+import { lockedForecasts } from "@/lib/cost-forecast-sync";
 import { parseCostSheet, sheetCoversPay, type CostSheetEntry } from "@/lib/cost-sheet";
 import { sameTimePrevMonth } from "@/lib/dashboard-calc";
 import { fetchAll, ownerSummary } from "@/lib/data";
@@ -27,6 +29,12 @@ let sheetCache: { at: number; id: string; months: Map<string, CostSheetEntry[]> 
  *   ยังไม่ตั้งลิงก์ / ยังไม่รัน SQL = ใช้ตัวเลขระบบอย่างเดียว · อ่านไม่ได้ชั่วคราว = ใช้ชุดเดิมที่จำไว้ ไม่มีก็แจ้ง error แล้วใช้ตัวเลขระบบ
  */
 async function costSheet(): Promise<{ months: Map<string, CostSheetEntry[]>; ready: boolean; error: string | null }> {
+  const res = await readCostSheet();
+  // เดือนที่ล็อค Forecast แล้ว: ใช้ชุดที่ล็อค (ตัวเลขในชีตเปลี่ยนทีหลังได้) · ยังไม่ได้รัน SQL = ใช้ชีตตามเดิม
+  return { ...res, months: withLockedForecasts(res.months, await lockedForecasts().catch(() => [])) };
+}
+
+async function readCostSheet(): Promise<{ months: Map<string, CostSheetEntry[]>; ready: boolean; error: string | null }> {
   const none = new Map<string, CostSheetEntry[]>();
   const { data, error } = await createAdminClient().from("settings").select("cost_sheet_id").eq("id", 1).maybeSingle();
   if (error) return { months: none, ready: false, error: null };
