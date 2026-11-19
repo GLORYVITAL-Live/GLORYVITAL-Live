@@ -1030,12 +1030,23 @@ const SUM_COLS: [string, string][] = [
   ["bonus", "ชดเชย"], ["proof", "หลักฐาน"], ["gmv", "GMV"], ["pay", "ยอดเงิน"],
 ];
 
-function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; type: Type; rows: OwnerPerson[]; onChanged: () => void }) {
+/** แท็บกลุ่ม Admin ในสรุปรายเดือน (ผู้ใช้ขอ 2026-11-19): ทั้งหมด / เสริม (รายชั่วโมง) / ประจำ (เงินเดือน) */
+const ADMIN_GROUP_KEY = "glory_owner_admin_group";
+type AdminGroup = "all" | "extra" | "salaried";
+const ADMIN_GROUPS: [AdminGroup, string][] = [["all", "ทั้งหมด"], ["extra", "Admin เสริม"], ["salaried", "Admin ประจำ"]];
+
+function SumTable({ data, type, rows: all, onChanged }: { data: OwnerSummary; type: Type; rows: OwnerPerson[]; onChanged: () => void }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<SortState>(null);
   // Admin: เจ้าของที่จัดการฝั่ง Admin ใส่ / แก้สถานะมาสายรายคิวได้ (คิวจากตัวเลขตอนปิดงวดไม่มี slotId = ไม่มีปุ่ม)
   const [lateTarget, setLateTarget] = useState<AdminLateTarget | null>(null);
-  if (!base.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
+  const savedGroup = useLocal(ADMIN_GROUP_KEY);
+  if (!all.length) return <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">ไม่มีคิวในเดือนนี้</div>;
+  // Admin ที่มีทั้งประจำและเสริม: แยกแท็บ + สรุปชั่วโมงแยกกลุ่ม + บรรทัดรวมทั้งสองกลุ่ม
+  const salariedRows = all.filter((r) => r.salaried), extraRows = all.filter((r) => !r.salaried);
+  const split = type === "Admin" && salariedRows.length > 0 && extraRows.length > 0;
+  const group: AdminGroup = split && (savedGroup === "extra" || savedGroup === "salaried") ? savedGroup : "all";
+  const base = group === "salaried" ? salariedRows : group === "extra" ? extraRows : all;
   const showPay = !payHiddenOf(data, type);
   const canLate = type === "Admin" && data.scope.admin && !data.payHidden?.admin;
   // Mc: "รับคิวหลุด" = คิวที่คนอื่นปล่อยแล้วคนนี้จองต่อในเว็บ (ต่อจากคอลัมน์ยกเลิก · มีข้อมูลคิวหลุดเท่านั้น)
@@ -1073,16 +1084,56 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
     if (next.has(name)) next.delete(name); else next.add(name);
     setOpen(next);
   };
-  const ts = rows.reduce((a, r) => a + r.slots, 0);
-  const th = rows.reduce((a, r) => a + r.hours, 0);
   // ยอดเงิน = ปัดทีละคิวแล้วรวม (ตรงกับไฟล์เบิก / ใบสรุปรายคน) · คิว Shopee คิดเรท Shopee ถ้าตั้งแยก
   //   คนรับเงิน = ของตัวเอง + Mc ในเครือ · Mc ในเครือ = ของตัวเอง (รวมอยู่ในยอดของคนรับเงินแล้ว)
   const payOf = (r: OwnerPerson) => (nested(r) ? ownPay(data, type, r) : personPay(data, type, r));
-  const tm = rows.reduce((a, r) => a + ownPay(data, type, r), 0);
-  const tl = rows.reduce((a, r) => a + r.lateSlots, 0);
-  const tb = rows.reduce((a, r) => a + r.bonusMinutes, 0);
   const num_ = "text-right tabular-nums";
+  /** ช่องในแถวรวมของคนกลุ่มหนึ่ง (เรียงตามคอลัมน์ที่แสดง) */
+  const totalOf = (k: string, list: OwnerPerson[]): string | number => {
+    const sum = (f: (r: OwnerPerson) => number) => list.reduce((a, r) => a + f(r), 0);
+    const items = list.flatMap((r) => slotsOf(data, type, r.name));
+    switch (k) {
+      case "slots": return sum((r) => r.slots);
+      case "hours": return num(sum((r) => r.hours));
+      case "cancelled": return sum((r) => r.cancelled) || "–";
+      case "pickup": return sum((r) => pickupsOf(data, r.name).length) || "–";
+      case "late": return sum((r) => r.lateSlots) || "–";
+      case "bonus": { const b = sum((r) => r.bonusMinutes); return b ? `+${b} น.` : "–"; }
+      case "proof": {
+        const need = items.filter((d) => !d.noProof);
+        return need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "–";
+      }
+      case "gmv": { const g = gmvOf(items); return g.count ? fmtGmv(g.total) : "–"; }
+      case "pay": { const m = sum((r) => ownPay(data, type, r)); return m ? money(m) : "–"; }
+      default: return "";
+    }
+  };
+  // แถวรวม: ไม่แยกกลุ่ม = แถวเดียว · แยกกลุ่ม = รวมกลุ่มที่ดูอยู่ (ทั้งหมด = ทั้งสองกลุ่ม) + รวมทั้งหมด (ประจำ + เสริม)
+  const foot: { label: string; list: OwnerPerson[]; grand?: boolean }[] = !split ? [{ label: `รวม ${rows.length} คน`, list: rows, grand: true }] : [
+    ...(group !== "extra" ? [{ label: `รวม Admin ประจำ ${salariedRows.length} คน`, list: salariedRows }] : []),
+    ...(group !== "salaried" ? [{ label: `รวม Admin เสริม ${extraRows.length} คน`, list: extraRows }] : []),
+    { label: `รวมทั้งหมด ${all.length} คน (ประจำ + เสริม)`, list: all, grand: true },
+  ];
   return (
+    <>
+      {split ? (
+        <div role="tablist" aria-label="กลุ่ม Admin" className="mb-2 flex w-fit max-w-full gap-1 overflow-x-auto rounded-full border bg-card p-1">
+          {ADMIN_GROUPS.map(([id, text]) => {
+            const list = id === "salaried" ? salariedRows : id === "extra" ? extraRows : all;
+            return (
+              <button
+                key={id} type="button" role="tab" aria-selected={group === id} onClick={() => writeLocal(ADMIN_GROUP_KEY, id)}
+                className={cn(
+                  "shrink-0 cursor-pointer rounded-full px-3 py-1 text-[13px] font-semibold whitespace-nowrap transition-colors pointer-coarse:min-h-9",
+                  group === id ? "bg-tint text-tint-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {text} <span className="font-normal tabular-nums">{list.length} คน · {num(list.reduce((a, r) => a + r.hours, 0))} ชม.</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     <div className="overflow-hidden rounded-xl border bg-card">
       <Table className="min-w-[680px]">
         <TableHeader className="bg-secondary">
@@ -1316,36 +1367,27 @@ function SumTable({ data, type, rows: base, onChanged }: { data: OwnerSummary; t
             );
           })}
         </TableBody>
-        <TableFooter className="bg-transparent font-bold">
-          <TableRow className="hover:bg-transparent">
-            <TableCell className={cn("px-3", STICKY_CELL)}>
-              รวม {rows.length} คน
-              <span className="block text-xs text-primary tabular-nums sm:hidden">{num(th)} ชม.{showPay && tm ? ` · ${money(tm)} บาท` : ""}</span>
-            </TableCell>
-            <TableCell className={num_}>{ts}</TableCell>
-            <TableCell className={num_}>{num(th)}</TableCell>
-            <TableCell />
-            <TableCell className={num_}>{rows.reduce((a, r) => a + r.cancelled, 0) || "–"}</TableCell>
-            <TableCell className={num_}>{tl || "–"}</TableCell>
-            <TableCell className={num_}>{tb ? `+${tb} น.` : "–"}</TableCell>
-            <TableCell className={num_}>
-              {(() => {
-                const need = rows.flatMap((r) => slotsOf(data, type, r.name)).filter((d) => !d.noProof);
-                return need.length ? `${need.filter((d) => d.proof).length}/${need.length}` : "–";
-              })()}
-            </TableCell>
-            <TableCell className={num_}>
-              {(() => {
-                const g = gmvOf(rows.flatMap((r) => slotsOf(data, type, r.name)));
-                return g.count ? fmtGmv(g.total) : "–";
-              })()}
-            </TableCell>
-            {showPay ? <TableCell className={cn(num_, "px-3")}>{tm ? money(tm) : "–"}</TableCell> : null}
-          </TableRow>
+        <TableFooter className="bg-transparent">
+          {foot.map((f) => {
+            const hours = f.list.reduce((a, r) => a + r.hours, 0), pay = f.list.reduce((a, r) => a + ownPay(data, type, r), 0);
+            return (
+              <TableRow key={f.label} className={cn("hover:bg-transparent", f.grand ? "font-bold" : "font-medium text-muted-foreground")}>
+                <TableCell className={cn("px-3 max-sm:whitespace-normal", STICKY_CELL)}>
+                  {f.label}
+                  <span className={cn("block text-xs tabular-nums sm:hidden", f.grand && "text-primary")}>{num(hours)} ชม.{showPay && pay ? ` · ${money(pay)} บาท` : ""}</span>
+                </TableCell>
+                {/* ช่องรวมเรียงตามคอลัมน์ที่แสดงจริง (Mc มีคอลัมน์ "รับคิวหลุด" เพิ่ม) */}
+                {cols.map(([k]) => (
+                  <TableCell key={k} className={cn(num_, k === "pay" && "px-3")}>{totalOf(k, f.list)}</TableCell>
+                ))}
+              </TableRow>
+            );
+          })}
         </TableFooter>
       </Table>
       {/* ใส่สถานะมาสายของ Admin (เขียนลงชีตคอลัมน์ M) → โหลดสรุปใหม่ ยอดเงินหักตามกฎเดิม */}
       {canLate ? <AdminLateDialog target={lateTarget} onClose={() => setLateTarget(null)} onSaved={onChanged} /> : null}
     </div>
+    </>
   );
 }
