@@ -1,14 +1,17 @@
 import { after } from "next/server";
 import { fail, ok, requireMe } from "@/lib/api";
-import { NIGHT_CANCEL_TEXT, cancelContact, cancelLinesOf, isNightCancel } from "@/lib/cancel-rule";
+import { NIGHT_CANCEL_TEXT, UNDO_MINUTES, cancelContact, cancelLinesOf, isNightCancel } from "@/lib/cancel-rule";
 import { processSyncJobs } from "@/lib/sync";
-import { getSettings, writeLogs } from "@/lib/data";
+import { getSettings, recentBookings, writeLogs } from "@/lib/data";
 import { notifyCancelled } from "@/lib/notifications";
 import { notifyCancel } from "@/lib/notify";
 import { createAdminClient } from "@/lib/supabase/server";
 
 // ยกเลิกคิวของตัวเอง ก่อนเวลาไลฟ์อย่างน้อย cancel_min_hours — แทน action "cancel" / "adminCancel"
 //   ช่วง 22:00–08:00 ยกเลิกผ่านเว็บไม่ได้ (ตอบ chatUrl = LINE คนดูแลฝ่ายนั้น)
+//     ยกเว้นคิวที่เพิ่งจอง / รับเองไม่เกิน UNDO_MINUTES นาที (กดพลาด) — ผู้ใช้ขอ 2026-11-19
+//   ยกเลิกไม่สำเร็จทุกกรณี (กลางคืน / Admin ประจำ / เลยเวลา / ไม่ใช่คิวของตัวเอง) ลงประวัติ booking_logs ด้วย
+//     result = ข้อความที่ผู้ใช้เห็น (ที่อื่นอ่านเฉพาะ result = "สำเร็จ" ตัวเลขสรุปไม่เปลี่ยน)
 export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
@@ -20,6 +23,11 @@ export async function POST(request: Request) {
   let personId: number;
   let log: { role: string; name: string; action: string };
   let who: string; // ชื่อในรายชื่อ (ใช้ในอีเมลแจ้งเตือน)
+  // ยกเลิกไม่สำเร็จ: บันทึกว่าใคร กดตอนไหน ติดอะไร แล้วตอบข้อความเดิมกลับไป
+  const failLogged = (message: string, status = 400, extra?: Record<string, unknown>) => {
+    after(() => writeLogs([{ email: r.me.email, ...log, slot_table: table, slot_id: id, result: message }]));
+    return fail(message, status, extra);
+  };
   if (body?.role === "mc") {
     if (!r.me.mc) return fail("บัญชีนี้ไม่ใช่ Mc", 403);
     table = "mc_slots";
@@ -28,27 +36,35 @@ export async function POST(request: Request) {
     log = { role: "Mc", name: `Mc ${r.me.mc.name}`, action: "ยกเลิกคิว" };
   } else if (body?.role === "admin") {
     if (!r.me.admin) return fail("บัญชีนี้ไม่มีสิทธิ์ใช้หน้า Admin", 403);
-    if (!r.me.admin.isExtra) return fail("Admin ประจำยกเลิกคิวผ่านเว็บไม่ได้ กรุณาติดต่อทีมงาน", 403);
     table = "admin_slots";
     personId = r.me.admin.id;
     who = r.me.admin.name;
     log = { role: "Admin", name: r.me.admin.name, action: "ยกเลิกคิว Admin" };
+    if (!r.me.admin.isExtra) return failLogged("Admin ประจำยกเลิกคิวผ่านเว็บไม่ได้ กรุณาติดต่อทีมงาน", 403);
   } else {
     return fail("ไม่รู้จักบทบาทนี้");
   }
 
   // ช่วงกลางคืน (22:00–08:00) ยกเลิกผ่านเว็บไม่ได้ → ส่งลิงก์ LINE คนดูแลฝ่ายนั้นกลับไปให้ทัก (src/lib/cancel-rule.ts)
+  //   ยกเว้นเพิ่งจอง / รับ slot นี้เองไม่เกิน UNDO_MINUTES นาที (ยังต้องผ่านกฎก่อนไลฟ์ N ชม. ในฐานข้อมูลเหมือนเดิม)
+  let undo = false;
   if (isNightCancel()) {
-    const settings = await getSettings();
-    const { data: s } = table === "mc_slots"
-      ? await createAdminClient().from("mc_slots").select("sheet_tab").eq("id", id).maybeSingle()
-      : { data: null };
-    const c = cancelContact(body.role, s?.sheet_tab === "shopee", cancelLinesOf(settings), settings.admin_chat_url);
-    return fail(`ช่วง ${NIGHT_CANCEL_TEXT} ยกเลิกคิวผ่านเว็บไม่ได้ กรุณาทัก LINE ${c.who} เพื่อยกเลิก`, 400, { chatUrl: c.url });
+    undo = (await recentBookings(r.me.email, body.role, [id]).catch(() => new Map<number, number>())).has(id);
+    if (!undo) {
+      const settings = await getSettings();
+      const { data: s } = table === "mc_slots"
+        ? await createAdminClient().from("mc_slots").select("sheet_tab").eq("id", id).maybeSingle()
+        : { data: null };
+      const c = cancelContact(body.role, s?.sheet_tab === "shopee", cancelLinesOf(settings), settings.admin_chat_url);
+      return failLogged(
+        `ช่วง ${NIGHT_CANCEL_TEXT} ยกเลิกคิวผ่านเว็บไม่ได้ (ยกเว้นคิวที่เพิ่งกด${body.role === "mc" ? "จอง" : "รับ"}ไม่เกิน ${UNDO_MINUTES} นาที) กรุณาทัก LINE ${c.who} เพื่อยกเลิก`,
+        400, { chatUrl: c.url },
+      );
+    }
   }
 
   const { data, error } = await createAdminClient().rpc("cancel_slot", { p_table: table, p_person_id: personId, p_slot_id: id });
-  if (error) return fail("เกิดข้อผิดพลาด: " + error.message, 500);
+  if (error) return failLogged("เกิดข้อผิดพลาด: " + error.message, 500);
   const res = data as { ok: boolean; message: string };
 
   const at = new Date();

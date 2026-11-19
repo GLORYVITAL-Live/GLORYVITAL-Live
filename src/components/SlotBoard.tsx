@@ -8,7 +8,7 @@ import {
   fmtDayLong, fmtDayShort, fmtHours, fmtMonthShort, fmtWeekShort, hoursOf, monthLabel, parseKey, platformOf, relLabel,
 } from "@/lib/format";
 import { quotaBlock, type MyQuota } from "@/lib/mc-quota";
-import { NIGHT_CANCEL_TEXT } from "@/lib/cancel-rule";
+import { NIGHT_CANCEL_TEXT, UNDO_MINUTES } from "@/lib/cancel-rule";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, LoadError, Notice, NoticeStrip, PlatformBadge, StateBox, api, useToast,
 } from "@/components/shared";
@@ -369,7 +369,7 @@ export function SlotBoard({ me, role, board = "tiktok", preview = false }: { me:
         <span className="mt-1 block font-semibold text-foreground">
           ยกเลิกผ่านเว็บได้ก่อนไลฟ์อย่างน้อย {cancelH} ชม. เท่านั้น
           {lateCount ? ` — ${lateCount} slot ที่เลือกใกล้เริ่ม / เริ่มไปแล้ว จองแล้วยกเลิกผ่านเว็บไม่ได้ ต้องติดต่อแอดมิน` : " หลังจากนั้นต้องติดต่อแอดมิน"}
-          {` · ช่วง ${NIGHT_CANCEL_TEXT} ยกเลิกต้องทัก LINE ${role === "admin" ? "Owner" : "แอดมินที่ดูแล"}`}
+          {` · ช่วง ${NIGHT_CANCEL_TEXT} ยกเลิกต้องทัก LINE ${role === "admin" ? "Owner" : "แอดมินที่ดูแล"} (กดพลาด: ยกเลิกเองใน "ตารางของฉัน" ได้ภายใน ${UNDO_MINUTES} นาทีหลัง${role === "admin" ? "รับ" : "จอง"})`}
         </span>
       </>
     );

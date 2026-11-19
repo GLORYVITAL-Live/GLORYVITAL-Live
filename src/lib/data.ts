@@ -1,5 +1,6 @@
 import "server-only";
 import { canonicalCampaign } from "@/lib/campaign";
+import { BOOK_ACTION, UNDO_MINUTES } from "@/lib/cancel-rule";
 import { gmvCoverage } from "@/lib/gmv";
 import { lockedRates } from "@/lib/pay-rates";
 import {
@@ -604,6 +605,27 @@ export async function ownerSummary(key: string, first: string, last: string): Pr
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     details: details.map(({ key, ...d }) => d),
   };
+}
+
+/**
+ * slot ที่คนนี้เพิ่งจอง / รับเองผ่านเว็บไม่เกิน UNDO_MINUTES นาที -> Map(slot id, เวลาที่จองล่าสุด ms)
+ *   ใช้ยกเลิกคิวที่กดพลาดได้แม้ช่วงกลางคืน (src/lib/cancel-rule.ts) · อ่านไม่ได้ = ว่าง (กลับไปใช้กฎกลางคืนตามเดิม)
+ */
+export async function recentBookings(email: string, role: "mc" | "admin", slotIds?: number[]) {
+  const out = new Map<number, number>();
+  if (!email) return out;
+  let q = createAdminClient().from("booking_logs").select("at, slot_id")
+    .eq("email", email).eq("action", BOOK_ACTION[role]).eq("result", "สำเร็จ")
+    .eq("slot_table", role === "mc" ? "mc_slots" : "admin_slots")
+    .gte("at", new Date(Date.now() - (UNDO_MINUTES + 1) * 60_000).toISOString());
+  if (slotIds?.length) q = q.in("slot_id", slotIds);
+  const { data, error } = await q.order("at", { ascending: false }).limit(200);
+  if (error) return out;
+  for (const x of data ?? []) {
+    const id = Number(x.slot_id);
+    if (!out.has(id)) out.set(id, Date.parse(String(x.at)));
+  }
+  return out;
 }
 
 /** บันทึกประวัติ (พลาดก็ไม่ให้การจองล้ม) */

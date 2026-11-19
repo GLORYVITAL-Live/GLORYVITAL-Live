@@ -1,7 +1,7 @@
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { cancelLinesOf } from "@/lib/cancel-rule";
 import { withPlatformLabels } from "@/lib/platform";
-import { getSettings, mySlots } from "@/lib/data";
+import { getSettings, mySlots, recentBookings } from "@/lib/data";
 import { framesForSlots } from "@/lib/live-frames";
 import { isLiveRoom, roomForPlatform } from "@/lib/loans";
 import { cleanTiers, platformRates, slotPay, travelPicks } from "@/lib/pay";
@@ -79,10 +79,14 @@ export async function GET(request: Request) {
   const defaultRate = Number(role === "mc" ? settings.default_mc_rate : settings.default_admin_rate) || 0;
   const lock = locked.get(person.id);
   const salaried = lock ? lock.salaried : !!staff.data.is_salaried;
-  const [subs, slips] = await Promise.all([
+  const now = Date.now();
+  const upcoming = items.filter((i) => !i.cancelled && i.startMs > now).map((i) => i.id);
+  const [subs, slips, booked] = await Promise.all([
     role === "mc" ? subsPay(person.id, key, first, last, defaultRate).catch(() => []) : [],
     // สลิปโอนเงินจากโฟลเดอร์ Slip ใน Drive (ทุกรอบ · ยังไม่ได้รัน SQL = ว่าง)
     mySlips(person.id),
+    // คิวที่เพิ่งจอง / รับเองไม่เกิน 15 นาที = ยกเลิกได้แม้ช่วงกลางคืน (src/lib/cancel-rule.ts · เซิร์ฟเวอร์ตรวจซ้ำตอนกดยกเลิก)
+    upcoming.length ? recentBookings(r.me.email, role as "mc" | "admin", upcoming).catch(() => new Map<number, number>()) : new Map<number, number>(),
   ]);
   // ค่ารถ (Admin ที่ติ๊กได้ค่ารถ): คิวเลิก 23:30 วันละครั้ง — ตัวเลขเดียวกับสรุปของเจ้าของ (src/lib/data.ts ownerSummary)
   const travel = role !== "admin" || salaried ? null : lock ? lock.travel : Number(extraRow.data?.travel_allowance) || null;
@@ -97,6 +101,7 @@ export async function GET(request: Request) {
       ? { tiktok: cancelLinesOf(settings).tiktok, shopee: cancelLinesOf(settings).shopee }
       : { admin: cancelLinesOf(settings).admin },
     canCancel: role === "mc" || !!r.me.admin?.isExtra,
+    ...(booked.size ? { undo: Object.fromEntries(booked) } : {}),
     // หาห้องจากชื่อช่องเดิมก่อน (GLORY MALL) แล้วค่อยเปลี่ยนเป็นชื่อช่องที่แสดง (ชีตยังใช้ชื่อเดิม)
     items: withPlatformLabels(items.map((i) => ({
       ...i, room: roomForPlatform(i.platform, roomNames), ...(frames.get(`${i.platform}|${i.date}`) ?? {}),

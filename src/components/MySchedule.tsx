@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { MyItem, MyResponse, MySlip, MySubItem } from "@/lib/types";
 import { fmtDayFull, fmtDayLong, fmtDayMonth, fmtDayShort, fmtHours, monthKey, monthLabel, money, parseKey, platformOf, relLabel } from "@/lib/format";
 import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabel } from "@/lib/pay";
-import { NIGHT_CANCEL_TEXT, cancelContact, isNightCancel } from "@/lib/cancel-rule";
+import { NIGHT_CANCEL_TEXT, UNDO_MINUTES, cancelContact, inUndoWindow, isNightCancel } from "@/lib/cancel-rule";
 import Link from "next/link";
 import {
   BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ReceiptTextIcon, ShirtIcon, SparklesIcon, UserIcon,
@@ -108,10 +108,14 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const contactOf = (i: MyItem) => cancelContact(role, !!i.shopee, data?.cancelLines, data?.adminChatUrl ?? "");
   const cancelOf = (i: MyItem) => {
     const allowed = !!data?.canCancel && !i.cancelled && i.startMs - now >= minH * 3600_000;
+    // กลางคืนแต่เพิ่งจอง / รับเองไม่เกิน 15 นาที = ยกเลิกเองได้ (กดพลาด) · undoUntil = ยกเลิกได้ถึงกี่โมง
+    const bookedAt = data?.undo?.[i.id];
+    const undo = night && inUndoWindow(bookedAt, now);
     // ยังไม่เริ่มแต่เหลือไม่ถึง N ชม. = ไม่มีปุ่มยกเลิก บอกเหตุผล + ทางติดต่อ
     return {
-      canCancel: allowed && !night, night: allowed && night,
+      canCancel: allowed && (!night || undo), night: allowed && night && !undo,
       tooLate: !!data?.canCancel && !i.cancelled && !allowed && i.startMs > now,
+      undoUntil: allowed && undo && bookedAt ? bookedAt + UNDO_MINUTES * 60_000 : null,
     };
   };
 
@@ -250,7 +254,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                   <DayBadge label={relLabel(k)} />
                 </h3>
                 {list.map((i) => {
-                  const { canCancel, night: nightOnly, tooLate } = cancelOf(i);
+                  const { canCancel, night: nightOnly, tooLate, undoUntil } = cancelOf(i);
                   return (
                     <div
                       key={i.id}
@@ -301,9 +305,12 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
                               : role === "admin" ? "Mc: ยังไม่มี Mc จอง" : "Admin: ยังไม่มี Admin"}
                           </span>
                           {canCancel ? (
-                            <Button variant="destructive" size="xs" className="relative z-10 rounded-full font-semibold" onClick={() => setCancelItem(i)}>
-                              ยกเลิกคิว
-                            </Button>
+                            <span className="relative z-10 shrink-0 text-right text-[11px] leading-tight">
+                              <Button variant="destructive" size="xs" className="rounded-full font-semibold" onClick={() => setCancelItem(i)}>
+                                ยกเลิกคิว
+                              </Button>
+                              {undoUntil ? <span className="mt-0.5 block">เพิ่งกด{role === "mc" ? "จอง" : "รับ"} · ยกเลิกเองได้ถึง {hmText(undoUntil)}</span> : null}
+                            </span>
                           ) : nightOnly ? (
                             <NightCancel contact={contactOf(i)} className="relative z-10 text-right" />
                           ) : tooLate ? (
@@ -343,7 +350,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
         contact={detail ? contactOf(detail) : null}
         onCancel={() => { setCancelItem(detail); setDetail(null); }}
         onClose={() => setDetail(null)}
-        {...(detail ? cancelOf(detail) : { canCancel: false, night: false, tooLate: false })}
+        {...(detail ? cancelOf(detail) : { canCancel: false, night: false, tooLate: false, undoUntil: null })}
       />
 
       <CancelDialog
@@ -362,6 +369,9 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
 }
 
 const telOf = (phone: string) => phone.replace(/[^0-9+]/g, "");
+const hmFmt = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" });
+/** เวลา (ms) -> "01:38" เวลาไทย */
+const hmText = (ms: number) => hmFmt.format(new Date(ms));
 
 /**
  * คิวของ Mc ในเครือที่จ่ายค่าตัวผ่านคุณ (staff.pay_to_id) เรียงตามวัน — ดูได้อย่างเดียว ไม่มีปุ่มยกเลิก / รายละเอียด
@@ -460,7 +470,7 @@ const Note = ({ className, children }: { className?: string; children: ReactNode
   <span className={cn("mt-0.5 block text-xs font-normal text-muted-foreground", className)}>{children}</span>;
 
 /** รายละเอียด slot ของฉัน (กดที่การ์ด): ช่อง · วันเวลา · ค่าจ้าง · สถานที่ · คู่ไลฟ์ (Admin ของ Mc / Mc ของ Admin) + เบอร์ */
-function SlotDetail({ item, role, rate, now, canCancel, night, tooLate, minH, adminChatUrl, contact, onCancel, onClose }: {
+function SlotDetail({ item, role, rate, now, canCancel, night, tooLate, undoUntil, minH, adminChatUrl, contact, onCancel, onClose }: {
   item: MyItem | null;
   role: "mc" | "admin";
   rate: number;
@@ -469,6 +479,8 @@ function SlotDetail({ item, role, rate, now, canCancel, night, tooLate, minH, ad
   /** ช่วงกลางคืน: ยกเลิกได้ทางทัก LINE คนดูแลเท่านั้น */
   night: boolean;
   tooLate: boolean;
+  /** กลางคืนแต่เพิ่งจอง / รับเอง: ยกเลิกเองได้ถึงเวลานี้ (ms) */
+  undoUntil: number | null;
   minH: number;
   adminChatUrl: string;
   contact: { url: string; who: string } | null;
@@ -572,6 +584,11 @@ function SlotDetail({ item, role, rate, now, canCancel, night, tooLate, minH, ad
           {night && contact ? (
             <p className="mt-3 text-xs text-muted-foreground">
               ช่วง {NIGHT_CANCEL_TEXT} ยกเลิกคิวผ่านเว็บไม่ได้ ต้องทัก LINE {contact.who} เพื่อยกเลิก{contact.url ? "" : " (ยังไม่ได้ตั้งลิงก์ ติดต่อทีมงาน)"}
+            </p>
+          ) : null}
+          {undoUntil ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              ช่วง {NIGHT_CANCEL_TEXT} ปกติยกเลิกผ่านเว็บไม่ได้ แต่คิวนี้เพิ่งกด{role === "mc" ? "จอง" : "รับ"} ยกเลิกเองได้ภายใน {UNDO_MINUTES} นาที (ถึง {hmText(undoUntil)})
             </p>
           ) : null}
         </DialogBody>

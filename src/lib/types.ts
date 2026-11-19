@@ -430,6 +430,8 @@ export type MyResponse = {
   /** ยกเลิกช่วง 22:00–08:00: LINE คนดูแลฝ่ายของคนนี้ (src/lib/cancel-rule.ts · ว่าง = ใช้ adminChatUrl) */
   cancelLines?: { tiktok?: string; shopee?: string; admin?: string };
   canCancel: boolean;
+  /** slot id -> เวลาที่เพิ่งจอง / รับเอง (ms) ไม่เกิน 15 นาที = ยกเลิกได้แม้ช่วงกลางคืน (inUndoWindow) */
+  undo?: Record<number, number>;
   items: MyItem[];
   /**
    * โปรไฟล์ของตัวเอง rate = ค่าจ้างต่อชั่วโมงปกติ (0 = ยังไม่ได้ตั้ง)
