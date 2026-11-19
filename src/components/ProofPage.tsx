@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
-import { fmtDayLong, fmtDayMonth, parseKey, relLabel, todayKey } from "@/lib/format";
+import { fmtDayLong, fmtDayMonth, fmtDayShort, monthKey, monthLabel, parseKey, relLabel, todayKey } from "@/lib/format";
+import { useLocal, writeLocal } from "@/lib/hooks";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, IconButton, LoadError, LoadingBlock, Notice, PlatformBadge, StateBox, api,
   useConfirm, useToast,
@@ -163,15 +164,138 @@ function beforeOf(
   return s.gmvBefore;
 }
 
+const VIEW_KEY = "glory_proof_view";
+const MC_KEY = "glory_proof_mc";
+const TAB_CLS = "gap-1.5 rounded-full! px-3 text-[13px] font-semibold whitespace-nowrap text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!";
+
 /**
- * หน้าหลักฐานไลฟ์ (ใช้ทำเบิก): แนบรูปแดชบอร์ด TikTok LIVE + เวลาเริ่ม/จบจริง เข้า slot ของ Mc
+ * หน้าหลักฐานไลฟ์ (ใช้ทำเบิก): แนบรูปแดชบอร์ด TikTok LIVE / Shopee Live + เวลาเริ่ม/จบจริง เข้า slot ของ Mc
  *   Admin เห็นเฉพาะ slot ที่ตัวเองเป็น Admin / Owner ฝั่ง Mc เห็นทุก slot
- *   ไลฟ์ครั้งเดียวคลุมหลาย slot -> ติ๊กหลาย slot (แพลตฟอร์มเดียวกัน) แล้วแนบรูปเดียว
+ *   มุมมอง "รายวัน" (เดิม) / "ราย Mc · Shopee" (2026-11-17: Admin Shopee ได้รูปแดชบอร์ดมาเป็นรายคน ไล่ทีละวันลำบาก)
  */
 export function ProofPage() {
+  const [date, setDate] = useState(() => todayKey());
+  const view = useLocal(VIEW_KEY) === "mc" ? "mc" : "day";
+  return (
+    <div className="pb-28">
+      <ToggleGroup
+        type="single" spacing={1} aria-label="มุมมอง" value={view}
+        onValueChange={(v) => { if (v) writeLocal(VIEW_KEY, v); }}
+        className="mb-2 rounded-full border bg-card p-1"
+      >
+        <ToggleGroupItem value="day" className={TAB_CLS}>รายวัน</ToggleGroupItem>
+        <ToggleGroupItem value="mc" className={TAB_CLS}>ราย Mc · Shopee</ToggleGroupItem>
+      </ToggleGroup>
+      {view === "mc"
+        ? <ShopeeMcView date={date} onOpenDay={(d) => { setDate(d); writeLocal(VIEW_KEY, "day"); }} />
+        : <DayView date={date} onDate={setDate} />}
+    </div>
+  );
+}
+
+/** ลบหลักฐาน (ถามยืนยันก่อน) ใช้ทั้งมุมมองรายวัน / ราย Mc */
+function useRemoveProof(onDone: () => void) {
   const toast = useToast();
   const confirm = useConfirm();
-  const [date, setDate] = useState(() => todayKey());
+  const [busy, setBusy] = useState(false);
+  async function remove(s: ProofSlot) {
+    if (!s.proof) return;
+    const ok = await confirm({
+      title: `ลบหลักฐานไลฟ์ ${proofTime(s.proof)} ?`,
+      description: "ถ้ารูปนี้ผูกกับหลาย slot จะหายจากทุก slot",
+      confirmText: "ลบหลักฐาน",
+      destructive: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await api<{ message: string }>("/api/proofs", { id: s.proof.id }, "DELETE");
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onDone();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return { busy, remove };
+}
+
+/** การ์ด slot หนึ่ง: เวลา / Mc / Admin + สถานะหลักฐาน + GMV (ใช้ทั้งมุมมองรายวัน / ราย Mc) */
+function SlotCard({ s, on, canEdit, now, showAdmin, hideMc, busy, onToggle, onRemove, onGmv }: {
+  s: ProofSlot;
+  on: boolean;
+  canEdit: boolean;
+  now: number;
+  showAdmin: boolean;
+  hideMc?: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onRemove: () => void;
+  onGmv: () => void;
+}) {
+  const ended = s.endMs <= now, started = s.startMs <= now;
+  const pickable = !s.salaried && canEdit && started;
+  return (
+    <div className={cn("flex items-start gap-3 rounded-xl border bg-card p-3 shadow-card", on && "border-primary ring-1 ring-primary")}>
+      {!pickable ? <span aria-hidden className="mt-0.5 size-5 shrink-0" /> : (
+        <Checkbox checked={on} onCheckedChange={onToggle} aria-label={`เลือก ${s.platform} ${s.date} ${s.start}–${s.end}`} className="mt-0.5 size-5" />
+      )}
+      <div className="min-w-0 flex-1 text-sm">
+        <button type="button" onClick={onToggle} disabled={!pickable} className="text-left disabled:cursor-default">
+          <span className="font-bold tabular-nums">{s.start}–{s.end}</span>
+          {hideMc ? null : <span className="ml-2">{s.mcName || "—"}</span>}
+          {showAdmin && s.adminName ? <span className="ml-2 text-muted-foreground">Admin {s.adminName}</span> : null}
+        </button>
+        {s.proof ? (
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <a
+              href={`/api/proofs/image?id=${s.proof.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 font-semibold text-success underline"
+            >
+              <CheckIcon className="size-3.5" />ไลฟ์จริง {proofTime(s.proof)} (ดูรูป)
+            </a>
+            {s.proof.driveUrl ? (
+              <a href={s.proof.driveUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline">
+                Google Drive
+              </a>
+            ) : null}
+            <span className="text-muted-foreground">แนบโดย {s.proof.by}</span>
+            {s.proof.canDelete ? (
+              // ปุ่มลบอยู่ชิดขวา ห่างจากปุ่ม "แก้ GMV" กันกดพลาดบนจอสัมผัส
+              <Button variant="ghost" size="sm" disabled={busy} onClick={onRemove} className="ml-auto text-destructive pointer-coarse:min-h-9">
+                ลบหลักฐาน
+              </Button>
+            ) : null}
+          </div>
+        ) : s.salaried ? <div className="mt-1 text-xs text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</div>
+          : !started ? <div className="mt-1 text-xs text-muted-foreground">ยังไม่ถึงเวลาไลฟ์ (แนบหลักฐานได้หลังเริ่มไลฟ์)</div>
+            : !ended ? <div className="mt-1 text-xs text-muted-foreground">กำลังไลฟ์ · แนบหลักฐานได้เมื่อจบไลฟ์</div>
+              : <div className="mt-1 text-xs font-semibold text-destructive">ยังไม่มีหลักฐาน</div>}
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs pointer-coarse:mt-2">
+          {s.gmv ? (
+            <span className="font-semibold tabular-nums">GMV {gmvText(s.gmv)}</span>
+          ) : s.gmvCoveredBy ? (
+            <span className="font-semibold text-success">✓ GMV รวมอยู่ในช่วง {s.gmvCoveredBy} (ไลฟ์ต่อเนื่อง {s.mcName})</span>
+          ) : ended ? <span className="font-semibold text-warning-foreground">ยังไม่ได้กรอก GMV</span>
+            : <span className="text-muted-foreground">ยังไม่ได้กรอก GMV</span>}
+          {canEdit && (started || s.gmv) ? (
+            <Button variant="outline" size="sm" disabled={busy} onClick={onGmv} className="bg-card pointer-coarse:min-h-9">
+              {s.gmv ? "แก้ GMV" : s.gmvCoveredBy ? "กรอกแยก" : "กรอก GMV"}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** มุมมองรายวัน (เดิม): เลือกวัน -> slot ทุกช่องของวันนั้น · ไลฟ์ครั้งเดียวคลุมหลาย slot = ติ๊กหลาย slot แล้วแนบรูปเดียว */
+function DayView({ date, onDate }: { date: string; onDate: (d: string) => void }) {
+  const toast = useToast();
   const [data, setData] = useState<DayData | null>(null);
   const [failed, setFailed] = useState<{ date: string; message: string } | null>(null);
   const [month, setMonth] = useState<{ key: string; days: MonthDay[] } | null>(null);
@@ -181,10 +305,10 @@ export function ProofPage() {
   const [onlyNoGmv, setOnlyNoGmv] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [gmvSlot, setGmvSlot] = useState<ProofSlot | null>(null);
-  const [busy, setBusy] = useState(false);
   // เวลาตอนโหลดข้อมูลล่าสุด: slot ที่ยังไม่จบไม่นับว่าขาด / ยังไม่เริ่มแนบหลักฐานไม่ได้
   const [now, setNow] = useState(() => Date.now());
   const reload = () => setTick((n) => n + 1);
+  const { busy, remove } = useRemoveProof(reload);
   const monthOf = date.slice(0, 7);
 
   useEffect(() => {
@@ -231,7 +355,7 @@ export function ProofPage() {
     .filter((g) => g.slots.length);
 
   function goTo(next: string) {
-    setDate(next);
+    onDate(next);
     setSelected([]);
   }
 
@@ -247,33 +371,11 @@ export function ProofPage() {
     setSelected([...selected, s.mcSlotId]);
   }
 
-  async function remove(s: ProofSlot) {
-    if (!s.proof) return;
-    const ok = await confirm({
-      title: `ลบหลักฐานไลฟ์ ${proofTime(s.proof)} ?`,
-      description: "ถ้ารูปนี้ผูกกับหลาย slot จะหายจากทุก slot",
-      confirmText: "ลบหลักฐาน",
-      destructive: true,
-    });
-    if (!ok) return;
-    setBusy(true);
-    try {
-      const res = await api<{ message: string }>("/api/proofs", { id: s.proof.id }, "DELETE");
-      if (!res.ok) throw new Error(res.message);
-      toast(res.message);
-      reload();
-    } catch (err) {
-      toast((err as Error).message, "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <div className="pb-28">
+    <>
       <Notice>
         {viewOnly ? "หลักฐานไลฟ์ของแต่ละ slot — บัญชีนี้ดูได้อย่างเดียว (เปิดดูรูป / ยอด GMV ได้ แต่แนบ / ลบ / กรอก GMV ไม่ได้)"
-          : "แนบรูปแดชบอร์ด TikTok LIVE (หน้าที่มีวันที่และเวลาเริ่ม–จบไลฟ์) เป็นหลักฐานทำเบิก · ไลฟ์ครั้งเดียวคลุมหลาย slot ให้ติ๊กทุก slot แล้วแนบรูปเดียว"}
+          : "แนบรูปแดชบอร์ด TikTok LIVE / Shopee Live (หน้าที่มีวันที่และเวลาเริ่ม–จบไลฟ์) เป็นหลักฐานทำเบิก · ไลฟ์ครั้งเดียวคลุมหลาย slot ให้ติ๊กทุก slot แล้วแนบรูปเดียว"}
         {day && !day.all ? " · เห็นเฉพาะ slot ที่คุณเป็น Admin" : ""}
         {day?.all && !viewOnly && day.editable ? " · แก้ได้เฉพาะ slot ที่คุณเป็น Admin" : ""}
       </Notice>
@@ -375,72 +477,20 @@ export function ProofPage() {
             <section key={g.platform}>
               <div className="mb-1.5"><PlatformBadge name={g.platform} index={platforms.indexOf(g.platform)} /></div>
               <div className="space-y-1.5">
-                {g.slots.map((s) => {
-                  const on = selected.includes(s.mcSlotId);
-                  const canEdit = canEditSlot(s);
-                  return (
-                    <div
-                      key={s.mcSlotId}
-                      className={cn("flex items-start gap-3 rounded-xl border bg-card p-3 shadow-card", on && "border-primary ring-1 ring-primary")}
-                    >
-                      {s.salaried || !canEdit || !started(s) ? <span aria-hidden className="mt-0.5 size-5 shrink-0" /> : (
-                        <Checkbox
-                          checked={on}
-                          onCheckedChange={() => toggle(s)}
-                          aria-label={`เลือก ${s.platform} ${s.start}–${s.end}`}
-                          className="mt-0.5 size-5"
-                        />
-                      )}
-                      <div className="min-w-0 flex-1 text-sm">
-                        <button type="button" onClick={() => toggle(s)} disabled={s.salaried || !canEdit || !started(s)} className="text-left disabled:cursor-default">
-                          <span className="font-bold tabular-nums">{s.start}–{s.end}</span>
-                          <span className="ml-2">{s.mcName || "—"}</span>
-                          {day.all && s.adminName ? <span className="ml-2 text-muted-foreground">Admin {s.adminName}</span> : null}
-                        </button>
-                        {s.proof ? (
-                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                            <a
-                              href={`/api/proofs/image?id=${s.proof.id}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 font-semibold text-success underline"
-                            >
-                              <CheckIcon className="size-3.5" />ไลฟ์จริง {proofTime(s.proof)} (ดูรูป)
-                            </a>
-                            {s.proof.driveUrl ? (
-                              <a href={s.proof.driveUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline">
-                                Google Drive
-                              </a>
-                            ) : null}
-                            <span className="text-muted-foreground">แนบโดย {s.proof.by}</span>
-                            {s.proof.canDelete ? (
-                              // ปุ่มลบอยู่ชิดขวา ห่างจากปุ่ม "แก้ GMV" กันกดพลาดบนจอสัมผัส
-                              <Button variant="ghost" size="sm" disabled={busy} onClick={() => remove(s)} className="ml-auto text-destructive pointer-coarse:min-h-9">
-                                ลบหลักฐาน
-                              </Button>
-                            ) : null}
-                          </div>
-                        ) : s.salaried ? <div className="mt-1 text-xs text-muted-foreground">Mc ประจำ ไม่ต้องแนบหลักฐาน</div>
-                          : !started(s) ? <div className="mt-1 text-xs text-muted-foreground">ยังไม่ถึงเวลาไลฟ์ (แนบหลักฐานได้หลังเริ่มไลฟ์)</div>
-                            : !ended(s) ? <div className="mt-1 text-xs text-muted-foreground">กำลังไลฟ์ · แนบหลักฐานได้เมื่อจบไลฟ์</div>
-                              : <div className="mt-1 text-xs font-semibold text-destructive">ยังไม่มีหลักฐาน</div>}
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs pointer-coarse:mt-2">
-                          {s.gmv ? (
-                            <span className="font-semibold tabular-nums">GMV {gmvText(s.gmv)}</span>
-                          ) : s.gmvCoveredBy ? (
-                            <span className="font-semibold text-success">✓ GMV รวมอยู่ในช่วง {s.gmvCoveredBy} (ไลฟ์ต่อเนื่อง {s.mcName})</span>
-                          ) : ended(s) ? <span className="font-semibold text-warning-foreground">ยังไม่ได้กรอก GMV</span>
-                            : <span className="text-muted-foreground">ยังไม่ได้กรอก GMV</span>}
-                          {canEdit && (started(s) || s.gmv) ? (
-                            <Button variant="outline" size="sm" disabled={busy} onClick={() => setGmvSlot(s)} className="bg-card pointer-coarse:min-h-9">
-                              {s.gmv ? "แก้ GMV" : s.gmvCoveredBy ? "กรอกแยก" : "กรอก GMV"}
-                            </Button>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {g.slots.map((s) => (
+                  <SlotCard
+                    key={s.mcSlotId}
+                    s={s}
+                    on={selected.includes(s.mcSlotId)}
+                    canEdit={canEditSlot(s)}
+                    now={now}
+                    showAdmin={day.all}
+                    busy={busy}
+                    onToggle={() => toggle(s)}
+                    onRemove={() => remove(s)}
+                    onGmv={() => setGmvSlot(s)}
+                  />
+                ))}
               </div>
             </section>
           ))}
@@ -481,7 +531,365 @@ export function ProofPage() {
           }}
         />
       ) : null}
-    </div>
+    </>
+  );
+}
+
+type McData = { month: string; all: boolean; canEdit?: boolean; editable?: number[] | null; slots: ProofSlot[] };
+type McFilter = "all" | "missing" | "nogmv";
+
+/**
+ * มุมมองราย Mc (Shopee เท่านั้น): เลือกเดือน + Mc -> คิว Shopee ทั้งเดือนของคนนั้นในหน้าเดียว (ไม่ต้องไล่ทีละวัน)
+ *   แนบหลักฐานทีละคิวต่อเนื่อง (ProofQueue) รูปเดียวใช้ต่อหลายคิวได้ · กรอก GMV ที่ขาดทีเดียวหลายคิว (GmvBatchDialog)
+ */
+function ShopeeMcView({ date, onOpenDay }: { date: string; onOpenDay: (d: string) => void }) {
+  const [month, setMonth] = useState(() => date.slice(0, 7));
+  const [data, setData] = useState<McData | null>(null);
+  const [failed, setFailed] = useState<{ month: string; message: string } | null>(null);
+  const [tick, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const [filter, setFilter] = useState<McFilter>("all");
+  const [selected, setSelected] = useState<number[]>([]);
+  const [queue, setQueue] = useState<ProofSlot[] | null>(null);
+  const [gmvSlot, setGmvSlot] = useState<ProofSlot | null>(null);
+  const [gmvBatch, setGmvBatch] = useState<ProofSlot[] | null>(null);
+  const reload = () => setTick((n) => n + 1);
+  const { busy, remove } = useRemoveProof(reload);
+  const stored = useLocal(MC_KEY);
+
+  useEffect(() => {
+    let alive = true;
+    api<McData>(`/api/proofs?month=${month}&app=shopee`)
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) { setData(res); setFailed(null); setNow(Date.now()); }
+      })
+      .catch((err) => { if (alive) setFailed({ month, message: (err as Error).message }); });
+    return () => { alive = false; };
+  }, [month, tick]);
+
+  const cur = data?.month === month ? data : null;
+  const error = failed?.month === month ? failed.message : "";
+  const canEditSlot = (s: ProofSlot) => cur?.canEdit !== false && (cur?.editable == null || cur.editable.includes(s.mcSlotId));
+  const ended = (s: ProofSlot) => s.endMs <= now;
+  const needProof = (s: ProofSlot) => !s.salaried && ended(s) && !s.proof;
+  const noGmv = (s: ProofSlot) => ended(s) && !s.gmv && !s.gmvCoveredBy;
+
+  // รายชื่อ Mc ที่มีคิว Shopee เดือนนี้ + จำนวนคิวที่ยังค้าง (ขาดหลักฐาน หรือยังไม่กรอก GMV)
+  const people = (() => {
+    const m = new Map<string, { name: string; total: number; todo: number }>();
+    for (const s of cur?.slots ?? []) {
+      if (!s.mcName) continue;
+      const p = m.get(s.mcName) ?? { name: s.mcName, total: 0, todo: 0 };
+      p.total++;
+      if (needProof(s) || noGmv(s)) p.todo++;
+      m.set(s.mcName, p);
+    }
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name, "th"));
+  })();
+  const mc = people.find((p) => p.name === stored)?.name ?? people[0]?.name ?? "";
+  const mine = (cur?.slots ?? []).filter((s) => s.mcName === mc);
+  const shown = mine.filter((s) => filter === "all" || (filter === "missing" ? needProof(s) : noGmv(s)));
+  const days = [...new Set(shown.map((s) => s.date))].map((d) => ({ date: d, slots: shown.filter((s) => s.date === d) }));
+  const picked = mine.filter((s) => selected.includes(s.mcSlotId)).sort((a, b) => a.startMs - b.startMs);
+  const todoProof = mine.filter((s) => needProof(s) && canEditSlot(s));
+  const todoGmv = mine.filter((s) => noGmv(s) && canEditSlot(s));
+  const needAll = mine.filter((s) => !s.salaried && ended(s));
+  const endedAll = mine.filter(ended);
+
+  function pickMc(name: string) {
+    writeLocal(MC_KEY, name);
+    setSelected([]);
+    setFilter("all");
+  }
+  function goMonth(next: string) {
+    setMonth(next);
+    setSelected([]);
+  }
+  function toggle(s: ProofSlot) {
+    setSelected(selected.includes(s.mcSlotId) ? selected.filter((x) => x !== s.mcSlotId) : [...selected, s.mcSlotId]);
+  }
+
+  return (
+    <>
+      <Notice>
+        เลือก Mc แล้วเห็นคิว Shopee ทั้งเดือนของคนนั้นในหน้าเดียว ไม่ต้องเปลี่ยนวันทีละวัน
+        · กด &quot;แนบหลักฐานที่ขาด&quot; แล้วระบบจะพาไปทีละคิว ถ้ารูปแดชบอร์ดรูปเดียวมีหลายไลฟ์ ใช้รูปเดิมต่อได้เลย
+      </Notice>
+
+      <div className="my-2 flex flex-wrap items-center gap-2">
+        <IconButton label="เดือนก่อนหน้า" onClick={() => goMonth(monthKey(-1, month))}><ChevronLeftIcon /></IconButton>
+        <span className="min-w-36 text-center font-bold">{monthLabel(month)}</span>
+        <IconButton label="เดือนถัดไป" onClick={() => goMonth(monthKey(1, month))}><ChevronRightIcon /></IconButton>
+        {month !== monthKey() ? (
+          <Button variant="outline" size="lg" className="rounded-full bg-card" onClick={() => goMonth(monthKey())}>เดือนนี้</Button>
+        ) : null}
+      </div>
+
+      {error && !cur ? (
+        <LoadError title="โหลดข้อมูลไม่สำเร็จ" message={error} onRetry={reload} />
+      ) : !cur ? (
+        <LoadingBlock />
+      ) : !people.length ? (
+        <StateBox title="เดือนนี้ไม่มีคิว Shopee">
+          {cur.all ? "ยังไม่มีคิว Shopee ที่มี Mc ไลฟ์ในเดือนนี้" : "เดือนนี้คุณไม่ได้เป็น Admin ในคิว Shopee ไหน"}
+        </StateBox>
+      ) : (
+        <>
+          <div className="my-2 flex flex-wrap gap-1.5" role="group" aria-label="เลือก Mc">
+            {people.map((p) => (
+              <Button
+                key={p.name}
+                variant="outline"
+                size="sm"
+                aria-pressed={p.name === mc}
+                onClick={() => pickMc(p.name)}
+                className={cn("gap-1.5 rounded-full bg-card font-semibold", p.name === mc && "border-primary bg-secondary text-primary")}
+              >
+                {p.name.replace(/^Mc\s*/, "")}
+                {p.todo ? (
+                  <span className="rounded-full bg-destructive px-1.5 text-[11px] leading-[18px] text-white tabular-nums" title={`ค้าง ${p.todo} คิว`}>{p.todo}</span>
+                ) : <CheckIcon className="size-3.5 text-success" aria-label="ครบแล้ว" />}
+              </Button>
+            ))}
+          </div>
+
+          <h2 className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-bold">
+            {mc}
+            <span className="text-xs font-medium text-muted-foreground">
+              {mine.length} คิว · มีหลักฐาน {needAll.filter((s) => s.proof).length}/{needAll.length}
+              {" "}· กรอก GMV {endedAll.filter((s) => !noGmv(s)).length}/{endedAll.length} (นับคิวที่จบแล้ว)
+            </span>
+          </h2>
+
+          {todoProof.length || todoGmv.length ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {todoProof.length ? (
+                <Button size="lg" onClick={() => setQueue(todoProof)}>แนบหลักฐานที่ขาด ทีละคิว ({todoProof.length})</Button>
+              ) : null}
+              {todoGmv.length ? (
+                <Button variant="outline" size="lg" className="bg-card" onClick={() => setGmvBatch(todoGmv)}>กรอก GMV ที่ขาด ({todoGmv.length})</Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          <ToggleGroup
+            type="single" spacing={1} aria-label="กรอง คิว" value={filter}
+            onValueChange={(v) => { if (v) setFilter(v as McFilter); }}
+            className="no-scrollbar mt-3 max-w-full overflow-x-auto rounded-full border bg-card p-1"
+          >
+            {([
+              ["all", "ทั้งหมด", mine.length],
+              ["missing", "ยังไม่มีหลักฐาน", mine.filter(needProof).length],
+              ["nogmv", "ยังไม่กรอก GMV", mine.filter(noGmv).length],
+            ] as const).map(([id, text, n]) => (
+              <ToggleGroupItem key={id} value={id} className={TAB_CLS}>
+                {text}
+                <span className={cn("rounded-full px-1.5 text-[11px] leading-[18px] tabular-nums", id !== "all" && n ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{n}</span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+
+          {!days.length ? (
+            <StateBox title={filter === "nogmv" ? "กรอก GMV ครบทุกคิวที่จบแล้ว ✓" : "แนบหลักฐานครบทุกคิวที่จบแล้ว ✓"} />
+          ) : (
+            <div className="mt-3 space-y-4">
+              {days.map((d) => (
+                <section key={d.date}>
+                  <h3 className="mb-1.5 flex items-center gap-2 text-sm font-bold">
+                    {fmtDayLong.format(parseKey(d.date))}
+                    <DayBadge label={relLabel(d.date)} />
+                    <Button variant="link" size="xs" className="ml-auto h-auto px-0" onClick={() => onOpenDay(d.date)}>ดูทั้งวัน</Button>
+                  </h3>
+                  <div className="space-y-1.5">
+                    {d.slots.map((s) => (
+                      <SlotCard
+                        key={s.mcSlotId}
+                        s={s}
+                        on={selected.includes(s.mcSlotId)}
+                        canEdit={canEditSlot(s)}
+                        now={now}
+                        showAdmin={cur.all}
+                        hideMc
+                        busy={busy}
+                        onToggle={() => toggle(s)}
+                        onRemove={() => remove(s)}
+                        onGmv={() => setGmvSlot(s)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {picked.length ? (
+        <div className="slot-bar-open app-bar fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-4 pt-3 pb-[calc(12px+env(safe-area-inset-bottom))] backdrop-blur">
+          <div className="mx-auto flex max-w-[760px] items-center gap-2">
+            <div className="min-w-0 flex-1 text-sm">
+              <strong>เลือก {picked.length} คิว</strong>
+              <span className="block truncate text-xs text-muted-foreground">
+                {picked.map((s) => `${fmtDayMonth.format(parseKey(s.date))} ${s.start}`).join(", ")}
+              </span>
+            </div>
+            <Button variant="outline" size="lg" onClick={() => setSelected([])}>ล้าง</Button>
+            <Button size="lg" onClick={() => setQueue(picked)}>แนบทีละคิว</Button>
+          </div>
+        </div>
+      ) : null}
+
+      {gmvSlot ? (
+        <GmvDialog
+          slot={gmvSlot}
+          onClose={(saved) => {
+            setGmvSlot(null);
+            if (saved) reload();
+          }}
+        />
+      ) : null}
+
+      {gmvBatch ? (
+        <GmvBatchDialog
+          slots={gmvBatch}
+          onClose={(saved) => {
+            setGmvBatch(null);
+            if (saved) reload();
+          }}
+        />
+      ) : null}
+
+      {queue?.length ? (
+        <ProofQueue
+          slots={queue}
+          onClose={(saved) => {
+            setQueue(null);
+            setSelected([]);
+            if (saved) reload();
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+type Img = { blob: Blob; url: string };
+/** โหมดทีละคิว: คิวที่ n จาก total · image = รูปของคิวก่อนหน้า (ใช้ต่อได้ ถ้ารูปแดชบอร์ดรูปเดียวมีหลายไลฟ์) */
+type QueueStep = { n: number; total: number; image: Img | null; onNext: (image: Img) => void; onSkip: () => void };
+
+/** แนบหลักฐานทีละคิว (มุมมองราย Mc): บันทึกแล้วไปคิวถัดไปเอง · onClose(จำนวนคิวที่บันทึก) */
+function ProofQueue({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved: number) => void }) {
+  const [i, setI] = useState(0);
+  const [image, setImage] = useState<Img | null>(null);
+  const [saved, setSaved] = useState(0);
+  const s = slots[i];
+  const last = i + 1 >= slots.length;
+  return (
+    <UploadDialog
+      key={s.mcSlotId}
+      slots={[s]}
+      onClose={() => onClose(saved)}
+      step={{
+        n: i + 1,
+        total: slots.length,
+        image,
+        onNext: (img) => {
+          setImage(img);
+          if (last) return onClose(saved + 1);
+          setSaved(saved + 1);
+          setI(i + 1);
+        },
+        onSkip: () => (last ? onClose(saved) : setI(i + 1)),
+      }}
+    />
+  );
+}
+
+/** กรอก GMV หลายคิวในหน้าต่างเดียว (คิวที่ยังไม่กรอก) ส่งทีละ 12 คิวตามที่ server รับ */
+function GmvBatchDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved: boolean) => void }) {
+  const toast = useToast();
+  const [drafts, setDrafts] = useState<Record<number, GmvDraft>>(() => Object.fromEntries(slots.map((s) => [s.mcSlotId, draftOf(s)])));
+  const [busy, setBusy] = useState(false);
+  const preview = previewGmv(slots, drafts);
+  const filled = slots.filter((s) => drafts[s.mcSlotId].input.trim());
+  const bad = filled.some((s) => preview.get(s.mcSlotId)?.error);
+
+  async function save() {
+    if (!filled.length || bad) return;
+    setBusy(true);
+    let n = 0;
+    try {
+      const warns: string[] = [];
+      for (let i = 0; i < filled.length; i += 12) {
+        const items = filled.slice(i, i + 12).map((s) => ({ id: s.mcSlotId, ...drafts[s.mcSlotId] }));
+        const res = await api<{ message: string; warning?: string }>("/api/proofs", { items }, "PATCH");
+        if (!res.ok) throw new Error(n ? `บันทึกไปแล้ว ${n} คิว แต่ที่เหลือไม่สำเร็จ: ${res.message}` : res.message);
+        n += items.length;
+        if (res.warning) warns.push(res.warning);
+      }
+      toast(`บันทึก GMV ${n} คิวแล้ว`);
+      for (const w of warns) toast(w, "error");
+      onClose(true);
+    } catch (err) {
+      toast((err as Error).message, "error");
+      if (n) onClose(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppDialog
+      open
+      onClose={() => onClose(false)}
+      busy={busy}
+      title={`กรอก GMV ${slots.length} คิว`}
+      description={`${slots[0].platform} · ${slots[0].mcName} · กรอกยอดจากแดชบอร์ดของแต่ละคิว ช่องที่เว้นว่างไว้จะไม่บันทึก`}
+    >
+      <DialogBody className="space-y-2">
+        {slots.map((s) => {
+          const id = `gmv-batch-${s.mcSlotId}`;
+          const d = drafts[s.mcSlotId];
+          const r = d.input.trim() ? preview.get(s.mcSlotId) : undefined;
+          return (
+            <div key={s.mcSlotId} className="rounded-lg border p-2.5">
+              <div className="flex items-center gap-2">
+                <Label htmlFor={id} className="min-w-0 flex-1 leading-snug">
+                  <span className="tabular-nums">{fmtDayShort.format(parseKey(s.date))} · {s.start}–{s.end}</span>
+                  {s.proof ? (
+                    <a href={`/api/proofs/image?id=${s.proof.id}`} target="_blank" rel="noopener noreferrer" className="ml-2 text-xs font-semibold text-success underline">
+                      ดูรูป
+                    </a>
+                  ) : null}
+                </Label>
+                <Input
+                  id={id}
+                  inputMode="decimal"
+                  value={d.input}
+                  disabled={busy}
+                  placeholder="เช่น 47295"
+                  onChange={(e) => setDrafts({ ...drafts, [s.mcSlotId]: { ...d, input: e.target.value } })}
+                  aria-invalid={!!r?.error}
+                  className="w-36 shrink-0"
+                />
+              </div>
+              {r ? (
+                <p className={cn("mt-1 text-right text-xs", r.error ? "font-semibold text-destructive" : "text-muted-foreground")}>
+                  {r.error || <>GMV <strong className="text-foreground tabular-nums">{fmtGmv(r.gmv ?? 0)}</strong></>}
+                </p>
+              ) : null}
+            </div>
+          );
+        })}
+      </DialogBody>
+      <DialogActions>
+        <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>
+        <Button size="lg" disabled={busy || !filled.length || bad} onClick={save}>
+          {busy ? "กำลังบันทึก..." : filled.length ? `บันทึก ${filled.length} คิว` : "กรอกอย่างน้อย 1 คิว"}
+        </Button>
+      </DialogActions>
+    </AppDialog>
   );
 }
 
@@ -544,9 +952,12 @@ function DriveBox({ tick, canRun }: { tick: number; canRun: boolean }) {
   );
 }
 
-function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved: boolean) => void }) {
+function UploadDialog({ slots, onClose, step }: { slots: ProofSlot[]; onClose: (saved: boolean) => void; step?: QueueStep }) {
   const toast = useToast();
-  const [image, setImage] = useState<{ blob: Blob; url: string } | null>(null);
+  // โหมดทีละคิว: เริ่มจากรูปของคิวก่อนหน้า (ยังใช้อยู่ใน ProofQueue ห้าม revoke)
+  const [image, setImage] = useState<Img | null>(() => step?.image ?? null);
+  const carried = !!step?.image && image === step.image;
+  const shopee = isShopeePlatform(slots[0].platform);
   const [start, setStart] = useState(() => toInput(slots[0].startMs));
   const [end, setEnd] = useState(() => toInput(slots[slots.length - 1].endMs));
   // ยังไม่ได้แก้เวลา = ยังเป็นเวลาตาม slot ที่ระบบเติมไว้ (ไฮไลต์ให้ตรวจกับแดชบอร์ด)
@@ -572,7 +983,7 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
     try {
       const blob = await shrinkImage(file);
       setImage((old) => {
-        if (old) URL.revokeObjectURL(old.url);
+        if (old && old !== step?.image) URL.revokeObjectURL(old.url);
         return { blob, url: URL.createObjectURL(blob) };
       });
     } catch (err) {
@@ -622,7 +1033,8 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
       if (!json?.ok) throw new Error(json?.message ?? `อัปโหลดไม่สำเร็จ (HTTP ${res.status})`);
       toast(json.message ?? "แนบหลักฐานแล้ว");
       if (json.warning) toast(json.warning, "error");
-      onClose(true);
+      if (step) step.onNext(image);
+      else onClose(true);
     } catch (err) {
       toast((err as Error).message, "error");
     } finally {
@@ -635,12 +1047,12 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
       open
       onClose={() => onClose(false)}
       busy={busy}
-      title="แนบหลักฐานไลฟ์"
-      description={`${slots[0].platform} · ${slots.map((s) => `${s.start}–${s.end} ${s.mcName}`).join(" / ")}`}
+      title={step ? `แนบหลักฐานไลฟ์ · คิว ${step.n}/${step.total}` : "แนบหลักฐานไลฟ์"}
+      description={`${step ? `${fmtDayLong.format(parseKey(slots[0].date))} · ` : ""}${slots[0].platform} · ${slots.map((s) => `${s.start}–${s.end} ${s.mcName}`).join(" / ")}`}
     >
       <DialogBody className="space-y-3">
         <div>
-          <Label htmlFor="proof-file" className="mb-1.5">รูปแดชบอร์ด TikTok LIVE</Label>
+          <Label htmlFor="proof-file" className="mb-1.5">รูปแดชบอร์ด {shopee ? "Shopee Live" : "TikTok LIVE"}</Label>
           <Input id="proof-file" type="file" accept="image/*" disabled={busy} onChange={(e) => takeFile(e.target.files?.[0])} />
           <p className="mt-1 text-xs text-muted-foreground">
             เลือกไฟล์<span className="pointer-coarse:hidden"> หรือแคปหน้าจอแล้วกด Ctrl + V ที่หน้านี้</span> · ต้องเห็นวันที่และเวลาเริ่ม–จบไลฟ์ในรูป
@@ -648,6 +1060,11 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
           {image ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={image.url} alt="ตัวอย่างรูปหลักฐาน" className="mt-2 max-h-72 w-full rounded-lg border object-contain" />
+          ) : null}
+          {carried ? (
+            <Notice variant="warning" className="text-xs">
+              ใช้รูปเดียวกับคิวก่อนหน้า (รูปแดชบอร์ดรูปเดียวมีหลายไลฟ์) · ถ้าคิวนี้อยู่ในรูปอื่น ให้เลือกไฟล์ใหม่<span className="pointer-coarse:hidden"> หรือกด Ctrl + V</span>
+            </Notice>
           ) : null}
         </div>
 
@@ -711,9 +1128,12 @@ function UploadDialog({ slots, onClose }: { slots: ProofSlot[]; onClose: (saved:
         </p>
       ) : null}
       <DialogActions>
-        <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>
+        <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>{step ? "หยุด" : "ยกเลิก"}</Button>
+        {step ? <Button variant="outline" size="lg" disabled={busy} onClick={step.onSkip}>ข้ามคิวนี้</Button> : null}
         <Button size="lg" disabled={busy || !image || !!invalid || !!gmvError} onClick={save}>
-          {busy ? "กำลังอัปโหลด..." : `บันทึกให้ ${slots.length} slot`}
+          {busy ? "กำลังอัปโหลด..."
+            : step ? (step.n < step.total ? "บันทึก แล้วไปคิวถัดไป" : "บันทึก (คิวสุดท้าย)")
+              : `บันทึกให้ ${slots.length} slot`}
         </Button>
       </DialogActions>
     </AppDialog>

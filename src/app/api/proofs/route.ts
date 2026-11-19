@@ -2,7 +2,7 @@ import { after } from "next/server";
 import { fail, monthRange, ok, requireMe } from "@/lib/api";
 import { bkkToday } from "@/lib/data";
 import { syncProofsToDrive, trashUnusedDriveFiles } from "@/lib/drive";
-import { withPlatformLabels } from "@/lib/platform";
+import { isShopeePlatform, withPlatformLabels } from "@/lib/platform";
 import {
   PROOF_BUCKET, asEditor, canEditAll, canEditProofs, canSeeAll, canUseProofs, parseGmvEntries, proofSlots, recomputeAfterSave, removeOrphanProofs,
   resolveGmv, saveGmv,
@@ -79,6 +79,14 @@ export async function GET(request: Request) {
   }
 
   const { key, first, last } = monthRange(sp.get("month"));
+  // ?month=YYYY-MM&app=shopee = slot Shopee ทั้งเดือน (มุมมอง "ราย Mc" ไม่ต้องไล่ทีละวัน)
+  if (sp.get("app") === "shopee") {
+    const slots = (await proofSlots(r.me, first, last)).filter((s) => isShopeePlatform(s.platform));
+    const editAll = canEditAll(r.me);
+    const editable = editAll ? null
+      : canEditProofs(r.me) ? (await proofSlots(asEditor(r.me), first, last)).filter((s) => isShopeePlatform(s.platform)).map((s) => s.mcSlotId) : [];
+    return ok({ month: key, all: canSeeAll(r.me), canEdit: canEditProofs(r.me), editable, slots: withPlatformLabels(slots) });
+  }
   const today = bkkToday();
   const until = last < today ? last : today;
   const now = Date.now();
