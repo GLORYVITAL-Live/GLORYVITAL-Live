@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  HOUR_COL, ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, pairRoomSlots, roomMonths, roomPlace, roomSheetText, roomTabTitle, summaryDate,
+  HOUR_COL, ROOM_COLS, WEB_ADMIN_FG, adminDayCounts, adminSummaryEdits, buildRoomSheet, keepTeamAdmins, pairRoomSlots, roomMonths, roomPlace, roomSheetText, roomTabTitle,
+  summaryDate,
   type RawSide, type RoomSlot,
 } from "@/lib/room-sheet";
 
@@ -83,6 +84,59 @@ describe("ตารางห้องไลฟ์ (แท็บ Live <เดื�
   test("ข้อความไว้เทียบกับชีต: ตัดช่องว่างท้ายแถว + แถวว่างท้ายตาราง", () => {
     expect(roomSheetText([[{ text: "a", bg: "" }, null], [null, { text: "", bg: "" }]])).toEqual([["a"]]);
     expect(roomSheetText([[null, { text: "b", bg: "" }]])).toEqual([["", "b"]]);
+  });
+});
+
+describe("ชื่อแอดมินที่ทีมพิมพ์เองในตาราง", () => {
+  const r = 2;
+  /** ข้อความในแท็บตอนนี้ (เหมือนที่ values.get คืนมา) จากตารางที่เว็บเขียน + ชื่อที่ทีมพิมพ์ */
+  const sheetOf = (t: ReturnType<typeof buildRoomSheet>, typed: Record<string, string>) => {
+    const text = roomSheetText(t.rows).map((row) => [...row]);
+    for (const [k, v] of Object.entries(typed)) {
+      const [rr, cc] = k.split(",").map(Number);
+      while (text.length <= rr) text.push([]);
+      while (text[rr].length <= cc) text[rr].push("");
+      text[rr][cc] = v;
+    }
+    return text;
+  };
+  const none = () => false;
+
+  test("เว็บยังไม่มีชื่อ = เก็บชื่อที่พิมพ์ไว้ · ชื่อจากเว็บเขียนด้วยสีที่แยกได้", () => {
+    const t = buildRoomSheet("2026-12", [slot({ date: "2026-12-01", admins: [] }), slot({ date: "2026-12-01", start: "11:30", end: "13:30" })]);
+    expect(t.rows[r + 2][colOf(11)]).toMatchObject({ text: "บี", fg: WEB_ADMIN_FG });
+    expect(t.rows[r + 2][colOf(9)]?.fg).toBeUndefined();
+    const old = sheetOf(t, { [`${r + 2},${colOf(9)}`]: "ปลื้ม" });
+    const fresh = buildRoomSheet("2026-12", [slot({ date: "2026-12-01", admins: [] }), slot({ date: "2026-12-01", start: "11:30", end: "13:30" })]);
+    expect(keepTeamAdmins(fresh, old, none)).toBe(1);
+    expect(fresh.rows[r + 2][colOf(9)]).toMatchObject({ text: "ปลื้ม" });
+    expect(fresh.rows[r + 2][colOf(9)]?.fg).toBeUndefined();
+    // ไม่มีอะไรเปลี่ยน = ข้อความเท่ากับในแท็บ (ไม่ต้องเขียน)
+    expect(JSON.stringify(roomSheetText(fresh.rows))).toBe(JSON.stringify(old));
+  });
+
+  test("เว็บมีชื่อแล้ว = ใช้ของเว็บ", () => {
+    const t = buildRoomSheet("2026-12", [slot({ date: "2026-12-01", admins: ["ฝน"] })]);
+    keepTeamAdmins(t, sheetOf(t, { [`${r + 2},${colOf(9)}`]: "ปลื้ม" }), none);
+    expect(t.rows[r + 2][colOf(9)]?.text).toBe("ฝน");
+  });
+
+  test("ชื่อที่เว็บเขียนไว้เอง แล้วเว็บไม่มีชื่อแล้ว (แอดมินยกเลิก) = ล้างออก", () => {
+    const before = buildRoomSheet("2026-12", [slot({ date: "2026-12-01", admins: ["ฝน"] })]);
+    const old = sheetOf(before, {});
+    const after = buildRoomSheet("2026-12", [slot({ date: "2026-12-01", admins: [] })]);
+    expect(keepTeamAdmins(after, old, (rr, cc) => rr === r + 2 && cc === colOf(9))).toBe(0);
+    expect(after.rows[r + 2][colOf(9)]?.text).toBe("");
+  });
+
+  test("คิวย้ายเวลา = ชื่อเดิมไม่ตามไป · คิวถูกลบ = ไม่มีช่องให้เก็บ", () => {
+    const before = buildRoomSheet("2026-12", [slot({ date: "2026-12-01", admins: [] })]);
+    const old = sheetOf(before, { [`${r + 2},${colOf(9)}`]: "ปลื้ม" });
+    const moved = buildRoomSheet("2026-12", [slot({ date: "2026-12-01", start: "09:30", end: "12:30", admins: [] })]);
+    expect(keepTeamAdmins(moved, old, none)).toBe(0);
+    expect(moved.rows[r + 2][colOf(9)]?.text).toBe("");
+    const gone = buildRoomSheet("2026-12", []);
+    expect(keepTeamAdmins(gone, old, none)).toBe(0);
   });
 });
 

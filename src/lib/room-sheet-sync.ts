@@ -3,7 +3,7 @@ import type { sheets_v4 } from "googleapis";
 import { spreadsheetIdOf } from "@/lib/frames";
 import { withSyncLock } from "@/lib/lock";
 import {
-  ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, nameKey, pairRoomSlots, roomSheetText, teamTabTitle,
+  ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, keepTeamAdmins, nameKey, pairRoomSlots, roomSheetText, teamTabTitle,
   type RawSide, type RoomCell, type RoomSheet,
 } from "@/lib/room-sheet";
 import { sheetsApi } from "@/lib/sheet";
@@ -13,6 +13,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 //   ลิงก์ชีตอยู่ที่ settings.room_sheet_id (ตั้งด้วย SQL ไม่อยู่ในโค้ด เพราะ repo เป็นสาธารณะ · SQL 20261201000000_room_sheet)
 //   ทุกชั่วโมง (cron notify รอบต้นชั่วโมง) เดือนนี้ + เดือนหน้า · ปุ่ม "ลงตารางห้องไลฟ์" ในหน้า Plan Slot Live = เดือนที่เปิดอยู่
 //   เขียนเฉพาะเมื่อข้อความ / ช่องที่รวมไว้ต่างจากในแท็บ (ไม่มีอะไรเปลี่ยน = ไม่แตะชีต) · แท็บเดิมที่ทีมทำมือไม่ถูกแตะ
+//   ชื่อแอดมินที่ทีมพิมพ์ในตารางก่อนลงแท็บ Admin เสริม = เก็บไว้ (src/lib/room-sheet.ts keepTeamAdmins)
 //   เขียนเฉพาะช่วงตาราง (แถว 1 ถึงวันสุดท้าย) — แถวใต้ตารางที่ทีมเพิ่มเอง (สรุปวันหยุดแอดมิน) ไม่ถูกแตะ (META_KEY)
 //   เดือนที่ยังไม่มีคิวเลยและยังไม่มีแท็บ = ไม่สร้างแท็บว่าง (ยกเว้นกดปุ่มเอง)
 //   สรุปวันหยุดแอดมินที่ทีมทำไว้ใต้ตาราง: กรอกเฉพาะจำนวนคิว (src/lib/room-sheet.ts adminSummaryEdits)
@@ -27,7 +28,8 @@ export type RoomSyncResult = {
 };
 
 const NOTE = "ตาราง (แถว 1 ถึงวันสุดท้าย) เว็บสร้างให้อัตโนมัติจากคิว Mc + Admin ในเว็บ (อัปเดตทุกชั่วโมง หรือกดปุ่ม \"ลงตารางห้องไลฟ์\" ในหน้า Plan Slot Live)"
-  + " — แก้ในตารางจะถูกเขียนทับ ให้แก้คิวที่เว็บแทน · แถวใต้ตารางเป็นของทีม เว็บไม่แตะ ยกเว้นกรอกจำนวนคิวในสรุปวันหยุด (ช่องที่พิมพ์ off / Holiday / Sick leave ไม่แตะ)";
+  + " — แก้ในตารางจะถูกเขียนทับ ให้แก้คิวที่เว็บแทน ยกเว้นชื่อแอดมิน (แถวสีฟ้า) ที่พิมพ์ไว้ในคิวที่เว็บยังไม่มีชื่อแอดมิน = เว็บเก็บไว้ (ลงแท็บ Admin เสริมแล้ว ชื่อจากเว็บจะแทน · คิวย้ายเวลา = ชื่อไม่ตามไป)"
+  + " · แถวใต้ตารางเป็นของทีม เว็บไม่แตะ ยกเว้นกรอกจำนวนคิวในสรุปวันหยุด (ช่องที่พิมพ์ off / Holiday / Sick leave ไม่แตะ)";
 
 const rgb = (hex: string) => ({
   red: parseInt(hex.slice(1, 3), 16) / 255, green: parseInt(hex.slice(3, 5), 16) / 255, blue: parseInt(hex.slice(5, 7), 16) / 255,
@@ -199,10 +201,19 @@ async function ensureTable(api: Api, spreadsheetId: string, tabs: TabInfo[], mon
     const old = tab.oldRows ?? buildRoomSheet(month, []).rows.length;
     tab.oldRows = old;
     // เทียบเฉพาะช่วงตาราง: ข้อความทุกช่อง + ช่องที่รวมไว้ + ความสูงตาราง เหมือนเดิม = ไม่ต้องเขียน
+    //   สีตัวอักษรไว้แยกชื่อแอดมินที่เว็บเขียน (WEB_ADMIN_FG) กับชื่อที่ทีมพิมพ์เอง
+    const range = `'${built.title}'!A1:AC${Math.min(old, tab.props.gridProperties?.rowCount ?? 1)}`;
     const [vals, merged] = await Promise.all([
-      api.spreadsheets.values.get({ spreadsheetId, range: `'${built.title}'!A1:AC${Math.min(old, tab.props.gridProperties?.rowCount ?? 1)}` }),
-      api.spreadsheets.get({ spreadsheetId, ranges: [`'${built.title}'`], fields: "sheets(merges)" }),
+      api.spreadsheets.values.get({ spreadsheetId, range }),
+      api.spreadsheets.get({ spreadsheetId, ranges: [range], fields: "sheets(merges,data(rowData(values(userEnteredFormat(textFormat(foregroundColor))))))" }),
     ]);
+    const formats = merged.data.sheets?.[0]?.data?.[0]?.rowData ?? [];
+    const webWritten = (r: number, c: number) => {
+      const fg = formats[r]?.values?.[c]?.userEnteredFormat?.textFormat?.foregroundColor;
+      return !!fg && !fg.red && !fg.green && Math.round((fg.blue ?? 0) * 255) === 1;
+    };
+    // ชื่อแอดมินที่ทีมพิมพ์ไว้ในคิวที่เว็บยังไม่มีชื่อ = เก็บไว้ (เทียบรวมด้วย ไม่มีอะไรเปลี่ยน = ไม่เขียน)
+    keepTeamAdmins(built, (vals.data.values ?? []) as string[][], webWritten);
     const sameText = JSON.stringify(vals.data.values ?? []) === JSON.stringify(roomSheetText(built.rows));
     const have = (merged.data.sheets?.[0]?.merges ?? []).filter((m) => (m.startRowIndex ?? 0) < old).map((m) => mergeKey({
       r0: m.startRowIndex ?? 0, r1: m.endRowIndex ?? 0, c0: m.startColumnIndex ?? 0, c1: m.endColumnIndex ?? 0,
