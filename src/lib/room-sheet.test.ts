@@ -211,3 +211,32 @@ describe("จับคู่ Mc + Admin", () => {
     expect(by("2026-11-24", "19:30")).toBeUndefined();
   });
 });
+
+describe("Agency ที่ไลฟ์ในห้องของเรา (TDH = ห้อง 1)", () => {
+  test("ลงห้อง 1 · บรรทัดล่าง = Agency TDH · ข้ามเที่ยงคืน = แถววันก่อน · Agency อื่นไม่ลง", () => {
+    const slots = pairRoomSlots([], [], [
+      { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-03", start_time: "21:30:00", end_time: "02:30:00" },
+      { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-05", start_time: "01:30:00", end_time: "03:30:00" },
+      { agency: "MCN", platform: "Shopee", live_date: "2026-11-03", start_time: "10:00:00", end_time: "12:00:00" },
+    ]);
+    expect(slots).toHaveLength(2);
+    expect(slots[0]).toMatchObject({ agency: "TDH", mc: null, admins: [] });
+    const t = buildRoomSheet("2026-11", slots);
+    const day = (d: number) => 2 + (d - 1) * 9;
+    expect(t.placed).toBe(2);
+    expect(t.rows[day(3)][colOf(21)]).toMatchObject({ text: "TIK TOK GLORY MALL\nAgency TDH", bg: "#d5a6bd" });
+    expect(t.merges).toContainEqual({ r0: day(3), r1: day(3) + 1, c0: colOf(21), c1: colOf(21) + 5 });
+    expect(t.rows[day(4)][colOf(1)]?.text).toBe("TIK TOK GLORY MALL\nAgency TDH"); // 5 พ.ย. 01:30 = แถวของ 4 พ.ย.
+  });
+
+  test("Agency + แถว Admin เวลาเดียวกัน = คิวเดียวกัน (แสดงชื่อแอดมิน) · มีแถว Mc = คิวทีมเรา", () => {
+    const side = (date: string, name: string): RawSide => ({ platform: "GLORY MALL", live_date: date, start_time: "19:30", end_time: "21:30", is_cancelled: false, confirmed: true, name });
+    const out = pairRoomSlots([side("2026-11-06", "เอ")], [side("2026-11-07", "บี")], [
+      { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-07", start_time: "19:30", end_time: "21:30" },
+      { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-06", start_time: "19:30", end_time: "21:30" },
+    ]);
+    expect(out.find((s) => s.date === "2026-11-07")).toMatchObject({ agency: "TDH", admins: ["บี"], mc: null });
+    expect(out.find((s) => s.date === "2026-11-06")).toMatchObject({ mc: "เอ" });
+    expect(out.find((s) => s.date === "2026-11-06")!.agency).toBeUndefined();
+  });
+});

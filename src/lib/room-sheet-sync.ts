@@ -3,8 +3,8 @@ import type { sheets_v4 } from "googleapis";
 import { spreadsheetIdOf } from "@/lib/frames";
 import { withSyncLock } from "@/lib/lock";
 import {
-  ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, keepTeamAdmins, nameKey, pairRoomSlots, roomSheetText, teamTabTitle,
-  type RawSide, type RoomCell, type RoomSheet,
+  ROOM_AGENCIES, ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, keepTeamAdmins, nameKey, pairRoomSlots, roomSheetText, teamTabTitle,
+  type RawAgency, type RawSide, type RoomCell, type RoomSheet,
 } from "@/lib/room-sheet";
 import { sheetsApi } from "@/lib/sheet";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -84,8 +84,15 @@ export async function loadRoomSlots(month: string) {
       if ((data ?? []).length < 1000) return out.map(({ person, ...x }) => ({ ...x, name: person?.name ?? null }));
     }
   };
-  const [mc, admin] = await Promise.all([all("mc_slots"), all("admin_slots")]);
-  return pairRoomSlots(mc, admin);
+  // แพลนของ Agency ที่ไลฟ์ในห้องของเรา (TDH = ห้อง 1 · ผู้ใช้ขอ 2026-11-20)
+  const agency = async () => {
+    const { data, error } = await db.from("agency_slots").select("agency, platform, live_date, start_time, end_time")
+      .in("agency", Object.keys(ROOM_AGENCIES)).gte("live_date", first).lte("live_date", next).order("id").limit(5000);
+    if (error) throw new Error(error.message);
+    return (data ?? []) as RawAgency[];
+  };
+  const [mc, admin, agencies] = await Promise.all([all("mc_slots"), all("admin_slots"), agency()]);
+  return pairRoomSlots(mc, admin, agencies);
 }
 
 function heightRuns(sheetId: number, heights: number[]): sheets_v4.Schema$Request[] {

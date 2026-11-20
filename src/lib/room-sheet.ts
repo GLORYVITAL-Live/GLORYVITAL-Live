@@ -4,7 +4,8 @@ import { isShopeePlatform, platformRaw } from "@/lib/platform";
 //   หน้าตาเหมือนแท็บ "Live Nov 2026" ที่ทีมทำมือ: แถวหัว = ชั่วโมง 05:00 ถึง 05:00 วันถัดไป
 //   วันละ 3 ห้อง ห้องละ 3 แถว (ช่อง + Mc / เวลาเริ่ม-จบ / แอดมิน) · วันอาทิตย์ช่องวันสีเหลือง
 //   ห้อง 1 = GLORY MALL, ห้อง 2 = Skin Expert, ห้อง 3 = Cherry Glory · ช่องอื่นของ TikTok = แถว "อื่นๆ"
-//   ไม่รวม Shopee (ผู้ใช้เลือก) และแพลนของ Agency (ใช้สตูดิโอของตัวเอง)
+//   ไม่รวม Shopee (ผู้ใช้เลือก) และแพลนของ Agency ที่ใช้สตูดิโอของตัวเอง
+//     ยกเว้น Agency TDH: ไลฟ์ที่ห้อง 1 ลงตารางด้วย (ผู้ใช้ขอ 2026-11-20) ช่องบน = "TIK TOK <ช่อง>\nAgency TDH" แทนชื่อ Mc
 //   ส่วนนี้เป็นฟังก์ชันล้วน (ทดสอบได้) · อ่าน DB + เขียนชีตอยู่ที่ src/lib/room-sheet-sync.ts
 
 /** คิวไลฟ์ 1 คิว (จับคู่ Mc + Admin ของช่อง + วัน + เวลาเดียวกันแล้ว) */
@@ -19,7 +20,12 @@ export type RoomSlot = {
   mc: string | null;
   admins: string[];
   campaign: string;
+  /** คิวของ Agency ที่ไลฟ์ในห้องของเรา (เช่น "TDH") · ไม่มี = คิวของทีมเรา */
+  agency?: string;
 };
+
+/** Agency ที่ไลฟ์ในห้องของเรา -> ห้อง (ลำดับใน ROOMS · 0 = ห้อง 1) · Agency อื่นใช้สตูดิโอของตัวเอง ไม่ลงตาราง */
+export const ROOM_AGENCIES: Record<string, number> = { TDH: 0 };
 
 export type RoomCell = {
   text: string;
@@ -121,9 +127,10 @@ export function roomPlace(s: Pick<RoomSlot, "date" | "start" | "end">) {
 
 /** ช่องในแถวแรกของคิว: "TIK TOK GLORY MALL\nMc ปิ่น" · คิว CEO = ชื่อแคมเปญตัวใหญ่ (ช่องสีแดงในชีตเดิม) */
 function slotTitle(s: RoomSlot) {
-  const ceo = /ceo/i.test(s.campaign);
+  const ceo = !s.agency && /ceo/i.test(s.campaign);
   const head = ceo ? s.campaign.trim().toUpperCase() : `TIK TOK ${platformRaw(s.platform.trim())}`;
-  return { ceo, text: `${head}\nMc ${s.mc?.trim() || "(ว่าง)"}` };
+  // คิวของ Agency: บรรทัดล่างเป็นชื่อ Agency (ไม่มีชื่อ Mc ของทีมเรา)
+  return { ceo, text: `${head}\n${s.agency ? `Agency ${s.agency}` : `Mc ${s.mc?.trim() || "(ว่าง)"}`}` };
 }
 
 /**
@@ -141,8 +148,9 @@ export function buildRoomSheet(month: string, slots: RoomSlot[]): RoomSheet {
     .map((s) => ({ s, at: roomPlace(s) }))
     .filter((x) => inMonth.has(x.at.day))
     .sort((a, b) => a.at.day.localeCompare(b.at.day) || a.at.col - b.at.col || a.s.platform.localeCompare(b.s.platform));
-  const roomOf = (p: string) => ROOMS.find((r) => r.match(p)) ?? OTHER;
-  const rooms = list.some((x) => roomOf(x.s.platform) === OTHER) ? [...ROOMS, OTHER] : ROOMS;
+  // คิวของ Agency ที่ไลฟ์ในห้องของเรา = ห้องที่ตั้งไว้ (TDH = ห้อง 1) · คิวทีมเรา = ห้องตามช่อง
+  const roomOf = (s: RoomSlot) => (s.agency && ROOM_AGENCIES[s.agency] !== undefined ? ROOMS[ROOM_AGENCIES[s.agency]] : ROOMS.find((r) => r.match(s.platform)) ?? OTHER);
+  const rooms = list.some((x) => roomOf(x.s) === OTHER) ? [...ROOMS, OTHER] : ROOMS;
   const perDay = rooms.length * 3;
   const rowCount = 2 + daysIn * perDay;
 
@@ -195,7 +203,7 @@ export function buildRoomSheet(month: string, slots: RoomSlot[]): RoomSheet {
   let placed = 0;
   const lastCol = HOUR_COL + HOUR_COLS;
   for (const { s, at } of list) {
-    const k = rooms.indexOf(roomOf(s.platform));
+    const k = rooms.indexOf(roomOf(s));
     const r = dayRow.get(at.day)! + k * 3;
     const taken = used.get(`${at.day}|${k}`) ?? new Set<number>();
     used.set(`${at.day}|${k}`, taken);
@@ -341,32 +349,40 @@ export type RawSide = {
   is_cancelled: boolean; confirmed: boolean | null; name: string | null; campaign?: string | null;
 };
 
+/** แพลนของ Agency ที่ไลฟ์ในห้องของเรา (ตาราง agency_slots · เฉพาะกลุ่มใน ROOM_AGENCIES) */
+export type RawAgency = { agency: string; platform: string; live_date: string; start_time: string; end_time: string };
+
 /**
- * คิวที่ลงตาราง: ฝั่ง Mc มีแถวและไม่ได้แคน (ไม่มีแถว Mc = ดูฝั่ง Admin ที่ยังนับ)
+ * คิวที่ลงตาราง: ฝั่ง Mc มีแถวและไม่ได้แคน (ไม่มีแถว Mc = ดูฝั่ง Admin ที่ยังนับ) + แพลนของ Agency ที่ไลฟ์ในห้องของเรา
  *   ชื่อ Mc / Admin แสดงเฉพาะแถวที่ยังนับ (ไม่แคน + ไม่ได้ติ๊กไม่นับ) แบบเดียวกับการนับชั่วโมงทั้งเว็บ
+ *   Agency เวลาเดียวกับแถว Admin = คิวเดียวกัน (แสดงชื่อแอดมินด้วย) · กลุ่มที่ไม่อยู่ใน ROOM_AGENCIES ไม่ลง
  */
-export function pairRoomSlots(mc: RawSide[], admin: RawSide[]): RoomSlot[] {
+export function pairRoomSlots(mc: RawSide[], admin: RawSide[], agency: RawAgency[] = []): RoomSlot[] {
   const hm = (t: string) => t.slice(0, 5);
-  const key = (x: RawSide) => `${x.platform}|${x.live_date}|${hm(x.start_time)}|${hm(x.end_time)}`;
+  const key = (x: Pick<RawSide, "platform" | "live_date" | "start_time" | "end_time">) => `${x.platform}|${x.live_date}|${hm(x.start_time)}|${hm(x.end_time)}`;
   const counts = (x: RawSide) => !x.is_cancelled && x.confirmed !== false;
-  const map = new Map<string, { base: RawSide; mcRows: RawSide[]; adminRows: RawSide[] }>();
-  const at = (x: RawSide) => {
+  type Entry = { base: Pick<RawSide, "platform" | "live_date" | "start_time" | "end_time">; mcRows: RawSide[]; adminRows: RawSide[]; agency: string | null };
+  const map = new Map<string, Entry>();
+  const at = (x: Entry["base"]) => {
     const k = key(x);
-    const v = map.get(k) ?? { base: x, mcRows: [], adminRows: [] };
+    const v = map.get(k) ?? { base: x, mcRows: [], adminRows: [], agency: null };
     map.set(k, v);
     return v;
   };
   for (const x of mc) at(x).mcRows.push(x);
   for (const x of admin) at(x).adminRows.push(x);
+  for (const x of agency) if (ROOM_AGENCIES[x.agency] !== undefined) at(x).agency = x.agency;
   const out: RoomSlot[] = [];
-  for (const { base, mcRows, adminRows } of map.values()) {
-    const live = mcRows.length ? mcRows.some((x) => !x.is_cancelled) : adminRows.some(counts);
+  for (const { base, mcRows, adminRows, agency: group } of map.values()) {
+    // คิวทีมเรามาก่อน (มีแถว Mc) · ไม่มีแถว Mc = Agency หรือฝั่ง Admin ที่ยังนับ
+    const live = mcRows.length ? mcRows.some((x) => !x.is_cancelled) : !!group || adminRows.some(counts);
     if (!live) continue;
     const mcName = mcRows.find((x) => counts(x) && x.name)?.name ?? null;
     out.push({
       platform: base.platform, date: base.live_date, start: hm(base.start_time), end: hm(base.end_time),
       mc: mcName, admins: [...new Set(adminRows.filter((x) => counts(x) && x.name).map((x) => x.name!))],
       campaign: mcRows.find((x) => !x.is_cancelled)?.campaign ?? "",
+      ...(group && !mcRows.length ? { agency: group } : {}),
     });
   }
   return out;
