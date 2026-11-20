@@ -5,7 +5,8 @@ import { isShopeePlatform, platformRaw } from "@/lib/platform";
 //   วันละ 3 ห้อง ห้องละ 3 แถว (ช่อง + Mc / เวลาเริ่ม-จบ / แอดมิน) · วันอาทิตย์ช่องวันสีเหลือง
 //   ห้อง 1 = GLORY MALL, ห้อง 2 = Skin Expert, ห้อง 3 = Cherry Glory · ช่องอื่นของ TikTok = แถว "อื่นๆ"
 //   ไม่รวม Shopee (ผู้ใช้เลือก) และแพลนของ Agency ที่ใช้สตูดิโอของตัวเอง
-//     ยกเว้น Agency TDH: ไลฟ์ที่ห้อง 1 ลงตารางด้วย (ผู้ใช้ขอ 2026-11-20) ช่องบน = "TIK TOK <ช่อง>\nAgency TDH" แทนชื่อ Mc
+//     ยกเว้น Agency TDH: ไลฟ์ที่ห้อง 1 ลงตารางด้วย (ผู้ใช้ขอ 2026-11-20) ช่องสีฟ้า "Agency TDH" (แบบรูปที่ผู้ใช้ส่ง)
+//     คิวของ Agency ที่ไลฟ์ต่อกัน (เช่น 19:30–21:30 + 21:30–23:30) รวมเป็นช่องเดียว 19:30–23:30
 //   ส่วนนี้เป็นฟังก์ชันล้วน (ทดสอบได้) · อ่าน DB + เขียนชีตอยู่ที่ src/lib/room-sheet-sync.ts
 
 /** คิวไลฟ์ 1 คิว (จับคู่ Mc + Admin ของช่อง + วัน + เวลาเดียวกันแล้ว) */
@@ -69,6 +70,8 @@ const DAY_START = FIRST_HOUR * 60;
 
 const DARK = "#302502", CREAM = "#fff2cc", PRIME = "#cc4125", WHITE = "#ffffff";
 const TIME_BG = "#ff9900", ADMIN_BG = "#9fc5e8", CEO_BG = "#ff0000";
+/** ช่องคิวของ Agency (สีฟ้าแบบที่ทีมใช้) */
+const AGENCY_BG = "#00ffff";
 /**
  * สีตัวอักษรของชื่อแอดมินที่เว็บเขียน: ดำเกือบสนิท (ตาเปล่าแยกไม่ออก) ไว้แยกจากชื่อที่ทีมพิมพ์เอง
  *   ทีมพิมพ์ในช่องว่าง = ได้สีดำปกติ → เว็บเก็บไว้ไม่ลบ · สีนี้ = ชื่อจากเว็บ → เว็บไม่มีชื่อแล้ว (แอดมินยกเลิก) = ล้างออก
@@ -128,9 +131,10 @@ export function roomPlace(s: Pick<RoomSlot, "date" | "start" | "end">) {
 /** ช่องในแถวแรกของคิว: "TIK TOK GLORY MALL\nMc ปิ่น" · คิว CEO = ชื่อแคมเปญตัวใหญ่ (ช่องสีแดงในชีตเดิม) */
 function slotTitle(s: RoomSlot) {
   const ceo = !s.agency && /ceo/i.test(s.campaign);
+  // คิวของ Agency: ช่องเขียนแค่ชื่อ Agency (ไม่มีชื่อช่อง / Mc ของทีมเรา)
+  if (s.agency) return { ceo, text: `Agency ${s.agency}` };
   const head = ceo ? s.campaign.trim().toUpperCase() : `TIK TOK ${platformRaw(s.platform.trim())}`;
-  // คิวของ Agency: บรรทัดล่างเป็นชื่อ Agency (ไม่มีชื่อ Mc ของทีมเรา)
-  return { ceo, text: `${head}\n${s.agency ? `Agency ${s.agency}` : `Mc ${s.mc?.trim() || "(ว่าง)"}`}` };
+  return { ceo, text: `${head}\nMc ${s.mc?.trim() || "(ว่าง)"}` };
 }
 
 /**
@@ -219,7 +223,8 @@ export function buildRoomSheet(month: string, slots: RoomSlot[]): RoomSheet {
     for (let c = c0; c < c0 + w; c++) taken.add(c);
 
     const { ceo, text } = slotTitle(s);
-    const color = ceo ? { bg: CEO_BG, fg: WHITE } : { bg: rooms[k].slot.bg, ...(rooms[k].slot.fg ? { fg: rooms[k].slot.fg } : {}) };
+    const color = s.agency ? { bg: AGENCY_BG }
+      : ceo ? { bg: CEO_BG, fg: WHITE } : { bg: rooms[k].slot.bg, ...(rooms[k].slot.fg ? { fg: rooms[k].slot.fg } : {}) };
     rows[r][c0] = { text, ...color, wrap: true, border: true, size: rooms[k] === ROOMS[2] && !ceo ? 11 : 10 };
     merge(r, r + 1, c0, c0 + w);
     for (let c = c0; c < c0 + w; c++) rows[r + 1][c] = { text: "", bg: TIME_BG, border: true };
@@ -385,5 +390,35 @@ export function pairRoomSlots(mc: RawSide[], admin: RawSide[], agency: RawAgency
       ...(group && !mcRows.length ? { agency: group } : {}),
     });
   }
-  return out;
+  return mergeAgencyRuns(out);
+}
+
+/**
+ * คิวของ Agency ที่ไลฟ์ต่อกัน = ช่องเดียว (แบบที่ทีมทำ เช่น "Agency TDH" 19:30–23:30)
+ *   ต่อกัน = กลุ่ม + ช่องเดียวกัน คิวถัดไปเริ่มตอนคิวก่อนจบพอดี (ข้ามเที่ยงคืนได้) + แอดมินชุดเดียวกัน · รวมไม่เกิน 20 ชม.
+ */
+function mergeAgencyRuns(slots: RoomSlot[]): RoomSlot[] {
+  const span = (s: RoomSlot) => {
+    const a = Date.parse(`${s.date}T${s.start}:00Z`);
+    return { a, b: a + (((mins(s.end) - mins(s.start) + 1440) % 1440) || 1440) * 60_000 };
+  };
+  const groups = new Map<string, RoomSlot[]>();
+  for (const s of slots) if (s.agency) groups.set(`${s.agency}|${s.platform}`, [...(groups.get(`${s.agency}|${s.platform}`) ?? []), s]);
+  if (!groups.size) return slots;
+  const merged: RoomSlot[] = [];
+  for (const list of groups.values()) {
+    list.sort((x, y) => span(x).a - span(y).a);
+    const runs: { slot: RoomSlot; from: number; to: number }[] = [];
+    const admins = (s: RoomSlot) => [...s.admins].sort().join("|");
+    for (const s of list) {
+      const t = span(s);
+      const last = runs[runs.length - 1];
+      if (last && t.a === last.to && admins(last.slot) === admins(s) && t.b - last.from <= 20 * 3600_000) {
+        last.slot = { ...last.slot, end: s.end };
+        last.to = t.b;
+      } else runs.push({ slot: { ...s }, from: t.a, to: t.b });
+    }
+    merged.push(...runs.map((r) => r.slot));
+  }
+  return [...slots.filter((s) => !s.agency), ...merged];
 }

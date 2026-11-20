@@ -213,7 +213,7 @@ describe("จับคู่ Mc + Admin", () => {
 });
 
 describe("Agency ที่ไลฟ์ในห้องของเรา (TDH = ห้อง 1)", () => {
-  test("ลงห้อง 1 · บรรทัดล่าง = Agency TDH · ข้ามเที่ยงคืน = แถววันก่อน · Agency อื่นไม่ลง", () => {
+  test("ลงห้อง 1 · ช่องสีฟ้า Agency TDH · ข้ามเที่ยงคืน = แถววันก่อน · Agency อื่นไม่ลง", () => {
     const slots = pairRoomSlots([], [], [
       { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-03", start_time: "21:30:00", end_time: "02:30:00" },
       { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-05", start_time: "01:30:00", end_time: "03:30:00" },
@@ -224,9 +224,24 @@ describe("Agency ที่ไลฟ์ในห้องของเรา (TDH 
     const t = buildRoomSheet("2026-11", slots);
     const day = (d: number) => 2 + (d - 1) * 9;
     expect(t.placed).toBe(2);
-    expect(t.rows[day(3)][colOf(21)]).toMatchObject({ text: "TIK TOK GLORY MALL\nAgency TDH", bg: "#d5a6bd" });
+    expect(t.rows[day(3)][colOf(21)]).toMatchObject({ text: "Agency TDH", bg: "#00ffff" });
     expect(t.merges).toContainEqual({ r0: day(3), r1: day(3) + 1, c0: colOf(21), c1: colOf(21) + 5 });
-    expect(t.rows[day(4)][colOf(1)]?.text).toBe("TIK TOK GLORY MALL\nAgency TDH"); // 5 พ.ย. 01:30 = แถวของ 4 พ.ย.
+    expect(t.rows[day(4)][colOf(1)]?.text).toBe("Agency TDH"); // 5 พ.ย. 01:30 = แถวของ 4 พ.ย.
+  });
+
+  test("คิว Agency ที่ไลฟ์ต่อกัน = ช่องเดียว (ข้ามเที่ยงคืนได้) · มีช่วงว่างคั่น = แยกช่อง", () => {
+    const tdh = (date: string, start: string, end: string) => ({ agency: "TDH", platform: "GLORY MALL", live_date: date, start_time: start, end_time: end });
+    const out = pairRoomSlots([], [], [
+      tdh("2026-11-03", "19:30", "21:30"), tdh("2026-11-03", "21:30", "23:30"),
+      tdh("2026-11-07", "23:30", "01:30"), tdh("2026-11-08", "01:30", "03:30"),
+      tdh("2026-11-09", "19:30", "21:30"), tdh("2026-11-09", "22:00", "23:30"),
+    ]).map((s) => `${s.date} ${s.start}-${s.end}`);
+    expect(out).toEqual(["2026-11-03 19:30-23:30", "2026-11-07 23:30-03:30", "2026-11-09 19:30-21:30", "2026-11-09 22:00-23:30"]);
+    const t = buildRoomSheet("2026-11", pairRoomSlots([], [], [tdh("2026-11-03", "19:30", "21:30"), tdh("2026-11-03", "21:30", "23:30")]));
+    const r = 2 + 2 * 9;
+    expect(t.placed).toBe(1);
+    expect(t.rows[r][colOf(19)]).toMatchObject({ text: "Agency TDH", bg: "#00ffff" });
+    expect([t.rows[r + 1][colOf(19)]?.text, t.rows[r + 1][colOf(22)]?.text]).toEqual(["19:30", "23:30"]);
   });
 
   test("Agency + แถว Admin เวลาเดียวกัน = คิวเดียวกัน (แสดงชื่อแอดมิน) · มีแถว Mc = คิวทีมเรา", () => {
