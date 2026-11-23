@@ -122,6 +122,15 @@ export type HomeData = {
   missingGmv: HomeSlot[];
   /** แคมเปญที่กำลังดำเนินอยู่ + ภายใน 30 วันข้างหน้า */
   campaigns: { key: string; label: string; start: string; end: string; status: "live" | "upcoming"; daysUntil: number; slots: number; noMc: number }[];
+  /**
+   * Mc ใหม่ที่มีคิวไลฟ์ TikTok ถึงสิ้นเดือนหน้า (ผู้ใช้ขอ 2026-11-23: เตือนให้เข้าไปดูไลฟ์เช็ก performance · Shopee ช่วงนี้ไม่ต้อง)
+   *   ใหม่ = ไลฟ์ TikTok ครั้งแรกตั้งแต่ต้นเดือนที่แล้ว / ยังไม่เคยไลฟ์ และ Owner ไม่ได้กด "ให้ผ่าน" เทรนนิ่ง
+   *   past = ไลฟ์ที่จบแล้วกี่ครั้ง · pastGmv = GMV รวมของไลฟ์ที่จบแล้ว (เฉพาะที่กรอก · ไม่มี = null) · lives.nth = ไลฟ์ครั้งที่เท่าไรของคนนี้
+   */
+  newMc?: {
+    name: string; added: string | null; past: number; pastGmv: number | null; pastHours: number;
+    lives: (HomeSlot & { nth: number; status: "live" | "next" })[];
+  }[];
   issues: {
     /** มีคิวข้างหน้าแต่ไม่มีอีเมล (login ไม่ได้ คิวไม่ลงปฏิทิน) */
     noEmail: { role: "mc" | "admin"; name: string; upcoming: number }[];

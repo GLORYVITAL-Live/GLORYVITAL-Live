@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangleIcon, BanknoteIcon, CalendarClockIcon, ChartColumnIcon, CheckCircle2Icon, ChevronRightIcon, CircleIcon, ClockIcon, DatabaseBackupIcon,
-  FileTextIcon, RadioIcon, ReceiptTextIcon, RefreshCwIcon, UserXIcon, WalletIcon, type LucideIcon,
+  FileTextIcon, RadioIcon, ReceiptTextIcon, RefreshCwIcon, UserPlusIcon, UserXIcon, WalletIcon, type LucideIcon,
 } from "lucide-react";
 import { windowText } from "@/lib/campaign";
 import { changeOf } from "@/lib/live-stats";
@@ -70,9 +70,12 @@ export function HomeView({ go }: { go: Go }) {
   const tawi = data.tawi ?? null;
   const tawiCount = tawi ? tawi.unmatched.length + tawi.noEmail.length + (tawi.missingMonth ? 1 : 0) : 0;
   const monthsText = (months: string[]) => months.map(tawiMonthLabel).join(", ");
+  const newMc = data.newMc ?? [];
 
   const stats: { label: string; value: string; tone: "ok" | "warn" | "info"; target: string; show: boolean }[] = [
     { label: "ไลฟ์วันนี้", value: `${data.live.length} slot`, tone: "info", target: "home-live", show: scope.mc || scope.proofs },
+    // Mc ใหม่มีคิวไลฟ์ = เตือนให้เข้าไปดูไลฟ์เช็ก performance (ผู้ใช้ขอ 2026-11-23)
+    { label: "Mc ใหม่มีคิวไลฟ์ TikTok", value: newMc.length ? `${newMc.length} คน` : "–", tone: newMc.length ? "warn" : "info", target: "home-newmc", show: scope.mc },
     { label: "ยังไม่มี Mc (7 วัน)", value: String(data.noMc.length), tone: data.noMc.length ? "warn" : "ok", target: "home-nomc", show: scope.mc },
     { label: "ยังไม่มี Admin (7 วัน)", value: String(data.noAdmin.length), tone: data.noAdmin.length ? "warn" : "ok", target: "home-noadmin", show: scope.admin },
     { label: "หลักฐานค้าง (7 วัน)", value: String(data.missingProof.length), tone: data.missingProof.length ? "warn" : "ok", target: "home-pending", show: scope.mc || scope.proofs },
@@ -171,6 +174,49 @@ export function HomeView({ go }: { go: Go }) {
               ))}
             </ul>
           ) : <Empty>วันนี้ไม่มี slot ไลฟ์</Empty>}
+        </Section>
+      ) : null}
+
+      {/* Mc ใหม่ที่มีคิวไลฟ์: เข้าไปดูไลฟ์เช็ก performance (ไลฟ์ครั้งแรก ๆ) */}
+      {scope.mc && newMc.length ? (
+        <Section
+          id="home-newmc" title="Mc ใหม่ · เข้าไปดูไลฟ์เช็ก performance" icon={<UserPlusIcon />} count={newMc.length}
+          action={<GoButton onClick={() => go("owner", "performance")}>ผลงาน Mc</GoButton>}
+        >
+          <ul className="divide-y">
+            {newMc.map((m) => (
+              <li key={m.name} className="py-2 text-sm">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="font-semibold">{m.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {m.added ? `เพิ่มชื่อ ${fmtDayMonth.format(parseKey(m.added))} · ` : ""}
+                    {m.past ? `ไลฟ์ไปแล้ว ${m.past} ครั้ง (${num(m.pastHours)} ชม.)${m.pastGmv !== null ? ` · GMV รวม ${money(m.pastGmv)}` : " · ยังไม่มี GMV"}` : "ยังไม่เคยไลฟ์"}
+                  </span>
+                </div>
+                <ul className="mt-1 flex flex-wrap gap-1.5">
+                  {/* คิวถัดไปไม่เกิน 4 คิว (กำลังไลฟ์ / ใกล้สุดก่อน) ที่เหลือบอกจำนวน */}
+                  {m.lives.slice(0, 4).map((s) => (
+                    <li
+                      key={s.id}
+                      className={cn("rounded-lg border px-2 py-1 text-xs tabular-nums", s.status === "live" ? "border-success bg-success/10 font-semibold text-success" : "bg-card")}
+                    >
+                      {s.status === "live" ? "กำลังไลฟ์ · " : `${s.date === data.today ? "วันนี้" : dayText(s.date)} `}
+                      {s.start}–{s.end} {s.platform}
+                      <span className={cn("ml-1", s.nth === 1 ? "font-semibold text-warning-foreground" : "text-muted-foreground")}>
+                        {s.nth === 1 ? "· ไลฟ์ครั้งแรก" : `· ครั้งที่ ${s.nth}`}
+                      </span>
+                    </li>
+                  ))}
+                  {m.lives.length > 4 ? (
+                    <li className="px-1 py-1 text-xs text-muted-foreground">+ อีก {m.lives.length - 4} คิว (ถึง {dayText(m.lives[m.lives.length - 1].date)})</li>
+                  ) : null}
+                </ul>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-muted-foreground">
+            เฉพาะคิว TikTok · Mc ใหม่ = เริ่มไลฟ์ TikTok ตั้งแต่ต้นเดือนที่แล้ว / ยังไม่เคยไลฟ์ · ไม่รวมคนที่กด &quot;ให้ผ่าน&quot; เทรนนิ่งไว้
+          </p>
         </Section>
       ) : null}
 

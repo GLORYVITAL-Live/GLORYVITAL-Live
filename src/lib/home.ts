@@ -2,11 +2,13 @@ import "server-only";
 import { assignCampaigns, instLabel } from "@/lib/campaign";
 import { slotPlatformOf } from "@/lib/campaign-data";
 import { bkkToday, fetchAll, getSettings, proofsBySlot, windowAlerts } from "@/lib/data";
+import { monthKey } from "@/lib/format";
 import { gmvCoverage } from "@/lib/gmv";
 import { dataHealth } from "@/lib/health";
 import { loadSessions } from "@/lib/live-stats-db";
 import { platformLabel } from "@/lib/platform";
 import { isFilteredError } from "@/lib/sheet-sync";
+import { isTestAccount } from "@/lib/staff-check";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { HealthIssues, HomeData, HomeSlot } from "@/lib/types";
 import { addDays } from "@/lib/window";
@@ -126,6 +128,10 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
       byKey.set(c.key, x);
     }
     out.campaigns = [...byKey.values()].sort((a, b) => a.start.localeCompare(b.start));
+    out.newMc = await newMcLives(db, assigned, adminName, today, now).catch((err) => {
+      console.warn("หา Mc ใหม่ไม่สำเร็จ:", err);
+      return [];
+    });
     const checks = await gmvChecks(assigned, now).catch(() => ({ over: [], odd: [] }));
     out.issues.gmvOver = checks.over;
     out.issues.gmvOdd = checks.odd;
@@ -166,6 +172,62 @@ export async function ownerHome(scope: { mc: boolean; admin: boolean; proofs: bo
   out.issues.samePhone = [...phones.values()].filter((g) => g.names.length > 1);
   out.health.sheetStuck = await sheetStuck(db, roles, now).catch(() => []);
   return out;
+}
+
+/**
+ * Mc ใหม่ที่มีคิวไลฟ์ TikTok ถึงสิ้นเดือนหน้า → การ์ดเตือนให้ Owner เข้าไปดูไลฟ์เช็ก performance (ผู้ใช้ขอ 2026-11-23)
+ *   เฉพาะคิว TikTok (ผู้ใช้: Shopee ช่วงนี้ไม่ต้อง)
+ *   ใหม่ = ไลฟ์ TikTok ครั้งแรกตั้งแต่ต้นเดือนที่แล้ว (ผู้ใช้: "เช็คย้อนหลังแค่เดือนตุลาพอ" ตอนเดือน พ.ย.) / ยังไม่เคยไลฟ์
+ *     + Owner ไม่ได้กด "ให้ผ่าน" เทรนนิ่ง (คนเก่าที่ประวัติไม่อยู่ในเว็บ) · ไม่รวมบัญชีทดสอบ
+ *   assigned = คิวของ Mc ที่นับ (ไม่แคน + ไม่ติ๊กไม่นับ) ช่วง 14 วันก่อน → 45 วันข้างหน้า เรียงตามเวลา
+ */
+async function newMcLives(
+  db: ReturnType<typeof createAdminClient>, assigned: McRow[], adminName: (r: Row) => string | null, today: string, now: number,
+): Promise<NonNullable<HomeData["newMc"]>> {
+  // ดูย้อนหลังถึงต้นเดือนที่แล้ว · เตือนคิวข้างหน้าถึงสิ้นเดือนหน้า (ผู้ใช้: "Alert Mc ใหม่เดือน ธันวาก็ได้" ตอนเดือน พ.ย.)
+  const from = `${monthKey(-1, today.slice(0, 7))}-01`;
+  const [ny, nm] = monthKey(1, today.slice(0, 7)).split("-").map(Number);
+  const until = `${monthKey(1, today.slice(0, 7))}-${String(new Date(Date.UTC(ny, nm, 0)).getUTCDate()).padStart(2, "0")}`;
+  const soon = (r: McRow) => r.live_date >= addDays(today, -1) && r.live_date <= until && ms(r.ends_at) > now;
+  const ids = [...new Set(assigned.filter((r) => r.sheet_tab !== "shopee" && soon(r)).map((r) => Number(r.mc_id)))];
+  if (!ids.length) return [];
+  // เคยไลฟ์ TikTok ก่อนต้นเดือนที่แล้ว = คนเก่า · ถามทีละคน (แถวเดียวพอ) — ถามรวมทีเดียวโดนตัดที่ 1,000 แถว คนเก่าบางคนหลุดเป็น "ใหม่"
+  const [olderRows, { data: people, error: peopleErr }] = await Promise.all([
+    Promise.all(ids.map((id) => db.from("mc_slots").select("mc_id").eq("mc_id", id).eq("sheet_tab", "mc").lt("live_date", from)
+      .eq("is_cancelled", false).or("confirmed.is.null,confirmed.eq.true").limit(1))),
+    db.from("staff").select("id, name, created_at, training_passed").in("id", ids),
+  ]);
+  const olderErr = olderRows.find((x) => x.error)?.error;
+  if (olderErr) throw olderErr;
+  if (peopleErr) throw peopleErr;
+  const veterans = new Set(olderRows.flatMap((x) => (x.data ?? []).map((y) => Number(y.mc_id))));
+  const fresh = (people ?? []).filter((p) => !veterans.has(Number(p.id)) && p.training_passed !== true && !isTestAccount(p.name));
+  if (!fresh.length) return [];
+  // ไลฟ์ TikTok ทั้งหมดของ Mc ใหม่ตั้งแต่ต้นเดือนที่แล้ว (นับครั้งที่ / ไลฟ์ไปแล้วกี่ครั้ง / GMV)
+  const rows = await fetchAll<McRow>((a, b) => db.from("mc_slots")
+    .select("id, platform, live_date, start_time, end_time, starts_at, ends_at, confirmed, campaign, gmv, mc_id, sheet_tab, person:staff!mc_id(name, is_salaried)")
+    .in("mc_id", fresh.map((p) => Number(p.id))).eq("sheet_tab", "mc").eq("is_cancelled", false)
+    .gte("live_date", from).lte("live_date", until).order("starts_at").range(a, b) as never);
+  const out: NonNullable<HomeData["newMc"]> = [];
+  for (const p of fresh) {
+    const mine = rows.filter((r) => Number(r.mc_id) === Number(p.id) && r.confirmed !== false);
+    const done = mine.filter((r) => ms(r.ends_at) <= now);
+    const gmv = done.filter((r) => r.gmv !== null);
+    const lives = mine.flatMap((r, i) => (soon(r) ? [{
+      id: Number(r.id), date: r.live_date, platform: platformLabel(r.platform), start: hm(r.start_time), end: hm(r.end_time),
+      mc: `Mc ${p.name}`, admin: adminName(r), nth: i + 1, status: (ms(r.starts_at) <= now ? "live" : "next") as "live" | "next",
+    }] : []));
+    if (!lives.length) continue;
+    out.push({
+      name: `Mc ${p.name}`, added: p.created_at ? String(p.created_at).slice(0, 10) : null,
+      past: done.length, pastGmv: gmv.length ? gmv.reduce((a, r) => a + Number(r.gmv), 0) : null,
+      pastHours: Math.round(done.reduce((a, r) => a + (ms(r.ends_at) - ms(r.starts_at)) / 3600_000, 0) * 100) / 100,
+      lives,
+    });
+  }
+  // กำลังไลฟ์ก่อน แล้วตามเวลาไลฟ์ถัดไป
+  return out.sort((a, b) => Number(b.lives[0].status === "live") - Number(a.lives[0].status === "live")
+    || `${a.lives[0].date} ${a.lives[0].start}`.localeCompare(`${b.lives[0].date} ${b.lives[0].start}`));
 }
 
 /** งานเขียนชีตที่ค้างเกิน 15 นาที (slot ที่ยังมีอยู่) ของฝั่งที่มีสิทธิ์ — เว็บกับชีตไม่ตรงกันจนกว่าจะเขียนได้ */
