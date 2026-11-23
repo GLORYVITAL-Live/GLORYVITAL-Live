@@ -31,7 +31,7 @@ import { monthDays, targetKey, targetReport, targetsInScope, type LiveTarget } f
 import { DatePicker } from "@/components/date-picker";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { MonthPicker, monthsIn, rangeLabel, type MonthRange } from "@/components/MonthPicker";
-import { BarChart, ChangeBadge, ChangeText, Donut, Legend, LineChart, PairBars, TableView } from "@/components/LiveCharts";
+import { BarChart, ChangeBadge, ChangeText, Legend, LineChart, PairBars, SplitBar, TableView, TipRow } from "@/components/LiveCharts";
 import { KpiCard } from "@/components/kpi";
 import { CeoLive } from "@/components/CeoLive";
 import { STICKY_CELL, STICKY_HEAD } from "@/components/SortHead";
@@ -259,6 +259,8 @@ const shortMonth = (key: string) => {
   const label = fmtMonthShort.format(new Date(`${key}-01T12:00:00Z`));
   return key.endsWith("-01") ? `${label} ${key.slice(2, 4)}` : label;
 };
+/** ชื่อเดือนสั้นมีปีเสมอ เช่น "พ.ย. 25" */
+const shortMonthYY = (key: string) => (key.endsWith("-01") ? shortMonth(key) : `${shortMonth(key)} ${key.slice(2, 4)}`);
 
 /** ส่วนต่างตามหน่วยของตัวชี้วัด (ไม่ใส่เครื่องหมาย) · ค่าที่เป็น % = pp */
 const gapText = (kind: (typeof METRICS)[number]["kind"], g: number) => (kind === "pct" ? `${(g * 100).toFixed(2)}pp` : fmtMetric(kind, g));
@@ -273,10 +275,15 @@ const METRIC_ICON: Record<MetricKey, LucideIcon> = {
 /**
  * การ์ดตัวชี้วัด + % เทียบกับช่วงอื่น (เช่น MoM / YoY)
  *   ป้ายมุมขวาบน = เทียบช่วงแรก (บรรทัดใต้ตัวเลขบอกว่าเทียบกับอะไร) · ช่วงถัดไปเป็นบรรทัด ▲▼ ตามเดิม
- *   trend = ยอดของแต่ละวัน / เดือนในช่วง (เส้นแนวโน้มเล็กในการ์ด · ไม่ใส่ = ไม่มีเส้น)
+ *   trend = ยอดของแต่ละวัน / เดือนในช่วง (กราฟเล็กในการ์ด: ยอดรวม = แท่ง · ค่าเฉลี่ย / อัตรา = เส้น · ไม่ใส่ = ไม่มี)
+ *   metric + onMetric = กดการ์ดเพื่อเปลี่ยนตัวชี้วัดของกราฟด้านล่าง (การ์ดที่เลือกพื้นชมพูอ่อน · ผู้ใช้ขอ 2026-11-23 ตามคลิป)
  */
-function KpiGrid({ cur, compare, trend }: { cur: Totals; compare: { totals: Totals; label: string }[]; trend?: Totals[] }) {
+function KpiGrid({ cur, compare, trend, metric, onMetric }: {
+  cur: Totals; compare: { totals: Totals; label: string }[]; trend?: Totals[]; metric?: MetricKey; onMetric?: (k: MetricKey) => void;
+}) {
   return (
+    <>
+      {onMetric ? <p className="mt-3 -mb-1 text-xs text-muted-foreground">แตะการ์ดเพื่อดูกราฟของตัวชี้วัดนั้นด้านล่าง</p> : null}
     <div className="my-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
       {METRICS.map((m, i) => {
         const v = m.value(cur);
@@ -285,10 +292,11 @@ function KpiGrid({ cur, compare, trend }: { cur: Totals; compare: { totals: Tota
         return (
           <KpiCard
             key={m.key} index={i} icon={METRIC_ICON[m.key]} label={m.label} note={m.note}
-            // ตัวเลขนับจากค่าเดิมไปค่าใหม่ (ตอนโหลด / เปลี่ยนตัวกรอง)
-            value={v} format={(n) => fmtMetric(m.kind, n)} empty={fmtMetric(m.kind, null)}
+            // ตัวเลขนับจากค่าเดิมไปค่าใหม่ (ตอนโหลด / เปลี่ยนตัวกรอง) · GMV ตัวเลขหมุนทีละหลัก
+            value={v} format={(n) => fmtMetric(m.kind, n)} empty={fmtMetric(m.kind, null)} roll={m.key === "gmv"}
             change={v !== null && first ? { cur: v, prev: prevOf(first) } : null}
-            spark={trend?.map((t) => (t.lives ? m.value(t) : null))}
+            spark={trend?.map((t) => (t.lives ? m.value(t) : null))} sparkKind={isStackable(m.key) ? "bars" : "line"}
+            selected={onMetric ? metric === m.key : undefined} onSelect={onMetric ? () => onMetric(m.key) : undefined}
             // มือถือ 2 คอลัมน์: จำนวนช่องเป็นเลขคี่ = ช่องสุดท้ายเต็มแถว (ไม่เหลือช่องว่าง)
             className={cn(METRICS.length % 2 && i === METRICS.length - 1 && "max-sm:col-span-2")}
           >
@@ -304,6 +312,7 @@ function KpiGrid({ cur, compare, trend }: { cur: Totals; compare: { totals: Tota
         );
       })}
     </div>
+    </>
   );
 }
 
@@ -447,6 +456,8 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
       exportedAt: bkkStamp(new Date().toISOString()),
       cover: { kicker: `รายเดือน${ongoing ? " (ยังไม่จบเดือน)" : ""}`, headline: monthLabel(month) },
       platformTime: true,
+      // เหมือนเว็บ: กราฟรายวันมีเส้นประเฉลี่ยต่อวันที่มีไลฟ์
+      timeAvg: "ต่อวันที่มีไลฟ์",
       // เดือนที่ยังไม่จบ: MoM เทียบเดือนก่อนถึงวันเดียวกัน (เหมือนตารางบนเว็บ)
       months: months13.map((m) => ({ short: `${shortMonth(m)}${ongoing && m === month ? "*" : ""}`, a: byMonth.get(m)!, ...(ongoing && m === month ? { b: prevList } : {}) })),
       target: scope.length ? {
@@ -513,11 +524,14 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
             ]}
             // เส้นแนวโน้มในการ์ด = ค่ารายวันของเดือนนี้ (วันที่ยังไม่มีไลฟ์ไม่มีจุด)
             trend={monthDays(month).map((d) => totalsOf(byMonth.get(month)!.filter((s) => bkkParts(s.startedAt).d === Number(d.slice(8)))))}
+            metric={metric} onMetric={setMetric}
           />
+          <PlatformShare cur={byMonth.get(month)!} prev={prevList} vs={`MoM vs ${shortMonth(prevKey)}${cutText}`} />
           <Funnel cur={byMonth.get(month)!} prev={prevList} prevLabel={`${shortMonth(prevKey)}${cutText}`} />
           <DailySection
             month={month} sessions={byMonth.get(month)!} metric={metric} onMetric={setMetric} replay={replay} spans={owners.spans}
             tagText={(d) => dayTagText(dayTags.tags, `${month}-${String(d).padStart(2, "0")}`, filter.platform)}
+            prevSessions={byMonth.get(prevKey)} prevName={shortMonth(prevKey)}
           />
         </>
       )}
@@ -539,6 +553,24 @@ function MonthOverview({ latest, dataMonths, version, readOnly }: { latest: stri
             categories={monthCategories}
             titles={monthTitles}
             highlight={12}
+            // เดือนที่ยังไม่จบ = ลายทแยง · เส้นประ = เฉลี่ยของเดือนที่จบแล้ว (ยอดรวมเท่านั้น)
+            hatched={months13.map((m) => ongoing && m === month)} hatchText="ยังไม่จบเดือน"
+            avg={monthSeries.length === 1 || isStackable(metric)
+              ? avgLine(months13.map((m) => (totals.get(m)!.lives ? def.value(totals.get(m)!) : null)), def.kind, "ของเดือนที่จบแล้ว", (i) => ongoing && months13[i] === month)
+              : null}
+            extra={(i) => {
+              const m = months13[i], t = totals.get(m)!;
+              if (!t.lives) return null;
+              // เดือนที่ยังไม่จบเทียบเดือนก่อนถึงวันเดียวกัน (เหมือนตาราง)
+              const before = ongoing && m === month ? prev : i > 0 ? totals.get(months13[i - 1])! : null;
+              return (
+                <>
+                  <TipRow label="ไลฟ์">{t.lives} ไลฟ์ · {fmtMetric("hours", t.durationSec / 3600)}</TipRow>
+                  {metric !== "gmv" ? <TipRow label="GMV">{fmtMetric("baht", t.gmv)}</TipRow> : null}
+                  {before?.lives ? <TipRow label={`MoM vs ${shortMonth(monthKey(-1, m))}`}><ChangeText cur={def.value(t)} prev={def.value(before)} /></TipRow> : null}
+                </>
+              );
+            }}
           />
         )}
         {ongoing ? <p className="mt-1 text-xs text-muted-foreground">* {monthLabel(month)} ยังไม่จบเดือน (ข้อมูลถึงวันที่ {lastDay}) แท่งจึงยังต่ำกว่าเดือนเต็ม</p> : null}
@@ -761,6 +793,8 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
       filterText: filterText({ platform: filter.platform, account: filter.account, sessions: data }).join(" · "),
       exportedAt: bkkStamp(new Date().toISOString()),
       cover: { kicker: `ภาพรวม${ongoing ? " (ยังไม่จบช่วง)" : ""}`, headline: aName },
+      // เหมือนเว็บ: กราฟรายเดือนมีลายทแยงเดือนที่ยังไม่จบ + เส้นประเฉลี่ยของเดือนที่จบแล้ว
+      timeAvg: "ของเดือนที่จบแล้ว",
       quarters: quarters.map((q) => ({ label: q.partial || q.open ? `${q.label}*` : q.label, a: q.a, b: q.b, before: q.before, open: q.open || q.partial })),
       focus: !prev.lives && lastDone
         ? { aName: monthLabel(lastDone), bName: monthLabel(monthKey(-1, lastDone)), a: byMonth.get(lastDone)!, b: byMonth.get(monthKey(-1, lastDone)) ?? [] }
@@ -805,7 +839,8 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
           <p className="mt-2 text-xs text-muted-foreground">
             ยอดรวม {ongoing ? `${rangeText} (ยังไม่จบช่วง)` : aName} · YoY เทียบกับ {bName} ช่วงเดียวกัน
           </p>
-          <KpiGrid cur={cur} compare={[{ totals: prev, label: `YoY vs ${bName}` }]} trend={doneKeys.map(totalsAt)} />
+          <KpiGrid cur={cur} compare={[{ totals: prev, label: `YoY vs ${bName}` }]} trend={doneKeys.map(totalsAt)} metric={metric} onMetric={setMetric} />
+          <PlatformShare cur={curList} prev={prevList} vs={`YoY vs ${bName}`} />
         </>
       )}
 
@@ -824,7 +859,21 @@ function YearOverview({ latest, dataMonths, version }: { latest: string; dataMon
             series={yearSeries} metric={metric} replay={replay}
             label={`${def.label} รายเดือน ${aName}`}
             categories={curKeys.map(shortMonth)}
-            titles={curKeys.map(monthLabel)}
+            titles={curKeys.map((k) => `${monthLabel(k)}${k === now ? " (ยังไม่จบเดือน)" : ""}`)}
+            hatched={curKeys.map((k) => k === now)} hatchText="ยังไม่จบเดือน"
+            avg={yearSeries.length === 1 || isStackable(metric) ? avgLine(curKeys.map(valOf), def.kind, "ของเดือนที่จบแล้ว", (i) => curKeys[i] >= now) : null}
+            extra={(i) => {
+              const k = curKeys[i], t = totalsAt(k);
+              if (!t.lives) return null;
+              const ly = valOf(prevKeys[i]);
+              return (
+                <>
+                  <TipRow label="ไลฟ์">{t.lives} ไลฟ์ · {fmtMetric("hours", t.durationSec / 3600)}</TipRow>
+                  {metric !== "gmv" ? <TipRow label="GMV">{fmtMetric("baht", t.gmv)}</TipRow> : null}
+                  {k !== now && ly !== null ? <TipRow label={`YoY vs ${shortMonthYY(prevKeys[i])}`}><ChangeText cur={valOf(k)} prev={ly} /></TipRow> : null}
+                </>
+              );
+            }}
           />
         )}
         {yearByAgency ? null : <TableView title="ดูเป็นตาราง">
@@ -923,22 +972,36 @@ function dayTitle(month: string, d: number) {
   return `${fmtWeekShort.format(k)} ${fmtDayMonth.format(k)}`;
 }
 
-/** กราฟแท่งรายวันของเดือนนี้ (นับตามวันที่เริ่มไลฟ์) ใช้ตัวชี้วัดเดียวกับกราฟรายเดือน · แท็บแยก Agency (spans = แพลนของกลุ่ม) */
-function DailySection({ month, sessions, metric, onMetric, replay, spans, tagText }: {
+const DAILY_VIEW_KEY = "glory_live_daily_view";
+/** ไลฟ์แยกตามวันที่ของเดือน (นับตามวันที่เริ่มไลฟ์) */
+const byDayOf = (sessions: LiveSession[]) => {
+  const out = new Map<number, LiveSession[]>();
+  for (const s of sessions) {
+    const d = bkkParts(s.startedAt).d;
+    out.set(d, [...(out.get(d) ?? []), s]);
+  }
+  return out;
+};
+
+/**
+ * กราฟรายวันของเดือนนี้ ใช้ตัวชี้วัดเดียวกับกราฟรายเดือน · แท็บแยก Agency (spans = แพลนของกลุ่ม)
+ *   แบบแท่ง (แยกแพลตฟอร์ม + เส้นประค่าเฉลี่ยต่อวันที่มีไลฟ์) | แบบเส้นเทียบเดือนก่อน (prevSessions): เส้นทึบ + พื้นไล่สี = เดือนนี้ · เส้นประ = เดือนก่อน วันที่เดียวกัน
+ *   (ผู้ใช้ขอ 2026-11-23 ตามคลิป · จำแบบที่เลือกไว้ในเครื่อง)
+ */
+function DailySection({ month, sessions, metric, onMetric, replay, spans, tagText, prevSessions, prevName }: {
   month: string; sessions: LiveSession[]; metric: MetricKey; onMetric: (k: MetricKey) => void; replay: string; spans?: OwnerSpan[];
   /** ป้ายวัน (วันแคมเปญ ...) ต่อท้ายชื่อวันในกล่องตัวเลข / ตาราง */
   tagText?: (day: number) => string;
+  /** ไลฟ์ทั้งเดือนของเดือนก่อน (เส้นเทียบ) · ไม่มี = ไม่มีแบบเส้น */
+  prevSessions?: LiveSession[]; prevName?: string;
 }) {
   const [split, setSplit] = useState<Split>("platform");
+  const savedView = useLocal(DAILY_VIEW_KEY);
   const def = metricOf(metric);
   const fmt = (v: number | null) => fmtMetric(def.kind, v);
   const [y, m] = month.split("-").map(Number);
   const days = Array.from({ length: new Date(Date.UTC(y, m, 0)).getUTCDate() }, (_, i) => i + 1);
-  const byDay = new Map<number, LiveSession[]>();
-  for (const s of sessions) {
-    const d = bkkParts(s.startedAt).d;
-    byDay.set(d, [...(byDay.get(d) ?? []), s]);
-  }
+  const byDay = byDayOf(sessions);
   const value = (d: number) => {
     const list = byDay.get(d);
     return list ? def.value(totalsOf(list)) : null;
@@ -948,6 +1011,15 @@ function DailySection({ month, sessions, metric, onMetric, replay, spans, tagTex
   const series = platformLines(groups, metric);
   const agency = spans ? agencyTrend(groups, spans) : null;
   const byAgency = split === "agency" && hasAgency(agency);
+  const canLine = !!prevSessions?.length && !!prevName;
+  const view = canLine && savedView === "line" ? "line" : "bars";
+  const viewTabs = canLine ? (
+    <ToggleGroup type="single" spacing={1} value={view} onValueChange={(v) => { if (v) writeLocal(DAILY_VIEW_KEY, v); }} aria-label="แบบกราฟรายวัน" className="rounded-full border bg-card p-0.5">
+      {[["bars", "แท่ง"], ["line", `เทียบ ${prevName}`]].map(([id, text]) => (
+        <ToggleGroupItem key={id} value={id} className="h-7 rounded-full! px-2.5 text-xs font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!">{text}</ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  ) : null;
   if (byAgency) {
     return (
       <section className="my-4 rounded-2xl border bg-card p-3">
@@ -959,12 +1031,68 @@ function DailySection({ month, sessions, metric, onMetric, replay, spans, tagTex
       </section>
     );
   }
+  if (view === "line") {
+    // แกน = วันที่ 1–31 (เดือนที่สั้นกว่าไม่มีค่าวันท้าย) · เดือนนี้วันที่ยังไม่ถึง = เส้นหยุด
+    const prevByDay = byDayOf(prevSessions!);
+    const prevValue = (d: number) => { const list = prevByDay.get(d); return list ? def.value(totalsOf(list)) : null; };
+    const [py, pm] = monthKey(-1, month).split("-").map(Number);
+    const n = Math.max(days.length, new Date(Date.UTC(py, pm, 0)).getUTCDate());
+    const axis = Array.from({ length: n }, (_, i) => i + 1);
+    const curName = shortMonth(month);
+    const lines = [
+      { name: curName, color: CUR, values: axis.map((d) => (d <= days.length ? value(d) : null)), area: true },
+      { name: prevName!, color: PREV, values: axis.map(prevValue), dash: true },
+    ];
+    return (
+      <section className="my-4 rounded-2xl border bg-card p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-bold">{def.label} รายวัน {curName} เทียบ {prevName}</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            {viewTabs}
+            <MetricSelect value={metric} onChange={onMetric} />
+          </div>
+        </div>
+        <LineChart
+          key={`${metric}|${replay}|line`}
+          label={`${def.label} รายวัน ${curName} เทียบ ${prevName}`}
+          categories={axis.map(String)}
+          tooltipTitles={axis.map((d) => (d <= days.length ? `${title(d)} vs ${d} ${prevName}` : `วันที่ ${d}`))}
+          series={lines}
+          format={fmt}
+          formatAxis={(v) => fmtMetric(def.kind === "hours" ? "int" : def.kind, v, true)}
+          compare
+        />
+        <div className="mt-1"><Legend series={[lines[0], { ...lines[1], name: `${prevName} วันที่เดียวกัน` }]} line /></div>
+        <TableView title="ดูเป็นตาราง">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>วันที่</TableHead><TableHead className="text-right">{curName}</TableHead><TableHead className="text-right">{prevName}</TableHead><TableHead className="text-right">เปลี่ยน</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {axis.map((d, i) => (lines[0].values[i] !== null || lines[1].values[i] !== null ? (
+                <TableRow key={d}>
+                  <TableCell>{d <= days.length ? title(d) : `วันที่ ${d}`}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmt(lines[0].values[i])}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmt(lines[1].values[i])}</TableCell>
+                  <TableCell className="text-right"><ChangeText cur={lines[0].values[i]} prev={lines[1].values[i]} /></TableCell>
+                </TableRow>
+              ) : null))}
+            </TableBody>
+          </Table>
+        </TableView>
+      </section>
+    );
+  }
+  const single = series.length === 1 || isStackable(metric);
   return (
     <section className="my-4 rounded-2xl border bg-card p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-bold">{def.label} รายวัน</h2>
         <div className="flex flex-wrap items-center gap-2">
           {hasAgency(agency) ? <SplitTabs value="platform" onChange={setSplit} /> : null}
+          {viewTabs}
           <MetricSelect value={metric} onChange={onMetric} />
         </div>
       </div>
@@ -973,6 +1101,12 @@ function DailySection({ month, sessions, metric, onMetric, replay, spans, tagTex
         label={`${def.label} รายวัน ${monthLabel(month)}`}
         categories={days.map(String)}
         titles={days.map(title)}
+        // เส้นประ = เฉลี่ยต่อวันที่มีไลฟ์ (วันที่ไม่มีไลฟ์ไม่นับ)
+        avg={single ? avgLine(days.map(value), def.kind, "ต่อวันที่มีไลฟ์") : null}
+        extra={(i) => {
+          const list = byDay.get(days[i]);
+          return list ? <TipRow label="ไลฟ์">{list.length} ไลฟ์ · {fmtMetric("hours", totalsOf(list).durationSec / 3600)}</TipRow> : null;
+        }}
       />
       <TableView title="ดูเป็นตาราง">
         <Table>
@@ -1093,10 +1227,16 @@ const trendLines = (groups: LiveSession[][], metric: MetricKey) => {
  * กราฟแท่งแยกสีตามแพลตฟอร์ม: ค่าที่บวกกันได้ (GMV ออเดอร์ ชั่วโมง ...) = แท่งซ้อน ความสูงรวมคือยอดรวมจริง
  *   ค่าต่อหน่วย (GMV/ชม. CO ...) บวกกันไม่ได้ = แท่งคู่ · ตัวกรองเหลือแพลตฟอร์มเดียว = แท่งสีเดียว ไม่มี Legend
  */
-function PlatformBars({ series, metric, categories, titles, label, highlight, replay }: {
+function PlatformBars({ series, metric, categories, titles, label, highlight, replay, hatched, hatchText, avg, extra }: {
   series: ReturnType<typeof platformLines>; metric: MetricKey; categories: string[]; titles: string[]; label: string; highlight?: number; replay: string;
+  /** กลุ่มที่ยังไม่จบ (ลายทแยง) + คำอธิบายใน Legend */
+  hatched?: boolean[]; hatchText?: string;
+  /** เส้นประค่าเฉลี่ย (avgLine) · note = ต่อท้ายคำว่า "เฉลี่ย" ใน Legend */
+  avg?: { value: number; label: string; note?: string } | null;
+  extra?: (i: number) => ReactNode;
 }) {
   const def = metricOf(metric);
+  const hatch = hatched?.some(Boolean) ? hatchText : undefined;
   return (
     <>
       <BarChart
@@ -1110,10 +1250,24 @@ function PlatformBars({ series, metric, categories, titles, label, highlight, re
         highlight={highlight}
         stacked={isStackable(metric)}
         compare={false}
+        hatched={hatched}
+        avg={avg}
+        extra={extra}
       />
-      {series.length > 1 ? <div className="mt-1"><Legend series={series} /></div> : null}
+      {series.length > 1 || hatch || avg ? <div className="mt-1"><Legend series={series.length > 1 ? series : []} hatch={hatch} avg={avg ? `เฉลี่ย${avg.note ?? ""}` : undefined} /></div> : null}
     </>
   );
+}
+
+/**
+ * เส้นประค่าเฉลี่ยของกราฟแท่ง: เฉลี่ยของกลุ่มที่มีค่า (ไม่นับกลุ่มที่ skip เช่น เดือนที่ยังไม่จบ) · น้อยกว่า 2 กลุ่ม = ไม่มีเส้น
+ *   ใช้เมื่อแท่งเป็นยอดรวมเดียว (แท่งซ้อน / เหลือแพลตฟอร์มเดียว) — แท่งคู่ค่าต่อหน่วยแยกแพลตฟอร์ม เส้นรวมเส้นเดียวอ่านสับสน ไม่ใส่
+ */
+function avgLine(values: (number | null)[], kind: (typeof METRICS)[number]["kind"], note: string, skip?: (i: number) => boolean) {
+  const list = values.filter((v, i): v is number => v !== null && !skip?.(i));
+  if (list.length < 2) return null;
+  const value = list.reduce((a, v) => a + v, 0) / list.length;
+  return { value, label: `เฉลี่ย ${fmtMetric(kind, value, true)}`, note };
 }
 
 /** กราฟเส้นรายวันแยก TikTok / Shopee (src/lib/live-lines.ts) ตั้งต้นที่ GMV/ชม. เพราะยอดรวมรายวันมีกราฟแท่งแล้ว · แท็บแยก Agency */
@@ -1902,39 +2056,56 @@ function PlanSection({ title, sessions, spans, range, replay }: { title: string;
 }
 
 /**
- * สัดส่วน GMV ของแต่ละกลุ่มในช่องเดียว (ผู้ใช้ขอ 2026-11-10 · เป็นโดนัทตามคลิปตัวอย่าง 2026-11-12) · สีตามกลุ่มแบบเดียวกับกราฟแยก Agency
- *   ตรงกลาง = GMV รวมของช่อง · ชื่อ + % + ยอด อยู่ข้างโดนัท (ไม่ใช้สีอย่างเดียว)
+ * สัดส่วน GMV ของแต่ละกลุ่มในช่องเดียว (ผู้ใช้ขอ 2026-11-10 · โดนัท 2026-11-12 → แถบแบ่งสัดส่วน 2026-11-23 ตามคลิป Sales Dashboard)
+ *   สีตามกลุ่มแบบเดียวกับกราฟแยก Agency · แต่ละแถว: ชื่อ + ไลฟ์ / ชม. · GMV + % (ไม่ใช้สีอย่างเดียว)
  */
 function ShareBar({ c }: { c: ChannelSplit }) {
-  const parts = c.rows.filter((r) => r.gmv > 0);
-  const pct = (gmv: number) => `${((gmv / c.gmv) * 100).toFixed(1)}%`;
   const color = (owner: string | null) => agencyColor(!owner || owner === "In house" ? AGENCY_OURS : owner);
   return (
     <div className="min-w-0">
-      <span className="mb-2 block text-sm font-semibold">{c.label}</span>
-      <div className="flex items-center gap-4">
-        <Donut
-          label={`สัดส่วน GMV ${c.label}: ${parts.map((r) => `${r.label} ${pct(r.gmv)}`).join(", ")}`}
-          parts={parts.map((r) => ({ key: r.owner ?? "", value: r.gmv, color: color(r.owner) }))}
-          center={fmtCompactBaht(c.gmv)} sub="GMV รวม"
-        />
-        <ul className="min-w-0 flex-1 space-y-1.5 text-xs">
-          {parts.map((r) => (
-            <li key={r.owner ?? ""} className="flex items-center gap-1.5">
-              <span className="size-2.5 shrink-0 rounded-[3px]" style={{ background: color(r.owner) }} aria-hidden />
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{r.label}</span>
-              <span className="font-semibold tabular-nums">{pct(r.gmv)}</span>
-              <span className="hidden w-24 text-right text-muted-foreground tabular-nums sm:inline">{fmtMetric("baht", r.gmv)}</span>
-            </li>
-          ))}
-        </ul>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold">{c.label}</span>
+        <span className="text-xs text-muted-foreground tabular-nums">GMV รวม {fmtMetric("baht", c.gmv)}</span>
       </div>
+      <SplitBar
+        label={`สัดส่วน GMV ${c.label}`} format={(v) => fmtMetric("baht", v)}
+        parts={c.rows.map((r) => ({
+          key: r.owner ?? "", label: r.label, value: r.gmv, color: color(r.owner),
+          sub: `${r.lives} ไลฟ์ · ${(r.sec / 3600).toFixed(1)} ชม.`,
+        }))}
+      />
     </div>
   );
 }
 
-/** ยอดเงินแบบสั้นกลางโดนัท เช่น ฿13.3M */
-const fmtCompactBaht = (n: number) => `฿${new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n)}`;
+/**
+ * สัดส่วน GMV TikTok vs Shopee (ผู้ใช้ขอ 2026-11-23 ตามคลิป "Online vs in store") — แสดงเมื่อช่วงนี้มี GMV ทั้ง 2 แพลตฟอร์ม
+ *   แต่ละแถว: GMV · ไลฟ์ · ชม. · GMV/ชม. · ป้าย % เทียบช่วงก่อน (vs บอกว่าเทียบกับอะไร)
+ */
+function PlatformShare({ cur, prev, vs }: { cur: LiveSession[]; prev: LiveSession[]; vs: string }) {
+  const rows = (["TikTok", "Shopee"] as const).map((p) => ({
+    p, a: totalsOf(cur.filter((s) => s.platform === p)), b: totalsOf(prev.filter((s) => s.platform === p)),
+  }));
+  if (rows.some((r) => !r.a.gmv)) return null;
+  const perHour = metricOf("gmvPerHour");
+  return (
+    <section className="rise my-3 rounded-2xl border bg-card p-3">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3">
+        <h2 className="font-bold">สัดส่วน GMV TikTok vs Shopee</h2>
+        <span className="text-xs text-muted-foreground">ป้าย % = {vs}</span>
+      </div>
+      <SplitBar
+        label="สัดส่วน GMV TikTok vs Shopee" format={(v) => fmtMetric("baht", v)}
+        parts={rows.map(({ p, a, b }) => ({
+          key: p, label: p, value: a.gmv, color: PLATFORM_COLOR[p],
+          sub: `${a.lives} ไลฟ์ · ${fmtMetric("hours", a.durationSec / 3600)} · ${fmtMetric("baht", perHour.value(a))}/ชม.`,
+          right: b.lives ? <ChangeBadge cur={a.gmv} prev={b.gmv} /> : null,
+        }))}
+      />
+    </section>
+  );
+}
+
 const compact2 = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 });
 /** ตัวเลขแบบสั้นในการ์ด Pipeline แนวนอน เช่น 2.07M / ฿4.81M (ค่า % แสดงเต็มตามเดิม) */
 const compactMetric = (kind: "int" | "pct" | "baht", v: number | null) =>

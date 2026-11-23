@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpIcon, BriefcaseIcon, CalendarDaysIcon, CalendarRangeIcon, CameraIcon, ChartColumnIcon, CrownIcon, HeadsetIcon, HouseIcon, LogOutIcon, MicIcon, MoonIcon,
@@ -16,6 +16,7 @@ import { SlotBoard } from "@/components/SlotBoard";
 import { WorkLocationButton } from "@/components/WorkLocation";
 import { AppProviders, IconButton, LoadingBlock, Notice, StateBox, api, useToast } from "@/components/shared";
 import { CountBadge, SIDE_W, SideNav } from "@/components/SideNav";
+import { LivePill } from "@/components/LivePill";
 
 // หน้าอื่นโหลดแยกเมื่อเปิดใช้ (แต่ละคนใช้แค่ 1–2 หน้า ไม่ต้องโหลดทั้งเว็บตอนเปิดครั้งแรก)
 // หน้าจองคิว (SlotBoard) โหลดมาเลย เพราะเป็นหน้าหลักของ Mc / Admin
@@ -134,14 +135,17 @@ const BADGE_TITLE: Record<keyof Badges, string> = {
 const badgeOf = (badges: Badges, p: Page) => (p in BADGE_TITLE ? badges[p as keyof Badges] ?? 0 : 0);
 const SIDE_KEY = "glory_side_collapsed";
 
-/** ป้ายตัวเลขงานค้าง: โหลดตอนเปิด / เปลี่ยนหน้า / กลับมาที่แท็บ / ทุก 5 นาที · โหลดไม่ได้ = ใช้ค่าเดิม (ไม่มีป้าย) */
+/**
+ * ป้ายตัวเลขงานค้าง: โหลดตอนเปิด / เปลี่ยนหน้า / กลับมาที่แท็บ / ทุก 5 นาที · โหลดไม่ได้ = ใช้ค่าเดิม (ไม่มีป้าย)
+ *   live = ช่วงเวลาคิวไลฟ์ที่ยังไม่จบ (เฉพาะ Owner) ใช้นับป้าย "กำลังไลฟ์" (useLiveCount)
+ */
 function useBadges(on: boolean, page: Page | null) {
-  const [badges, setBadges] = useState<Badges>({});
+  const [badges, setBadges] = useState<{ badges: Badges; live?: [number, number][] }>({ badges: {} });
   useEffect(() => {
     if (!on) return;
     let alive = true;
-    const load = () => api<{ badges: Badges }>("/api/badges")
-      .then((r) => { if (alive && r.ok) setBadges(r.badges); })
+    const load = () => api<{ badges: Badges; live?: [number, number][] }>("/api/badges")
+      .then((r) => { if (alive && r.ok) setBadges({ badges: r.badges, live: r.live }); })
       .catch(() => {});
     load();
     const timer = setInterval(load, 5 * 60_000);
@@ -151,6 +155,21 @@ function useBadges(on: boolean, page: Page | null) {
   }, [on, page]);
   return badges;
 }
+
+/** ตอนนี้กำลังไลฟ์กี่ช่อง (นับใหม่ทุก 30 วินาทีจากช่วงเวลาคิว ไม่ต้องรอโหลดป้ายรอบถัดไป) */
+function useLiveCount(live: [number, number][] | undefined) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const tick = () => { const now = Date.now(); setCount(live ? live.filter(([a, b]) => a <= now && now < b).length : 0); };
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 30_000);
+    return () => { clearTimeout(first); clearInterval(timer); };
+  }, [live]);
+  return count;
+}
+
+/** หน้าที่เป็นข้อมูล / กราฟ: เปลี่ยนหน้าแล้วเบลอแล้วค่อยชัด (globals.css .page-blur) */
+const DATA_PAGES: Page[] = ["home", "stats", "ceo"];
 
 const ROLE_KEY = PAGE_KEY;
 const THEME_KEY = "glory_booking_theme";
@@ -287,10 +306,27 @@ function Shell({ me }: { me: Me | null }) {
     window.scrollTo({ top: 0 });
   };
 
-  function toggleTheme() {
+  /**
+   * สลับธีม: ธีมใหม่ขยายเป็นวงกลมจากปุ่ม (ผู้ใช้ขอ 2026-11-23 ตามโค้ดในคลิป · View Transitions)
+   *   เบราว์เซอร์ที่ไม่รองรับ / ตั้งลดการเคลื่อนไหว = สลับทันทีแบบเดิม
+   */
+  function toggleTheme(e: ReactMouseEvent<HTMLElement>) {
     const next = !dark;
-    document.documentElement.classList.toggle("dark", next);
-    writeLocal(THEME_KEY, next ? "dark" : "light");
+    const apply = () => {
+      document.documentElement.classList.toggle("dark", next);
+      writeLocal(THEME_KEY, next ? "dark" : "light");
+    };
+    const start = (document as Document & { startViewTransition?: (cb: () => void) => { ready: Promise<void> } }).startViewTransition?.bind(document);
+    if (!start || matchMedia("(prefers-reduced-motion: reduce)").matches) return apply();
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const end = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    start(apply).ready.then(() => {
+      document.documentElement.animate(
+        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${end}px at ${x}px ${y}px)`] },
+        { duration: 560, easing: "cubic-bezier(0.22, 1, 0.36, 1)", pseudoElement: "::view-transition-new(root)" },
+      );
+    }).catch(() => {});
   }
 
   async function signIn() {
@@ -326,7 +362,13 @@ function Shell({ me }: { me: Me | null }) {
   const navLabel = (p: Page) => `${PAGE_SHORT[p]}${(p === "mc" || p === "admin") && isPreview(me, p) ? " (ดู)" : ""}`;
 
   // ป้ายตัวเลขงานค้างบนเมนู + เมนูด้านซ้ายบนจอคอม (ตั้งแต่ 1024px · ย่อได้ จำไว้ในเครื่อง)
-  const badges = useBadges(registered && showNav, page);
+  const { badges, live } = useBadges(registered && showNav, page);
+  const liveCount = useLiveCount(live);
+  // กดป้าย: อยู่หน้าแรก = เลื่อนไปที่ "ไลฟ์วันนี้" · หน้าอื่น = ไปหน้าแรก (ไม่มีหน้าแรก = กดไม่ได้)
+  const openLive = pages.includes("home") ? () => {
+    if (page === "home") document.getElementById("home-live")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    else { writeLocal(ROLE_KEY, "home"); window.scrollTo({ top: 0 }); }
+  } : undefined;
   const sideCollapsed = useLocal(SIDE_KEY) === "1";
   const sideW = showNav ? (sideCollapsed ? SIDE_W.closed : SIDE_W.open) : 0;
 
@@ -354,6 +396,13 @@ function Shell({ me }: { me: Me | null }) {
           <span className="hidden text-[13px] font-medium text-muted-foreground sm:inline">{mode?.sub ?? "Live booking"}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          {/* กำลังไลฟ์ตามตารางคิว (Owner) · มือถือแสดงแค่จุด + ตัวเลข */}
+          {liveCount ? (
+            <>
+              <LivePill n={liveCount} onClick={openLive} className="max-sm:hidden" />
+              <LivePill n={liveCount} onClick={openLive} compact className="sm:hidden" />
+            </>
+          ) : null}
           {registered ? (
             <NotificationBell onGo={(p) => {
               if (p === "guide") router.push("/guide"); // วิธีแชร์ปฏิทิน
@@ -462,7 +511,7 @@ function Shell({ me }: { me: Me | null }) {
       {/* เอกสารทำเบิก: ป้ายเตือนถ้ายังไม่ส่ง + หน้าต่างส่ง / แก้ (เปิดจาก "ตารางของฉัน" ได้ด้วย) · อยู่นอกกล่องเปลี่ยนหน้า สลับ Mc ↔ Admin ไม่ต้องโหลดใหม่ */}
       {me && (role === "mc" || role === "admin") && !preview ? <PayDocs open={docsOpen} onOpenChange={setDocsOpen} /> : null}
       {/* เปลี่ยนหน้า = เนื้อหาจางเข้า (globals.css .page-in) */}
-      <div key={page ?? "none"} className="page-in">
+      <div key={page ?? "none"} className={cn("page-in", page && DATA_PAGES.includes(page) && "page-blur")}>
       {me?.owner && role === "owner" ? <OwnerTabs me={me} /> : null}
       {me && noBoard ? <NoBoard onOpenMine={() => setMyOpen(true)} /> : null}
       {me && (role === "mc" || role === "admin") && board ? (

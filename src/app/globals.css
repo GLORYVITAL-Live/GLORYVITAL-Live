@@ -215,9 +215,32 @@
 @keyframes donut-arc { from { stroke-dasharray: 0 100; } }
 .fade-in { animation: page-in 0.6s ease-out 0.25s both; }
 
+/*
+ * Motion ชุดที่ 2 (ผู้ใช้ขอ 2026-11-23 ตามคลิป Sales Dashboard)
+ *   rise (การ์ดตัวเลข) + page-blur (หน้า Data) = เบลอแล้วค่อยชัด · backwards: จบแล้วไม่เหลือ filter (filter ค้าง = แถบ fixed ในหน้าเพี้ยน)
+ *   roll-strip = ตัวเลขหมุนทีละหลัก (motion.tsx RollingNumber)
+ *   gauge-sweep / gauge-turn = เกจเป้า: ส่วนโค้งกวาด + ปุ่มหมุนตามพร้อมกัน (LiveCharts Gauge)
+ *   live-dot = จุดกระพริบของป้าย "กำลังไลฟ์"
+ */
+.rise { animation-name: rise-blur; }
+@keyframes rise-blur { from { opacity: 0; transform: translateY(10px); filter: blur(6px); } }
+.page-blur { animation: page-blur 0.42s ease-out backwards; }
+@keyframes page-blur { from { opacity: 0; filter: blur(8px); } }
+.roll-strip { transition: transform 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
+.gauge-sweep { animation: gauge-sweep 1s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes gauge-sweep { from { stroke-dasharray: 0 100; } }
+.gauge-turn { transform-box: view-box; animation: gauge-turn 1s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes gauge-turn { from { transform: rotate(0deg); } }
+.live-dot { animation: live-dot 1.6s ease-out infinite; }
+@keyframes live-dot { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--destructive) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+/* สลับธีม: ธีมใหม่ขยายเป็นวงกลมจากปุ่ม (App toggleTheme · ใช้ View Transitions เฉพาะตอนสลับธีม) */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+
 @media (prefers-reduced-motion: reduce) {
   .refresh-bar { animation: none; background: var(--brand-glow); opacity: 0.5; }
   .bar-grow, .bar-fill, .line-draw, .dot-pop, .page-in, .rise, .stagger > *, .donut-arc, .fade-in { animation: none; }
+  .page-blur, .gauge-sweep, .gauge-turn, .live-dot { animation: none; }
+  .roll-strip { transition: none; }
   .line-draw { stroke-dasharray: none; }
   .lift, .press { transition: none; }
   .lift:hover { translate: none; }

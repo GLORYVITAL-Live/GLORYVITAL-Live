@@ -15,7 +15,7 @@ import { fmtDayMonth, fmtMonthShort, money, monthKey, monthLabel, num, parseKey 
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
-import { BarChart, ChangeText, Legend, LineChart, TableView } from "@/components/LiveCharts";
+import { BarChart, ChangeText, Legend, LineChart, TableView, TipRow } from "@/components/LiveCharts";
 import { CostForecast } from "@/components/CostForecast";
 import { McCostView } from "@/components/McCostView";
 import { MonthPicker } from "@/components/MonthPicker";
@@ -118,33 +118,37 @@ export function CostPage() {
   // เส้นแนวโน้มในการ์ด = ยอดรายเดือนของปีนี้ถึงเดือนที่เลือก (โหลดยอดทั้งปีไม่ได้ = ไม่มีเส้น)
   const upToMonth = (trend ?? []).filter((p) => p.month <= report.month);
   const sparkOf = (f: (t: CostPoint) => number | null) => (upToMonth.length > 1 ? upToMonth.map(f) : undefined);
-  type Kpi = { label: string; icon: LucideIcon; value: number | null; format: (n: number) => string; change: KpiChange; note: string; spark?: (number | null)[] };
+  // bars = ยอดเงินรายเดือน (แท่งเล็ก) · line = อัตรา (ROI / Cost ต่อ GMV) · roll = ตัวเลขหมุนทีละหลัก (Cost รวม / ROI)
+  type Kpi = {
+    label: string; icon: LucideIcon; value: number | null; format: (n: number) => string; change: KpiChange; note: string; spark?: (number | null)[];
+    kind: "line" | "bars"; roll?: boolean;
+  };
   const kpis: Kpi[] = [
     {
       label: "Cost รวม", icon: WalletIcon, value: totals.cost, format: baht, change: { cur: totals.cost, prev: prev.cost, neutral: true },
       note: [open && totals.full !== totals.cost ? `ทั้งเดือนตามแผน ${baht(totals.full)}` : "", totals.forecast ? `ประมาณการ ${baht(totals.forecast)}` : ""].filter(Boolean).join(" · "),
-      spark: sparkOf((t) => t.cost),
+      spark: sparkOf((t) => t.cost), kind: "bars", roll: true,
     },
     ...(see.gmv ? [{
       label: "Cost ต่อ GMV", icon: PercentIcon, value: costRatio(totals.cost, totals.gmv), format: pct,
       change: { cur: costRatio(totals.cost, totals.gmv), prev: costRatio(prev.cost, prev.gmv), goodDown: true },
       note: totals.gmv === null ? "ยังไม่มีไฟล์ Export ของเดือนนี้" : `GMV ${baht(totals.gmv)}`,
-      spark: sparkOf((t) => costRatio(t.cost, t.gmv)),
+      spark: sparkOf((t) => costRatio(t.cost, t.gmv)), kind: "line" as const,
     }, {
       label: "ROI (GMV ÷ Cost)", icon: TrendingUpIcon, value: roiOf(totals.gmv, totals.cost), format: roiText,
       change: { cur: roiOf(totals.gmv, totals.cost), prev: roiOf(prev.gmv, prev.cost) },
       note: roiOf(totals.gmv, totals.cost) === null ? "" : `จ่าย ฿1 ได้ยอดขาย ${baht(roiOf(totals.gmv, totals.cost))}`,
-      spark: sparkOf((t) => roiOf(t.gmv, t.cost)),
+      spark: sparkOf((t) => roiOf(t.gmv, t.cost)), kind: "line" as const, roll: true,
     }] : []),
-    ...(see.mc ? [{ label: "ค่าจ้าง Mc", icon: MicIcon, value: totals.mc, format: baht, change: { cur: totals.mc, prev: prev.mc, neutral: true }, note: "", spark: sparkOf((t) => t.mc) }] : []),
+    ...(see.mc ? [{ label: "ค่าจ้าง Mc", icon: MicIcon, value: totals.mc, format: baht, change: { cur: totals.mc, prev: prev.mc, neutral: true }, note: "", spark: sparkOf((t) => t.mc), kind: "bars" as const }] : []),
     ...(see.admin ? [{
       label: "Admin + ค่ารถ", icon: HeadsetIcon, value: totals.admin + totals.travel, format: baht,
       change: { cur: totals.admin + totals.travel, prev: prev.admin + prev.travel, neutral: true },
-      note: totals.travel ? `ค่ารถ ${baht(totals.travel)}` : "", spark: sparkOf((t) => t.admin + t.travel),
+      note: totals.travel ? `ค่ารถ ${baht(totals.travel)}` : "", spark: sparkOf((t) => t.admin + t.travel), kind: "bars" as const,
     }] : []),
     ...(see.agency ? [{
       label: "งบ Agency", icon: Building2Icon, value: totals.agency, format: baht, change: { cur: totals.agency, prev: prev.agency, neutral: true }, note: "",
-      spark: sparkOf((t) => t.agency),
+      spark: sparkOf((t) => t.agency), kind: "bars" as const,
     }] : []),
   ];
 
@@ -189,6 +193,7 @@ export function CostPage() {
           // ช่องว่างท้ายแถว: มือถือจำนวนคี่ = Cost รวมเต็มแถว · จอกว้าง 5 การ์ด = Cost รวมกว้าง 2 ช่อง (3 + 2 → 2 แถวเต็ม)
           <KpiCard
             key={k.label} index={i} icon={k.icon} label={k.label} value={k.value} format={k.format} empty="-" change={k.change} spark={k.spark}
+            sparkKind={k.kind} roll={k.roll}
             className={cn(i === 0 && kpis.length % 2 === 1 && "max-sm:col-span-2", i === 0 && kpis.length === 5 && "sm:col-span-2")}
           >
             {/* ป้าย % มุมขวาบน · บรรทัดนี้บอกว่าเทียบกับอะไร (ไม่มีฐานเทียบ = ข้อความแจ้ง) */}
@@ -399,6 +404,12 @@ function TrendSection({ trend, report, month, year }: { trend: CostPoint[] | nul
   ];
   const at = trend.findIndex((p) => p.month === month);
   const roi = trend.map((p) => roiOf(p.gmv, p.cost));
+  // เฉลี่ยเฉพาะเดือนที่จบแล้วและไม่มีตัวเลขประมาณการ (ไม่ถึง 2 เดือน = ไม่มีเส้น)
+  //   ใช้ผลรวมของส่วนที่บัญชีนี้เห็น (ความสูงแท่งจริง) ไม่ใช่ Cost รวม
+  const shownCost = (i: number) => series.reduce((a, s) => a + (s.values[i] ?? 0), 0);
+  const actual = trend.flatMap((p, i) => (!p.open && !p.forecast && shownCost(i) > 0 ? [shownCost(i)] : []));
+  const actualAvg = actual.length > 1 ? actual.reduce((a, v) => a + v, 0) / actual.length : null;
+  const axisBaht = (v: number) => (v >= 1_000_000 ? `฿${(v / 1_000_000).toLocaleString("th-TH", { maximumFractionDigits: 2 })}M` : v >= 1000 ? `฿${(v / 1000).toLocaleString("th-TH", { maximumFractionDigits: 0 })}K` : `฿${Math.round(v)}`);
   return (
     <section className="my-4 rounded-2xl border bg-card p-3">
       <h2 className="font-bold">Cost ปี {year}</h2>
@@ -419,8 +430,27 @@ function TrendSection({ trend, report, month, year }: { trend: CostPoint[] | nul
         highlight={at >= 0 ? at : undefined}
         stacked
         compare={false}
+        // ลายทแยง = ตัวเลขยังไม่จบ (เดือนที่ยังไม่จบ / มี Forecast) · เส้นประ = เฉลี่ยของเดือนที่เป็นตัวเลขจริงทั้งเดือน
+        hatched={trend.map((p) => p.open || p.forecast > 0)}
+        avg={actualAvg === null ? null : { value: actualAvg, label: `เฉลี่ย ${axisBaht(actualAvg)}` }}
+        extra={(i) => {
+          const p = trend[i];
+          return (
+            <>
+              {see.gmv && p.gmv !== null ? <TipRow label="GMV">{baht(p.gmv)}</TipRow> : null}
+              {see.gmv && roi[i] !== null ? <TipRow label="ROI">{roiText(roi[i])}</TipRow> : null}
+              {p.forecast ? <TipRow label="ในนี้เป็น Forecast">{baht(p.forecast)}</TipRow> : null}
+            </>
+          );
+        }}
       />
-      {series.length > 1 ? <div className="mt-1"><Legend series={series} /></div> : null}
+      <div className="mt-1">
+        <Legend
+          series={series.length > 1 ? series : []}
+          hatch={trend.some((p) => p.open || p.forecast > 0) ? "ยังไม่จบเดือน / มี Forecast" : undefined}
+          avg={actualAvg === null ? undefined : "เฉลี่ยต่อเดือน (เดือนที่จบแล้ว ไม่มี Forecast)"}
+        />
+      </div>
       {see.gmv && roi.some((v) => v !== null) ? (
         <>
           <h3 className="mt-4 text-sm font-semibold">ROI รายเดือน (GMV ÷ Cost)</h3>

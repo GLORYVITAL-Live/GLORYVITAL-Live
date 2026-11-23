@@ -125,6 +125,31 @@ describe("รายเดือน", () => {
       expect(titled(slides, "Agency TDH")).toBe(true);
     }
   });
+  test("เหมือนเว็บ: เดือนที่ยังไม่จบ = ลายทแยง + เส้นประเฉลี่ย · PowerPoint = ลายของกราฟจริง + กราฟผสม / Google Slides = รูปทรง", async () => {
+    const m = (short: string, k: number) => ({ short, a: days.flatMap((t) => t.a).map((x) => ({ ...x, gmv: x.gmv * k })) });
+    // ยอดต่อวัน 1,500 / 3,000 / 4,500 (เฉลี่ย ฿3K) · ก.ย. 9,000 + ต.ค. 27,000 (เฉลี่ย ฿18K ไม่นับ พ.ย.* ที่ยังไม่จบ)
+    const deck: CompareDeckInput = { ...month, timeAvg: "ต่อวันที่มีไลฟ์", months: [m("ก.ย.", 1), m("ต.ค.", 3), m("พ.ย.*", 1)] };
+    const { charts } = await open(await buildCompareDeck(deck));
+    const hatched = charts.filter((c) => c.includes("pattFill"));
+    expect(hatched).toHaveLength(1);
+    // แท่งซ้อน TikTok + Shopee: ทั้ง 2 ส่วนของ พ.ย.* (ลำดับที่ 2) เป็นลาย
+    expect(hatched[0].match(/<c:dPt><c:idx val="2"\/>/g)).toHaveLength(2);
+    expect(hatched[0]).toContain('<a:pattFill prst="wdUpDiag">');
+    for (const c of charts) expect(c).not.toMatch(/[​‌]/);
+    const combo = charts.filter((c) => c.includes("<c:barChart>") && c.includes("<c:lineChart>"));
+    expect(combo).toHaveLength(2);
+    expect(combo.some((c) => c.includes("เฉลี่ยของเดือนที่จบแล้ว ฿18K"))).toBe(true);
+    expect(combo.some((c) => c.includes("เฉลี่ยต่อวันที่มีไลฟ์ ฿3K"))).toBe(true);
+    for (const c of combo) expect(c).toContain('<a:prstDash val="dash"/>');
+
+    const { slides } = await open(await buildCompareDeck(deck, "gslides"));
+    const page = slides.find((s) => s.includes("GMV รายเดือน (3 เดือน)"))!;
+    expect(page).toContain("เฉลี่ยของเดือนที่จบแล้ว ฿18K");
+    expect(page).toContain('<a:prstDash val="dash"/>');
+    // เส้นทแยงสีขาวทับแท่ง พ.ย.*
+    expect((page.match(/prst="line"/g) ?? []).length).toBeGreaterThan(20);
+    expect(slides.find((s) => s.includes("GMV รายวัน"))).toContain("เฉลี่ยต่อวันที่มีไลฟ์ ฿3K");
+  });
   test("ไม่มีเป้า / ไม่มีแพลนกลุ่ม = ไม่มีหน้านั้น", async () => {
     const { slides } = await open(await buildCompareDeck({ ...month, target: undefined, owners: [] }));
     expect(titled(slides, "เป้าหมาย GMV")).toBe(false);

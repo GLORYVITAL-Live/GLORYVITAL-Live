@@ -5,7 +5,8 @@ import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, PencilIcon, PlusIco
 import { accountLabel, accountsOf, filterSessions, fmtMetric, monthOf, type LiveSession, type Platform } from "@/lib/live-stats";
 import { cleanTarget, dailyOf, monthDays, scaleDays, targetKey, targetReport, targetsInScope, type LiveTarget } from "@/lib/live-targets";
 import { fmtDayMonth, monthKey, monthLabel, parseKey } from "@/lib/format";
-import { CountUp } from "@/components/motion";
+import { CountUp, RollingNumber } from "@/components/motion";
+import { Gauge } from "@/components/LiveCharts";
 import { AppDialog, DialogActions, DialogBody, IconButton, LoadingBlock, api, useToast } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,6 +66,44 @@ function AchieveTile({ title, pct, gmv, target, mark, children }: {
       <Meter pct={pct} mark={mark} />
       <div className="mt-1.5 text-xs text-muted-foreground tabular-nums">{baht(gmv)} / เป้า {baht(target)}</div>
       {children}
+    </div>
+  );
+}
+
+/**
+ * % achieve เดือนเป็นเกจครึ่งวงกลม (ผู้ใช้ขอ 2026-11-23 ตามคลิป Sales Dashboard "86 of 100 · Ahead of plan")
+ *   เข็ม = ทำได้จริง · ขีดดำ = เป้าถึงวันนี้ (pace) · ใต้เกจ: ล้ำหน้า / ตามหลังแผนกี่บาท (เดือนที่จบแล้ว = ถึง / ขาดเป้า)
+ */
+function GaugeTile({ title, pct, gmv, target, pace, className }: {
+  title: string; pct: number | null; gmv: number; target: number;
+  pace: { mark: number; gap: number; day: number } | null; className?: string;
+}) {
+  const ahead = pace ? pace.gap >= 0 : gmv >= target;
+  const status = pace
+    ? ahead ? `ล้ำหน้าแผน ${baht(pace.gap)}` : `ตามหลังแผน ${baht(-pace.gap)}`
+    : ahead ? "✓ ถึงเป้าเดือน" : `ขาดเป้า ${baht(target - gmv)}`;
+  return (
+    <div className={cn("flex min-w-0 flex-col rounded-xl border bg-card px-3 py-2.5", className)}>
+      <div className="text-xs text-muted-foreground">{title}</div>
+      <div className="my-auto pt-2">
+        <Gauge
+          pct={pct} mark={pace?.mark} width={250}
+          label={`${title}: ${pctText(pct)} · ${baht(gmv)} จากเป้า ${baht(target)}${pace ? ` · ขีด = เป้าถึงวันที่ ${pace.day}` : ""}`}
+          center={(
+            <>
+              <span className="text-2xl font-bold">{pct === null ? "-" : <RollingNumber value={pct} format={pctText} />}</span>
+              <span className="text-[11px] text-muted-foreground">ของเป้าเดือน</span>
+            </>
+          )}
+        />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-center">
+        <Badge className={cn("font-semibold", ahead ? "bg-success/15 text-success" : "bg-destructive/10 text-destructive")}>{status}</Badge>
+      </div>
+      <div className="mt-1 text-center text-xs text-muted-foreground tabular-nums">
+        {baht(gmv)} / เป้า {baht(target)}
+        {pace ? <span className="block text-[11px]">ขีดดำบนเกจ = เป้าถึงวันที่ {pace.day} ({pctText(pace.mark)})</span> : null}
+      </div>
     </div>
   );
 }
@@ -142,13 +181,13 @@ export function TargetPanel({ month, sessions, platform, account, lastDay, readO
         </p>
       ) : (
         <>
-          <div className={cn("mt-2 grid gap-2", r.toDate ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
-            <AchieveTile
+          {/* เกจ % เดือน (ซ้าย สูง 2 แถว) + ถึงวันนี้ / รายวัน (ขวา) · มือถือเรียงลงมา */}
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <GaugeTile
               title={`% Achieve เดือน${r.toDate ? " (เทียบเป้าทั้งเดือน)" : ""}`} pct={r.pct} gmv={r.gmv} target={r.monthly}
-              mark={r.toDate && r.monthly ? r.toDate.target / r.monthly : null}
-            >
-              {r.toDate ? <div className="mt-0.5 text-[11px] text-muted-foreground">ขีดบนแถบ = เป้าถึงวันที่ {lastDay}</div> : null}
-            </AchieveTile>
+              pace={r.toDate && r.monthly ? { mark: r.toDate.target / r.monthly, gap: r.toDate.gap, day: lastDay } : null}
+              className={cn(r.toDate && "sm:row-span-2")}
+            />
             {r.toDate ? (
               <AchieveTile title={`% Achieve ถึงวันที่ ${lastDay}`} pct={r.toDate.pct} gmv={r.gmv} target={r.toDate.target}>
                 <div className={cn("mt-0.5 text-xs font-semibold tabular-nums", r.toDate.gap >= 0 ? "text-success" : "text-destructive")}>

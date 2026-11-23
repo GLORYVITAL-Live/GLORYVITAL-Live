@@ -57,7 +57,6 @@ export function HomeView({ go }: { go: Go }) {
   }
 
   const { scope } = data;
-  const liveNow = data.live.filter((s) => s.status === "live");
   const nextCamp = data.campaigns.find((c) => c.status === "upcoming");
   const liveCamp = data.campaigns.find((c) => c.status === "live");
   const gmvOver = data.issues.gmvOver ?? [];
@@ -97,7 +96,8 @@ export function HomeView({ go }: { go: Go }) {
     <MotionProvider>
     <div className="pb-10">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <span className="text-sm text-muted-foreground">วันนี้ {dayText(data.today)}{liveNow.length ? ` · กำลังไลฟ์ ${liveNow.length} ช่อง` : ""}</span>
+        {/* จำนวนที่กำลังไลฟ์อยู่ที่ป้ายบนหัวเว็บ (App LivePill นับใหม่ทุก 30 วินาที) · ข้อความที่นี่เป็นค่าตอนโหลดหน้า ค้างแล้วตัวเลขไม่ตรงกับป้าย จึงไม่ใส่ */}
+        <span className="text-sm text-muted-foreground">วันนี้ {dayText(data.today)}</span>
         <Button variant="outline" size="sm" className="rounded-full" disabled={busy} onClick={refresh}>
           <RefreshCwIcon className={cn(busy && "animate-spin")} />รีเฟรช
         </Button>
@@ -555,12 +555,12 @@ function DashboardBody({ d, go }: { d: DashboardData; go: Go }) {
   const hoursSpark = d.daily.slice(0, todayIndex >= 0 ? todayIndex + 1 : d.daily.length).map((x) => (x.planned ? null : x.hours));
   const kpis: {
     label: string; icon: LucideIcon; value: number | null; format: (n: number) => string; unit?: string;
-    change: KpiChange | null; vs: string; note?: string; spark?: (number | null)[];
+    change: KpiChange | null; vs: string; note?: string; spark?: (number | null)[]; roll?: boolean;
   }[] = [
     { label: "ชั่วโมงไลฟ์", icon: ClockIcon, value: d.hours.cur, format: (n) => num(Math.round(n * 100) / 100), unit: "ชม.", change: { cur: d.hours.cur, prev: d.hours.prev }, vs, spark: hoursSpark },
     { label: "คิวที่ไลฟ์", icon: RadioIcon, value: d.slots.cur, format: (n) => Math.round(n).toLocaleString("th-TH"), unit: "คิว", change: { cur: d.slots.cur, prev: d.slots.prev }, vs },
     ...(d.gmv ? [{
-      label: "GMV (ไฟล์ Export)", icon: BanknoteIcon, value: d.gmv.cur, format: baht,
+      label: "GMV (ไฟล์ Export)", icon: BanknoteIcon, value: d.gmv.cur, format: baht, roll: true,
       note: d.gmv.upTo ? (d.gmv.upTo < d.upTo ? `ข้อมูลถึง ${fmtDayMonth.format(parseKey(d.gmv.upTo))}` : undefined) : "ยังไม่มีไฟล์ของเดือนนี้",
       change: d.gmv.cur === null ? null : { cur: d.gmv.cur, prev: d.gmv.prev }, vs: d.gmv.cur === null ? "" : gmvVs,
     }] : []),
@@ -583,7 +583,8 @@ function DashboardBody({ d, go }: { d: DashboardData; go: Go }) {
         {kpis.map((k, i) => (
           <KpiCard
             key={k.label} index={i} icon={k.icon} label={k.label} value={k.value} format={k.format} unit={k.unit} empty="—"
-            change={k.change} spark={k.spark} className={cn(kpis.length === 3 && i === 2 && "max-sm:col-span-2")}
+            // ชั่วโมงไลฟ์รายวัน = ยอดรวมแยกวัน จึงเป็นแท่งเล็ก · GMV ตัวเลขหมุนทีละหลัก
+            change={k.change} spark={k.spark} sparkKind="bars" roll={k.roll} className={cn(kpis.length === 3 && i === 2 && "max-sm:col-span-2")}
           >
             {/* ป้าย % อยู่มุมขวาบน · บรรทัดนี้บอกว่าเทียบกับอะไร (ไม่มีฐานเทียบ = ข้อความแจ้ง) */}
             {k.change ? (changeOf(k.change.cur, k.change.prev) === null

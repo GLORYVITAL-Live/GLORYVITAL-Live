@@ -43,6 +43,8 @@ export type CompareDeckInput = {
    *   ช่วงเทียบใช้กับตัวเลขหลัก / ตาราง / วิเคราะห์ ส่วนกราฟรายวันเป็นแท่งซ้อน + เส้นแยกแพลตฟอร์ม (ไม่มีเส้นรวม)
    */
   platformTime?: boolean;
+  /** เส้นประค่าเฉลี่ยในกราฟ GMV ตามเวลา (คำต่อท้าย "เฉลี่ย" เช่น "ต่อวันที่มีไลฟ์") · ไม่ใส่ = ไม่มีเส้น (เหมือนเว็บ: มีเฉพาะรายเดือน / ทั้งปี) */
+  timeAvg?: string;
   /** กราฟแท่งหลายเดือนย้อนหลัง (หน้ารายเดือน = 13 เดือน) · b = ฐานของ MoM (เดือนที่ยังไม่จบ = เดือนก่อนถึงวันเดียวกัน) */
   months?: { short: string; a: LiveSession[]; b?: LiveSession[] }[];
   /** หน้าเป้าหมาย GMV (src/lib/live-targets.ts) · names = ชื่อช่องตาม key · noTarget = ช่องที่มียอดแต่ยังไม่ตั้งเป้า */
@@ -95,6 +97,56 @@ const keyOf = (s: LiveSession) => `${s.platform}|${s.accountId}`;
 // ตัวเลขบนกราฟ: 1.2M / 350K
 const COMPACT = '[>=1000000]"฿"#,##0.0,,"M";[>=1000]"฿"#,##0,"K";"฿"#,##0';
 
+/**
+ * ลายทแยง + เส้นประค่าเฉลี่ยในกราฟแท่ง (เหมือนเว็บ · ผู้ใช้ขอ 2026-11-23)
+ *   HATCH ต่อท้ายป้ายแกน (มองไม่เห็น) = แท่งลายทแยง (ตัวเลขยังไม่จบ): PowerPoint → finish() แปลงเป็นลายของกราฟจริง (c:dPt pattFill) แล้วลบตัวนี้ออก
+ *     Google Slides / กราฟรูปทรง → shapeBars วาดเส้นทแยงสีขาวทับแท่ง
+ *   NO_HATCH ต่อท้ายชื่อชุด = ชุดนั้นไม่ใส่ลาย (เช่น แท่งปีก่อนที่ครบเดือนแล้ว) · ลบออกตอน finish() เช่นกัน
+ */
+const HATCH = "​", NO_HATCH = "‌";
+type Avg = { value: number; label: string };
+/** ค่าเฉลี่ยของกลุ่มที่มีค่า (> 0) ไม่นับกลุ่มที่ skip (เช่น เดือนที่ยังไม่จบ) · ไม่ถึง 2 กลุ่ม = ไม่มีเส้น */
+function avgOf(values: (number | null)[], word: string, skip?: (i: number) => boolean, format: (v: number) => string = compact): Avg | null {
+  const list = values.filter((v, i): v is number => v !== null && v > 0 && !skip?.(i));
+  if (list.length < 2) return null;
+  const value = list.reduce((a, v) => a + v, 0) / list.length;
+  return { value, label: `เฉลี่ย${word} ${format(value)}` };
+}
+
+/** ลายทแยงสีขาวทับแท่งที่วาดด้วยรูปทรง: เส้น "/" ห่างกัน 0.09 นิ้ว ตัดให้อยู่ในกรอบแท่ง */
+function hatchRect(pres: PptxGenJS, s: PptxGenJS.Slide, r: { x: number; y: number; w: number; h: number }) {
+  const step = 0.09;
+  for (let c = -r.h + step / 2; c < r.w; c += step) {
+    // เส้น u − v = c (u = ระยะจากขอบซ้าย, v = ความสูงจากขอบล่าง): จุดล่างซ้าย → จุดบนขวา
+    const v1 = Math.max(0, -c), u1 = c + v1;
+    const u2 = Math.min(r.w, c + r.h), v2 = u2 - c;
+    if (u2 - u1 < 0.01) continue;
+    s.addShape(pres.ShapeType.line, { x: r.x + u1, y: r.y + r.h - v2, w: u2 - u1, h: v2 - v1, flipV: true, line: { color: C.white, width: 1 } });
+  }
+}
+
+/**
+ * กราฟแท่งจริงของ PowerPoint · hatched = กลุ่มที่เป็นลายทแยง (ใส่ HATCH ท้ายป้าย) · avg = เส้นประค่าเฉลี่ย (กราฟผสม แท่ง + เส้น ตำนานบอกค่า)
+ *   เส้นเฉลี่ยตั้งตำแหน่งป้ายเป็น "t" (ค่าของแท่ง "outEnd" ใช้กับกราฟเส้นไม่ได้ = ไฟล์เสีย)
+ */
+function nativeBars(pres: PptxGenJS, s: PptxGenJS.Slide, data: { name: string; labels: string[]; values: (number | null)[] }[], opts: PptxGenJS.IChartOpts, hatched?: boolean[], avg?: Avg | null) {
+  const marked = data.map((d) => ({ ...d, labels: d.labels.map((l, i) => (hatched?.[i] ? `${l}${HATCH}` : l)), values: d.values as number[] }));
+  if (!avg) {
+    s.addChart(pres.ChartType.bar, marked, opts);
+    return;
+  }
+  const labels = marked[0]?.labels ?? [];
+  const types: PptxGenJS.IChartMulti[] = [
+    { type: pres.ChartType.bar, data: marked, options: {} },
+    {
+      type: pres.ChartType.line, data: [{ name: avg.label, labels, values: labels.map(() => avg.value) }],
+      options: { chartColors: [C.text], lineSize: 1.5, lineDash: "dash", lineDataSymbol: "none", showValue: false, dataLabelPosition: "t" },
+    },
+  ];
+  // กราฟผสม: อาร์กิวเมนต์ที่ 2 คือ options (pptxgenjs addChart([ชนิด...], options))
+  s.addChart(types, { ...opts, showLegend: true } as unknown as unknown[]);
+}
+
 /** ข้อสังเกตอัตโนมัติ (ใช้ในหน้าสรุปและข้างกราฟ) */
 function insights(o: CompareDeckInput, ta: Totals, tb: Totals) {
   const out: string[] = [];
@@ -141,12 +193,14 @@ function niceTicks(max: number) {
 }
 
 /** ตำนานของกราฟที่วาดด้วยรูปทรง: กว้างตามชื่อ (ชื่อช่วงยาว เช่น "พฤหัสบดี 5 พ.ย. 2026" ไม่ตัดบรรทัด) · line = ขีดแทนสี่เหลี่ยม */
-function shapeLegend(pres: PptxGenJS, s: PptxGenJS.Slide, box: { x: number; y: number; w: number }, series: { name: string; color: string }[], line = false) {
+function shapeLegend(pres: PptxGenJS, s: PptxGenJS.Slide, box: { x: number; y: number; w: number }, series: { name: string; color: string; dash?: boolean }[], line = false) {
   const nameW = (name: string) => Math.min(3.6, 0.1 * name.length + 0.25);
   const total = series.reduce((a, sr) => a + 0.34 + nameW(sr.name), 0);
   let lx = box.x + Math.max(0, (box.w - total) / 2);
   for (const sr of series) {
-    if (line) s.addShape(pres.ShapeType.line, { x: lx, y: box.y + 0.16, w: 0.24, h: 0, line: { color: sr.color, width: 2.25 } });
+    // dash = เส้นประ (เส้นค่าเฉลี่ยในกราฟแท่ง)
+    if (sr.dash) s.addShape(pres.ShapeType.line, { x: lx, y: box.y + 0.16, w: 0.24, h: 0, line: { color: sr.color, width: 1.5, dashType: "dash" } });
+    else if (line) s.addShape(pres.ShapeType.line, { x: lx, y: box.y + 0.16, w: 0.24, h: 0, line: { color: sr.color, width: 2.25 } });
     else s.addShape(pres.ShapeType.rect, { x: lx + 0.08, y: box.y + 0.08, w: 0.16, h: 0.16, fill: { color: sr.color }, line: { color: sr.color } });
     s.addText(sr.name, { x: lx + 0.3, y: box.y, w: nameW(sr.name), h: 0.32, fontSize: 12, color: C.text, valign: "middle", fontFace: FONT, margin: 0, isTextBox: true, wrap: false });
     lx += 0.34 + nameW(sr.name);
@@ -169,12 +223,18 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
   legend?: boolean;
   /** false = ไม่ใส่ % ที่เปลี่ยนเหนือคู่แท่ง (2 ชุดไม่ใช่ช่วงที่เทียบกัน เช่น TikTok / Shopee) */
   change?: boolean;
+  /** กลุ่มที่ตัวเลขยังไม่จบ = ลายทแยง (แท่งซ้อน: ทุกส่วน · แท่งคู่: เฉพาะชุดแรก = ช่วงหลัก) */
+  hatched?: boolean[];
+  /** เส้นประค่าเฉลี่ย + ป้ายท้ายเส้น */
+  avg?: Avg | null;
 }) {
   const { x, y, w, h } = o.box;
   const em = o.emphasis ?? 0;
   const compact = o.format ?? compactBaht;
   const text = (t: string, opts: PptxGenJS.TextPropsOptions) => s.addText(t, { fontFace: FONT, margin: 0, isTextBox: true, ...opts });
-  if (o.legend !== false) shapeLegend(pres, s, { x, y, w }, o.series);
+  // เส้นเฉลี่ย: บอกค่าในตำนาน (เหมือนกราฟจริงของ PowerPoint) · ไม่มีตำนาน = ป้ายท้ายเส้น
+  const avgShown = !!o.avg && o.avg.value > 0;
+  if (o.legend !== false) shapeLegend(pres, s, { x, y, w }, [...o.series, ...(avgShown ? [{ name: o.avg!.label, color: C.text, dash: true }] : [])]);
   // เผื่อที่ด้านบน 25% ให้ตัวเลขบนแท่ง + % ที่เปลี่ยน ไม่ชนขอบ
   const totalAt = (i: number) => o.series.reduce((a, sr) => a + (sr.values[i] ?? 0), 0);
   const max = o.stacked ? Math.max(0, ...o.labels.map((_, i) => totalAt(i))) : Math.max(0, ...o.series.flatMap((sr) => sr.values));
@@ -199,7 +259,11 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
       let base = 0;
       for (const sr of o.series) {
         const v = sr.values[i] ?? 0;
-        if (v > 0) s.addShape(pres.ShapeType.rect, { x: gx, y: yOf(base + v), w: bw - 0.03, h: (v / top) * ph, fill: { color: sr.color }, line: { color: sr.color, width: 0 } });
+        if (v > 0) {
+          const bar = { x: gx, y: yOf(base + v), w: bw - 0.03, h: (v / top) * ph };
+          s.addShape(pres.ShapeType.rect, { ...bar, fill: { color: sr.color }, line: { color: sr.color, width: 0 } });
+          if (o.hatched?.[i]) hatchRect(pres, s, bar);
+        }
         base += v;
       }
       if (o.showValue && base > 0) text(compact(base), { x: gx - 0.15, y: yOf(base) - 0.3, w: bw + 0.27, h: 0.28, fontSize: valueSize, bold: true, color: C.text, align: "center", valign: "bottom" });
@@ -210,7 +274,9 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
       const v = sr.values[i] ?? 0;
       peak = Math.max(peak, v);
       if (v > 0) {
-        s.addShape(pres.ShapeType.rect, { x: gx + j * bw, y: yOf(v), w: bw - 0.03, h: (v / top) * ph, fill: { color: sr.color }, line: { color: sr.color, width: 0 } });
+        const bar = { x: gx + j * bw, y: yOf(v), w: bw - 0.03, h: (v / top) * ph };
+        s.addShape(pres.ShapeType.rect, { ...bar, fill: { color: sr.color }, line: { color: sr.color, width: 0 } });
+        if (j === 0 && o.hatched?.[i]) hatchRect(pres, s, bar);
       }
       if (o.showValue && v > 0) {
         text(compact(v), {
@@ -229,6 +295,12 @@ function shapeBars(pres: PptxGenJS, s: PptxGenJS.Slide, o: {
       });
     }
   });
+  // เส้นประค่าเฉลี่ย (ทับแท่ง) · ไม่มีตำนาน = ป้ายชิดขวาเหนือเส้น
+  if (avgShown && o.avg!.value <= top) {
+    const ay = yOf(o.avg!.value);
+    s.addShape(pres.ShapeType.line, { x: px, y: ay, w: pw, h: 0, line: { color: C.text, width: 1.25, dashType: "dash" } });
+    if (o.legend === false) text(o.avg!.label, { x: px + pw - 3.2, y: ay - 0.3, w: 3.2, h: 0.28, fontSize: 11, bold: true, color: C.text, align: "right", valign: "bottom", wrap: false });
+  }
 }
 
 type ChartTarget = "pptx" | "gslides";
@@ -344,17 +416,21 @@ function addTrendSlide(pres: PptxGenJS, target: ChartTarget, title: string, labe
  * กราฟแท่งแยกสีตามแพลตฟอร์ม (เหมือนเว็บ): หลายแพลตฟอร์ม = แท่งซ้อน ความสูงรวมคือยอดรวม · แพลตฟอร์มเดียว = สีของแพลตฟอร์มนั้น
  *   PowerPoint = กราฟจริง (ตัวเลขอยู่กลางแต่ละส่วน) / Google Slides = วาดด้วยรูปทรง (ตัวเลขเป็นยอดรวมบนแท่ง)
  */
-function platformBars(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, o: { title: string; labels: string[]; groups: LiveSession[][]; box: ChartBox; showValue: boolean }) {
+function platformBars(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, o: {
+  title: string; labels: string[]; groups: LiveSession[][]; box: ChartBox; showValue: boolean;
+  /** กลุ่มที่ยังไม่จบ = ลายทแยง · avg = เส้นประค่าเฉลี่ย (เหมือนเว็บ) */
+  hatched?: boolean[]; avg?: Avg | null;
+}) {
   const series = platformLines(o.groups, "gmv");
   if (!series.length) return;
   const stacked = series.length > 1;
   if (target === "gslides") {
-    shapeBars(pres, s, { labels: o.labels, series: series.map((sr) => ({ ...sr, values: sr.values.map((v) => v ?? 0) })), box: o.box, showValue: o.showValue, stacked: true });
+    shapeBars(pres, s, { labels: o.labels, series: series.map((sr) => ({ ...sr, values: sr.values.map((v) => v ?? 0) })), box: o.box, showValue: o.showValue, stacked: true, hatched: o.hatched, avg: o.avg });
     return;
   }
   const valueSize = o.labels.length <= 4 ? 14 : o.labels.length <= 8 ? 12 : 10;
   // กลุ่มที่ไม่มียอด = ช่องว่าง ไม่ใช่ 0 (ไม่งั้นมีป้าย ฿0 ซ้อนบนแท่ง เช่น บัญชี TikTok ในชุด Shopee)
-  s.addChart(pres.ChartType.bar, series.map((sr) => ({ name: sr.name, labels: o.labels, values: sr.values.map((v) => v || null) as number[] })), {
+  nativeBars(pres, s, series.map((sr) => ({ name: sr.name, labels: o.labels, values: sr.values.map((v) => v || null) })), {
     ...o.box, barDir: "col", barGrouping: stacked ? "stacked" : "clustered", barGapWidthPct: 60, chartColors: series.map((sr) => sr.color),
     showLegend: stacked, legendPos: "t", legendFontSize: 12, legendFontFace: FONT, legendColor: C.text, showTitle: false, altText: o.title,
     // แท่งซ้อนใส่ป้ายนอกแท่งไม่ได้ (PowerPoint ฟ้องไฟล์เสีย)
@@ -363,7 +439,7 @@ function platformBars(pres: PptxGenJS, s: PptxGenJS.Slide, target: ChartTarget, 
     valAxisMinVal: 0, valAxisLabelFormatCode: COMPACT, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
     catAxisLabelFontSize: 11, catAxisLabelFontFace: FONT, catAxisLabelColor: C.text,
     valGridLine: { color: C.grid, size: 0.75 }, catGridLine: { style: "none" },
-  });
+  }, o.hatched, o.avg);
 }
 
 /** สไลด์ว่าง 16:9 + แม่แบบหน้าเนื้อหา "CONTENT" (หัวข้อซ้ายบน + ท้ายหน้า = footer / เลขหน้า) */
@@ -386,10 +462,29 @@ async function newDeck(title: string, footer: string) {
   return pres;
 }
 
-/** เขียนไฟล์ .pptx (+ แก้ฟอนต์ไทยในธีม) */
+/** เขียนไฟล์ .pptx (+ แก้ฟอนต์ไทยในธีม + ลายทแยงในกราฟแท่ง) */
 async function finish(pres: PptxGenJS) {
   const data = (await pres.write({ outputType: "uint8array", compression: true })) as Uint8Array;
   return new Blob([thaiThemeFont(data) as BlobPart], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
+}
+
+/**
+ * กราฟแท่งที่มีป้ายแกนลงท้าย HATCH: ใส่ลายทแยง (เส้นขาวบนสีของชุด) ให้แท่งของกลุ่มนั้นในทุกชุด ยกเว้นชุดที่ชื่อมี NO_HATCH
+ *   แทรก c:dPt ก่อน c:dLbls / c:cat (ลำดับตาม schema ของ c:ser) แล้วลบตัวทำเครื่องหมายออกจากกราฟ
+ */
+export function hatchChartXml(xml: string) {
+  if (!xml.includes(HATCH) && !xml.includes(NO_HATCH)) return xml;
+  const out = xml.replace(/<c:barChart>[\s\S]*?<\/c:barChart>/g, (bar) => bar.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, (ser) => {
+    if ((/<c:tx>[\s\S]*?<\/c:tx>/.exec(ser)?.[0] ?? "").includes(NO_HATCH)) return ser;
+    const idx = [...ser.matchAll(/<c:pt idx="(\d+)">\s*<c:v>([^<]*)<\/c:v>/g)].filter((m) => m[2].endsWith(HATCH)).map((m) => m[1]);
+    const at = ser.search(/<c:dLbls>|<c:trendline>|<c:errBars>|<c:cat>/);
+    if (!idx.length || at < 0) return ser;
+    const color = /<c:spPr>\s*<a:solidFill>\s*<a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(ser)?.[1] ?? C.pink;
+    const dpt = idx.map((i) => `<c:dPt><c:idx val="${i}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/><c:spPr><a:pattFill prst="wdUpDiag">`
+      + `<a:fgClr><a:srgbClr val="${C.white}"/></a:fgClr><a:bgClr><a:srgbClr val="${color}"/></a:bgClr></a:pattFill></c:spPr></c:dPt>`).join("");
+    return ser.slice(0, at) + dpt + ser.slice(at);
+  }));
+  return out.replace(/[​‌]/g, "");
 }
 
 /** หน้าวิเคราะห์: ลดลง / ทำได้ดี (ซ้าย) + ข้อเสนอแนะ (ขวา) */
@@ -1385,11 +1480,13 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
    * กราฟแท่งเทียบ 2 ชุด
    *   PowerPoint = กราฟจริง (แก้ตัวเลขได้) / Google Slides = วาดด้วยรูปทรง (Google แปลงกราฟเป็นรูปเบลอ ตัวเลขยาว ชื่อแกนหาย)
    */
-  const barChart = (s: PptxGenJS.Slide, title: string, labels: string[], va: number[], vb: number[], box: { x: number; y: number; w: number; h: number }, showValue = true) => {
+  const barChart = (s: PptxGenJS.Slide, title: string, labels: string[], va: number[], vb: number[], box: { x: number; y: number; w: number; h: number }, showValue = true,
+    /** ลายทแยงเฉพาะแท่งช่วงหลัก (ช่วงเทียบครบแล้ว) + เส้นประค่าเฉลี่ยของช่วงหลัก */
+    more: { hatched?: boolean[]; avg?: Avg | null } = {}) => {
     // ไม่มีข้อมูลช่วงเทียบ = แท่งชุดเดียว
     const single = !hasB;
     if (target === "pptx") {
-      s.addChart(pres.ChartType.bar, single ? [{ name: o.aName, labels, values: va }] : [{ name: o.aName, labels, values: va }, { name: o.bName, labels, values: vb }], {
+      nativeBars(pres, s, single ? [{ name: o.aName, labels, values: va }] : [{ name: o.aName, labels, values: va }, { name: `${o.bName}${NO_HATCH}`, labels, values: vb }], {
         ...box, barDir: "col", barGrouping: "clustered", barGapWidthPct: 60,
         chartColors: single ? [C.pink, C.pink] : [C.pink, C.blue],
         showLegend: !single, legendPos: "t", legendFontSize: 12, legendFontFace: FONT, legendColor: C.text,
@@ -1399,11 +1496,11 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
         valAxisMinVal: 0, valAxisLabelFormatCode: COMPACT, valAxisLabelFontSize: 11, valAxisLabelFontFace: FONT, valAxisLabelColor: C.muted,
         catAxisLabelFontSize: 11, catAxisLabelFontFace: FONT, catAxisLabelColor: C.text,
         valGridLine: { color: C.grid, size: 0.75 }, catGridLine: { style: "none" },
-      });
+      }, more.hatched, more.avg);
       return;
     }
     shapeBars(pres, s, {
-      labels, box, showValue,
+      labels, box, showValue, hatched: more.hatched, avg: more.avg,
       series: single ? [{ name: o.aName, color: C.pink, values: va }] : [{ name: o.aName, color: C.pink, values: va }, { name: o.bName, color: C.blue, values: vb }],
     });
   };
@@ -1439,10 +1536,13 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     const labels = o.time.map((t) => t.short);
     const box = { x: M, y: 1.4, w: W - 2 * M, h: 5.3 };
     const byPeriod = hasB && !o.platformTime;
-    if (byPeriod) barChart(s, `GMV ${o.timeName}`, labels, o.time.map((t) => totalsOf(t.a).gmv), o.time.map((t) => totalsOf(t.b).gmv), box, o.time.length <= 12);
-    else platformBars(pres, s, target, { title: `GMV ${o.timeName}`, labels, groups: o.time.map((t) => t.a), box, showValue: o.time.length <= 12 });
-    if (labels.some((l) => l.endsWith("*"))) {
-      s.addText("* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)", { x: M, y: 6.75, w: 6, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+    // เหมือนเว็บ: เดือนที่ยังไม่จบ (*) = ลายทแยง · timeAvg = เส้นประค่าเฉลี่ยของช่วงหลัก (ไม่นับเดือนที่ยังไม่จบ)
+    const hatched = labels.map((l) => l.endsWith("*"));
+    const avg = o.timeAvg ? avgOf(o.time.map((t) => totalsOf(t.a).gmv || null), o.timeAvg, (i) => hatched[i]) : null;
+    if (byPeriod) barChart(s, `GMV ${o.timeName}`, labels, o.time.map((t) => totalsOf(t.a).gmv), o.time.map((t) => totalsOf(t.b).gmv), box, o.time.length <= 12, { hatched, avg });
+    else platformBars(pres, s, target, { title: `GMV ${o.timeName}`, labels, groups: o.time.map((t) => t.a), box, showValue: o.time.length <= 12, hatched, avg });
+    if (hatched.some(Boolean)) {
+      s.addText("* / ลายทแยง = เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)", { x: M, y: 6.75, w: 6, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
     }
     s.addNotes(byPeriod ? `${stepWordOf(o.timeName)}ที่ 1 ของ ${o.aName} เทียบกับ${stepWordOf(o.timeName)}ที่ 1 ของ ${o.bName} (ชื่อบนแกนเป็นของ ${o.aName})` : `${o.aName} แยกสีตามแพลตฟอร์ม`);
 
@@ -1467,7 +1567,12 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
     const months = o.months;
     const mom = months.slice(1).map((m, i) => ({ m, c: changeOf(totalsOf(m.a).gmv || null, totalsOf(m.b ?? months[i].a).gmv || null) }));
     const hasMom = mom.some((x) => x.c !== null);
-    platformBars(pres, s, target, { title, labels: months.map((m) => m.short), groups: months.map((m) => m.a), box: { x: M, y: 1.4, w: W - 2 * M, h: hasMom ? 4.75 : 5.25 }, showValue: true });
+    // เหมือนเว็บ: เดือนที่ยังไม่จบ = ลายทแยง · เส้นประ = เฉลี่ยของเดือนที่จบแล้ว
+    const hatched = months.map((m) => m.short.endsWith("*"));
+    platformBars(pres, s, target, {
+      title, labels: months.map((m) => m.short), groups: months.map((m) => m.a), box: { x: M, y: 1.4, w: W - 2 * M, h: hasMom ? 4.75 : 5.25 }, showValue: true,
+      hatched, avg: avgOf(months.map((m) => totalsOf(m.a).gmv || null), "ของเดือนที่จบแล้ว", (i) => hatched[i]),
+    });
     if (hasMom) {
       s.addText([
         { text: "MoM:  ", options: { bold: true, color: C.text } },
@@ -1478,7 +1583,7 @@ export async function buildCompareDeck(o: CompareDeckInput, target: "pptx" | "gs
       ], { x: M, y: 6.2, w: W - 2 * M, h: 0.45, fontSize: 11, fontFace: FONT, margin: 0, valign: "middle", fit: "shrink", isTextBox: true });
     }
     if (months.some((m) => m.short.endsWith("*"))) {
-      s.addText(`* เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)${months.some((m) => m.b) ? " · MoM ของเดือนนี้เทียบเดือนก่อนถึงวันเดียวกัน" : ""}`, { x: M, y: 6.7, w: 9, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
+      s.addText(`* / ลายทแยง = เดือนที่ยังไม่จบ (ยอดยังไม่ครบเดือน)${months.some((m) => m.b) ? " · MoM ของเดือนนี้เทียบเดือนก่อนถึงวันเดียวกัน" : ""}`, { x: M, y: 6.7, w: 9, h: 0.3, fontSize: 11, italic: true, color: C.muted, fontFace: FONT, margin: 0, isTextBox: true });
     }
   }
 
@@ -1895,6 +2000,13 @@ export async function buildMultiDeck(o: MultiDeckInput, target: "pptx" | "gslide
 function thaiThemeFont(pptx: Uint8Array) {
   const files = unzipSync(pptx);
   for (const name of Object.keys(files)) {
+    // กราฟแท่ง: ลายทแยงของกลุ่มที่ยังไม่จบ (hatchChartXml)
+    if (/^ppt\/charts\/chart\d+\.xml$/.test(name)) {
+      const xml = strFromU8(files[name]);
+      const fixed = hatchChartXml(xml);
+      if (fixed !== xml) files[name] = strToU8(fixed);
+      continue;
+    }
     if (!/^ppt\/theme\/theme\d+\.xml$/.test(name)) continue;
     const xml = strFromU8(files[name])
       .replace(/<a:font script="Thai" typeface="[^"]*"\/>/g, `<a:font script="Thai" typeface="${FONT}"/>`)

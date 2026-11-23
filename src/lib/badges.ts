@@ -20,17 +20,26 @@ type AdminRow = Row & { admin_id: number | null };
 const ms = (s: string) => Date.parse(s);
 const keyOf = (r: Row) => `${r.platform}|${ms(r.starts_at)}|${ms(r.ends_at)}`;
 
-export async function badgesFor(me: Me): Promise<Badges> {
+/**
+ * live = ช่วงเวลา [เริ่ม, จบ] (ms) ของคิวไลฟ์ (mc_slots ทุกแท็บ แบบเดียวกับ "กำลังไลฟ์" ในหน้าแรก) ที่ยังไม่จบและเริ่มภายใน 12 ชม.
+ *   เว็บนับเองทุก 30 วินาทีว่าตอนนี้กำลังไลฟ์กี่ช่อง (ป้าย "● กำลังไลฟ์" บนหัวเว็บ · ผู้ใช้ขอ 2026-11-23) — เฉพาะ Owner ที่ดูฝั่ง Mc / หลักฐาน / สถิติ
+ *   เป็นเวลาตามตารางคิว ไม่ใช่สถานะสดจาก TikTok / Shopee
+ */
+export type LiveWindow = [number, number];
+
+export async function badgesFor(me: Me): Promise<{ badges: Badges; live?: LiveWindow[] }> {
   const db = createAdminClient();
   const out: Badges = {};
+  let live: LiveWindow[] | undefined;
   const o = me.owner;
   const homeMc = !!o && o.see.mc, homeAdmin = !!o && o.see.admin;
   // หน้าหลักฐานไลฟ์: Owner ฝั่ง Mc / ติ๊กหลักฐานไลฟ์ = ทุก slot · Admin = slot ของตัวเอง
   const proofAll = !!o && (o.see.mc || o.see.proofs);
   const proofMine = !proofAll && me.admin ? me.admin.id : null;
+  const liveOn = !!o && (o.see.mc || o.see.proofs || o.see.analytics);
 
   const jobs: Promise<void>[] = [];
-  if (homeMc || homeAdmin || proofAll || proofMine) {
+  if (homeMc || homeAdmin || proofAll || proofMine || liveOn) {
     jobs.push((async () => {
       const today = bkkToday(), now = Date.now();
       const from = addDays(today, -7), to = addDays(today, 6), weekAgo = addDays(today, -6);
@@ -55,6 +64,9 @@ export async function badgesFor(me: Me): Promise<Badges> {
           && !r.person?.is_salaried && r.sheet_tab !== "shopee" && !proofs.has(Number(r.id))
           && (!mine || mine.has(keyOf(r)))).length;
       }
+      if (liveOn) {
+        live = mcRows.filter((r) => ms(r.ends_at) > now && ms(r.starts_at) < now + 12 * 3600_000).map((r) => [ms(r.starts_at), ms(r.ends_at)]);
+      }
     })().catch((err) => console.warn("นับป้ายงานค้าง (slot / หลักฐาน) ไม่สำเร็จ:", err)));
   }
   if (me.equipment) {
@@ -64,5 +76,5 @@ export async function badgesFor(me: Me): Promise<Badges> {
     })());
   }
   await Promise.all(jobs);
-  return out;
+  return { badges: out, ...(live ? { live } : {}) };
 }

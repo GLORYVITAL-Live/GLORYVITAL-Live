@@ -38,6 +38,22 @@ const input = (see = ALL): CostDeckInput => ({
   shortMonth: (k) => (k.endsWith("-10") ? "ต.ค." : "พ.ย."), monthLabel: (k) => k, exportedAt: "12 พ.ย. 2026",
 });
 
+describe("สไลด์ Cost / ROI: ลายทแยง + เส้นเฉลี่ย", () => {
+  test("Cost รายเดือน: เดือนที่ยังไม่จบ = ลายทแยง · เส้นประ = เฉลี่ยของเดือนที่จบแล้ว (เหมือนเว็บ)", async () => {
+    const months: CostPoint[] = [
+      { ...costTotals(prevRows), month: "2026-09", open: false, rows: prevRows },
+      { ...costTotals(prevRows), month: "2026-10", open: false, rows: prevRows },
+      { ...costTotals(rows), month: "2026-11", open: true, rows },
+    ];
+    const slides = await slidesOf(await buildCostDeck({ ...input(), trend: months, shortMonth: (k) => k.slice(5) }));
+    const page = slides.find((s) => s.includes("Cost รายเดือน ปี 2026"))!;
+    // เดือนที่จบแล้ว 2 เดือน เดือนละ ฿22,500 (Mc 9,000 + Admin 2,500 + Agency 6,000 + Shopee 5,000) · ไม่นับเดือนที่ยังไม่จบ
+    expect(page).toContain("เฉลี่ยเดือนที่จบแล้ว ฿22,500");
+    expect(page).toContain('<a:prstDash val="dash"/>');
+    expect(page).toContain("ลายทแยง = ยังไม่จบเดือน / มี Forecast");
+  });
+});
+
 describe("สไลด์ Cost / ROI", () => {
   test("เหมือนเว็บ: เส้นในการ์ด · MoM ครบ 4 ตัวชี้วัด + ตาราง Cost / GMV / ROI · เรท Agency · คำเตือน", async () => {
     for (const target of ["pptx", "gslides"] as const) {

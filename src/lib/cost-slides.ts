@@ -277,6 +277,16 @@ export async function buildCostDeck(o: CostDeckInput, target: "pptx" | "gslides"
     const hasGmv = trend.some((p) => p.gmv !== null), yearGmv = hasGmv ? trend.reduce((a, p) => a + (p.gmv ?? 0), 0) : null;
     const yearForecast = trend.reduce((a, p) => a + p.forecast, 0);
     const legend = `* = ยังไม่จบเดือน · ~ = มีตัวเลขประมาณการ (Forecast)${yearForecast ? ` รวม ${baht(yearForecast)}` : ""}`;
+    // เหมือนเว็บ: เดือนที่ยังไม่จบ / มี Forecast = ลายทแยง · เส้นประ = เฉลี่ยของเดือนที่เป็นตัวเลขจริงทั้งเดือน (ส่วนที่บัญชีนี้เห็น)
+    const costSeries = [
+      ...(see.mc ? [{ name: "Mc", color: COST_HEX.mc, values: trend.map((p) => p.mc) }] : []),
+      ...(see.admin ? [{ name: "Admin + ค่ารถ", color: COST_HEX.admin, values: trend.map((p) => p.admin + p.travel) }] : []),
+      ...(see.agency ? [{ name: "Agency", color: COST_HEX.agency, values: trend.map((p) => p.agency) }] : []),
+    ];
+    const hatched = trend.map((p) => p.open || p.forecast > 0);
+    const shown = trend.map((_, i) => costSeries.reduce((a, sr) => a + (sr.values[i] ?? 0), 0));
+    const actual = shown.filter((v, i) => !hatched[i] && v > 0);
+    const avgCost = actual.length > 1 ? actual.reduce((a, v) => a + v, 0) / actual.length : null;
 
     // 4) Cost รายเดือน: แท่งซ้อนตามประเภท (ความสูง = Cost รวม)
     {
@@ -285,14 +295,10 @@ export async function buildCostDeck(o: CostDeckInput, target: "pptx" | "gslides"
       s.addText(`รวม ${baht(yearCost)}${see.gmv && yearGmv !== null ? ` · GMV ${baht(yearGmv)} · Cost/GMV ${pctOf(costRatio(yearCost, yearGmv))} · ROI ${roiText(roiOf(yearGmv, yearCost))}` : ""}`,
         { x: M, y: 1.2, w: W - 2 * M, h: 0.35, fontSize: 14, bold: true, color: C.text, fontFace: FONT, margin: 0, isTextBox: true });
       shapeBars(pres, s, {
-        labels, box: { x: M, y: 1.55, w: W - 2 * M, h: 4.95 }, showValue: true, stacked: true,
-        series: [
-          ...(see.mc ? [{ name: "Mc", color: COST_HEX.mc, values: trend.map((p) => p.mc) }] : []),
-          ...(see.admin ? [{ name: "Admin + ค่ารถ", color: COST_HEX.admin, values: trend.map((p) => p.admin + p.travel) }] : []),
-          ...(see.agency ? [{ name: "Agency", color: COST_HEX.agency, values: trend.map((p) => p.agency) }] : []),
-        ],
+        labels, box: { x: M, y: 1.55, w: W - 2 * M, h: 4.95 }, showValue: true, stacked: true, series: costSeries,
+        hatched, avg: avgCost === null ? null : { value: avgCost, label: `เฉลี่ยเดือนที่จบแล้ว ${baht(avgCost)}` },
       });
-      note(s, legend);
+      note(s, `${legend} · ลายทแยง = ยังไม่จบเดือน / มี Forecast${avgCost === null ? "" : " · เส้นประ = เฉลี่ยของเดือนที่จบแล้วและไม่มี Forecast"}`);
     }
 
     // 5) ROI รายเดือน (GMV ÷ Cost)

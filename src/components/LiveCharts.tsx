@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { changeOf } from "@/lib/live-stats";
@@ -24,7 +24,11 @@ export function TableView({ title, children }: { title: string; children: ReactN
  * faded = แท่งที่ยังไม่ใช่ตัวเลขจริง (เช่น คิวที่จองไว้ข้างหน้า) วาดสีจางของชุดเดียวกัน — ใส่ใน Legend ด้วย fadedColor()
  * stack = ชื่อกองของแท่งซ้อน (เช่น TikTok / Shopee): หลายกอง = วางแท่งซ้อนคู่กันในแต่ละกลุ่ม
  */
-export type Series = { name: string; color: string; values: (number | null)[]; faded?: boolean[]; stack?: string };
+export type Series = {
+  name: string; color: string; values: (number | null)[]; faded?: boolean[]; stack?: string;
+  /** กราฟเส้น: เส้นประ (ช่วงก่อนที่เทียบ) · area = พื้นไล่สีใต้เส้น (ช่วงนี้) */
+  dash?: boolean; area?: boolean;
+};
 
 /** สีจางของชุด (แท่งที่ faded + จุดใน Legend ใช้สีเดียวกัน) */
 export const fadedColor = (color: string) => `color-mix(in srgb, ${color} 38%, transparent)`;
@@ -58,16 +62,37 @@ function barPath(x: number, y: number, w: number, h: number) {
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
 
-/** line = กราฟเส้น (สัญลักษณ์เป็นเส้นตามเส้นในกราฟ) */
-export function Legend({ series, line = false }: { series: Pick<Series, "name" | "color">[]; line?: boolean }) {
+/** สัญลักษณ์เส้นใน Legend / กล่องตัวเลข · dash = เส้นประ */
+function LineSwatch({ color, dash, className }: { color: string; dash?: boolean; className?: string }) {
+  return dash
+    ? <span className={cn("h-0 w-3.5 border-t-2 border-dashed", className)} style={{ borderColor: color }} aria-hidden />
+    : <span className={cn("h-0.5 w-3.5 rounded-full", className)} style={{ background: color }} aria-hidden />;
+}
+
+/** สีพื้นสัญลักษณ์ลายทแยง (แท่งที่ตัวเลขยังไม่จบ) — ลายเดียวกับในกราฟ */
+const HATCH_BG = "repeating-linear-gradient(135deg, var(--muted-foreground) 0 1.5px, transparent 1.5px 4px)";
+
+/**
+ * line = กราฟเส้น (สัญลักษณ์เป็นเส้นตามเส้นในกราฟ · ชุดที่ dash = เส้นประ)
+ *   hatch = ความหมายของแท่งลายทแยงในกราฟนี้ (เช่น "ยังไม่จบเดือน") · avg = ความหมายของเส้นประแนวนอน
+ */
+export function Legend({ series, line = false, hatch, avg }: {
+  series: (Pick<Series, "name" | "color"> & { dash?: boolean })[]; line?: boolean; hatch?: string; avg?: string;
+}) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
       {series.map((s) => (
         <span key={s.name} className="inline-flex items-center gap-1.5">
-          <span className={line ? "h-0.5 w-3.5 rounded-full" : "size-2.5 rounded-[3px]"} style={{ background: s.color }} aria-hidden />
+          {line ? <LineSwatch color={s.color} dash={s.dash} /> : <span className="size-2.5 rounded-[3px]" style={{ background: s.color }} aria-hidden />}
           {s.name}
         </span>
       ))}
+      {hatch ? (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-2.5 rounded-[3px] border border-muted-foreground/50" style={{ background: HATCH_BG }} aria-hidden />{hatch}
+        </span>
+      ) : null}
+      {avg ? <span className="inline-flex items-center gap-1.5"><LineSwatch color="var(--muted-foreground)" dash />{avg}</span> : null}
     </div>
   );
 }
@@ -78,8 +103,10 @@ export function Legend({ series, line = false }: { series: Pick<Series, "name" |
  *   stacked = แท่งเดียวซ้อนทุกชุด (ใช้กับค่าที่บวกกันได้เท่านั้น) กล่องตัวเลขบอกสัดส่วน + ยอดรวม
  *     ชุดมี stack หลายค่า = แท่งซ้อนวางคู่กัน (ตามลำดับที่เจอ) แต่ละแท่งซ้อนเฉพาะชุดของกองตัวเอง กล่องตัวเลขแยกกอง + ยอดต่อกอง
  *   compare = false: 2 ชุดไม่ใช่ช่วงที่เทียบกัน (เช่น TikTok / Shopee) กล่องตัวเลขไม่แสดง % ที่เปลี่ยน
+ *   hatched = กลุ่มที่ตัวเลขยังไม่จบ (เดือนที่ยังไม่จบ / มี Forecast) วาดลายทแยงทับแท่ง · avg = เส้นประค่าเฉลี่ย + ป้าย
+ *   extra = บรรทัดเพิ่มท้ายกล่องตัวเลขของกลุ่มนั้น (เช่น จำนวนไลฟ์ · MoM)
  */
-export function BarChart({ categories, tooltipTitles, series, format, formatAxis, highlight, height = 220, label, stacked = false, compare = true }: {
+export function BarChart({ categories, tooltipTitles, series, format, formatAxis, highlight, height = 220, label, stacked = false, compare = true, hatched, avg, extra }: {
   categories: string[];
   /** หัวข้อในกล่องตัวเลข (ไม่ใส่ = ใช้ชื่อแกน) */
   tooltipTitles?: string[];
@@ -91,9 +118,13 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
   label: string;
   stacked?: boolean;
   compare?: boolean;
+  hatched?: boolean[];
+  avg?: { value: number; label: string } | null;
+  extra?: (i: number) => ReactNode;
 }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
+  const hatchId = `hatch${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const n = categories.length;
   const totalAt = (i: number) => series.reduce((a, s) => a + (s.values[i] ?? 0), 0);
   const stacks = stacked ? [...new Set(series.map((s) => s.stack ?? ""))] : [];
@@ -133,6 +164,14 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
     <div ref={ref} className="relative w-full select-none" onMouseLeave={() => setHover(null)}>
       {width > 0 ? (
         <svg width={width} height={height} role="img" aria-label={label} className="block overflow-visible">
+          {hatched?.some(Boolean) ? (
+            <defs>
+              {/* ลายทแยงสีพื้นการ์ด ทับบนแท่งสีเดิม (สีแพลตฟอร์ม / ประเภทยังอ่านออก) */}
+              <pattern id={hatchId} width={6} height={6} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width={2.4} height={6} fill="var(--card)" opacity={0.6} />
+              </pattern>
+            </defs>
+          ) : null}
           {ticks.map((t) => (
             <g key={t}>
               <line x1={pad.l} x2={width - pad.r} y1={y(t)} y2={y(t)} className={t === 0 ? "stroke-muted-foreground/40" : "stroke-border"} strokeWidth={1} />
@@ -140,6 +179,7 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
             </g>
           ))}
           {categories.map((c, i) => {
+            const hatch = hatched?.[i] ? `url(#${hatchId})` : null;
             const gx = pad.l + i * groupW;
             const inner = barW * k + gap * (k - 1);
             // แท่งซ้อน: ไม่จางตาม highlight (สีแยกแพลตฟอร์มต้องอ่านออกทุกแท่ง) เน้นด้วยชื่อตัวหนาแทน
@@ -164,9 +204,13 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
                     <g key={st} className="bar-grow" opacity={dim ? 0.45 : 1} style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}>
                       {parts.map((p, j) => {
                         const h = Math.max(1, p.bottom - p.top - (j > 0 ? gap : 0));
-                        return j === parts.length - 1
-                          ? <path key={p.name} d={barPath(bx, p.top, barW, h)} fill={p.color} />
-                          : <rect key={p.name} x={bx} y={p.top} width={barW} height={h} fill={p.color} />;
+                        const d = j === parts.length - 1 ? barPath(bx, p.top, barW, h) : `M${bx},${p.top}h${barW}v${h}h${-barW}Z`;
+                        return (
+                          <Fragment key={p.name}>
+                            <path d={d} fill={p.color} />
+                            {hatch ? <path d={d} fill={hatch} /> : null}
+                          </Fragment>
+                        );
                       })}
                     </g>
                   );
@@ -174,12 +218,13 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
                   const v = s.values[i];
                   if (v === null || v <= 0) return null;
                   const bx = gx + (groupW - inner) / 2 + j * (barW + gap);
+                  const d = barPath(bx, y(v), barW, y(0) - y(v));
                   // แท่งโตขึ้นจากแกนตอนข้อมูลมาถึง ทยอยจากซ้าย (ลดการเคลื่อนไหว = ไม่โต · globals.css .bar-grow)
                   return (
-                    <path
-                      key={j} d={barPath(bx, y(v), barW, y(0) - y(v))} fill={s.faded?.[i] ? fadedColor(s.color) : s.color} opacity={dim ? 0.45 : 1}
-                      className="bar-grow" style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}
-                    />
+                    <g key={j} className="bar-grow" opacity={dim ? 0.45 : 1} style={{ animationDelay: `${Math.min(i * 12, 360)}ms` }}>
+                      <path d={d} fill={s.faded?.[i] ? fadedColor(s.color) : s.color} />
+                      {hatch ? <path d={d} fill={hatch} /> : null}
+                    </g>
                   );
                 })}
                 {i % every === 0 ? (
@@ -192,6 +237,18 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
               </g>
             );
           })}
+          {/* เส้นประค่าเฉลี่ย (ทับแท่ง · ไม่รับการชี้ แท่งด้านล่างยังชี้ได้) */}
+          {avg && avg.value > 0 && avg.value <= top ? (
+            <g className="fade-in pointer-events-none">
+              <line x1={pad.l} x2={width - pad.r} y1={y(avg.value)} y2={y(avg.value)} stroke="var(--foreground)" strokeOpacity={0.55} strokeWidth={1.25} strokeDasharray="4 4" />
+              <text
+                x={width - pad.r} y={y(avg.value) - 5} textAnchor="end" stroke="var(--card)" strokeWidth={3} strokeLinejoin="round"
+                className="fill-foreground text-[11px] font-semibold tabular-nums" style={{ paintOrder: "stroke" }}
+              >
+                {avg.label}
+              </text>
+            </g>
+          ) : null}
         </svg>
       ) : <div style={{ height }} />}
       {hover !== null && width > 0 ? (
@@ -221,8 +278,19 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
             </div>
           ) : null}
           {k === 2 && compare ? <ChangeText cur={series[0].values[hover]} prev={series[1].values[hover]} className="mt-1 block text-right" /> : null}
+          {extra ? <div className="mt-1 space-y-0.5 border-t pt-1">{extra(hover)}</div> : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** บรรทัด "ชื่อ ... ค่า" ในกล่องตัวเลขของกราฟ (ใช้กับ extra) */
+export function TipRow({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-semibold tabular-nums">{children}</span>
     </div>
   );
 }
@@ -232,11 +300,12 @@ export function BarChart({ categories, tooltipTitles, series, format, formatAxis
  *   ค่าที่ไม่มี = เส้นขาด ไม่ลากข้าม · จุดเดี่ยวที่ไม่มีเพื่อนบ้านวาดเป็นจุดให้เห็น · หลายเส้น = ป้ายชื่อปลายเส้น (ปลายเส้นเบียดกัน = เหลือแค่ Legend)
  *   เส้นวาดจากซ้ายไปขวา (ลดการเคลื่อนไหว = ไม่ขยับ · globals.css .line-draw / .dot-pop)
  *   compare = 2 เส้นเป็นช่วงที่เทียบกัน (กล่องตัวเลขแสดง % ที่เปลี่ยน)
+ *   ชุดที่ dash = เส้นประ (ค่อยๆ วาดผ่าน mask เพราะ line-draw ใช้ dasharray อยู่แล้ว) · area = พื้นไล่สีใต้เส้นจางเข้า
  */
 export function LineChart({ categories, tooltipTitles, series, format, formatAxis, height = 260, label, compare = false }: {
   categories: string[];
   tooltipTitles?: string[];
-  series: Pick<Series, "name" | "color" | "values">[];
+  series: Pick<Series, "name" | "color" | "values" | "dash" | "area">[];
   format: (v: number | null) => string;
   formatAxis: (v: number) => string;
   height?: number;
@@ -245,6 +314,7 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
 }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const n = categories.length;
   const ticks = niceTicks(Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0))));
   const top = ticks[ticks.length - 1] || 1;
@@ -292,10 +362,36 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
             <text key={i} x={x(i)} y={height - 8} textAnchor="middle" className="fill-muted-foreground text-[11px] tabular-nums">{c}</text>
           ) : null))}
           {hover !== null ? <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={pad.t + plotH} className="stroke-muted-foreground/50" strokeWidth={1} /> : null}
+          {/* พื้นไล่สีใต้เส้น (ใต้ทุกเส้น) */}
+          {series.map((s, k) => {
+            const last = lastOf(s.values), first = s.values.findIndex((v) => v !== null);
+            if (!s.area || first < 0 || last <= first) return null;
+            return (
+              <g key={`area${s.name}`} className="fade-in">
+                <defs>
+                  <linearGradient id={`${uid}a${k}`} x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0" stopColor={s.color} stopOpacity={0.2} />
+                    <stop offset="1" stopColor={s.color} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <path d={`${pathOf(s.values)}L${x(last)},${pad.t + plotH}L${x(first)},${pad.t + plotH}Z`} fill={`url(#${uid}a${k})`} />
+              </g>
+            );
+          })}
           {/* วาดจากเส้นท้าย เส้นแรกอยู่บนสุด: จุดที่ค่ารวมเท่าค่าแพลตฟอร์ม เส้นรวม (ท้ายสุด) จะไม่บังสีแพลตฟอร์ม */}
-          {painted.map((s) => (
-            <path key={s.name} d={pathOf(s.values)} pathLength={1} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="line-draw" />
-          ))}
+          {painted.map((s) => {
+            const d = pathOf(s.values);
+            if (!s.dash) return <path key={s.name} d={d} pathLength={1} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="line-draw" />;
+            const mid = `${uid}m${series.indexOf(s)}`;
+            return (
+              <g key={s.name}>
+                <mask id={mid} maskUnits="userSpaceOnUse" x={0} y={0} width={width} height={height}>
+                  <path d={d} pathLength={1} fill="none" stroke="#fff" strokeWidth={6} strokeLinejoin="round" strokeLinecap="round" className="line-draw" />
+                </mask>
+                <path d={d} fill="none" stroke={s.color} strokeWidth={2} strokeDasharray="5 4" strokeLinejoin="round" mask={`url(#${mid})`} />
+              </g>
+            );
+          })}
           {painted.flatMap((s) => s.values.map((v, i) => {
             // จุด = ค่าจริงที่ติดกับช่วงที่ไม่มีค่า (ให้เห็นว่าเส้นตรงนั้นลากข้าม) + จุดท้ายเส้น · ช่วงที่มีค่าติดกันไม่ต้องมีจุด
             const first = s.values.findIndex((c) => c !== null) === i;
@@ -317,7 +413,7 @@ export function LineChart({ categories, tooltipTitles, series, format, formatAxi
           {series.map((s) => (
             <div key={s.name} className="flex items-center justify-between gap-3">
               <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <span className="h-0.5 w-3 rounded-full" style={{ background: s.color }} aria-hidden />{s.name}
+                <LineSwatch color={s.color} dash={s.dash} className="w-3" />{s.name}
               </span>
               <span className="font-semibold tabular-nums">{format(s.values[hover])}</span>
             </div>
@@ -413,6 +509,98 @@ export function Donut({ parts, size = 112, label, center, sub }: {
           {sub ? <span className="text-[10px] text-muted-foreground">{sub}</span> : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * เกจครึ่งวงกลม (ผู้ใช้ขอ 2026-11-23 ตามคลิป Sales Dashboard) — ใช้กับ % achieve เป้ารวมตัวเดียวเท่านั้น (เป้าแยกช่องใช้แถบ เทียบหลายช่องแม่นกว่า)
+ *   ส่วนโค้ง + ปุ่มกวาดจากซ้ายไปถึงค่าจริง (เกิน 100% = เต็มเกจ) · ขีดตามรัศมี = เส้นแบ่งทุก 5% ส่วนที่ทำได้แล้วเข้ม
+ *   mark = ขีดเป้าถึงวันนี้ (สัดส่วนของเป้าเดือน) · center = ตัวเลขกลางเกจ (ตัวเลขจริงต้องอยู่ในข้อความคู่กันเสมอ)
+ */
+export function Gauge({ pct, mark, label, center, width = 240 }: {
+  pct: number | null; mark?: number | null; label: string; center?: ReactNode; width?: number;
+}) {
+  const W = 240, H = 132, cx = 120, cy = 122, r = 94, sw = 14;
+  const p = Math.min(1, Math.max(0, pct ?? 0));
+  const arc = `M${cx - r},${cy}A${r},${r} 0 0 1 ${cx + r},${cy}`;
+  // มุมจากซ้าย (0) ผ่านด้านบน ไปขวา (π) · ปัดทศนิยม 2 ตำแหน่ง (cos/sin ของเซิร์ฟเวอร์กับเบราว์เซอร์ต่างกันที่หลักท้าย = hydration ไม่ตรง)
+  const round = (v: number) => Math.round(v * 100) / 100;
+  const at = (t: number, rad: number) => [round(cx - rad * Math.cos(t * Math.PI)), round(cy - rad * Math.sin(t * Math.PI))] as const;
+  return (
+    <div className="relative mx-auto" style={{ width, maxWidth: "100%", aspectRatio: `${W} / ${H}` }}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="block size-full overflow-visible" role="img" aria-label={label}>
+        {Array.from({ length: 21 }, (_, i) => {
+          // ขีดทุก 5% · ทุก 25% ยาวกว่า
+          const t = i / 20;
+          const [x1, y1] = at(t, r + sw / 2 + 4), [x2, y2] = at(t, r + sw / 2 + (i % 5 === 0 ? 12 : 8));
+          return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} strokeWidth={1.5} strokeLinecap="round" className={p > 0 && t <= p + 1e-9 ? "stroke-foreground/70" : "stroke-border"} />;
+        })}
+        <path d={arc} fill="none" strokeWidth={sw} strokeLinecap="round" className="stroke-muted" />
+        {p > 0 ? (
+          <path d={arc} pathLength={100} fill="none" stroke="var(--viz-cur)" strokeWidth={sw} strokeLinecap="round" strokeDasharray={`${p * 100} 100`} className="gauge-sweep" />
+        ) : null}
+        {mark ? (() => {
+          const [x1, y1] = at(Math.min(1, mark), r - sw / 2 - 4), [x2, y2] = at(Math.min(1, mark), r + sw / 2 + 4);
+          return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--foreground)" strokeWidth={2.5} strokeLinecap="round" />;
+        })() : null}
+        {/* ปุ่มที่ปลายส่วนโค้ง: วางไว้ซ้ายสุดแล้วหมุนรอบจุดกลางไปตามค่า (หมุนพร้อมส่วนโค้ง) */}
+        {pct !== null ? (
+          <g className="gauge-turn" style={{ transform: `rotate(${p * 180}deg)`, transformOrigin: `${cx}px ${cy}px` }}>
+            <circle cx={cx - r} cy={cy} r={8} fill="var(--card)" stroke="var(--viz-cur)" strokeWidth={3.5} />
+          </g>
+        ) : null}
+      </svg>
+      {center !== undefined ? <div className="absolute inset-x-0 bottom-0 flex flex-col items-center leading-tight">{center}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * แถบแบ่งสัดส่วนแนวนอน + รายการแต่ละส่วน (ผู้ใช้ขอ 2026-11-23 แทนโดนัท · อ่านบนมือถือง่ายกว่า)
+ *   2 ส่วน = % ตัวใหญ่หัวท้ายแถบ (แบบคลิป "66% online · 34% in store") · ส่วนคั่นด้วยช่องว่างสีพื้น 2px
+ *   แต่ละแถว: สีของส่วน + ชื่อ + บรรทัดรอง (sub) · ค่า + ป้าย (right) — ไม่ใช้สีอย่างเดียว
+ */
+export function SplitBar({ parts, label, format }: {
+  parts: { key: string; label: ReactNode; value: number; color: string; sub?: ReactNode; right?: ReactNode }[];
+  label: string;
+  format: (v: number) => string;
+}) {
+  const shown = parts.filter((p) => p.value > 0);
+  const total = shown.reduce((a, p) => a + p.value, 0);
+  if (!total) return null;
+  const pctOf = (v: number) => `${((v / total) * 100).toFixed(v / total < 0.1 ? 1 : 0)}%`;
+  const pair = shown.length === 2;
+  return (
+    <div className="min-w-0">
+      {pair ? (
+        <div className="flex items-baseline justify-between gap-3">
+          {shown.map((p, i) => (
+            <span key={p.key} className={cn("flex items-baseline gap-1.5", i === 1 && "flex-row-reverse")}>
+              <span className="text-xl font-bold tabular-nums">{pctOf(p.value)}</span>
+              <span className="text-xs text-muted-foreground">{p.label}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-1.5 flex h-2.5 gap-0.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={`${label}: ${shown.map((p) => `${typeof p.label === "string" ? p.label : p.key} ${pctOf(p.value)}`).join(", ")}`}>
+        {shown.map((p) => <div key={p.key} className="bar-fill h-full first:rounded-l-full last:rounded-r-full" style={{ flex: `${p.value} 1 0`, background: p.color }} />)}
+      </div>
+      <ul className="mt-2.5 divide-y">
+        {shown.map((p) => (
+          <li key={p.key} className="flex items-start gap-2 py-1.5 text-sm">
+            <span className="mt-1.5 size-2.5 shrink-0 rounded-[3px]" style={{ background: p.color }} aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-semibold">{p.label}</span>
+              {p.sub ? <span className="block text-xs text-muted-foreground">{p.sub}</span> : null}
+            </span>
+            <span className="flex shrink-0 flex-col items-end">
+              <span className="font-semibold tabular-nums">{format(p.value)}</span>
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">{pair ? null : pctOf(p.value)}{p.right}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
