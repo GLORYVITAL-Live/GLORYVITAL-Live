@@ -21,7 +21,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { fmtMonthShort, money, monthKey } from "@/lib/format";
 import { parseTierHours, tiersLabel, TRAVEL_END } from "@/lib/pay";
-import { liveTeamLabel, type LiveTeam } from "@/lib/live-team";
+import { canShopee, canTiktok, liveTeamLabel, type LiveTeam } from "@/lib/live-team";
+import { useLocal, writeLocal } from "@/lib/hooks";
 import { isTestAccount } from "@/lib/staff-check";
 import type { CommitTier, OwnerScope } from "@/lib/types";
 
@@ -40,6 +41,9 @@ iPhone: เปิดใน Safari → ปุ่มแชร์ → "เพิ่
 const RATE_ALERT = 5000;
 /** Mc / Admin = มีคิว ค่าจ้าง ปฏิทิน (Owner / Marketing ไม่มี) */
 const isCrew = (role: Role) => role === "mc" || role === "admin";
+/** แท็บ Mc แยกทีม TikTok / Shopee (ผู้ใช้ขอ 2026-11-23) · ทีม TikTok + Shopee ขึ้นทั้งสองแท็บ */
+const MC_TEAM_KEY = "glory_staff_mc_team";
+type McTeam = "tiktok" | "shopee";
 type Person = {
   id: number; role: Role; name: string; email: string | null; phone: string | null;
   hourly_rate: number | null; is_extra_admin: boolean; is_salaried: boolean; upcoming: number;
@@ -182,6 +186,10 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
   const [onlyNoEmail, setOnlyNoEmail] = useState(false);
   const [editing, setEditing] = useState<Person | "new" | null>(null);
   const reload = () => setTick((n) => n + 1);
+  const team: McTeam = useLocal(MC_TEAM_KEY) === "shopee" ? "shopee" : "tiktok";
+  const inTeam = (p: Pick<Person, "live_platform">, t: McTeam) => (t === "shopee" ? canShopee(p.live_platform) : canTiktok(p.live_platform));
+  /** คนที่แสดงในแท็บนี้: บทบาทนี้ (Mc = เฉพาะทีมที่เลือก · ทีม TikTok + Shopee อยู่ทั้งสองแท็บ) */
+  const inView = (p: Person) => p.role === role && (role !== "mc" || inTeam(p, team));
 
   useEffect(() => {
     let alive = true;
@@ -194,32 +202,31 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
     return () => { alive = false; };
   }, [tick]);
 
-  const counts = useMemo(() => {
-    const c = { mc: 0, admin: 0, owner: 0, marketing: 0, borrower: 0, noEmail: 0 };
-    for (const p of data?.staff ?? []) {
-      if (p.role in c) c[p.role]++;
-      if (p.role === role && !p.email) c.noEmail++;
-    }
-    return c;
-  }, [data, role]);
+  const counts = { mc: 0, admin: 0, owner: 0, marketing: 0, borrower: 0, noEmail: 0, tiktok: 0, shopee: 0 };
+  for (const p of data?.staff ?? []) {
+    if (p.role in counts) counts[p.role]++;
+    if (inView(p) && !p.email) counts.noEmail++;
+    if (p.role === "mc" && inTeam(p, "tiktok")) counts.tiktok++;
+    if (p.role === "mc" && inTeam(p, "shopee")) counts.shopee++;
+  }
 
   // รายชื่อที่น่าจะซ้ำ (เบอร์เดียวกัน / ชื่อเดียวกันเมื่อตัด Mc / Admin) = อาจลงชื่อซ้ำ
   const dups = useMemo(() => dupGroups(data?.staff ?? []), [data]);
   const dupOf = useMemo(() => new Map(dups.flatMap((g) => g.people.map((p) => [p.id, g] as const))), [dups]);
   const roleDups = dups.filter((g) => g.people[0].role === role);
-  // คนในบทบาทนี้ที่คิวข้างหน้ายังไม่ขึ้นปฏิทิน (มากไปน้อย)
-  const noCalendar = (data?.staff ?? []).filter((p) => p.role === role && p.calendarMissing)
+  // คนในแท็บนี้ที่คิวข้างหน้ายังไม่ขึ้นปฏิทิน (มากไปน้อย)
+  const noCalendar = (data?.staff ?? []).filter((p) => inView(p) && p.calendarMissing)
     .sort((a, b) => (b.calendarMissing ?? 0) - (a.calendarMissing ?? 0));
-  // แจ้งเตือนเด้งในมือถือ: คนในบทบาทนี้ที่มีอีเมล เปิดแล้ว / ยังไม่เปิด
-  const pushPeople = (data?.staff ?? []).filter((p) => p.role === role && p.pushDevices !== undefined);
+  // แจ้งเตือนเด้งในมือถือ: คนในแท็บนี้ที่มีอีเมล เปิดแล้ว / ยังไม่เปิด
+  const pushPeople = (data?.staff ?? []).filter((p) => inView(p) && p.pushDevices !== undefined);
   const pushOff = pushPeople.filter((p) => !p.pushDevices);
   // เอกสารทำเบิก (เห็นเฉพาะ Owner ที่ดูเอกสารได้): คนใหม่ที่ยังไม่ส่ง + จำนวนที่มีแล้ว
   // เอกสาร (ทำเบิก / ใบ 50 ทวิ / รับเงิน) ของแท็บนี้: เฉพาะฝั่งที่ดูเอกสารได้
   const docsSide = isCrew(role) && (data?.docsScope ? data.docsScope[role as "mc" | "admin"] : !!data?.payDocsViewer);
-  const noPayDocs = (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "missing");
+  const noPayDocs = (data?.staff ?? []).filter((p) => inView(p) && p.payDocs === "missing");
   const payDocsCount = {
-    ok: (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "ok").length,
-    drive: (data?.staff ?? []).filter((p) => p.role === role && p.payDocs === "drive").length,
+    ok: (data?.staff ?? []).filter((p) => inView(p) && p.payDocs === "ok").length,
+    drive: (data?.staff ?? []).filter((p) => inView(p) && p.payDocs === "drive").length,
   };
   const [scanning, setScanning] = useState(false);
   /** จับคู่รายชื่อกับโฟลเดอร์เอกสารเดิมใน Drive ตามชื่อ ("Mc มะนาว" = มะนาว) */
@@ -237,15 +244,13 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
     }
   }
 
-  const list = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (data?.staff ?? [])
-      .filter((p) => p.role === role)
-      .filter((p) => !onlyNoEmail || !p.email)
-      .filter((p) => !q || p.name.toLowerCase().includes(q) || (p.email ?? "").includes(q) || (p.phone ?? "").includes(q))
-      // มีคิวข้างหน้าแต่ไม่มีอีเมลขึ้นก่อน (ต้องแก้ด่วน) แล้วเรียงตามชื่อ
-      .sort((a, b) => Number(!b.email && b.upcoming > 0) - Number(!a.email && a.upcoming > 0) || a.name.localeCompare(b.name, "th"));
-  }, [data, role, search, onlyNoEmail]);
+  const q = search.trim().toLowerCase();
+  const list = (data?.staff ?? [])
+    .filter(inView)
+    .filter((p) => !onlyNoEmail || !p.email)
+    .filter((p) => !q || p.name.toLowerCase().includes(q) || (p.email ?? "").includes(q) || (p.phone ?? "").includes(q))
+    // มีคิวข้างหน้าแต่ไม่มีอีเมลขึ้นก่อน (ต้องแก้ด่วน) แล้วเรียงตามชื่อ
+    .sort((a, b) => Number(!b.email && b.upcoming > 0) - Number(!a.email && a.upcoming > 0) || a.name.localeCompare(b.name, "th"));
 
   if (!data) {
     return error ? <LoadError title="โหลดรายชื่อไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock />;
@@ -281,6 +286,25 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
         </InputGroup>
         {canEditRole(role) ? <Button onClick={() => setEditing("new")}><PlusIcon />เพิ่มคน</Button> : null}
       </div>
+      {role === "mc" ? (
+        <div className="my-2 flex flex-wrap items-center gap-2">
+          <ToggleGroup
+            type="single" spacing={1} value={team} aria-label="ทีม Mc"
+            onValueChange={(v) => { if (v) { writeLocal(MC_TEAM_KEY, v); setOnlyNoEmail(false); } }}
+            className="rounded-full border bg-card p-1"
+          >
+            {(["tiktok", "shopee"] as const).map((t) => (
+              <ToggleGroupItem
+                key={t} value={t}
+                className="gap-1.5 rounded-full! px-3 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!"
+              >
+                {t === "shopee" ? "Shopee" : "TikTok"} <span className="text-xs font-normal">({counts[t]})</span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <span className="text-xs text-muted-foreground">Mc ทีม TikTok + Shopee ขึ้นทั้งสองแท็บ · เปลี่ยนทีมได้ที่ชื่อคนนั้น</span>
+        </div>
+      ) : null}
       {!canEditRole(role) ? (
         <p className="my-1 text-xs text-muted-foreground">รายชื่อ {ROLE_LABEL[role]}: ดูได้อย่างเดียว (ไม่แสดงค่าจ้าง / Commit)</p>
       ) : null}
