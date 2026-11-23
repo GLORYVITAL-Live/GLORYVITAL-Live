@@ -5,6 +5,7 @@ import { isShopeePlatform, platformRaw } from "@/lib/platform";
 //   วันละ 3 ห้อง ห้องละ 3 แถว (ช่อง + Mc / เวลาเริ่ม-จบ / แอดมิน) · วันอาทิตย์ช่องวันสีเหลือง
 //   ห้อง 1 = GLORY MALL, ห้อง 2 = Skin Expert, ห้อง 3 = Cherry Glory · ช่องอื่นของ TikTok = แถว "อื่นๆ"
 //   ไม่รวม Shopee (ผู้ใช้เลือก) และแพลนของ Agency ที่ใช้สตูดิโอของตัวเอง
+//   ช่องที่ทีมใส่เองนอกช่องคิว (กิจกรรม ฯลฯ) เว็บเก็บไว้ (keepTeamCells)
 //     ยกเว้น Agency TDH: ไลฟ์ที่ห้อง 1 ลงตารางด้วย (ผู้ใช้ขอ 2026-11-20) ช่องสีฟ้า "Agency TDH" (แบบรูปที่ผู้ใช้ส่ง)
 //     คิวของ Agency ที่ไลฟ์ต่อกัน (เช่น 19:30–21:30 + 21:30–23:30) รวมเป็นช่องเดียว 19:30–23:30
 //   ส่วนนี้เป็นฟังก์ชันล้วน (ทดสอบได้) · อ่าน DB + เขียนชีตอยู่ที่ src/lib/room-sheet-sync.ts
@@ -38,6 +39,8 @@ export type RoomCell = {
   prompt?: boolean;
   wrap?: boolean;
   border?: boolean;
+  /** ช่องที่ทีมใส่เอง (กิจกรรม ฯลฯ): เขียนค่า + รูปแบบเดิมกลับตามที่อ่านจากชีต (keepTeamCells) */
+  raw?: { value?: unknown; format?: unknown };
 };
 
 /** ช่วงที่รวมเซลล์ (end ไม่นับ) */
@@ -261,6 +264,58 @@ export function keepTeamAdmins(built: RoomSheet, old: string[][], webWritten: (r
     if ((time[a.c0]?.text ?? "") !== at(a.r - 1, a.c0) || (time[a.c1 - 1]?.text ?? "") !== at(a.r - 1, a.c1 - 1)) continue;
     built.rows[a.r][a.c0] = { ...built.rows[a.r][a.c0]!, text };
     kept++;
+  }
+  return kept;
+}
+
+// ---------- ช่องที่ทีมใส่เองในตาราง (กิจกรรม ฯลฯ · ผู้ใช้ขอ 2026-11-23) ----------
+//   เว็บจดตำแหน่งช่องคิวที่วางไว้ (developer metadata ของแท็บ) · ช่องนอกตำแหน่งนั้น (ทั้งรอบก่อนและรอบนี้) ที่มีค่า / สี / เส้นขอบ
+//   = ของทีม เก็บค่า + รูปแบบ + ช่องที่รวมไว้ตามเดิม · ช่องของคิวที่ย้ายไป (อยู่ในตำแหน่งรอบก่อน) = ล้างได้ตามปกติ
+//   คิวใหม่มาลงทับช่องของทีม = คิวชนะ (ต้องเห็นคิวจริง)
+
+/** ตำแหน่งช่องคิวทั้งหมดของตาราง "แถว.คอลัมน์.กว้าง" (แถวบนของคิว · คิวละ 3 แถว) ไว้จดในชีต */
+export const webFootprint = (built: Pick<RoomSheet, "adminCells">) =>
+  built.adminCells.map((a) => `${a.r - 2}.${a.c0}.${a.c1 - a.c0}`).join(",");
+
+/** ข้อความตำแหน่ง -> ชุดช่อง "แถว,คอลัมน์" · ว่าง / อ่านไม่ได้ = null (ยังไม่เคยจด) */
+export function footprintCells(text: string | null | undefined) {
+  if (!text) return null;
+  const out = new Set<string>();
+  for (const part of text.split(",")) {
+    const [r, c0, w] = part.split(".").map(Number);
+    if (![r, c0, w].every(Number.isInteger)) return null;
+    for (let rr = r; rr < r + 3; rr++) for (let c = c0; c < c0 + w; c++) out.add(`${rr},${c}`);
+  }
+  return out;
+}
+
+/** ช่องในแท็บตอนนี้ (อ่านจากชีต): ข้อความที่แสดง + ค่า / รูปแบบดิบ · filled = มีค่า สีพื้น หรือเส้นขอบ */
+export type GridCell = { text: string; value?: unknown; format?: unknown; filled: boolean };
+
+/**
+ * เก็บช่องที่ทีมใส่เองในพื้นที่ชั่วโมงของตาราง (แถว 3 ลงไป · คอลัมน์ D ถึงท้ายตาราง) ใส่กลับเข้าตารางที่จะเขียน
+ *   prev = ตำแหน่งช่องคิวที่เว็บเขียนรอบก่อน (null = ยังไม่เคยจด → ถือว่าเหมือนรอบนี้)
+ *   ช่องที่รวมไว้ของทีม (ไม่ทับช่องคิวรอบก่อน / รอบนี้) = รวมตามเดิม · คืนจำนวนช่องที่เก็บ
+ */
+export function keepTeamCells(built: RoomSheet, cells: (GridCell | null | undefined)[][], merges: RoomMerge[], prev: Set<string> | null) {
+  const now = footprintCells(webFootprint(built)) ?? new Set<string>();
+  const web = (r: number, c: number) => now.has(`${r},${c}`) || !!prev?.has(`${r},${c}`);
+  const inArea = (r: number, c: number) => r >= 2 && r < built.rows.length && c >= HOUR_COL && c < ROOM_COLS;
+  let kept = 0;
+  for (let r = 2; r < built.rows.length; r++) {
+    for (let c = HOUR_COL; c < ROOM_COLS; c++) {
+      const g = cells[r]?.[c];
+      if (!g?.filled || web(r, c) || built.rows[r][c]) continue;
+      built.rows[r][c] = { text: g.text, bg: "#ffffff", raw: { value: g.value, format: g.format } };
+      kept++;
+    }
+  }
+  const have = new Set(built.merges.map((m) => `${m.r0},${m.r1},${m.c0},${m.c1}`));
+  for (const m of merges) {
+    if (have.has(`${m.r0},${m.r1},${m.c0},${m.c1}`) || !inArea(m.r0, m.c0) || !inArea(m.r1 - 1, m.c1 - 1)) continue;
+    let free = true;
+    for (let r = m.r0; r < m.r1 && free; r++) for (let c = m.c0; c < m.c1 && free; c++) if (web(r, c) || (built.rows[r][c] && !built.rows[r][c]!.raw)) free = false;
+    if (free) built.merges.push({ ...m });
   }
   return kept;
 }

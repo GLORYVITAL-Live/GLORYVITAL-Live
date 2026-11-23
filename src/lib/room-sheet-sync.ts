@@ -3,8 +3,9 @@ import type { sheets_v4 } from "googleapis";
 import { spreadsheetIdOf } from "@/lib/frames";
 import { withSyncLock } from "@/lib/lock";
 import {
-  ROOM_AGENCIES, ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, keepTeamAdmins, nameKey, pairRoomSlots, roomSheetText, teamTabTitle,
-  type RawAgency, type RawSide, type RoomCell, type RoomSheet,
+  ROOM_AGENCIES, ROOM_COLS, adminDayCounts, adminSummaryEdits, buildRoomSheet, footprintCells, keepTeamAdmins, keepTeamCells, nameKey, pairRoomSlots,
+  roomSheetText, teamTabTitle, webFootprint,
+  type GridCell, type RawAgency, type RawSide, type RoomCell, type RoomSheet,
 } from "@/lib/room-sheet";
 import { sheetsApi } from "@/lib/sheet";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -14,6 +15,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 //   ทุกชั่วโมง (cron notify รอบต้นชั่วโมง) เดือนนี้ + เดือนหน้า · ปุ่ม "ลงตารางห้องไลฟ์" ในหน้า Plan Slot Live = เดือนที่เปิดอยู่
 //   เขียนเฉพาะเมื่อข้อความ / ช่องที่รวมไว้ต่างจากในแท็บ (ไม่มีอะไรเปลี่ยน = ไม่แตะชีต) · แท็บเดิมที่ทีมทำมือไม่ถูกแตะ
 //   ชื่อแอดมินที่ทีมพิมพ์ในตารางก่อนลงแท็บ Admin เสริม = เก็บไว้ (src/lib/room-sheet.ts keepTeamAdmins)
+//   ช่องที่ทีมใส่เองนอกช่องคิว (กิจกรรม ข้อความ สี ช่องรวม) = เก็บไว้ (keepTeamCells · ตำแหน่งช่องคิวจดไว้ที่ CELLS_KEY)
 //   เขียนเฉพาะช่วงตาราง (แถว 1 ถึงวันสุดท้าย) — แถวใต้ตารางที่ทีมเพิ่มเอง (สรุปวันหยุดแอดมิน) ไม่ถูกแตะ (META_KEY)
 //   เดือนที่ยังไม่มีคิวเลยและยังไม่มีแท็บ = ไม่สร้างแท็บว่าง (ยกเว้นกดปุ่มเอง)
 //   สรุปวันหยุดแอดมินที่ทีมทำไว้ใต้ตาราง: กรอกเฉพาะจำนวนคิว (src/lib/room-sheet.ts adminSummaryEdits)
@@ -29,6 +31,7 @@ export type RoomSyncResult = {
 
 const NOTE = "ตาราง (แถว 1 ถึงวันสุดท้าย) เว็บสร้างให้อัตโนมัติจากคิว Mc + Admin ในเว็บ (อัปเดตทุกชั่วโมง หรือกดปุ่ม \"ลงตารางห้องไลฟ์\" ในหน้า Plan Slot Live)"
   + " — แก้ในตารางจะถูกเขียนทับ ให้แก้คิวที่เว็บแทน ยกเว้นชื่อแอดมิน (แถวสีฟ้า) ที่พิมพ์ไว้ในคิวที่เว็บยังไม่มีชื่อแอดมิน = เว็บเก็บไว้ (ลงแท็บ Admin เสริมแล้ว ชื่อจากเว็บจะแทน · คิวย้ายเวลา = ชื่อไม่ตามไป)"
+  + " · ช่องว่างนอกคิวที่ทีมใส่เอง (กิจกรรม ข้อความ สี ช่องรวม) เว็บเก็บไว้ ยกเว้นคิวจริงย้ายมาลงตรงนั้น"
   + " · แถวใต้ตารางเป็นของทีม เว็บไม่แตะ ยกเว้นกรอกจำนวนคิวในสรุปวันหยุด (ช่องที่พิมพ์ off / Holiday / Sick leave ไม่แตะ)";
 
 const rgb = (hex: string) => ({
@@ -38,6 +41,13 @@ const LINE = { style: "SOLID", color: rgb("#000000") };
 
 function cellData(c: RoomCell | null, note?: string): sheets_v4.Schema$CellData {
   if (!c) return {};
+  // ช่องที่ทีมใส่เอง: ค่า + รูปแบบเดิมทุกอย่าง (สี / ฟอนต์ / เส้นขอบ)
+  if (c.raw) {
+    return {
+      ...(c.raw.value ? { userEnteredValue: c.raw.value as sheets_v4.Schema$ExtendedValue } : {}),
+      ...(c.raw.format ? { userEnteredFormat: c.raw.format as sheets_v4.Schema$CellFormat } : {}),
+    };
+  }
   return {
     ...(c.text ? { userEnteredValue: { stringValue: c.text } } : {}),
     userEnteredFormat: {
@@ -116,8 +126,22 @@ function heightRuns(sheetId: number, heights: number[]): sheets_v4.Schema$Reques
  *   ตารางสูงขึ้น / เตี้ยลง (มี / หมดห้อง "อื่นๆ") = แทรก / ลบแถวท้ายตาราง ส่วนของทีมเลื่อนตามไม่ถูกทับ
  */
 const META_KEY = "glory-room-table-rows";
+/** ตำแหน่งช่องคิวที่เว็บเขียนรอบล่าสุด (src/lib/room-sheet.ts webFootprint) — ช่องนอกนี้ที่มีของ = ทีมใส่เอง เก็บไว้ */
+const CELLS_KEY = "glory-room-web-cells";
 
-type TabInfo = { props: sheets_v4.Schema$SheetProperties; metaId: number | null; oldRows: number | null };
+type TabInfo = {
+  props: sheets_v4.Schema$SheetProperties; metaId: number | null; oldRows: number | null;
+  cellsMetaId: number | null; cells: string | null;
+};
+
+/** สีพื้นที่ไม่ใช่ขาว (ทีมระบายสี) */
+function colored(f: sheets_v4.Schema$CellFormat | undefined) {
+  const c = f?.backgroundColorStyle?.rgbColor ?? f?.backgroundColor;
+  if (!c) return false;
+  return (c.red ?? 0) < 0.99 || (c.green ?? 0) < 0.99 || (c.blue ?? 0) < 0.99;
+}
+const bordered = (f: sheets_v4.Schema$CellFormat | undefined) =>
+  !!f?.borders && Object.values(f.borders).some((b) => b && (b as sheets_v4.Schema$Border).style && (b as sheets_v4.Schema$Border).style !== "NONE");
 
 function writeRequests(tab: TabInfo, built: RoomSheet, created: boolean): sheets_v4.Schema$Request[] {
   const sheetId = tab.props.sheetId!;
@@ -162,6 +186,24 @@ function writeRequests(tab: TabInfo, built: RoomSheet, created: boolean): sheets
     out.push({
       updateDimensionProperties: {
         range: { sheetId, dimension: "COLUMNS", startIndex: 0, endIndex: ROOM_COLS }, properties: { pixelSize: 100 }, fields: "pixelSize",
+      },
+    });
+  }
+  // จำตำแหน่งช่องคิวรอบนี้ไว้ (รอบหน้าแยกได้ว่าช่องไหนเป็นของทีม)
+  const cells = webFootprint(built);
+  if (tab.cellsMetaId !== null && tab.cellsMetaId >= 0) {
+    if (tab.cells !== cells) {
+      out.push({
+        updateDeveloperMetadata: {
+          dataFilters: [{ developerMetadataLookup: { metadataId: tab.cellsMetaId } }],
+          developerMetadata: { metadataValue: cells }, fields: "metadataValue",
+        },
+      });
+    }
+  } else if (tab.cellsMetaId === null) {
+    out.push({
+      createDeveloperMetadata: {
+        developerMetadata: { metadataKey: CELLS_KEY, metadataValue: cells, location: { sheetId }, visibility: "DOCUMENT" },
       },
     });
   }
@@ -212,7 +254,8 @@ async function ensureTable(api: Api, spreadsheetId: string, tabs: TabInfo[], mon
     const range = `'${built.title}'!A1:AC${Math.min(old, tab.props.gridProperties?.rowCount ?? 1)}`;
     const [vals, merged] = await Promise.all([
       api.spreadsheets.values.get({ spreadsheetId, range }),
-      api.spreadsheets.get({ spreadsheetId, ranges: [range], fields: "sheets(merges,data(rowData(values(userEnteredFormat(textFormat(foregroundColor))))))" }),
+      // ค่า + รูปแบบดิบทุกช่อง: แยกชื่อแอดมินที่เว็บเขียน (สีตัวอักษร) + คัดลอกช่องที่ทีมใส่เองกลับ
+      api.spreadsheets.get({ spreadsheetId, ranges: [range], fields: "sheets(merges,data(rowData(values(userEnteredValue,userEnteredFormat,formattedValue))))" }),
     ]);
     const formats = merged.data.sheets?.[0]?.data?.[0]?.rowData ?? [];
     const webWritten = (r: number, c: number) => {
@@ -221,13 +264,22 @@ async function ensureTable(api: Api, spreadsheetId: string, tabs: TabInfo[], mon
     };
     // ชื่อแอดมินที่ทีมพิมพ์ไว้ในคิวที่เว็บยังไม่มีชื่อ = เก็บไว้ (เทียบรวมด้วย ไม่มีอะไรเปลี่ยน = ไม่เขียน)
     keepTeamAdmins(built, (vals.data.values ?? []) as string[][], webWritten);
-    const sameText = JSON.stringify(vals.data.values ?? []) === JSON.stringify(roomSheetText(built.rows));
-    const have = (merged.data.sheets?.[0]?.merges ?? []).filter((m) => (m.startRowIndex ?? 0) < old).map((m) => mergeKey({
+    // กิจกรรม / ข้อความ / สี ที่ทีมใส่เองนอกช่องคิว = เก็บไว้ (ผู้ใช้ขอ 2026-11-23)
+    const existingMerges = (merged.data.sheets?.[0]?.merges ?? []).filter((m) => (m.startRowIndex ?? 0) < old).map((m) => ({
       r0: m.startRowIndex ?? 0, r1: m.endRowIndex ?? 0, c0: m.startColumnIndex ?? 0, c1: m.endColumnIndex ?? 0,
-    })).sort();
+    }));
+    const grid: GridCell[][] = formats.map((row) => (row.values ?? []).map((v) => ({
+      text: v.formattedValue ?? "", value: v.userEnteredValue ?? undefined, format: v.userEnteredFormat ?? undefined,
+      filled: !!v.userEnteredValue || colored(v.userEnteredFormat ?? undefined) || bordered(v.userEnteredFormat ?? undefined),
+    })));
+    // ยังไม่เคยจดตำแหน่งช่องคิว (รอบแรกหลังมีระบบนี้) = แยกไม่ได้ว่าช่องไหนเป็นคิวเก่าที่ย้ายไปแล้ว → เขียนใหม่ทั้งตารางแบบเดิม 1 รอบ แล้วจดไว้
+    const prev = footprintCells(tab.cells);
+    if (prev) keepTeamCells(built, grid, existingMerges, prev);
+    const sameText = JSON.stringify(vals.data.values ?? []) === JSON.stringify(roomSheetText(built.rows));
+    const have = existingMerges.map(mergeKey).sort();
     const sameMerges = JSON.stringify(have) === JSON.stringify(built.merges.map(mergeKey).sort());
-    // ยังไม่มีค่าความสูงตารางในแท็บ = เขียนรอบนี้เพื่อจดไว้
-    if (sameText && sameMerges && old === rows && tab.metaId !== null) return { tab, written: false, created: false };
+    // ยังไม่มีค่าความสูงตาราง / ตำแหน่งช่องคิวในแท็บ = เขียนรอบนี้เพื่อจดไว้
+    if (sameText && sameMerges && old === rows && tab.metaId !== null && tab.cells === webFootprint(built)) return { tab, written: false, created: false };
   }
   let created = false;
   if (!tab) {
@@ -251,7 +303,7 @@ async function ensureTable(api: Api, spreadsheetId: string, tabs: TabInfo[], mon
     // แท็บที่อยู่ถัดไปเลื่อนไป 1 ลำดับ (เดือนถัดไปจะได้วางต่อจากแท็บของทีมถูกที่)
     const at = props.index ?? 0;
     for (const t of tabs) if ((t.props.index ?? 0) >= at) t.props.index = (t.props.index ?? 0) + 1;
-    tab = { props, metaId: null, oldRows: rows };
+    tab = { props, metaId: null, oldRows: rows, cellsMetaId: null, cells: null };
     tabs.push(tab);
     created = true;
   }
@@ -261,6 +313,8 @@ async function ensureTable(api: Api, spreadsheetId: string, tabs: TabInfo[], mon
   tab.props.gridProperties = { ...tab.props.gridProperties, rowCount: grid + rows - (tab.oldRows ?? rows) };
   tab.oldRows = rows;
   tab.metaId ??= -1; // จดค่าแล้ว (id จริงไม่ต้องใช้ในรอบนี้)
+  tab.cellsMetaId ??= -1;
+  tab.cells = webFootprint(built);
   return { tab, written: true, created };
 }
 
@@ -286,8 +340,12 @@ async function run(months: string[], createEmpty: boolean, idOverride?: string):
     });
     const tabs: TabInfo[] = (meta.data.sheets ?? []).map((s) => {
       const d = (s.developerMetadata ?? []).find((x) => x.metadataKey === META_KEY);
+      const k = (s.developerMetadata ?? []).find((x) => x.metadataKey === CELLS_KEY);
       const n = Number(d?.metadataValue);
-      return { props: s.properties!, metaId: d?.metadataId ?? null, oldRows: Number.isInteger(n) && n > 0 ? n : null };
+      return {
+        props: s.properties!, metaId: d?.metadataId ?? null, oldRows: Number.isInteger(n) && n > 0 ? n : null,
+        cellsMetaId: k?.metadataId ?? null, cells: k?.metadataValue ?? null,
+      };
     });
     const out: RoomSyncResult[] = [];
     let extra: Set<string> | null = null;

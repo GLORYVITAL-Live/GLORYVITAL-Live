@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  HOUR_COL, ROOM_COLS, WEB_ADMIN_FG, adminDayCounts, adminSummaryEdits, buildRoomSheet, keepTeamAdmins, pairRoomSlots, roomMonths, roomPlace, roomSheetText, roomTabTitle,
+  HOUR_COL, ROOM_COLS, WEB_ADMIN_FG, adminDayCounts, adminSummaryEdits, buildRoomSheet, footprintCells, keepTeamAdmins, keepTeamCells, pairRoomSlots, roomMonths, roomPlace, roomSheetText, roomTabTitle, webFootprint,
   summaryDate,
   type RawSide, type RoomSlot,
 } from "@/lib/room-sheet";
@@ -253,5 +253,42 @@ describe("Agency ที่ไลฟ์ในห้องของเรา (TDH 
     expect(out.find((s) => s.date === "2026-11-07")).toMatchObject({ agency: "TDH", admins: ["บี"], mc: null });
     expect(out.find((s) => s.date === "2026-11-06")).toMatchObject({ mc: "เอ" });
     expect(out.find((s) => s.date === "2026-11-06")!.agency).toBeUndefined();
+  });
+});
+
+describe("ช่องที่ทีมใส่เองในตาราง (กิจกรรม)", () => {
+  const cell = (text: string, filled = true) => ({ text, value: text ? { stringValue: text } : undefined, format: { backgroundColor: { red: 1 } }, filled });
+  test("จดตำแหน่งช่องคิว แล้วอ่านกลับได้ (คิวละ 3 แถว × ความกว้าง)", () => {
+    const t = buildRoomSheet("2026-11", [slot({})]);
+    expect(webFootprint(t)).toBe(`2.${colOf(9)}.2`);
+    const cells = footprintCells(webFootprint(t))!;
+    expect(cells.size).toBe(6);
+    expect(cells.has(`4,${colOf(10)}`)).toBe(true);
+    expect(footprintCells("")).toBeNull();
+    expect(footprintCells("x.1")).toBeNull();
+  });
+
+  test("กิจกรรมนอกช่องคิว = เก็บค่า / รูปแบบ / ช่องรวม · ช่องคิวรอบก่อนที่ย้ายไปแล้ว = ล้าง · คิวมาลงทับ = คิวชนะ", () => {
+    const before = buildRoomSheet("2026-11", [slot({}), slot({ start: "13:30", end: "15:30" })]);
+    const prev = footprintCells(webFootprint(before));
+    // ตอนนี้คิว 13:30 ถูกลบ · ทีมใส่กิจกรรม 16:00–19:00 ห้อง 2 (แถว 5–7) + ข้อความในช่องคิวเก่า 13:30 + ข้อความทับคิว 09:30
+    const now = buildRoomSheet("2026-11", [slot({})]);
+    const grid: ReturnType<typeof cell>[][] = Array.from({ length: now.rows.length }, () => Array(ROOM_COLS).fill(undefined));
+    grid[5][colOf(16)] = cell("กิจกรรม ลอยกระทง");
+    grid[6][colOf(16)] = cell("16:00");
+    grid[6][colOf(18)] = cell("19:00");
+    grid[7][colOf(16)] = cell("", true); // แถวแอดมินว่างแต่ระบายสี
+    grid[2][colOf(13)] = cell("TIK TOK GLORY MALL\nMc เอ"); // คิว 13:30 เก่า (เว็บเขียนไว้) = ล้าง
+    grid[2][colOf(9)] = cell("ทีมพิมพ์ทับคิว"); // ช่องคิวจริง = คิวชนะ
+    const merges = [{ r0: 5, r1: 6, c0: colOf(16), c1: colOf(16) + 3 }, { r0: 2, r1: 3, c0: colOf(13), c1: colOf(13) + 2 }];
+    const kept = keepTeamCells(now, grid, merges, prev);
+    expect(kept).toBe(4);
+    expect(now.rows[5][colOf(16)]).toMatchObject({ text: "กิจกรรม ลอยกระทง", raw: { value: { stringValue: "กิจกรรม ลอยกระทง" } } });
+    expect(now.rows[6][colOf(18)]?.text).toBe("19:00");
+    expect(now.rows[2][colOf(13)]).toBeNull();
+    expect(now.rows[2][colOf(9)]?.text).toBe("TIK TOK GLORY MALL\nMc เอ");
+    expect(now.merges).toContainEqual({ r0: 5, r1: 6, c0: colOf(16), c1: colOf(16) + 3 });
+    expect(now.merges).not.toContainEqual({ r0: 2, r1: 3, c0: colOf(13), c1: colOf(13) + 2 });
+    expect(roomSheetText(now.rows)[5][colOf(16)]).toBe("กิจกรรม ลอยกระทง");
   });
 });
