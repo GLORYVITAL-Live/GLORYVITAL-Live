@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { processCalendarJobs } from "@/lib/calendar";
 import { forecastCron } from "@/lib/cost-forecast-sync";
-import { pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySummary, sendWorkReminders } from "@/lib/notifications";
+import { notifyNewSlots, pruneNotifications, sendOwnerAlerts, sendPreLiveReminders, sendWeeklySummary, sendWorkReminders } from "@/lib/notifications";
 import { sendLoanLiveAlerts, sendLoanReminders } from "@/lib/loans-db";
 import { withSyncLock } from "@/lib/lock";
 import { sendReceiptReminders } from "@/lib/receipts-db";
@@ -61,6 +61,14 @@ async function run() {
   const shopee = onTheHour
     ? await applySheetEdits("shopee").then((x) => ({ updated: x.updated, created: x.created, removed: x.removed })).catch(fail)
     : null;
+  // แท็บ Admin เสริม: อ่านทั้งแท็บชั่วโมงละครั้งด้วย (ผู้ใช้ขอ 2026-11-23: ใส่ remark "Admin เสริม" ในชีตแล้วไม่เข้าเว็บ น้องๆ ไม่เห็นคิว)
+  //   คิวที่เพิ่งเปิดรับ Admin เสริม (remark ใหม่ / แถวใหม่ที่ยังว่าง) → แจ้งคนที่รับคิวได้
+  const admin = onTheHour
+    ? await applySheetEdits("admin", undefined, undefined, { openAlerts: true }).then(async (x) => {
+      const opened = x.newOpen.length ? await notifyNewSlots("admin", x.newOpen) : 0;
+      return { updated: x.updated, created: x.created, removed: x.removed, opened: x.newOpen.length, notified: opened };
+    }).catch(fail)
+    : null;
   // ตารางห้องไลฟ์ของแอดมินประจำ (แท็บ "Live <เดือน> <ปี> (เว็บ)") เดือนนี้ + เดือนหน้า · ชั่วโมงละครั้ง เขียนเฉพาะที่เปลี่ยน
   const rooms = onTheHour
     ? await syncRoomSheet(roomMonths(Date.now()))
@@ -72,5 +80,5 @@ async function run() {
   // งานลงปฏิทินที่ค้าง (เช่น ซิงค์ทั้งแท็บแล้วได้คิวทีละเยอะ — ลงได้ครั้งละ 30) → ทยอยลงทุก 15 นาที ไม่ต้องรอ cron เช้า
   const calendar = await processCalendarJobs(30, 15_000).catch(fail);
   await pruneNotifications().catch(() => undefined);
-  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, shopee, rooms, forecast, calendar });
+  return NextResponse.json({ ok: true, reminders, work, owner, weekly, receipt, slips, tawi, loans, loanLive, sheet, shopee, admin, rooms, forecast, calendar });
 }

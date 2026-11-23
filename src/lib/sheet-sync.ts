@@ -824,8 +824,10 @@ const FIELDS: Field[] = ["platform", "date", "start", "end", "campaign", "person
  * อัปเดต DB ตามแถวในชีต
  *   rowNumbers: เลขแถว (เริ่ม 1) ที่ถูกแก้ ไม่ระบุ = ทุกแถว (ซิงค์ทั้งหมด)
  *   cols: ช่วงคอลัมน์ที่ถูกแก้ (เริ่ม 1) ใช้อัปเดตเฉพาะฟิลด์นั้น ไม่ทับค่าที่เว็บเพิ่งเปลี่ยนในช่องอื่น
+ *   openAlerts: ซิงค์ทั้งหมดแต่ยังคืน newOpen (slot ที่เพิ่งเปิดรับ Admin เสริม) ไว้แจ้งเตือน — ใช้กับซิงค์ทุกชั่วโมงของ cron
+ *     (ปุ่มซิงค์ทั้งหมดไม่แจ้ง กันแจ้งรัว · การแก้ remark ในชีตบางครั้งไม่เข้าเว็บ ผู้ใช้เจอ 2026-11-23)
  */
-export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?: [number, number]) {
+export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?: [number, number], opts: { openAlerts?: boolean } = {}) {
   const result = await withSheetLock(async () => {
     const db = createAdminClient();
     const table = TABLE_OF[tab];
@@ -933,7 +935,7 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         touched.push(p.id);
         updated++;
         // แก้หมายเหตุเป็น "Admin เสริม" ใน slot Admin ที่ยังว่าง = เปิดรับ Admin เสริม (notifyNewSlots ตรวจ needs_extra_admin เอง)
-        if (rowNumbers && tab === "admin" && "remark" in row && row.remark !== s.remark && !s.personId && !row[personCol]) newOpen.push(p.id);
+        if ((rowNumbers || opts.openAlerts) && tab === "admin" && "remark" in row && row.remark !== s.remark && !s.personId && !row[personCol]) newOpen.push(p.id);
         if (rowNumbers && (personCol in row || "status" in row)) {
           changes.push({ id: p.id, oldPerson: s.personId, newPerson: personCol in row ? (row[personCol] as number | null) : s.personId, oldCancelled: s.cancelled });
         }
@@ -1004,6 +1006,8 @@ export async function applySheetEdits(tab: TabKey, rowNumbers?: number[], cols?:
         touched.push(id);
         idWrites.push({ range: `'${TABS[tab]}'!${colLetter(c.id)}${r}`, values: [[id]] });
         if (p.person) calendar.push({ slot_table: table, slot_id: id });
+        // แถวใหม่ที่ยังว่าง (ซิงค์ทุกชั่วโมง) = slot ว่างใหม่ → แจ้งคนที่จองได้ (notifyNewSlots ตรวจ needs_extra_admin เอง)
+        else if (opts.openAlerts) newOpen.push(id);
       }
     }
 
