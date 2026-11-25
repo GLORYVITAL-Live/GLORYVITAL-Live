@@ -3584,7 +3584,7 @@ function FilePreview({ file }: { file: Picked }) {
   if (file.error || !file.parsed) {
     return <Notice variant="warning" icon title={file.name} className="mt-3">{file.error}</Notice>;
   }
-  const { platform, sessions, skipped } = file.parsed;
+  const { platform, sessions, skipped, missing } = file.parsed;
   const times = sessions.map((s) => s.startedAt).sort();
   const t = totalsOf(sessions);
   return (
@@ -3600,6 +3600,13 @@ function FilePreview({ file }: { file: Picked }) {
           <br />บัญชี: {accountsOf(sessions).map((a) => a.name).join(", ")}
         </div>
       ) : <div className="mt-1.5 text-destructive">ไม่พบไลฟ์ในไฟล์นี้</div>}
+      {/* Export บางแบบตัดคอลัมน์ทิ้ง (เช่น Shopee ไม่มีสินค้าที่ขายได้) — เดิมบันทึกเป็น 0 แล้วเทียบดูเหมือนขายไม่ได้ */}
+      {sessions.length && missing.length ? (
+        <Notice variant="warning" icon title="ไฟล์นี้ไม่มีบางคอลัมน์" className="mt-2">
+          ไม่มี {missing.join(", ")} — ไลฟ์จากไฟล์นี้จะเป็น &quot;ไม่มีข้อมูล&quot; ในตัวชี้วัดเหล่านี้ (ไม่ใช่ 0)
+          ไลฟ์ที่เคยอัปจากไฟล์ที่ครบแล้วคงค่าเดิมไว้ · แนะนำ Export ใหม่แบบที่มีคอลัมน์ครบแล้วอัปโหลดแทน
+        </Notice>
+      ) : null}
       {skipped.length ? (
         <TableView title={`ข้าม ${skipped.length} แถว`}>
           <ul className="list-disc pl-5 text-xs text-muted-foreground">
