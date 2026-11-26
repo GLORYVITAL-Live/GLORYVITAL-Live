@@ -77,6 +77,8 @@ type Person = {
   can_view_pay_docs_admin?: boolean;
   /** Owner: ตั้งสิทธิ์จอง Mc ต่อเดือน (เพิ่มพิเศษ / เปิดปิด) ได้ (ไม่มี = ยังไม่ได้รัน SQL 20261107000000_mc_quota) */
   can_manage_quota?: boolean;
+  /** Owner: ดูสรุป Mc TikTok (GMV / ROI) ได้แม้ไม่มีสิทธิ์ Analytics (ไม่มี = ยังไม่ได้รัน SQL 20261204000000_tiktok_mc_report) */
+  can_view_tiktok_mc?: boolean;
   /** ทีมอื่น: ชื่อทีม / แผนก (ไม่มี = ยังไม่ได้รัน SQL 20261110000000_equipment_loans) */
   team_name?: string;
 };
@@ -510,6 +512,7 @@ export function StaffManager({ scope, canGrantPlan = false }: { scope: OwnerScop
           docsScope={data.docsScope ?? { mc: !!data.payDocsViewer, admin: !!data.payDocsViewer }}
           docsAdminReady={data.staff.some((p) => p.can_view_pay_docs_admin !== undefined)}
           quotaReady={data.staff.some((p) => p.can_manage_quota !== undefined)}
+          tiktokReady={data.staff.some((p) => p.can_view_tiktok_mc !== undefined)}
           others={editing === "new" ? [] : data.staff.filter((p) => p.role === editing.role && p.id !== editing.id)}
           onClose={(changed) => {
             setEditing(null);
@@ -646,12 +649,14 @@ function DuplicatePanel({ role, groups, onMerged }: { role: "mc" | "admin"; grou
   );
 }
 
-function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan, viewReady, notifyReady, teamReady, docsScope, docsAdminReady, quotaReady, others, onClose }: {
+function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan, viewReady, notifyReady, teamReady, docsScope, docsAdminReady, quotaReady, tiktokReady, others, onClose }: {
   person: Person | null;
   /** แสดงปุ่มลบคนนี้ (Mc / Admin = เฉพาะเจ้าของระบบ) */
   canDelete: boolean;
   /** รัน SQL 20261107000000_mc_quota แล้ว (มีคอลัมน์กำหนดสิทธิ์จอง Mc) */
   quotaReady: boolean;
+  /** รัน SQL 20261204000000_tiktok_mc_report แล้ว (มีคอลัมน์ดูสรุป Mc TikTok) */
+  tiktokReady: boolean;
   roles: Role[];
   defaultRole: Role;
   isMe: boolean;
@@ -723,6 +728,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
   const payDocsViewer = docsScope.mc && docsScope.admin;
   // กำหนดสิทธิ์จอง Mc ต่อเดือน (ตาราง slot > รายวัน ใต้ช่วงเปิดจอง) — Owner ที่จัดการได้ทั้ง Mc + Admin ได้อยู่แล้ว
   const [quota, setQuota] = useState(person?.can_manage_quota ?? false);
+  // ดูสรุป Mc TikTok (ผลงาน Mc) — คนที่ดู Analytics ได้ + จัดการ Mc เห็นอยู่แล้ว
+  const [tiktokView, setTiktokView] = useState(person?.can_view_tiktok_mc ?? false);
   const fullPerm = perm.mc === "edit" && perm.admin === "edit";
   // ฝั่ง Mc ครอบหลักฐานไลฟ์อยู่แล้ว (จัดการ Mc = จัดการหลักฐานได้ / ดู Mc = ดูหลักฐานได้)
   const proofsLevel: Level = RANK[perm.mc] > RANK[perm.proofs] ? perm.mc : perm.proofs;
@@ -809,6 +816,8 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
         ...(role === "owner" && !isMe && payDocsViewer && (docsAdminReady || docs.admin) ? { can_view_pay_docs_admin: docs.admin } : {}),
         // กำหนดสิทธิ์จอง Mc: ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(role === "owner" && !isMe && (quotaReady || quota) ? { can_manage_quota: quota } : {}),
+        // ดูสรุป Mc TikTok: ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
+        ...(role === "owner" && !isMe && (tiktokReady || tiktokView) ? { can_view_tiktok_mc: tiktokView } : {}),
         // รับอีเมลแจ้งยกเลิก (ตั้งให้ตัวเองได้) ส่งเมื่อรัน SQL แล้ว หรือติ๊กไว้ (ยังไม่รัน = เซิร์ฟเวอร์แจ้งให้รันก่อน)
         ...(role === "owner" && (notifyReady || anyNotify) ? { notify_cancel_mc: notifyOn.mc, notify_cancel_admin: notifyOn.admin } : {}),
         ...(rateDirty ? { rate_from: rateFrom } : {}),
@@ -1257,6 +1266,22 @@ function EditDialog({ person, roles, defaultRole, isMe, canDelete, canGrantPlan,
                     : "ตาราง slot > รายวัน > สิทธิ์จอง Mc ต่อเดือน: ตั้งสิทธิ์จองเพิ่มพิเศษรายคน / เปิดปิดการจำกัด / คำนวณแร็งค์ใหม่ (ต้องมีสิทธิ์ฝั่ง Mc ด้วย)"}
                   {!isMe && quota && !quotaReady ? <span className="block text-destructive">ต้องรัน SQL 20261107000000_mc_quota ใน Supabase ก่อน</span> : null}
                   {!isMe && quota && perm.mc === "none" ? <span className="block text-destructive">ต้องมีสิทธิ์ฝั่ง Mc ด้วย ถึงจะเห็นหน้าผลงาน Mc</span> : null}
+                </span>
+              </span>
+            </Label>
+            <Label className="mt-2 items-start border-t pt-2 leading-snug font-normal">
+              <Checkbox
+                checked={tiktokView || (perm.analytics !== "none" && perm.mc === "edit")} disabled={isMe || (perm.analytics !== "none" && perm.mc === "edit")}
+                onCheckedChange={(v) => setTiktokView(v === true)} className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">ดูสรุป Mc TikTok (GMV / ROI)</span>
+                <span className="block text-xs text-muted-foreground">
+                  {perm.analytics !== "none" && perm.mc === "edit"
+                    ? "จัดการ Mc + ดู Analytics ได้ = เห็นอยู่แล้ว"
+                    : "ผลงาน Mc > สรุป Mc TikTok: ค่าจ้าง Mc ทีมเรา · GMV · ROI · ชั่วโมง · % เป้า + ดึงสไลด์ (ต้องจัดการฝั่ง Mc ได้ด้วย · ไม่เปิดหน้า Analytics ทั้งหมดให้)"}
+                  {!isMe && tiktokView && !tiktokReady ? <span className="block text-destructive">ต้องรัน SQL 20261204000000_tiktok_mc_report ใน Supabase ก่อน</span> : null}
+                  {!isMe && tiktokView && perm.mc !== "edit" ? <span className="block text-destructive">ต้องจัดการฝั่ง Mc ได้ด้วย (เห็นค่าจ้าง) ถึงจะเห็นแท็บนี้</span> : null}
                 </span>
               </span>
             </Label>

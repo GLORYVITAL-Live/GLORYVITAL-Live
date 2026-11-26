@@ -15,6 +15,7 @@ import { applyPeriods } from "@/lib/periods";
 import { ownerText, spanLen } from "@/lib/plan-clash";
 import { sheetsApi } from "@/lib/sheet";
 import { createAdminClient } from "@/lib/supabase/server";
+import type { TiktokMcMonth } from "@/lib/tiktok-mc-calc";
 
 /** อ่านชีตของทีมจำไว้กี่นาที (ทีมกรอกเพิ่ม = หน้า Cost อัปเดตภายในเวลานี้) */
 const SHEET_TTL = 5 * 60_000;
@@ -116,6 +117,48 @@ export async function costReport(month: string | null, see: CostSee): Promise<Co
       : [],
     sheet: { ready: sheet.ready, error: sheet.error },
   };
+}
+
+/**
+ * สรุป Mc TikTok ทีมเรา รายเดือนของทั้งปี (src/lib/tiktok-mc-calc.ts) · โหลดทีละเดือนเหมือน costTrend
+ *   ค่าจ้าง Mc + GMV ของเรา = แถว "TikTok ของเรา" ของหน้า Cost (ต้องคิดแถว Agency ด้วย GMV ของเราจึงถูก แต่ไม่ส่งตัวเลข Agency ออกไป)
+ *   ชั่วโมง = คิว Mc แท็บ Deal Mc ที่เริ่มแล้ว (ถึงจุดตัดเดียวกับค่าจ้าง) · เป้า = live_targets ของช่อง TikTok (ยังไม่ได้รัน SQL = ไม่มีเป้า)
+ */
+export async function tiktokMcTrend(year: string): Promise<TiktokMcMonth[]> {
+  const see: CostSee = { mc: true, admin: false, agency: true, gmv: true };
+  const sheet = await costSheet();
+  const now = monthKey();
+  const last = year < now.slice(0, 4) ? 12 : year === now.slice(0, 4) ? Number(now.slice(5)) : 0;
+  const db = createAdminClient();
+  type SlotRow = { live_date: string; starts_at: string; ends_at: string; mc: { is_salaried: boolean | null } | null };
+  const [targetRes, slots] = await Promise.all([
+    db.from("live_targets").select("account_id, month, monthly").eq("platform", "TikTok").gte("month", `${year}-01`).lte("month", `${year}-12`),
+    fetchAll<SlotRow>((a, b) => db.from("mc_slots").select("live_date, starts_at, ends_at, mc:staff!mc_id(is_salaried)")
+      .eq("sheet_tab", "mc").eq("is_cancelled", false).not("mc_id", "is", null).or("confirmed.is.null,confirmed.eq.true")
+      .gte("live_date", `${year}-01-01`).lte("live_date", `${year}-12-31`).order("id").range(a, b) as never),
+  ]);
+  const targets = targetRes.error ? [] : targetRes.data ?? [];
+  const out: TiktokMcMonth[] = [];
+  for (let i = 0; i < last; i++) {
+    const key = monthKey(i, `${year}-01`), entries = sheet.months.get(key);
+    const m = await monthData(key, see, sheetCoversPay(entries));
+    const cut = costCut(Date.now(), m.range.last, m.sessions);
+    const ours = costRows({ ...m, cut, see, sheet: entries }).rows.find((r) => r.app === "TikTok" && !r.owner);
+    const monthTargets = targets.filter((t) => t.month === key && Number(t.monthly) > 0);
+    const accounts = new Set(monthTargets.map((t) => String(t.account_id)));
+    const lived = slots.filter((s) => s.live_date.startsWith(key) && Date.parse(s.starts_at) <= Math.min(cut, Date.now()));
+    const hoursOf = (list: SlotRow[]) => Math.round(list.reduce((a, s) => a + (Date.parse(s.ends_at) - Date.parse(s.starts_at)) / 3600_000, 0) * 100) / 100;
+    out.push({
+      month: m.range.key, open: cut !== Infinity,
+      cost: ours?.mc ?? 0, source: ours?.sources.mc ?? "system", gmv: ours?.gmv ?? null,
+      hours: hoursOf(lived), salariedHours: hoursOf(lived.filter((s) => s.mc?.is_salaried)), slots: lived.length,
+      target: monthTargets.length ? monthTargets.reduce((a, t) => a + Number(t.monthly), 0) : null,
+      targetGmv: monthTargets.length && m.sessions
+        ? m.sessions.filter((s) => s.platform === "TikTok" && accounts.has(s.accountId)).reduce((a, s) => a + s.gmv, 0)
+        : null,
+    });
+  }
+  return out;
 }
 
 /**
