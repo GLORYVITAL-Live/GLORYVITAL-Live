@@ -18,7 +18,8 @@ export const sessionFromRow = (r: Row): LiveSession => ({
   durationSec: Number(r.duration_sec),
   gmv: Number(r.gmv),
   orders: Number(r.orders),
-  itemsSold: Number(r.items_sold),
+  // null = ไฟล์ที่อัปไม่มีคอลัมน์ชิ้นที่ขาย (SQL 20261203000000_items_sold_unknown)
+  itemsSold: r.items_sold === null || r.items_sold === undefined ? null : Number(r.items_sold),
   customers: n(r.customers),
   viewers: Number(r.viewers),
   views: n(r.views),

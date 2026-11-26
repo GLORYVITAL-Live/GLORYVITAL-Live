@@ -27,7 +27,8 @@ export type LiveSession = {
   durationSec: number;
   gmv: number;
   orders: number;
-  itemsSold: number;
+  /** null = ไฟล์ Export ไม่มีคอลัมน์ชิ้นที่ขาย (ไม่รู้ ไม่ใช่ 0) */
+  itemsSold: number | null;
   customers: number | null;
   viewers: number;
   views: number | null;
@@ -212,17 +213,26 @@ function toWhen(v: string | undefined) {
 // ---------- รูปแบบไฟล์ของแต่ละแพลตฟอร์ม ----------
 
 type Get = (col: string) => string | undefined;
+/** ไฟล์มีคอลัมน์นี้ไหม (คอลัมน์ไม่มี = ไม่รู้ค่า · มีแต่ช่องว่าง = 0) */
+type Has = (col: string) => boolean;
 
 const FORMATS: {
   platform: Platform;
   /** คอลัมน์ที่ต้องมี (ใช้ทั้งหาแถวหัวตาราง และตรวจว่าไฟล์ถูกแบบ) */
   required: string[];
-  build: (get: Get) => Omit<LiveSession, "platform" | "raw"> | null;
+  /** คอลัมน์ที่ไม่บังคับแต่ใช้คิดตัวชี้วัด: ไม่มี = เตือนตอนเลือกไฟล์ (Export บางแบบตัดคอลัมน์ทิ้ง) */
+  important: { col: string; label: string }[];
+  build: (get: Get, has: Has) => Omit<LiveSession, "platform" | "raw"> | null;
 }[] = [
   {
     platform: "TikTok",
     required: ["Creator ID", "Launched Time", "Duration", "LIVE-attributed GMV (฿)", "Orders Paid", "Viewers"],
-    build: (get) => {
+    important: [
+      { col: "LIVE-attributed items sold", label: "ชิ้นที่ขาย (LIVE-attributed items sold)" },
+      { col: "Product Impressions", label: "Product Impressions" },
+      { col: "Product Clicks", label: "Product Clicks" },
+    ],
+    build: (get, has) => {
       const startedAt = toWhen(get("Launched Time"));
       const accountId = get("Creator ID") ?? "";
       if (!startedAt || !accountId) return null;
@@ -234,7 +244,7 @@ const FORMATS: {
         durationSec: toSeconds(get("Duration"), "day") ?? 0,
         gmv: toNum(get("LIVE-attributed GMV (฿)")) ?? 0,
         orders: toInt(get("Orders Paid")) ?? 0,
-        itemsSold: toInt(get("LIVE-attributed items sold")) ?? 0,
+        itemsSold: has("LIVE-attributed items sold") ? toInt(get("LIVE-attributed items sold")) ?? 0 : null,
         customers: toInt(get("Unique customers")),
         viewers: toInt(get("Viewers")) ?? 0,
         views: toInt(get("Views")),
@@ -253,7 +263,11 @@ const FORMATS: {
   {
     platform: "Shopee",
     required: ["User Id", "เวลาเริ่มต้น", "ระยะเวลา", "ยอดขาย(คำสั่งซื้อที่ยืนยันแล้ว)", "คำสั่งซื้อ(คำสั่งซื้อที่ยืนยันแล้ว)", "ผู้ชมทั้งหมด"],
-    build: (get) => {
+    important: [
+      { col: "สินค้าที่ขายได้(คำสั่งซื้อที่ยืนยันแล้ว)", label: "สินค้าที่ขายได้ (ชิ้นที่ขาย)" },
+      { col: "ผู้ชมที่มีส่วนร่วม", label: "ผู้ชมที่มีส่วนร่วม" },
+    ],
+    build: (get, has) => {
       const startedAt = toWhen(get("เวลาเริ่มต้น"));
       const id = toNum(get("User Id"));
       if (!startedAt || id === null) return null;
@@ -266,7 +280,7 @@ const FORMATS: {
         durationSec: toSeconds(get("ระยะเวลา"), "day") ?? 0,
         gmv: toNum(get("ยอดขาย(คำสั่งซื้อที่ยืนยันแล้ว)")) ?? 0,
         orders: toInt(get("คำสั่งซื้อ(คำสั่งซื้อที่ยืนยันแล้ว)")) ?? 0,
-        itemsSold: toInt(get("สินค้าที่ขายได้(คำสั่งซื้อที่ยืนยันแล้ว)")) ?? 0,
+        itemsSold: has("สินค้าที่ขายได้(คำสั่งซื้อที่ยืนยันแล้ว)") ? toInt(get("สินค้าที่ขายได้(คำสั่งซื้อที่ยืนยันแล้ว)")) ?? 0 : null,
         customers: null,
         viewers: toInt(get("ผู้ชมทั้งหมด")) ?? 0,
         views: null,
@@ -289,6 +303,8 @@ export type ParsedFile = {
   sessions: LiveSession[];
   /** แถวที่อ่านไม่ได้ (เลขแถวตาม Excel) */
   skipped: { row: number; reason: string }[];
+  /** คอลัมน์สำคัญที่ไฟล์นี้ไม่มี (ชื่อที่แสดง) — ตัวชี้วัดนั้นของไลฟ์ในไฟล์ = ไม่มีข้อมูล */
+  missing: string[];
 };
 
 /** ตาราง -> ไลฟ์ (หาแถวหัวตารางเองใน 10 แถวแรก ดูว่าเป็นไฟล์ของแพลตฟอร์มไหนจากชื่อคอลัมน์) */
@@ -297,6 +313,8 @@ export function parseRows(rows: string[][]): ParsedFile {
     const headerAt = rows.slice(0, 10).findIndex((r) => fmt.required.every((h) => r.includes(h)));
     if (headerAt < 0) continue;
     const header = rows[headerAt];
+    const has: Has = (col) => header.includes(col);
+    const missing = fmt.important.filter((x) => !has(x.col)).map((x) => x.label);
     const byKey = new Map<string, LiveSession>();
     const skipped: ParsedFile["skipped"] = [];
     rows.slice(headerAt + 1).forEach((r, i) => {
@@ -306,7 +324,7 @@ export function parseRows(rows: string[][]): ParsedFile {
         const at = header.indexOf(col);
         return at < 0 ? undefined : r[at];
       };
-      const s = fmt.build(get);
+      const s = fmt.build(get, has);
       if (!s) {
         skipped.push({ row: rowNo, reason: "ไม่มีรหัสบัญชีหรือเวลาเริ่มไลฟ์" });
         return;
@@ -328,7 +346,7 @@ export function parseRows(rows: string[][]): ParsedFile {
       header.forEach((h, j) => { if (h && r[j]) raw[h] = r[j]; });
       byKey.set(key, { platform: fmt.platform, ...s, raw });
     });
-    return { platform: fmt.platform, sessions: [...byKey.values()], skipped };
+    return { platform: fmt.platform, sessions: [...byKey.values()], skipped, missing };
   }
   throw new Error("ไม่รู้จักรูปแบบไฟล์นี้ ต้องเป็นไฟล์ Export รายการไลฟ์จาก TikTok LIVE หรือ Shopee Live");
 }
@@ -339,7 +357,8 @@ export type Totals = {
   lives: number;
   gmv: number;
   orders: number;
-  items: number;
+  /** null = มีไลฟ์ที่ไม่รู้จำนวนชิ้น (ไฟล์ไม่มีคอลัมน์) — ไม่รวมเป็นยอดที่ดูเหมือนขายน้อยลง */
+  items: number | null;
   durationSec: number;
   viewers: number;
   /** ค่าที่มีเฉพาะ TikTok: null = ไม่มีไลฟ์ TikTok ในชุดนี้ */
@@ -361,7 +380,7 @@ export function totalsOf(list: LiveSession[]): Totals {
     t.lives++;
     t.gmv += s.gmv;
     t.orders += s.orders;
-    t.items += s.itemsSold;
+    t.items = t.items === null || s.itemsSold === null ? null : t.items + s.itemsSold;
     t.durationSec += s.durationSec;
     t.viewers += s.viewers;
     if (s.platform === "TikTok") {
@@ -471,7 +490,7 @@ export function cleanSession(v: unknown): LiveSession | null {
     durationSec: cleanInt(o.durationSec) ?? 0,
     gmv,
     orders: cleanInt(o.orders) ?? 0,
-    itemsSold: cleanInt(o.itemsSold) ?? 0,
+    itemsSold: cleanInt(o.itemsSold),
     customers: cleanInt(o.customers),
     viewers: cleanInt(o.viewers) ?? 0,
     views: cleanInt(o.views),

@@ -20,7 +20,8 @@ const toRow = (s: LiveSession, fileName: string, by: string) => ({
   duration_sec: s.durationSec,
   gmv: s.gmv,
   orders: s.orders,
-  items_sold: s.itemsSold,
+  // ไม่รู้จำนวนชิ้น (ไฟล์ไม่มีคอลัมน์) = ไม่ส่งคอลัมน์นี้: ไลฟ์เดิมคงค่าเดิมไว้ (ไม่ทับยอดจากไฟล์ที่ครบ) · ไลฟ์ใหม่ = ค่าเริ่มต้นของตาราง
+  ...(s.itemsSold === null ? {} : { items_sold: s.itemsSold }),
   customers: s.customers,
   viewers: s.viewers,
   views: s.views,
@@ -91,10 +92,13 @@ export async function POST(request: Request) {
   const updated = clean.filter((s) => existing.has(`${s.platform}|${s.accountId}|${s.startedAt}`)).length;
 
   const by = r.me.owner?.name || r.me.email;
-  for (let i = 0; i < clean.length; i += 500) {
-    const { error } = await db.from("live_sessions")
-      .upsert(clean.slice(i, i + 500).map((s) => toRow(s, fileName, by)), { onConflict: "platform,account_id,started_at" });
-    if (error) return fail(error.message, 500);
+  // แยกส่งตามว่ารู้จำนวนชิ้นไหม: ส่งรวมกัน = คอลัมน์ที่บางแถวไม่มีถูกตั้งเป็น null ทั้งแถว (ทับยอดเดิม)
+  for (const part of [clean.filter((s) => s.itemsSold !== null), clean.filter((s) => s.itemsSold === null)]) {
+    for (let i = 0; i < part.length; i += 500) {
+      const { error } = await db.from("live_sessions")
+        .upsert(part.slice(i, i + 500).map((s) => toRow(s, fileName, by)), { onConflict: "platform,account_id,started_at" });
+      if (error) return fail(error.message, 500);
+    }
   }
   const platforms = [...new Set(clean.map((s) => s.platform))].join(", ");
   await db.from("booking_logs").insert({
