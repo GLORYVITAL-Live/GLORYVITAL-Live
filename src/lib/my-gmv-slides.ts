@@ -27,7 +27,7 @@ export async function buildMyGmvDeck(d: MyGmvData, month: string, exportedAt: st
   {
     const s = pres.addSlide();
     s.background = { color: C.dark };
-    text(s, "GLORY VITAL  ·  ยอดขายของฉัน", { x: M, y: 0.6, w: 8, h: 0.4, fontSize: 14, bold: true, color: C.pinkOnDark, charSpacing: 3 });
+    text(s, "GLORY VITAL  ·  ยอดขาย Mc", { x: M, y: 0.6, w: 8, h: 0.4, fontSize: 14, bold: true, color: C.pinkOnDark, charSpacing: 3 });
     text(s, d.name, { x: M, y: 1.7, w: 7.6, h: 1.2, fontSize: 44, bold: true, color: C.white, fit: "shrink" });
     text(s, monText(month) + (sum.partial ? ` (ถึงวันที่ ${sum.uptoDay})` : ""), { x: M, y: 2.95, w: 7.6, h: 0.6, fontSize: 22, color: C.mutedOnDark });
     text(s, `ส่งออกเมื่อ ${exportedAt}`, { x: M, y: H - 0.9, w: 8, h: 0.35, fontSize: 11, color: C.mutedOnDark });

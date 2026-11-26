@@ -10,8 +10,10 @@ import { BarChart, ChangeBadge, TableView } from "@/components/LiveCharts";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { AppDialog, DialogBody, MonthNav, api } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { useLocal, writeLocal } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,54 +27,107 @@ const fmtBaht = (v: number | null) => baht(v);
 /** เวลาส่งออก (เวลาไทย) เช่น 2026-11-26 15:04 */
 const stampNow = () => new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 16).replace("T", " ");
 
-export function MyGmv({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [data, setData] = useState<MyGmvData | null>(null);
-  const [error, setError] = useState("");
-  const [month, setMonth] = useState<string | null>(null);
+/** โหลดยอดขายจาก url (null = ยังไม่โหลด) · เปลี่ยน url = โหลดใหม่ */
+function useGmvData(url: string | null) {
+  const [state, setState] = useState<{ url: string; data: MyGmvData | null; error: string } | null>(null);
   const [tick, setTick] = useState(0);
-
   useEffect(() => {
-    if (!open) return;
+    if (!url) return;
     let alive = true;
-    api<MyGmvData>("/api/my/gmv")
+    api<MyGmvData>(url)
       .then((res) => {
         if (!res.ok) throw new Error(res.message);
-        if (!alive) return;
-        setData(res);
-        setError("");
-        setMonth((m) => (m && m >= res.first && m <= res.last ? m : res.last));
+        if (alive) setState({ url, data: res, error: "" });
       })
-      .catch((err) => { if (alive) setError((err as Error).message); });
+      .catch((err) => { if (alive) setState({ url, data: null, error: (err as Error).message }); });
     return () => { alive = false; };
-  }, [open, tick]);
+  }, [url, tick]);
+  const cur = state && state.url === url ? state : null;
+  return { data: cur?.data ?? null, error: cur?.error ?? "", retry: () => { setState(null); setTick((n) => n + 1); } };
+}
 
-  const cur = data && month ? month : null;
+/** เลือกเดือน + รายงาน · dialog = เลือกเดือนอยู่นอกส่วนที่เลื่อนได้ (ติดหัวหน้าต่าง) */
+function GmvView({ data, dialog = false }: { data: MyGmvData; dialog?: boolean }) {
+  const [month, setMonth] = useState(data.last);
   const go = (by: number) => {
-    if (!data || !cur) return;
-    const next = shiftMonth(cur, by);
+    const next = shiftMonth(month, by);
     if (next >= data.first && next <= data.last) setMonth(next);
   };
+  const nav = <MonthNav label={monText(month)} onPrev={() => go(-1)} onNext={() => go(1)} />;
+  return dialog
+    ? <>{nav}<DialogBody><Report data={data} month={month} /></DialogBody></>
+    : <>{nav}<Report data={data} month={month} /></>;
+}
 
+function GmvState({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return error ? (
+    <div className="py-6 text-center text-sm text-muted-foreground">
+      <strong className="block text-foreground">โหลดยอดขายไม่สำเร็จ</strong>
+      {error}
+      <br />
+      <Button variant="outline" className="mt-3" onClick={onRetry}>ลองใหม่</Button>
+    </div>
+  ) : (
+    <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"><Spinner />กำลังโหลดยอดขาย…</div>
+  );
+}
+
+export function MyGmv({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data, error, retry } = useGmvData(open ? "/api/my/gmv" : null);
   return (
     <AppDialog open={open} onClose={onClose} title="ยอดขายของฉัน" className="sm:max-w-[720px]">
-      {data && cur ? (
-        <>
-          <MonthNav label={monText(cur)} onPrev={() => go(-1)} onNext={() => go(1)} />
-          <DialogBody>
-            <Report data={data} month={cur} />
-          </DialogBody>
-        </>
-      ) : error ? (
-        <div className="py-6 text-center text-sm text-muted-foreground">
-          <strong className="block text-foreground">โหลดยอดขายไม่สำเร็จ</strong>
-          {error}
-          <br />
-          <Button variant="outline" className="mt-3" onClick={() => { setError(""); setTick((n) => n + 1); }}>ลองใหม่</Button>
-        </div>
-      ) : (
-        <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"><Spinner />กำลังโหลดยอดขาย…</div>
-      )}
+      {data ? <GmvView data={data} dialog /> : <GmvState error={error} onRetry={retry} />}
     </AppDialog>
+  );
+}
+
+type McOption = { id: number; name: string; salaried: boolean; platform: string };
+const OWNER_GMV_KEY = "glory_owner_gmv_mc";
+
+/**
+ * หน้าเจ้าของ > ผลงาน Mc > ยอดขายราย Mc (ผู้ใช้ขอ 2026-11-26: Owner ดึงสไลด์ชุดเดียวกับที่ Mc ประจำเห็นได้)
+ *   เลือก Mc (Mc ประจำขึ้นก่อน · จำคนล่าสุด) -> รายงาน + สไลด์ / Excel ของคนนั้น
+ */
+export function McGmvPanel() {
+  const [mcs, setMcs] = useState<McOption[] | null>(null);
+  const [listError, setListError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    api<{ mcs: McOption[] }>("/api/owner/mc-gmv")
+      .then((res) => {
+        if (!res.ok) throw new Error(res.message);
+        if (alive) setMcs(res.mcs);
+      })
+      .catch((err) => { if (alive) setListError((err as Error).message); });
+    return () => { alive = false; };
+  }, []);
+  const saved = Number(useLocal(OWNER_GMV_KEY)) || null;
+  const id = mcs?.some((m) => m.id === saved) ? saved : mcs?.[0]?.id ?? null;
+  const { data, error, retry } = useGmvData(id ? `/api/owner/mc-gmv?id=${id}` : null);
+
+  if (listError) return <div className="mt-4"><GmvState error={listError} onRetry={() => location.reload()} /></div>;
+  return (
+    <div className="mt-4 max-w-3xl space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-lg font-bold">ยอดขายราย Mc</h2>
+        {mcs ? (
+          <Select value={id ? String(id) : undefined} onValueChange={(v) => writeLocal(OWNER_GMV_KEY, v)}>
+            <SelectTrigger aria-label="เลือก Mc" className="h-9 min-w-48 rounded-full bg-card"><SelectValue placeholder="เลือก Mc" /></SelectTrigger>
+            <SelectContent position="popper" className="max-h-80">
+              {mcs.map((m) => (
+                <SelectItem key={m.id} value={String(m.id)}>{m.name}{m.salaried ? " · Mc ประจำ" : ""}{m.platform === "shopee" ? " · Shopee" : ""}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        ชุดเดียวกับที่ Mc ประจำเห็นใน &quot;ตารางของฉัน &gt; ยอดขายของฉัน&quot; · กดปุ่มสไลด์เพื่อดึง PowerPoint / Google Slides
+      </p>
+      <div className="rounded-xl border bg-card p-3 sm:p-4">
+        {data && id ? <GmvView key={id} data={data} /> : <GmvState error={error} onRetry={retry} />}
+      </div>
+    </div>
   );
 }
 

@@ -2,6 +2,7 @@
 
 import { useLocal, writeLocal } from "@/lib/hooks";
 import { CampaignView } from "@/components/CampaignView";
+import { McGmvPanel } from "@/components/MyGmv";
 import { McRankPanel } from "@/components/McRankPanel";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
@@ -12,11 +13,11 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
  */
 
 const PERF_TAB_KEY = "glory_perf_tab";
-const TABS = [["rank", "อันดับ Mc"], ["campaign", "แคมเปญ"]] as const;
+const TABS = [["rank", "อันดับ Mc"], ["campaign", "แคมเปญ"], ["gmv", "ยอดขายราย Mc"]] as const;
 
 export function PerformanceView() {
   const saved = useLocal(PERF_TAB_KEY);
-  const tab = saved === "campaign" ? saved : "rank";
+  const tab = saved === "campaign" || saved === "gmv" ? saved : "rank";
   return (
     <div className="pb-10">
       <ToggleGroup
@@ -33,7 +34,7 @@ export function PerformanceView() {
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
-      {tab === "rank" ? <McRankPanel /> : <CampaignView />}
+      {tab === "rank" ? <McRankPanel /> : tab === "gmv" ? <McGmvPanel /> : <CampaignView />}
     </div>
   );
 }
