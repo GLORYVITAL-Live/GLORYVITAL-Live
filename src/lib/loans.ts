@@ -25,6 +25,11 @@ export const ACTION_TO: Record<LoanAction, LoanStatus> = {
   approve: "approved", reject: "rejected", handover: "borrowed", return: "returned", cancel: "cancelled",
 };
 export const canAct = (status: LoanStatus, action: LoanAction) => ACTION_FROM[action].includes(status);
+/**
+ * คนดูแลอุปกรณ์แก้รายการของคำขอได้ (ผู้ใช้ขอ 2026-11-26: ให้ตรงกับชิ้นที่ส่งให้ยืมจริง)
+ *   คืนแล้วยังแก้ได้ (ให้ประวัติถูก) · ไม่อนุมัติ / ยกเลิก = ไม่มีของออกไป แก้ไม่ได้
+ */
+export const EDITABLE: LoanStatus[] = ["pending", "approved", "borrowed", "returned"];
 
 export type LoanItem = { equipmentId: number; quantity: number; name: string; code: string; category: string };
 export type Loan = {
@@ -254,6 +259,34 @@ export function cleanLoanInput(raw: Record<string, unknown>, now = Date.now()): 
       items: [...items].map(([equipmentId, quantity]) => ({ equipmentId, quantity })),
     },
   };
+}
+
+/** รายการอุปกรณ์ที่แก้ (ชิ้นเดียวกันส่งมาซ้ำ = รวมจำนวน) */
+export function cleanLoanItems(raw: unknown): { items: { equipmentId: number; quantity: number }[] } | { error: string } {
+  const list: unknown[] = Array.isArray(raw) ? raw : [];
+  const items = new Map<number, number>();
+  for (const it of list.slice(0, 50) as { equipmentId?: unknown; quantity?: unknown }[]) {
+    const id = Number(it?.equipmentId), q = Number(it?.quantity);
+    if (!Number.isInteger(id) || id <= 0) return { error: "รายการอุปกรณ์ไม่ถูกต้อง" };
+    if (!Number.isInteger(q) || q <= 0) return { error: "จำนวนต้องเป็นเลขจำนวนเต็มมากกว่า 0" };
+    items.set(id, (items.get(id) ?? 0) + q);
+  }
+  if (!items.size) return { error: "ต้องมีอุปกรณ์อย่างน้อย 1 รายการ (ไม่ได้ให้ยืมอะไรเลย = กดยกเลิกคำขอแทน)" };
+  return { items: [...items].map(([equipmentId, quantity]) => ({ equipmentId, quantity })) };
+}
+
+/** ข้อความสิ่งที่เปลี่ยน เช่น "+ ขาไฟ x1 · − Softbox x1 · ไฟ Nanlite 2 → 1" · ไม่เปลี่ยน = "" */
+export function itemsDiff(before: Pick<LoanItem, "equipmentId" | "quantity" | "name">[], after: Pick<LoanItem, "equipmentId" | "quantity" | "name">[]) {
+  const old = new Map(before.map((i) => [i.equipmentId, i]));
+  const now = new Map(after.map((i) => [i.equipmentId, i]));
+  const out: string[] = [];
+  for (const a of after) {
+    const b = old.get(a.equipmentId);
+    if (!b) out.push(`+ ${a.name} x${a.quantity}`);
+    else if (b.quantity !== a.quantity) out.push(`${a.name} ${b.quantity} → ${a.quantity}`);
+  }
+  for (const b of before) if (!now.has(b.equipmentId)) out.push(`− ${b.name} x${b.quantity}`);
+  return out.join(" · ");
 }
 
 // ---------- ยืมไฟเป็นชุด (ไฟ + Softbox + ขา) ----------

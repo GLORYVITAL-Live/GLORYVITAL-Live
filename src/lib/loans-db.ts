@@ -2,7 +2,7 @@ import "server-only";
 import { notify, notifyMany, type Note } from "@/lib/notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
-  ACTION_TO, HOLDING, LOAN_STATUS_TEXT, canAct, isLiveRoom, liveBlocks, loanLiveClashes, shortages,
+  ACTION_TO, EDITABLE, HOLDING, LOAN_STATUS_TEXT, canAct, isLiveRoom, itemsDiff, liveBlocks, loanLiveClashes, shortages,
   type Loan, type LoanAction, type LoanInput, type LoanStatus, type Stock,
 } from "@/lib/loans";
 
@@ -194,6 +194,50 @@ export async function actOnLoan(id: number, action: LoanAction, actor: { email: 
   await Promise.all([
     notifyMany(notes),
     log(actor.email, actor.name, `${ACTION_TEXT[action]}คำขอยืม #${id} ของ ${whoText(loan)}${reason ? ` (${reason})` : ""}${note ? ` · สภาพ: ${note}` : ""}`, id),
+  ]);
+  return { ok: true };
+}
+
+/**
+ * แก้รายการอุปกรณ์ของคำขอ ให้ตรงกับชิ้นที่ส่งให้ยืมจริง (คนดูแลอุปกรณ์ · ผู้ใช้ขอ 2026-11-26)
+ *   ของในระบบไม่พอในช่วงนั้น = ถามยืนยันก่อน (confirm) · ยืนยันแล้ว (force) บันทึกตามจริง
+ *   เขียนรายการใหม่ก่อน (upsert) แล้วค่อยลบชิ้นที่เอาออก — ล้มกลางทางก็ไม่เหลือคำขอที่ไม่มีของ
+ *   แจ้งผู้ยืม + บันทึกประวัติว่าเปลี่ยนอะไร
+ */
+export async function editLoanItems(id: number, items: { equipmentId: number; quantity: number }[], actor: { email: string; name: string }, force = false) {
+  const loan = await loanById(id);
+  if (!loan) return { error: "ไม่พบคำขอนี้" };
+  if (!EDITABLE.includes(loan.status)) return { error: `คำขอที่${LOAN_STATUS_TEXT[loan.status]}แก้รายการไม่ได้` };
+  const db = createAdminClient();
+  const ids = items.map((i) => i.equipmentId);
+  const { data: eq, error: eqErr } = await db.from("equipment").select("id, name, code, category, quantity").in("id", ids);
+  if (eqErr) return { error: eqErr.message };
+  const byId = new Map((eq ?? []).map((e) => [Number(e.id), e]));
+  const missing = ids.filter((x) => !byId.has(x));
+  if (missing.length) return { error: "มีอุปกรณ์ที่ถูกลบไปแล้ว โหลดหน้าใหม่แล้วลองอีกครั้ง" };
+  const over = items.filter((i) => i.quantity > Number(byId.get(i.equipmentId)!.quantity));
+  if (over.length) return { error: `เกินจำนวนที่มี: ${over.map((i) => `${byId.get(i.equipmentId)!.name} มี ${byId.get(i.equipmentId)!.quantity}`).join(" · ")}` };
+  const after = items.map((i) => ({ ...i, name: String(byId.get(i.equipmentId)!.name) }));
+  const diff = itemsDiff(loan.items, after);
+  if (!diff) return { ok: true, unchanged: true };
+  // คืนแล้ว = ไม่กันของ ไม่ต้องตรวจ · ยังไม่จบ: ตรวจของพอ (ไม่นับคำขอนี้เอง)
+  if (loan.status !== "returned" && !force) {
+    const short = shortages(items, await loanCatalog(), Date.parse(loan.startAt), Date.parse(loan.endAt), id);
+    if (short.length) return { confirm: `ช่วงนี้ของในระบบไม่พอ: ${short.map((s) => `${s.name} เหลือ ${s.left} (ใส่ ${s.want})`).join(" · ")} — ถ้าส่งให้ยืมไปจริงแล้ว กดบันทึกตามจริงได้` };
+  }
+  const { error: upErr } = await db.from("equipment_loan_items")
+    .upsert(items.map((i) => ({ loan_id: id, equipment_id: i.equipmentId, quantity: i.quantity })), { onConflict: "loan_id,equipment_id" });
+  if (upErr) return { error: sqlMsg(upErr.message) };
+  const { error: delErr } = await db.from("equipment_loan_items").delete().eq("loan_id", id).not("equipment_id", "in", `(${ids.join(",")})`);
+  if (delErr) return { error: sqlMsg(delErr.message) };
+  await db.from("equipment_loans").update({ updated_at: new Date().toISOString() }).eq("id", id);
+  const fresh = (await loanById(id)) ?? loan;
+  await Promise.all([
+    log(actor.email, actor.name, `แก้รายการยืม #${id} ของ ${whoText(loan)}: ${diff}${force ? " (บันทึกตามจริง แม้ของในระบบไม่พอ)" : ""}`, id),
+    notify([loan.requester.email], {
+      kind: "loan", page: "borrow", title: "ทีมงานแก้รายการยืมให้ตรงกับของที่ส่งจริง",
+      body: `คำขอ #${id}: ${diff}\nรายการตอนนี้: ${itemsText(fresh)}`,
+    }),
   ]);
   return { ok: true };
 }

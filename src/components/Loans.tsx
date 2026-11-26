@@ -1,9 +1,9 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PhoneIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import { CalendarClockIcon, MapPinIcon, MinusIcon, PackageIcon, PencilIcon, PhoneIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import {
-  LOAN_STATUS_TEXT, OPEN, canAct, companionsFor, isOverdue, leftOf, lightRole, loanLiveClashes, pickRole, roomInfo, shortages,
+  EDITABLE, LOAN_STATUS_TEXT, OPEN, canAct, companionsFor, isOverdue, leftOf, lightRole, loanLiveClashes, pickRole, roomInfo, shortages,
   type CatalogItem, type Hold, type LiveBlock, type Loan, type LoanAction, type LoanStatus, type Stock,
 } from "@/lib/loans";
 import { todayKey } from "@/lib/format";
@@ -411,7 +411,7 @@ export function LoanManager() {
             const warning = short.length ? `ของไม่พอแล้ว: ${short.map((s) => `${s.name} เหลือ ${s.left} (ขอ ${s.want})`).join(" · ")}`
               : clash.length ? `ชนไลฟ์ที่เพิ่มทีหลัง: ${clash.map((c) => `${c.room.replace(/^ห้องไลฟ์\s*/, "ห้อง ")} มีไลฟ์ ${c.what}ให้ยืมได้ ${c.left} แต่ยืมไป ${c.want}`).join(" · ")} — ติดต่อผู้ยืมให้คืนก่อน หรือย้ายเวลาไลฟ์`
                 : "";
-            return <LoanCard key={l.id} loan={l} now={now} manage actions={actionsOf(l)} warning={warning} onDone={reload} />;
+            return <LoanCard key={l.id} loan={l} now={now} manage stock={stockOf(data)} actions={actionsOf(l)} warning={warning} onDone={reload} />;
           })}
         </div>
       )}
@@ -429,13 +429,18 @@ const ACTION_BUTTON: Record<LoanAction, { text: string; variant: "default" | "ou
   cancel: { text: "ยกเลิกคำขอ", variant: "outline" },
 };
 
-function LoanCard({ loan: l, now, manage = false, actions, warning = "", onDone }: {
-  loan: Loan; now: number; manage?: boolean; actions: LoanAction[]; warning?: string; onDone: () => void;
+function LoanCard({ loan: l, now, manage = false, stock, actions, warning = "", onDone }: {
+  loan: Loan; now: number; manage?: boolean;
+  /** คนดูแลอุปกรณ์: ของทั้งหมด + ที่ถูกกันไว้ (ไว้แก้รายการ) */
+  stock?: Stock;
+  actions: LoanAction[]; warning?: string; onDone: () => void;
 }) {
   const toast = useToast();
   const confirm = useConfirm();
   const [asking, setAsking] = useState<LoanAction | null>(null);
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const canEdit = manage && !!stock && EDITABLE.includes(l.status);
   const late = isOverdue(l, now);
 
   async function run(action: LoanAction, extra: { reason?: string; note?: string } = {}) {
@@ -504,8 +509,13 @@ function LoanCard({ loan: l, now, manage = false, actions, warning = "", onDone 
         {l.returnedAt ? <div>รับคืนโดย {l.returnedBy} · {when(l.returnedAt)}{l.returnNote ? ` · สภาพ: ${l.returnNote}` : ""}</div> : null}
       </div>
       {warning ? <p className="mt-2 text-xs font-semibold text-destructive">{warning}</p> : null}
-      {actions.length ? (
+      {actions.length || canEdit ? (
         <div className="mt-3 flex flex-wrap justify-end gap-2">
+          {canEdit ? (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(true)} className="mr-auto pointer-coarse:h-10 pointer-coarse:px-4">
+              <PencilIcon />แก้รายการ
+            </Button>
+          ) : null}
           {actions.map((a) => (
             <Button key={a} size="sm" variant={ACTION_BUTTON[a].variant} disabled={busy || (a === "approve" && !!warning)} onClick={() => press(a)} className="pointer-coarse:h-10 pointer-coarse:px-4">
               {ACTION_BUTTON[a].text}
@@ -514,7 +524,113 @@ function LoanCard({ loan: l, now, manage = false, actions, warning = "", onDone 
         </div>
       ) : null}
       {asking ? <AskDialog action={asking} busy={busy} onClose={() => setAsking(null)} onSubmit={(text) => run(asking, asking === "return" ? { note: text } : { reason: text })} /> : null}
+      {editing && stock ? <EditItemsDialog loan={l} stock={stock} onClose={(saved) => { setEditing(false); if (saved) onDone(); }} /> : null}
     </article>
+  );
+}
+
+/**
+ * แก้รายการอุปกรณ์ของคำขอให้ตรงกับชิ้นที่ส่งให้ยืมจริง (คนดูแลอุปกรณ์ · ผู้ใช้ขอ 2026-11-26)
+ *   ปรับจำนวน / เอาออก / เพิ่มจากรายการอุปกรณ์ · "ว่าง" = เหลือในช่วงยืมนี้ (ไม่นับคำขอนี้เอง)
+ *   ของในระบบไม่พอ = เซิร์ฟเวอร์ถามยืนยันก่อน แล้วบันทึกตามจริงได้ · บันทึกแล้วแจ้งผู้ยืม
+ */
+function EditItemsDialog({ loan: l, stock, onClose }: { loan: Loan; stock: Stock; onClose: (saved: boolean) => void }) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [rows, setRows] = useState(() => l.items.map((i) => ({ id: i.equipmentId, quantity: i.quantity })));
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const span = { startMs: Date.parse(l.startAt), endMs: Date.parse(l.endAt) };
+  const byId = useMemo(() => new Map(stock.catalog.map((c) => [c.id, c])), [stock.catalog]);
+  const nameOf = (id: number) => {
+    const c = byId.get(id), i = l.items.find((x) => x.equipmentId === id);
+    return { name: c?.name ?? i?.name ?? "อุปกรณ์", code: c?.code ?? i?.code ?? "" };
+  };
+  // คืนแล้ว = ไม่กันของ ไม่ต้องบอกว่าง
+  const leftText = (id: number) => {
+    const c = byId.get(id);
+    if (l.status === "returned") return "";
+    return c ? `ว่าง ${leftOf(stock, c, span.startMs, span.endMs, l.id)} จาก ${c.quantity}` : "ไม่อยู่ในรายการที่ให้ยืมได้แล้ว";
+  };
+  const setQty = (id: number, by: number) => setRows((list) => list.map((r) => (r.id === id ? { ...r, quantity: Math.max(1, r.quantity + by) } : r)));
+  const remove = (id: number) => setRows((list) => list.filter((r) => r.id !== id));
+  const add = (id: number) => setRows((list) => (list.some((r) => r.id === id) ? list : [...list, { id, quantity: 1 }]));
+  const q = query.trim().toLowerCase();
+  const results = q
+    ? stock.catalog.filter((c) => !rows.some((r) => r.id === c.id) && `${c.name} ${c.code} ${c.category}`.toLowerCase().includes(q)).slice(0, 20)
+    : [];
+
+  async function save(force = false): Promise<void> {
+    setBusy(true);
+    try {
+      const res = await api<{ message: string; needConfirm?: boolean }>(
+        "/api/loans", { id: l.id, action: "edit", items: rows.map((r) => ({ equipmentId: r.id, quantity: r.quantity })), force }, "PATCH",
+      );
+      if (!res.ok && res.needConfirm) {
+        setBusy(false);
+        const ok = await confirm({ title: "ของในระบบไม่พอในช่วงนี้", description: res.message, confirmText: "บันทึกตามจริง" });
+        if (ok) await save(true);
+        return;
+      }
+      if (!res.ok) throw new Error(res.message);
+      toast(res.message);
+      onClose(true);
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppDialog open onClose={() => onClose(false)} busy={busy} title={`แก้รายการยืม #${l.id}`} description={`${l.requester.name} · ${when(l.startAt)} → ${when(l.endAt)}`}>
+      <DialogBody>
+        <p className="mb-2 text-xs text-muted-foreground">ปรับให้ตรงกับชิ้นที่ส่งให้ยืมจริง บันทึกแล้วระบบแจ้งผู้ยืมว่าเปลี่ยนอะไร</p>
+        <ul className="divide-y rounded-lg border">
+          {rows.map((r) => {
+            const n = nameOf(r.id);
+            return (
+              <li key={r.id} className="flex items-center gap-2 px-2.5 py-2">
+                <span className="min-w-0 flex-1 text-sm leading-tight">
+                  <span className="block truncate font-medium">{n.name}{n.code ? <span className="font-normal text-muted-foreground"> {n.code}</span> : null}</span>
+                  <span className="block text-[11px] text-muted-foreground">{leftText(r.id)}</span>
+                </span>
+                <Button size="icon-sm" variant="outline" aria-label={`ลดจำนวน ${n.name}`} disabled={busy || r.quantity <= 1} onClick={() => setQty(r.id, -1)}><MinusIcon /></Button>
+                <span className="w-6 text-center font-semibold tabular-nums">{r.quantity}</span>
+                <Button size="icon-sm" variant="outline" aria-label={`เพิ่มจำนวน ${n.name}`} disabled={busy} onClick={() => setQty(r.id, 1)}><PlusIcon /></Button>
+                <Button size="icon-sm" variant="ghost" aria-label={`เอา ${n.name} ออก`} disabled={busy} onClick={() => remove(r.id)}><XIcon /></Button>
+              </li>
+            );
+          })}
+          {!rows.length ? <li className="px-2.5 py-3 text-center text-sm text-muted-foreground">ยังไม่มีอุปกรณ์ — เพิ่มจากช่องค้นหาด้านล่าง</li> : null}
+        </ul>
+        <Label htmlFor="loan-edit-search" className="mt-3 mb-1">เพิ่มอุปกรณ์ที่ส่งไปจริง</Label>
+        <InputGroup>
+          <InputGroupAddon><SearchIcon /></InputGroupAddon>
+          <InputGroupInput id="loan-edit-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="พิมพ์ชื่อ / รหัส / หมวด เช่น ขาไฟ, Softbox" />
+        </InputGroup>
+        {results.length ? (
+          <ul className="mt-1.5 divide-y rounded-lg border">
+            {results.map((c) => (
+              <li key={c.id}>
+                <button type="button" disabled={busy} onClick={() => { add(c.id); setQuery(""); }}
+                  className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none">
+                  <span className="min-w-0">
+                    <span className="block truncate">{c.name}{c.code ? <span className="text-muted-foreground"> {c.code}</span> : null}</span>
+                    <span className="block text-[11px] text-muted-foreground">{c.category}{l.status !== "returned" ? ` · ว่าง ${leftOf(stock, c, span.startMs, span.endMs, l.id)} จาก ${c.quantity}` : ""}</span>
+                  </span>
+                  <PlusIcon className="size-4 shrink-0 text-primary" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : q ? <p className="mt-1.5 text-xs text-muted-foreground">ไม่พบอุปกรณ์ที่ตรงกับ &quot;{query.trim()}&quot;</p> : null}
+      </DialogBody>
+      <DialogActions>
+        <Button variant="outline" size="lg" disabled={busy} onClick={() => onClose(false)}>ยกเลิก</Button>
+        <Button size="lg" disabled={busy || !rows.length} onClick={() => save()}>{busy ? "กำลังบันทึก..." : "บันทึกรายการ"}</Button>
+      </DialogActions>
+    </AppDialog>
   );
 }
 

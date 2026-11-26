@@ -1,6 +1,6 @@
 import { fail, ok, requireMe } from "@/lib/api";
-import { cleanLoanInput, type LoanAction } from "@/lib/loans";
-import { LOANS_SQL, actOnLoan, createLoan, listLoans, loanCatalog } from "@/lib/loans-db";
+import { cleanLoanInput, cleanLoanItems, type LoanAction } from "@/lib/loans";
+import { LOANS_SQL, actOnLoan, createLoan, editLoanItems, listLoans, loanCatalog } from "@/lib/loans-db";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Me } from "@/lib/types";
 
@@ -9,6 +9,7 @@ import type { Me } from "@/lib/types";
 //   GET ?mine=1               หน้าขอยืม: เฉพาะคำขอของตัวเองเสมอ
 //   POST  { items, location, purpose, phone, team, startAt, endAt }   ส่งคำขอ (บัญชีทีมอื่น / Marketing)
 //   PATCH { id, action, reason?, note? }   ผู้ยืม: cancel · คนที่เข้าหน้าอุปกรณ์ได้: approve / reject / handover / return / cancel
+//   PATCH { id, action: "edit", items, force? }   คนที่เข้าหน้าอุปกรณ์ได้: แก้รายการให้ตรงกับของที่ส่งจริง
 
 const ACTIONS: LoanAction[] = ["approve", "reject", "handover", "return", "cancel"];
 const managerName = (me: Me) => me.owner?.name || me.admin?.name || me.email;
@@ -63,6 +64,20 @@ export async function PATCH(request: Request) {
   const body = await request.json().catch(() => ({}));
   const id = Number(body?.id), action = body?.action as LoanAction;
   if (!Number.isInteger(id) || id <= 0) return fail("ไม่พบคำขอนี้");
+  // แก้รายการให้ตรงกับของที่ส่งจริง (คนดูแลอุปกรณ์) · ของในระบบไม่พอ = ตอบ needConfirm ให้หน้าเว็บถามก่อน แล้วส่ง force มา
+  if (body?.action === "edit") {
+    if (!r.me.equipment) return fail("แก้รายการยืมได้เฉพาะคนดูแลอุปกรณ์", 403);
+    const c = cleanLoanItems(body?.items);
+    if ("error" in c) return fail(c.error);
+    try {
+      const res = await editLoanItems(id, c.items, { email: r.me.email, name: managerName(r.me) }, body?.force === true);
+      if ("error" in res) return fail(res.error!, res.error === LOANS_SQL ? 409 : 400);
+      if ("confirm" in res) return fail(res.confirm!, 409, { needConfirm: true });
+      return ok({ message: res.unchanged ? "รายการเหมือนเดิม ไม่มีอะไรเปลี่ยน" : "แก้รายการแล้ว แจ้งผู้ยืมแล้ว" });
+    } catch (err) {
+      return errorOf(err);
+    }
+  }
   if (!ACTIONS.includes(action)) return fail("ไม่รู้จักคำสั่งนี้");
   if (action === "reject" && !String(body?.reason ?? "").trim()) return fail("กรุณาใส่เหตุผลที่ไม่อนุมัติ");
   // คนที่เข้าหน้าอุปกรณ์ได้ = จัดการได้ทุกคำขอ · บัญชีทีมอื่น = ยกเลิกคำขอของตัวเองได้อย่างเดียว

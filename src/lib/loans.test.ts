@@ -1,13 +1,33 @@
 // เทสขอยืมอุปกรณ์ (bun test)
 import { describe, expect, test } from "bun:test";
 import {
-  availableQty, cameraRole, canAct, cleanLoanInput, companionsFor, isCameraBody, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, loanLiveClashes, peakHeld, pickRole, roomForPlatform, roomInfo, shortages, type Hold,
+  EDITABLE, availableQty, cameraRole, canAct, cleanLoanInput, cleanLoanItems, companionsFor, itemsDiff, isCameraBody, isOverdue, leftOf, lightRole, liveBlocks, liveConflict, loanLiveClashes, peakHeld, pickRole, roomForPlatform, roomInfo, shortages, type Hold,
 } from "@/lib/loans";
 
 const H = 3600_000;
 const T0 = Date.UTC(2026, 10, 2, 3); // 2 พ.ย. 2026 10:00 เวลาไทย
 const hold = (loanId: number, equipmentId: number, quantity: number, startH: number, endH: number): Hold =>
   ({ loanId, equipmentId, quantity, startMs: T0 + startH * H, endMs: T0 + endH * H });
+
+describe("แก้รายการยืมให้ตรงกับของที่ส่งจริง", () => {
+  test("แก้ได้ตอนรออนุมัติ / อนุมัติ / ยืมอยู่ / คืนแล้ว · ไม่อนุมัติ / ยกเลิก แก้ไม่ได้", () => {
+    expect(EDITABLE).toEqual(["pending", "approved", "borrowed", "returned"]);
+  });
+  test("รวมชิ้นซ้ำ · ตรวจจำนวน · ต้องมีอย่างน้อย 1 รายการ", () => {
+    expect(cleanLoanItems([{ equipmentId: 3, quantity: 1 }, { equipmentId: 3, quantity: 2 }, { equipmentId: 5, quantity: 1 }]))
+      .toEqual({ items: [{ equipmentId: 3, quantity: 3 }, { equipmentId: 5, quantity: 1 }] });
+    expect(cleanLoanItems([{ equipmentId: 3, quantity: 0 }])).toHaveProperty("error");
+    expect(cleanLoanItems([{ equipmentId: "x", quantity: 1 }])).toHaveProperty("error");
+    expect(cleanLoanItems([])).toHaveProperty("error");
+    expect(cleanLoanItems(null)).toHaveProperty("error");
+  });
+  test("ข้อความสิ่งที่เปลี่ยน: เพิ่ม / เปลี่ยนจำนวน / เอาออก · เหมือนเดิม = ว่าง", () => {
+    const before = [{ equipmentId: 1, quantity: 2, name: "ไฟ Nanlite" }, { equipmentId: 2, quantity: 1, name: "Softbox" }];
+    expect(itemsDiff(before, [{ equipmentId: 1, quantity: 1, name: "ไฟ Nanlite" }, { equipmentId: 3, quantity: 1, name: "ขาไฟ" }]))
+      .toBe("ไฟ Nanlite 2 → 1 · + ขาไฟ x1 · − Softbox x1");
+    expect(itemsDiff(before, [...before].reverse())).toBe("");
+  });
+});
 
 describe("จำนวนที่ถูกกันพร้อมกัน", () => {
   const holds = [hold(1, 7, 2, 0, 24), hold(2, 7, 1, 48, 72), hold(3, 8, 5, 0, 100)];
