@@ -74,11 +74,14 @@ export async function roomSheetId(): Promise<{ id: string } | { skipped: string 
   return id ? { id } : { skipped: "ค่า settings.room_sheet_id ไม่ใช่ลิงก์หรือ id ของ Google Sheets" };
 }
 
-/** คิว Mc (แท็บ Deal Mc) + Admin ของเดือน รวมวันแรกของเดือนถัดไป (คิวก่อน 05:00 = แถวของวันสุดท้าย) */
+/**
+ * คิว Mc (แท็บ Deal Mc) + Admin ของเดือน · วันที่ = วันไลฟ์ (หลังเที่ยงคืนนับเป็นวันเดิม)
+ *   โหลดเผื่อวันสุดท้ายของเดือนก่อน (คิว 05:00–07:29 ของวันนั้น = เช้าวันที่ 1 ตามปฏิทิน) · ตัดคิวนอกเดือนตอนวางลงตาราง
+ */
 export async function loadRoomSlots(month: string) {
   const db = createAdminClient();
   const [y, m] = month.split("-").map(Number);
-  const first = `${month}-01`;
+  const first = new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10);
   const next = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
   type Row = Omit<RawSide, "name"> & { person: { name: string } | null };
   const all = async (table: "mc_slots" | "admin_slots") => {
@@ -88,7 +91,7 @@ export async function loadRoomSlots(month: string) {
       const q = table === "mc_slots"
         ? db.from(table).select(`${cols}, campaign, person:staff!mc_id(name)`).eq("sheet_tab", "mc")
         : db.from(table).select(`${cols}, person:staff!admin_id(name)`);
-      const { data, error } = await q.gte("live_date", first).lte("live_date", next).order("id").range(from, from + 999);
+      const { data, error } = await q.gte("live_date", first).lt("live_date", next).order("id").range(from, from + 999);
       if (error) throw new Error(error.message);
       out.push(...((data ?? []) as unknown as Row[]));
       if ((data ?? []).length < 1000) return out.map(({ person, ...x }) => ({ ...x, name: person?.name ?? null }));
@@ -97,7 +100,7 @@ export async function loadRoomSlots(month: string) {
   // แพลนของ Agency ที่ไลฟ์ในห้องของเรา (TDH = ห้อง 1 · ผู้ใช้ขอ 2026-11-20)
   const agency = async () => {
     const { data, error } = await db.from("agency_slots").select("agency, platform, live_date, start_time, end_time")
-      .in("agency", Object.keys(ROOM_AGENCIES)).gte("live_date", first).lte("live_date", next).order("id").limit(5000);
+      .in("agency", Object.keys(ROOM_AGENCIES)).gte("live_date", first).lt("live_date", next).order("id").limit(5000);
     if (error) throw new Error(error.message);
     return (data ?? []) as RawAgency[];
   };

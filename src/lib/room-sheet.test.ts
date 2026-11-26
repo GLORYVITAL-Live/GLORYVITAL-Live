@@ -18,10 +18,14 @@ describe("ตารางห้องไลฟ์ (แท็บ Live <เดื�
     expect(roomMonths(Date.parse("2026-12-15T03:00:00Z"))).toEqual(["2026-12", "2027-01"]);
   });
 
-  test("ตำแหน่ง: คิว 2 ชม. = 2 คอลัมน์เริ่มที่ชั่วโมงที่เริ่ม · ก่อนตี 5 = แถวของวันก่อน", () => {
+  test("ตำแหน่ง: คิว 2 ชม. = 2 คอลัมน์เริ่มที่ชั่วโมงที่เริ่ม · วันที่ = วันไลฟ์ (หลังเที่ยงคืนอยู่ท้ายแถวของวันเดิม)", () => {
     expect(roomPlace({ date: "2026-11-02", start: "09:30", end: "11:30" })).toEqual({ day: "2026-11-02", col: colOf(9), width: 2 });
     expect(roomPlace({ date: "2026-11-02", start: "22:00", end: "02:00" })).toEqual({ day: "2026-11-02", col: colOf(22), width: 4 });
-    expect(roomPlace({ date: "2026-11-02", start: "00:30", end: "02:30" })).toEqual({ day: "2026-11-01", col: colOf(0), width: 2 });
+    // คิว 00:30 ของวันไลฟ์ 2 พ.ย. = ตีครึ่งของเช้า 3 พ.ย. → ท้ายแถวของ 2 พ.ย. (แถว = 05:00 ถึง 05:00 วันถัดไป)
+    expect(roomPlace({ date: "2026-11-02", start: "00:30", end: "02:30" })).toEqual({ day: "2026-11-02", col: colOf(0), width: 2 });
+    // 05:30–07:30 ของวันไลฟ์ 2 พ.ย. = เช้า 3 พ.ย. → ต้นแถวของ 3 พ.ย.
+    expect(roomPlace({ date: "2026-11-02", start: "05:30", end: "07:30" })).toEqual({ day: "2026-11-03", col: colOf(5), width: 2 });
+    expect(roomPlace({ date: "2026-11-02", start: "07:30", end: "09:30" })).toEqual({ day: "2026-11-02", col: colOf(7), width: 2 });
   });
 
   test("หัวตาราง + วัน + ห้อง แบบชีตเดิม", () => {
@@ -69,7 +73,7 @@ describe("ตารางห้องไลฟ์ (แท็บ Live <เดื�
       slot({ platform: "Glory Shop" }),
       slot({ start: "09:00", end: "11:00" }),
       slot({ start: "10:00", end: "12:00", mc: "ดี" }),
-      slot({ start: "03:00", end: "05:00", date: "2026-11-01" }),
+      slot({ start: "03:00", end: "05:00", date: "2026-10-31" }),
     ]);
     expect(t.rows.length).toBe(2 + 30 * 12);
     expect(t.rows[2 + 9][2]?.text).toBe("อื่นๆ");
@@ -77,7 +81,7 @@ describe("ตารางห้องไลฟ์ (แท็บ Live <เดื�
     // 09:00 ได้ช่อง 9–10 · 10:00 เลื่อนไป 11 (กว้างได้ 2 ช่องถึง 12)
     expect(t.rows[2][colOf(11)]?.text).toBe("TIK TOK GLORY MALL\nMc ดี");
     expect(t.rows[3][colOf(11)]?.text).toBe("10:00");
-    // ตี 3 วันที่ 1 = แถวของ 31 ต.ค. (นอกเดือน) ไม่ลง
+    // ตี 3 ของวันไลฟ์ 31 ต.ค. = แถวของ 31 ต.ค. (นอกเดือน) ไม่ลง
     expect(t.placed).toBe(3);
   });
 
@@ -213,7 +217,7 @@ describe("จับคู่ Mc + Admin", () => {
 });
 
 describe("Agency ที่ไลฟ์ในห้องของเรา (TDH = ห้อง 1)", () => {
-  test("ลงห้อง 1 · ช่องสีฟ้า Agency TDH · ข้ามเที่ยงคืน = แถววันก่อน · Agency อื่นไม่ลง", () => {
+  test("ลงห้อง 1 · ช่องสีฟ้า Agency TDH · หลังเที่ยงคืน = ท้ายแถวของวันไลฟ์เดิม · Agency อื่นไม่ลง", () => {
     const slots = pairRoomSlots([], [], [
       { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-03", start_time: "21:30:00", end_time: "02:30:00" },
       { agency: "TDH", platform: "GLORY MALL", live_date: "2026-11-05", start_time: "01:30:00", end_time: "03:30:00" },
@@ -226,14 +230,29 @@ describe("Agency ที่ไลฟ์ในห้องของเรา (TDH 
     expect(t.placed).toBe(2);
     expect(t.rows[day(3)][colOf(21)]).toMatchObject({ text: "Agency TDH", bg: "#00ffff" });
     expect(t.merges).toContainEqual({ r0: day(3), r1: day(3) + 1, c0: colOf(21), c1: colOf(21) + 5 });
-    expect(t.rows[day(4)][colOf(1)]?.text).toBe("Agency TDH"); // 5 พ.ย. 01:30 = แถวของ 4 พ.ย.
+    expect(t.rows[day(5)][colOf(1)]?.text).toBe("Agency TDH"); // วันไลฟ์ 5 พ.ย. 01:30 (ตี 1 ครึ่งเช้า 6 พ.ย.) = ท้ายแถวของ 5 พ.ย.
+    expect(t.rows[day(4)][colOf(1)]).toBeFalsy();
+  });
+
+  test("เคสจริง 30 พ.ย.: 21:30–02:30 ของ 30 พ.ย. ไม่มีคิว 01:30 ของ 1 ธ.ค. มาซ้อน · 1 ธ.ค. 23:30–01:30 + 01:30–03:30 = ช่องเดียว", () => {
+    const tdh = (date: string, start: string, end: string) => ({ agency: "TDH", platform: "GLORY MALL", live_date: date, start_time: start, end_time: end });
+    const slots = pairRoomSlots([], [], [
+      tdh("2026-11-30", "21:30", "02:30"), tdh("2026-12-01", "01:30", "03:30"), tdh("2026-12-01", "23:30", "01:30"),
+    ]);
+    expect(slots.map((s) => `${s.date} ${s.start}-${s.end}`).sort()).toEqual(["2026-11-30 21:30-02:30", "2026-12-01 23:30-03:30"]);
+    const nov = buildRoomSheet("2026-11", slots);
+    expect(nov.placed).toBe(1);
+    const r = 2 + 29 * 9;
+    expect(nov.rows[r][colOf(21)]?.text).toBe("Agency TDH");
+    expect(nov.rows[r][colOf(1)]).toBeFalsy();
+    expect(buildRoomSheet("2026-12", slots).rows[2][colOf(23)]?.text).toBe("Agency TDH");
   });
 
   test("คิว Agency ที่ไลฟ์ต่อกัน = ช่องเดียว (ข้ามเที่ยงคืนได้) · มีช่วงว่างคั่น = แยกช่อง", () => {
     const tdh = (date: string, start: string, end: string) => ({ agency: "TDH", platform: "GLORY MALL", live_date: date, start_time: start, end_time: end });
     const out = pairRoomSlots([], [], [
       tdh("2026-11-03", "19:30", "21:30"), tdh("2026-11-03", "21:30", "23:30"),
-      tdh("2026-11-07", "23:30", "01:30"), tdh("2026-11-08", "01:30", "03:30"),
+      tdh("2026-11-07", "23:30", "01:30"), tdh("2026-11-07", "01:30", "03:30"),
       tdh("2026-11-09", "19:30", "21:30"), tdh("2026-11-09", "22:00", "23:30"),
     ]).map((s) => `${s.date} ${s.start}-${s.end}`);
     expect(out).toEqual(["2026-11-03 19:30-23:30", "2026-11-07 23:30-03:30", "2026-11-09 19:30-21:30", "2026-11-09 22:00-23:30"]);

@@ -118,13 +118,21 @@ const mins = (t: string) => {
 const addDays = (date: string, n: number) => new Date(Date.parse(`${date}T00:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
 const hhmm = (h: number) => `${String(h % 24).padStart(2, "0")}:00`;
 
-/** แถวของวันไหน: ก่อน 05:00 = ต่อจากคืนก่อนหน้า (แถวของวันก่อน) · คอลัมน์ = ชั่วโมงที่เริ่ม */
+/**
+ * วันที่ในเว็บ = "วันไลฟ์" แบบหน้าแพลน: วันไลฟ์ TikTok เริ่ม 07:30 คิวที่เริ่มก่อน 07:30 = หลังเที่ยงคืนของวันนั้น
+ *   (คิว 01:30 ของวันที่ 1 = ตี 1 ครึ่งของเช้าวันที่ 2 ตามปฏิทิน) → แปลงเป็นวันตามปฏิทินก่อนวางลงชีต
+ */
+const LIVE_DAY_START = 7 * 60 + 30;
+const calendarDate = (s: Pick<RoomSlot, "date" | "start">) => (mins(s.start) < LIVE_DAY_START ? addDays(s.date, 1) : s.date);
+
+/** แถวของวันไหน (แถวละ 05:00 ถึง 05:00 วันถัดไป): ตามปฏิทินก่อน 05:00 = แถวของวันก่อน · คอลัมน์ = ชั่วโมงที่เริ่ม */
 export function roomPlace(s: Pick<RoomSlot, "date" | "start" | "end">) {
   const a = mins(s.start), b = mins(s.end);
   const early = a < DAY_START;
   const len = (b - a + 1440) % 1440 || 1440;
+  const cal = calendarDate(s);
   return {
-    day: early ? addDays(s.date, -1) : s.date,
+    day: early ? addDays(cal, -1) : cal,
     col: HOUR_COL + Math.floor(((a - DAY_START + 1440) % 1440) / 60),
     /** คิว 2 ชม. = 2 คอลัมน์ (09:30–11:30 อยู่ช่อง 09:00 + 10:00 แบบในชีตเดิม) */
     width: Math.max(1, Math.round(len / 60)),
@@ -454,7 +462,7 @@ export function pairRoomSlots(mc: RawSide[], admin: RawSide[], agency: RawAgency
  */
 function mergeAgencyRuns(slots: RoomSlot[]): RoomSlot[] {
   const span = (s: RoomSlot) => {
-    const a = Date.parse(`${s.date}T${s.start}:00Z`);
+    const a = Date.parse(`${calendarDate(s)}T${s.start}:00Z`);
     return { a, b: a + (((mins(s.end) - mins(s.start) + 1440) % 1440) || 1440) * 60_000 };
   };
   const groups = new Map<string, RoomSlot[]>();
