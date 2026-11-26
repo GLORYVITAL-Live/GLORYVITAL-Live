@@ -147,15 +147,33 @@ const daysIn = (month: string) => {
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
 };
 
-export type MyGmvMonth = MyGmvAgg & { month: string; partial: boolean };
+/**
+ * live = ชั่วโมงไลฟ์จริงของเดือน (ทุกคิวที่ไลฟ์ไปแล้ว ไม่นับสแตนด์บาย / รอไลฟ์ · รวมคิวที่ยังไม่มียอด) แยกวันแคมเปญ / วันปกติ
+ *   ต่างจาก hours (ชั่วโมงที่มียอด ใช้หาร GMV ต่อชั่วโมง)
+ */
+export type MyGmvMonth = MyGmvAgg & { month: string; partial: boolean; live: { campaign: number; normal: number; total: number } };
+
+const lived = (s: MyGmvSlot) => s.status !== "upcoming" && s.status !== "standby";
 
 /** ยอดรายเดือน first..last (เดือนที่ยังไม่จบ = partial) */
 export function monthSeries(d: Pick<MyGmvData, "slots" | "first" | "today">, last: string): MyGmvMonth[] {
   const out: MyGmvMonth[] = [];
   for (let m = d.first; m <= last; m = shiftMonth(m, 1)) {
-    out.push({ ...total(inMonth(d.slots, m), m, m), month: m, partial: m >= d.today.slice(0, 7) });
+    const list = inMonth(d.slots, m);
+    const h = (camp: boolean) => r2(list.filter((s) => lived(s) && !!s.campaign === camp).reduce((a, s) => a + s.hours, 0));
+    const live = { campaign: h(true), normal: h(false), total: 0 };
+    live.total = r2(live.campaign + live.normal);
+    out.push({ ...total(list, m, m), month: m, partial: m >= d.today.slice(0, 7), live });
   }
   return out;
+}
+
+/** คิวยอดสูงสุดรวมทุกเดือน (ตั้งแต่เดือนแรกที่มีข้อมูล ถึงเดือนที่เลือก) · ยอดที่กรอกรวมหลายคิว = นับเป็นคิวเดียว (เวลาเต็ม) */
+export function topSlots(d: Pick<MyGmvData, "slots">, upto: string, n = 5): MyGmvSlot[] {
+  return d.slots
+    .filter((s) => s.date.slice(0, 7) <= upto && (s.status === "entered" || s.status === "estimated"))
+    .sort((a, b) => (b.gmv ?? 0) - (a.gmv ?? 0) || a.date.localeCompare(b.date))
+    .slice(0, n);
 }
 
 /**

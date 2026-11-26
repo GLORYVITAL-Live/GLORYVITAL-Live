@@ -3,10 +3,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { InfoIcon } from "lucide-react";
 import {
-  SOURCE_NOTE, SPLIT_NOTE, STATUS_TEXT, baht, dayText, hrs, inMonth, monShort, monText, monthSeries, prevNote, quarterSeries, rateOf, shiftMonth, slotGmv, slotRate, slotTime, summary, yearSeries,
+  SOURCE_NOTE, SPLIT_NOTE, STATUS_TEXT, baht, dayText, hrs, inMonth, monShort, monText, monthSeries, prevNote, quarterSeries, rateOf, shiftMonth, slotGmv, slotRate, slotTime, summary, topSlots, yearSeries,
   type MyGmvAgg, type MyGmvData, type MyGmvPeriod, type MyGmvSlot,
 } from "@/lib/my-gmv";
-import { BarChart, ChangeBadge, TableView } from "@/components/LiveCharts";
+import { BarChart, ChangeBadge, Legend, TableView } from "@/components/LiveCharts";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
 import { AppDialog, DialogBody, MonthNav, api } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
@@ -138,6 +138,7 @@ function Report({ data, month }: { data: MyGmvData; month: string }) {
   const at = months.findIndex((m) => m.month === month);
   const note = prevNote(sum);
   const list = inMonth(data.slots, month);
+  const topAll = topSlots(data, month);
   const title = `${data.name} ยอดขาย ${monShort(month)}`;
 
   return (
@@ -192,6 +193,24 @@ function Report({ data, month }: { data: MyGmvData; month: string }) {
         </Section>
       ) : null}
 
+      {months.length > 1 ? (
+        <Section title="ชั่วโมงไลฟ์รายเดือน" note="ทุกคิวที่ไลฟ์แล้ว (ไม่นับสแตนด์บาย / รอไลฟ์) · ชี้ / แตะที่แท่งเพื่อดูชั่วโมงรวม">
+          <Legend series={[{ name: "วันแคมเปญ", color: "var(--viz-cur)" }, { name: "วันปกติ", color: "var(--viz-prev)" }]} hatch="ยังไม่จบเดือน" />
+          <BarChart
+            label="ชั่วโมงไลฟ์รายเดือน" categories={months.map((m) => monShort(m.month))} tooltipTitles={months.map((m) => monText(m.month))} stacked compare={false}
+            series={[
+              { name: "วันแคมเปญ", color: "var(--viz-cur)", values: months.map((m) => m.live.campaign) },
+              { name: "วันปกติ", color: "var(--viz-prev)", values: months.map((m) => m.live.normal) },
+            ]}
+            format={(v) => (v === null ? "-" : hrs(v))} formatAxis={(v) => `${Math.round(v)}`} highlight={at >= 0 ? at : undefined}
+            hatched={months.map((m) => m.partial)} height={180}
+          />
+          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+            รวม: {months.map((m) => `${monShort(m.month)} ${hrs(m.live.total)}`).join(" · ")}
+          </p>
+        </Section>
+      ) : null}
+
       <Section
         title={`รวมรายไตรมาส / รายปี (นับถึง${monText(month)})`}
         note={`ช่วงที่ไม่ครบบอกเดือนที่นับไว้ในวงเล็บ · ยอดจับคู่กับคิวได้ตั้งแต่ ${monText(data.first)} · เทียบช่วงก่อนด้วย GMV ต่อชั่วโมง`}
@@ -215,8 +234,17 @@ function Report({ data, month }: { data: MyGmvData; month: string }) {
       ) : null}
 
       {sum.top.length ? (
-        <Section title={`Top ${sum.top.length} คิวยอดสูงสุด`}>
+        <Section title={`Top ${sum.top.length} คิวยอดสูงสุด ${monText(month)}`}>
           <SlotList list={sum.top} unitTime />
+        </Section>
+      ) : null}
+
+      {topAll.length ? (
+        <Section
+          title={`Top ${topAll.length} คิวยอดสูงสุด รวมทุกเดือน (${data.first === month ? monShort(month) : `${monShort(data.first)}–${monShort(month)}`})`}
+          note="ยอดที่กรอกรวมหลายคิว = นับเป็นคิวเดียว (เวลาเต็ม)"
+        >
+          <SlotList list={topAll} unitTime />
         </Section>
       ) : null}
 

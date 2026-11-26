@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CampInfo } from "@/lib/campaign";
 import type { CtxSlot } from "@/lib/campaign-data";
-import { monthSeries, quarterSeries, summary, toMyGmvSlots, yearSeries } from "@/lib/my-gmv";
+import { monthSeries, quarterSeries, summary, toMyGmvSlots, topSlots, yearSeries } from "@/lib/my-gmv";
 
 const at = (date: string, hm: string) => Date.parse(`${date}T${hm}:00+07:00`);
 let id = 0;
@@ -89,6 +89,16 @@ describe("summary", () => {
   });
   test("รายเดือน: เดือนที่ยังไม่จบ = partial", () => {
     expect(monthSeries(d, "2026-11").map((m) => [m.month, m.gmv, m.partial])).toEqual([["2026-10", 250_000, false], ["2026-11", 380_000, true]]);
+  });
+  test("ชั่วโมงไลฟ์รายเดือน: รวมคิวที่ยังไม่มียอด ไม่นับรอไลฟ์ · แยกวันแคมเปญ", () => {
+    const nov = monthSeries(d, "2026-11")[1];
+    // 3 พ.ย. ปกติ 2 + 25 พ.ย. แคมเปญ 2 + 26 พ.ย. ปกติ (ประมาณ) 2 + 24 พ.ย. ยังไม่มียอด 2 · 28 พ.ย. รอไลฟ์ ไม่นับ
+    expect(nov.live).toEqual({ campaign: 2, normal: 6, total: 8 });
+    expect(nov.hours).toBe(6);
+  });
+  test("Top 5 รวมทุกเดือน ถึงเดือนที่เลือก", () => {
+    expect(topSlots(d, "2026-11", 3).map((s) => [s.date, s.gmv])).toEqual([["2026-11-25", 300_000], ["2026-10-28", 200_000], ["2026-11-03", 60_000]]);
+    expect(topSlots(d, "2026-10").map((s) => s.date)).toEqual(["2026-10-28", "2026-10-05"]);
   });
   test("รายไตรมาส / รายปี: ป้ายบอกช่วงที่ไม่ครบ · เทียบ GMV/ชม.", () => {
     const d2 = { ...d, first: "2026-08" };

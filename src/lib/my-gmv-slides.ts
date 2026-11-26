@@ -1,5 +1,6 @@
 // สไลด์ + ไฟล์ Excel "ยอดขายของฉัน" ของ Mc ประจำ (ตารางของฉัน > ยอดขายของฉัน) — ตัวเลขชุดเดียวกับหน้าเว็บ (src/lib/my-gmv.ts)
-//   สไลด์: ปก · สรุปเดือน · GMV รายเดือน · GMV/ชม. รายเดือน · รวมรายไตรมาส · รวมรายปี · GMV รายวัน · ช่วงเวลา + วันแคมเปญ · Top 5 · รายการคิว
+//   สไลด์: ปก · สรุปเดือน · GMV + ชั่วโมงไลฟ์ รายเดือน · GMV/ชม. รายเดือน · รวมรายไตรมาส · รวมรายปี · GMV รายวัน · ช่วงเวลา + วันแคมเปญ
+//          · Top 5 ของเดือน · Top 5 รวมทุกเดือน · รายการคิว
 //   กราฟวาดด้วยรูปทรง (shapeBars) = PowerPoint และ Google Slides หน้าตาเดียวกัน
 
 import type PptxGenJS from "pptxgenjs";
@@ -8,7 +9,7 @@ import { changeOf } from "@/lib/live-stats";
 import { SLIDE_C as C, SLIDE_FONT as FONT, SLIDE_H as H, SLIDE_M as M, SLIDE_W as W, finish, newDeck, pctColor, pctText, shapeBars } from "@/lib/live-slides";
 import {
   SOURCE_NOTE as sourceNote, SPLIT_NOTE as splitNote, baht, dayText, hrs, inMonth, monShort, monText, monthSeries, prevNote, rateOf, slotGmv, slotRate, slotTime,
-  quarterSeries, statusText, summary, yearSeries,
+  quarterSeries, statusText, summary, topSlots, yearSeries,
   type MyGmvData, type MyGmvPeriod, type MyGmvSlot,
 } from "@/lib/my-gmv";
 
@@ -78,14 +79,34 @@ export async function buildMyGmvDeck(d: MyGmvData, month: string, exportedAt: st
   if (months.length > 1) {
     const labels = months.map((m) => monShort(m.month));
     const hatched = months.map((m) => m.partial);
-    const charts: [string, number[]][] = [
-      ["GMV รายเดือน", months.map((m) => m.gmv)],
-      ["GMV ต่อชั่วโมง รายเดือน", months.map((m) => rateOf(m) ?? 0)],
-    ];
-    for (const [title, values] of charts) {
+    // GMV (บน) + ชั่วโมงไลฟ์แท่งซ้อน วันแคมเปญ / วันปกติ ตัวเลขบนแท่ง = ชั่วโมงรวม (ล่าง) · ผู้ใช้ขอ 2026-11-26
+    {
       const s = pres.addSlide({ masterName: "CONTENT" });
-      s.addText(title, { placeholder: "title" });
-      shapeBars(pres, s, { labels, box: { x: M, y: 1.4, w: W - 2 * M, h: 4.9 }, showValue: true, hatched, series: [{ name: d.name, color: C.pink, values }] });
+      s.addText("GMV และชั่วโมงไลฟ์ รายเดือน", { placeholder: "title" });
+      text(s, "GMV", { x: M, y: 1.2, w: 4, h: 0.32, fontSize: 14, bold: true, color: C.text });
+      shapeBars(pres, s, {
+        labels, box: { x: M, y: 1.2, w: W - 2 * M, h: 2.75 }, showValue: true, hatched, legend: false,
+        series: [{ name: "GMV", color: C.pink, values: months.map((m) => m.gmv) }],
+      });
+      text(s, "ชั่วโมงไลฟ์ (ตัวเลขบนแท่ง = รวม)", { x: M, y: 4.05, w: 5, h: 0.32, fontSize: 14, bold: true, color: C.text });
+      shapeBars(pres, s, {
+        labels, box: { x: M, y: 4.05, w: W - 2 * M, h: 2.4 }, showValue: true, hatched, stacked: true,
+        format: (v) => `${Math.round(v)} ชม.`,
+        series: [
+          { name: "วันแคมเปญ", color: C.pink, values: months.map((m) => m.live.campaign) },
+          { name: "วันปกติ", color: C.blue, values: months.map((m) => m.live.normal) },
+        ],
+      });
+      text(s, `แท่งลายทแยง = เดือนที่ยังไม่จบ · ชั่วโมงไลฟ์ = ทุกคิวที่ไลฟ์แล้ว (ไม่นับสแตนด์บาย / รอไลฟ์) · ${sourceNote}`,
+        { x: M, y: 6.55, w: W - 2 * M, h: 0.3, fontSize: 10, italic: true, color: C.muted, fit: "shrink" });
+    }
+    {
+      const s = pres.addSlide({ masterName: "CONTENT" });
+      s.addText("GMV ต่อชั่วโมง รายเดือน", { placeholder: "title" });
+      shapeBars(pres, s, {
+        labels, box: { x: M, y: 1.4, w: W - 2 * M, h: 4.9 }, showValue: true, hatched,
+        series: [{ name: d.name, color: C.pink, values: months.map((m) => rateOf(m) ?? 0) }],
+      });
       text(s, `แท่งลายทแยง = เดือนที่ยังไม่จบ · ${sourceNote}`, { x: M, y: 6.45, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted });
     }
   }
@@ -205,14 +226,23 @@ export async function buildMyGmvDeck(d: MyGmvData, month: string, exportedAt: st
       ]);
     }
     s.addTable(rows, {
-      x: M, y, w: W - 2 * M, colW: [1.9, 1.6, 1.9, 1.9, 1.9, 1.5, W - 2 * M - 10.7], fontSize: size,
+      x: M, y, w: W - 2 * M, colW: [1.9, 1.6, 1.7, 1.6, 1.9, 1.5, W - 2 * M - 10.2], fontSize: size,
       fontFace: FONT, color: C.text, rowH: size >= 14 ? 0.5 : 0.27, border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
     });
   };
   if (sum.top.length) {
     const s = pres.addSlide({ masterName: "CONTENT" });
-    s.addText(`Top ${sum.top.length} คิวยอดสูงสุด`, { placeholder: "title" });
+    s.addText(`Top ${sum.top.length} คิวยอดสูงสุด ${monText(month)}`, { placeholder: "title" });
     table(s, sum.top, 1.5, 14, true);
+  }
+  // Top 5 รวมทุกเดือน (ตั้งแต่เดือนแรกที่มีข้อมูล ถึงเดือนที่เลือก) · ผู้ใช้ขอ 2026-11-26
+  const topAll = topSlots(d, month);
+  if (topAll.length) {
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    const span = d.first === month ? monShort(month) : `${monShort(d.first)}–${monShort(month)}`;
+    s.addText(`Top ${topAll.length} คิวยอดสูงสุด รวมทุกเดือน (${span})`, { placeholder: "title" });
+    table(s, topAll, 1.5, 14, true);
+    text(s, `ยอดที่กรอกรวมหลายคิว = นับเป็นคิวเดียว (เวลาเต็ม) · ${dataNote}`, { x: M, y: 6.45, w: W - 2 * M, h: 0.3, fontSize: 11, italic: true, color: C.muted, fit: "shrink" });
   }
   const all = inMonth(d.slots, month).filter((x) => x.status !== "upcoming");
   const PER = 18;
@@ -232,8 +262,24 @@ export function myGmvBook(d: MyGmvData, month: string): ExportBook {
   const monthly: ExportSheet = {
     name: "รายเดือน",
     rows: [
-      ["เดือน", "คิวที่นับยอด", "ชั่วโมงที่มียอด", "GMV", "GMV ต่อชั่วโมง", "ส่วนที่ประมาณจาก Export", "หมายเหตุ"],
-      ...months.map((m) => [monText(m.month), m.slots, { v: m.hours, f: "dec" as const }, money(m.gmv), money(rateOf(m)), money(m.estimated), m.partial ? "ยังไม่จบเดือน" : ""]),
+      [
+        "เดือน", "คิวที่นับยอด", "ชั่วโมงที่มียอด", "GMV", "GMV ต่อชั่วโมง", "ส่วนที่ประมาณจาก Export",
+        "ชั่วโมงไลฟ์ วันแคมเปญ", "ชั่วโมงไลฟ์ วันปกติ", "ชั่วโมงไลฟ์ รวม", "หมายเหตุ",
+      ],
+      ...months.map((m) => [
+        monText(m.month), m.slots, { v: m.hours, f: "dec" as const }, money(m.gmv), money(rateOf(m)), money(m.estimated),
+        { v: m.live.campaign, f: "dec" as const }, { v: m.live.normal, f: "dec" as const }, { v: m.live.total, f: "dec" as const }, m.partial ? "ยังไม่จบเดือน" : "",
+      ]),
+    ],
+  };
+  const topAll: ExportSheet = {
+    name: "Top 5 ทุกเดือน",
+    rows: [
+      ["อันดับ", "วันที่", "วัน", "เวลา", "ช่อง", "แคมเปญ", "GMV", "ชั่วโมง", "GMV ต่อชั่วโมง", "ที่มาของยอด"],
+      ...topSlots(d, month).map((x, i) => [
+        i + 1, x.date, dayText(x.date), slotTime(x), x.platform, x.campaign || "วันปกติ", money(x.gmv), { v: x.gmvHours, f: "dec" as const },
+        money(x.gmv !== null && x.gmvHours > 0 ? x.gmv / x.gmvHours : null), statusText(x),
+      ]),
     ],
   };
   const slots: ExportSheet = {
@@ -266,5 +312,5 @@ export function myGmvBook(d: MyGmvData, month: string): ExportBook {
       ]),
     ],
   };
-  return { title: `${d.name} ยอดขาย ${monText(month)}`, sheets: [monthly, periods, slots, groups] };
+  return { title: `${d.name} ยอดขาย ${monText(month)}`, sheets: [monthly, periods, topAll, slots, groups] };
 }
