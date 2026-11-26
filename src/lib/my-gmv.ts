@@ -158,6 +158,71 @@ export function monthSeries(d: Pick<MyGmvData, "slots" | "first" | "today">, las
   return out;
 }
 
+/**
+ * รวมรายไตรมาส / รายปี (ผู้ใช้ขอ 2026-11-26) นับถึงเดือนที่เลือก (upto) เหมือนกราฟรายเดือน
+ *   ป้ายบอกช่วงเดือนที่มีจริงเมื่อไม่ครบ: ข้อมูลเริ่มกลางไตรมาส (ยอดจับคู่กับคิวได้ตั้งแต่ ส.ค. 2026) / ยังไม่จบ / นับถึงเดือนที่เลือก
+ *   change = GMV ต่อชั่วโมง เทียบช่วงก่อนหน้า (เทียบได้แม้ช่วงไม่ครบ) · ยอดรวมเทียบเฉพาะเมื่อทั้งสองช่วงครบ
+ */
+export type MyGmvPeriod = MyGmvAgg & {
+  /** เดือนแรก–เดือนสุดท้ายที่นับ */
+  from: string;
+  to: string;
+  /** จำนวนเดือนที่นับ / จำนวนเดือนเต็มของช่วง */
+  months: number;
+  size: number;
+  /** ยังไม่จบ (มีเดือนหลังเดือนที่เลือก หรือเดือนที่ยังไม่จบ) */
+  partial: boolean;
+  /** ไม่มีข้อมูลต้นช่วง (ข้อมูลเริ่มหลังวันแรกของช่วง) */
+  incomplete: boolean;
+  rateChange: number | null;
+  gmvChange: number | null;
+};
+
+const monName = (m: string) => fmtMonthShort.format(new Date(`${m}-01T12:00:00Z`));
+
+function periodSeries(d: Pick<MyGmvData, "slots" | "first" | "today">, upto: string, size: 3 | 12): MyGmvPeriod[] {
+  const months = monthSeries(d, upto);
+  const keyOf = (m: string) => {
+    const y = m.slice(0, 4), i = Number(m.slice(5, 7)) - 1;
+    return size === 12 ? y : `${y}-Q${Math.floor(i / 3) + 1}`;
+  };
+  const startOf = (key: string) => (size === 12 ? `${key}-01` : `${key.slice(0, 4)}-${String((Number(key.slice(-1)) - 1) * 3 + 1).padStart(2, "0")}`);
+  const groups = new Map<string, MyGmvMonth[]>();
+  for (const m of months) groups.set(keyOf(m.month), [...(groups.get(keyOf(m.month)) ?? []), m]);
+  const todayMonth = d.today.slice(0, 7);
+  const out: MyGmvPeriod[] = [];
+  for (const [key, list] of groups) {
+    const start = startOf(key), end = shiftMonth(start, size - 1);
+    const from = list[0].month, to = list[list.length - 1].month;
+    const sum = list.reduce((a, m) => ({ gmv: a.gmv + m.gmv, hours: a.hours + m.hours, slots: a.slots + m.slots, estimated: a.estimated + m.estimated }), { gmv: 0, hours: 0, slots: 0, estimated: 0 });
+    const partial = end > upto || end >= todayMonth;
+    const incomplete = from > start;
+    const name = size === 12 ? `ปี ${key}` : `${key.slice(5)} ${key.slice(0, 4)}`;
+    const span = from === to ? monName(from) : `${monName(from)}–${monName(to)}`;
+    out.push({
+      key, label: partial || incomplete ? `${name} (${span}${partial && to >= todayMonth ? " ยังไม่จบ" : ""})` : name,
+      gmv: r2(sum.gmv), hours: r2(sum.hours), slots: sum.slots, estimated: r2(sum.estimated),
+      from, to, months: list.length, size, partial, incomplete, rateChange: null, gmvChange: null,
+    });
+  }
+  return out.map((p, i) => {
+    const prev = out[i - 1];
+    if (!prev) return p;
+    const a = rateOf(p), b = rateOf(prev);
+    const full = (x: MyGmvPeriod) => !x.partial && !x.incomplete;
+    return {
+      ...p,
+      rateChange: a !== null && b ? a / b - 1 : null,
+      gmvChange: full(p) && full(prev) && prev.gmv ? p.gmv / prev.gmv - 1 : null,
+    };
+  });
+}
+
+/** รายไตรมาส (ม.ค.–มี.ค. = Q1 …) นับถึงเดือนที่เลือก */
+export const quarterSeries = (d: Pick<MyGmvData, "slots" | "first" | "today">, upto: string) => periodSeries(d, upto, 3);
+/** รายปี นับถึงเดือนที่เลือก */
+export const yearSeries = (d: Pick<MyGmvData, "slots" | "first" | "today">, upto: string) => periodSeries(d, upto, 12);
+
 export type MyGmvSummary = {
   month: string;
   cur: MyGmvAgg;

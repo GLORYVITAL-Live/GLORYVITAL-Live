@@ -1,5 +1,5 @@
 // สไลด์ + ไฟล์ Excel "ยอดขายของฉัน" ของ Mc ประจำ (ตารางของฉัน > ยอดขายของฉัน) — ตัวเลขชุดเดียวกับหน้าเว็บ (src/lib/my-gmv.ts)
-//   สไลด์: ปก · สรุปเดือน · GMV รายเดือน · GMV/ชม. รายเดือน · GMV รายวัน · ช่วงเวลา + วันแคมเปญ · Top 5 · รายการคิว
+//   สไลด์: ปก · สรุปเดือน · GMV รายเดือน · GMV/ชม. รายเดือน · รวมรายไตรมาส · รวมรายปี · GMV รายวัน · ช่วงเวลา + วันแคมเปญ · Top 5 · รายการคิว
 //   กราฟวาดด้วยรูปทรง (shapeBars) = PowerPoint และ Google Slides หน้าตาเดียวกัน
 
 import type PptxGenJS from "pptxgenjs";
@@ -8,8 +8,8 @@ import { changeOf } from "@/lib/live-stats";
 import { SLIDE_C as C, SLIDE_FONT as FONT, SLIDE_H as H, SLIDE_M as M, SLIDE_W as W, finish, newDeck, pctColor, pctText, shapeBars } from "@/lib/live-slides";
 import {
   SOURCE_NOTE as sourceNote, SPLIT_NOTE as splitNote, baht, dayText, hrs, inMonth, monShort, monText, monthSeries, prevNote, rateOf, slotGmv, slotRate, slotTime,
-  statusText, summary,
-  type MyGmvData, type MyGmvSlot,
+  quarterSeries, statusText, summary, yearSeries,
+  type MyGmvData, type MyGmvPeriod, type MyGmvSlot,
 } from "@/lib/my-gmv";
 
 export async function buildMyGmvDeck(d: MyGmvData, month: string, exportedAt: string): Promise<Blob> {
@@ -90,6 +90,70 @@ export async function buildMyGmvDeck(d: MyGmvData, month: string, exportedAt: st
     }
   }
 
+  // รวมรายไตรมาส / รายปี (นับถึงเดือนที่เลือก · ช่วงที่ไม่ครบบอกเดือนที่นับ)
+  const head = (t: string, align: "left" | "right" = "left") => ({ text: t, options: { bold: true, color: C.white, fill: { color: C.dark }, align } });
+  const chg = (c: number | null) => ({ text: c === null ? "–" : pctText(c), options: { align: "right" as const, bold: c !== null, color: pctColor(c) } });
+  const periodRows = (list: MyGmvPeriod[]): PptxGenJS.TableRow[] => [
+    [head("ช่วง"), head("คิว", "right"), head("ชั่วโมง", "right"), head("GMV", "right"), head("GMV/ชม.", "right"), head("GMV/ชม. เทียบช่วงก่อน", "right")],
+    ...list.map((p) => [
+      { text: p.label }, { text: String(p.slots), options: { align: "right" as const } }, { text: hrs(p.hours), options: { align: "right" as const } },
+      { text: baht(p.gmv), options: { align: "right" as const, bold: true } }, { text: baht(rateOf(p)), options: { align: "right" as const } }, chg(p.rateChange),
+    ]),
+  ];
+  const tableOpts = (y: number, rows: number): PptxGenJS.TableProps => ({
+    x: M, y, w: W - 2 * M, colW: [4.0, 1.1, 1.5, 2.0, 1.7, W - 2 * M - 10.3], fontSize: rows > 5 ? 12 : 13,
+    fontFace: FONT, color: C.text, rowH: 0.34, border: { type: "solid", pt: 0.5, color: C.grid }, valign: "middle", margin: [0, 0.08, 0, 0.08],
+  });
+  const dataNote = `ยอดจับคู่กับคิวได้ตั้งแต่ ${monText(d.first)} · ${sourceNote}`;
+  const periodNote = `ลายทแยง = ไตรมาสที่ยังไม่ครบ (วงเล็บ = เดือนที่นับ) · ${dataNote}`;
+  const quarters = quarterSeries(d, month);
+  if (quarters.length) {
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText(`รวมรายไตรมาส (นับถึง${monText(month)})`, { placeholder: "title" });
+    shapeBars(pres, s, {
+      labels: quarters.map((p) => `${p.key.slice(5)} ${p.key.slice(2, 4)}`), box: { x: M, y: 1.3, w: W - 2 * M, h: 3.0 }, showValue: true, legend: false,
+      hatched: quarters.map((p) => p.partial || p.incomplete), series: [{ name: "GMV", color: C.pink, values: quarters.map((p) => p.gmv) }],
+    });
+    s.addTable(periodRows(quarters), tableOpts(4.45, quarters.length + 1));
+    text(s, periodNote, { x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 10, italic: true, color: C.muted, fit: "shrink" });
+  }
+  const years = yearSeries(d, month);
+  const year = years[years.length - 1];
+  if (year) {
+    const s = pres.addSlide({ masterName: "CONTENT" });
+    s.addText(`รวมรายปี ${year.key}${year.partial || year.incomplete ? ` (${year.from === year.to ? monShort(year.from) : `${monShort(year.from)}–${monShort(year.to)}`})` : ""}`, { placeholder: "title" });
+    const inYear = monthSeries(d, month).filter((m) => m.month.startsWith(year.key) && m.gmv > 0);
+    const bestMonth = [...inYear].sort((a, b) => b.gmv - a.gmv)[0];
+    const bestQ = quarters.filter((q) => q.key.startsWith(year.key) && q.hours > 0).sort((a, b) => (rateOf(b) ?? 0) - (rateOf(a) ?? 0))[0];
+    const cards = [
+      { label: "GMV รวม", value: baht(year.gmv), sub: `${year.months} เดือน · ${year.slots} คิว` },
+      { label: "GMV ต่อชั่วโมง", value: baht(rateOf(year)), sub: year.rateChange === null ? "ปีก่อนไม่มีข้อมูลเทียบ" : `${pctText(year.rateChange)} เทียบปีก่อน` },
+      { label: "ชั่วโมงที่มียอด", value: hrs(year.hours), sub: `เฉลี่ย ${hrs(Math.round((year.hours / (inYear.length || 1)) * 10) / 10)} ต่อเดือน` },
+      { label: "เฉลี่ยต่อเดือน", value: baht(inYear.length ? year.gmv / inYear.length : null), sub: `จาก ${inYear.length} เดือนที่มียอด` },
+    ];
+    const cw = (W - 2 * M - 3 * 0.3) / 4;
+    cards.forEach((c, i) => {
+      const x = M + i * (cw + 0.3);
+      s.addShape(pres.ShapeType.roundRect, { x, y: 1.4, w: cw, h: 1.9, fill: { color: C.tint }, line: { color: C.tint }, rectRadius: 0.12 });
+      text(s, c.label, { x: x + 0.25, y: 1.6, w: cw - 0.5, h: 0.35, fontSize: 14, color: C.muted });
+      text(s, c.value, { x: x + 0.25, y: 2.0, w: cw - 0.5, h: 0.7, fontSize: 28, bold: true, color: C.text, fit: "shrink" });
+      text(s, c.sub, { x: x + 0.25, y: 2.75, w: cw - 0.5, h: 0.35, fontSize: 12, color: C.muted, fit: "shrink" });
+    });
+    if (years.length > 1) {
+      s.addTable(periodRows(years), tableOpts(3.6, years.length + 1));
+    } else {
+      const lines = [
+        bestMonth ? `เดือนที่ยอดสูงสุด: ${monText(bestMonth.month)} ${baht(bestMonth.gmv)} (${baht(rateOf(bestMonth))}/ชม.)` : "",
+        bestQ ? `ไตรมาสที่ GMV ต่อชั่วโมงสูงสุด: ${bestQ.label} ${baht(rateOf(bestQ))}/ชม.` : "",
+        year.incomplete ? `ปี ${year.key} นับตั้งแต่ ${monText(year.from)} (ก่อนหน้านั้นยอดยังจับคู่กับคิวไม่ได้)` : "",
+        year.partial ? `ยังไม่จบปี: นับถึง${monText(year.to)}${year.to === d.today.slice(0, 7) ? ` (ถึงวันที่ ${Number(d.today.slice(8, 10))})` : ""}` : "",
+      ].filter(Boolean);
+      text(s, lines.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < lines.length - 1 } })),
+        { x: M, y: 3.7, w: W - 2 * M, h: 2.6, fontSize: 15, color: C.text, valign: "top", paraSpaceAfter: 8, fit: "shrink" });
+    }
+    text(s, years.length > 1 ? `วงเล็บ = เดือนที่นับ (ปีที่ไม่ครบ) · ${dataNote}` : dataNote, { x: M, y: 6.6, w: W - 2 * M, h: 0.3, fontSize: 10, italic: true, color: C.muted, fit: "shrink" });
+  }
+
   // 5) รายวันของเดือน
   {
     const s = pres.addSlide({ masterName: "CONTENT" });
@@ -129,7 +193,6 @@ export async function buildMyGmvDeck(d: MyGmvData, month: string, exportedAt: st
   }
 
   // 7) Top 5 + 8) รายการคิว
-  const head = (t: string, align: "left" | "right" = "left") => ({ text: t, options: { bold: true, color: C.white, fill: { color: C.dark }, align } });
   /** unitTime = เวลาเต็มของยอด (ยอดรวมหลายคิว = ตั้งแต่คิวแรก) ใช้กับ Top 5 · รายการคิว = เวลาของคิวนั้น */
   const table = (s: PptxGenJS.Slide, list: MyGmvSlot[], y: number, size: number, unitTime = false) => {
     const rows: PptxGenJS.TableRow[] = [[head("วัน"), head("เวลา"), head("ช่อง"), head("แคมเปญ"), head("GMV", "right"), head("GMV/ชม.", "right"), head("ที่มา")]];
@@ -192,5 +255,16 @@ export function myGmvBook(d: MyGmvData, month: string): ExportBook {
         .map((a) => [a.label, a.slots, { v: a.hours, f: "dec" as const }, money(a.gmv), money(rateOf(a))]),
     ],
   };
-  return { title: `${d.name} ยอดขาย ${monText(month)}`, sheets: [monthly, slots, groups] };
+  const pct = (c: number | null) => (c === null ? null : { v: Math.round(c * 10000) / 10000, f: "pct" as const });
+  const periods: ExportSheet = {
+    name: "ไตรมาส-ปี",
+    rows: [
+      ["ช่วง (นับถึงเดือนที่เลือก)", "เดือนที่นับ", "คิวที่นับยอด", "ชั่วโมงที่มียอด", "GMV", "GMV ต่อชั่วโมง", "GMV/ชม. เทียบช่วงก่อน", "GMV เทียบช่วงก่อน (เฉพาะช่วงที่ครบ)", "หมายเหตุ"],
+      ...[...quarterSeries(d, month), ...yearSeries(d, month)].map((p) => [
+        p.label, `${p.months}/${p.size}`, p.slots, { v: p.hours, f: "dec" as const }, money(p.gmv), money(rateOf(p)), pct(p.rateChange), pct(p.gmvChange),
+        [p.incomplete ? `ข้อมูลเริ่ม ${monText(p.from)}` : "", p.partial ? "ยังไม่ครบช่วง" : ""].filter(Boolean).join(" · "),
+      ]),
+    ],
+  };
+  return { title: `${d.name} ยอดขาย ${monText(month)}`, sheets: [monthly, periods, slots, groups] };
 }

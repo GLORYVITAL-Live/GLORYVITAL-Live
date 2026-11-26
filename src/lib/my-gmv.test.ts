@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CampInfo } from "@/lib/campaign";
 import type { CtxSlot } from "@/lib/campaign-data";
-import { monthSeries, summary, toMyGmvSlots } from "@/lib/my-gmv";
+import { monthSeries, quarterSeries, summary, toMyGmvSlots, yearSeries } from "@/lib/my-gmv";
 
 const at = (date: string, hm: string) => Date.parse(`${date}T${hm}:00+07:00`);
 let id = 0;
@@ -89,6 +89,27 @@ describe("summary", () => {
   });
   test("รายเดือน: เดือนที่ยังไม่จบ = partial", () => {
     expect(monthSeries(d, "2026-11").map((m) => [m.month, m.gmv, m.partial])).toEqual([["2026-10", 250_000, false], ["2026-11", 380_000, true]]);
+  });
+  test("รายไตรมาส / รายปี: ป้ายบอกช่วงที่ไม่ครบ · เทียบ GMV/ชม.", () => {
+    const d2 = { ...d, first: "2026-08" };
+    const q = quarterSeries(d2, "2026-11");
+    expect(q.map((p) => [p.key, p.label, p.gmv, p.months, p.partial, p.incomplete])).toEqual([
+      ["2026-Q3", "Q3 2026 (ส.ค.–ก.ย.)", 0, 2, false, true],
+      ["2026-Q4", "Q4 2026 (ต.ค.–พ.ย. ยังไม่จบ)", 630_000, 2, true, false],
+    ]);
+    expect(q[1].gmvChange).toBeNull();
+    const y = yearSeries(d2, "2026-11");
+    expect(y.map((p) => [p.label, p.gmv, p.hours])).toEqual([["ปี 2026 (ส.ค.–พ.ย. ยังไม่จบ)", 630_000, 10]]);
+    // เลือกเดือนที่จบแล้ว: นับถึงเดือนนั้น (ไตรมาสที่ยังมีเดือนหลังจากนั้น = ไม่ครบ)
+    expect(quarterSeries(d2, "2026-10").map((p) => [p.label, p.gmv])).toEqual([["Q3 2026 (ส.ค.–ก.ย.)", 0], ["Q4 2026 (ต.ค.)", 250_000]]);
+  });
+  test("ไตรมาสครบทั้งคู่ = เทียบยอดรวมได้", () => {
+    const s2 = toMyGmvSlots([
+      slot("2026-01-10", "11:30", "13:30", { gmv: 100_000 }),
+      slot("2026-04-10", "11:30", "13:30", { gmv: 150_000 }),
+    ], now);
+    const q = quarterSeries({ slots: s2, first: "2026-01", today: "2026-11-26" }, "2026-06");
+    expect(q.map((p) => [p.label, p.gmvChange, p.rateChange])).toEqual([["Q1 2026", null, null], ["Q2 2026", 0.5, 0.5]]);
   });
   test("เดือนที่จบแล้ว ไม่มี prevSame", () => {
     expect(summary(d, "2026-10").prevSame).toBeNull();

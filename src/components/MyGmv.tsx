@@ -3,8 +3,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { InfoIcon } from "lucide-react";
 import {
-  SOURCE_NOTE, SPLIT_NOTE, STATUS_TEXT, baht, dayText, hrs, inMonth, monShort, monText, monthSeries, prevNote, rateOf, shiftMonth, slotGmv, slotRate, slotTime, summary,
-  type MyGmvAgg, type MyGmvData, type MyGmvSlot,
+  SOURCE_NOTE, SPLIT_NOTE, STATUS_TEXT, baht, dayText, hrs, inMonth, monShort, monText, monthSeries, prevNote, quarterSeries, rateOf, shiftMonth, slotGmv, slotRate, slotTime, summary, yearSeries,
+  type MyGmvAgg, type MyGmvData, type MyGmvPeriod, type MyGmvSlot,
 } from "@/lib/my-gmv";
 import { BarChart, ChangeBadge, TableView } from "@/components/LiveCharts";
 import { ExportMenu, SlidesMenu } from "@/components/ExportMenu";
@@ -192,6 +192,13 @@ function Report({ data, month }: { data: MyGmvData; month: string }) {
         </Section>
       ) : null}
 
+      <Section
+        title={`รวมรายไตรมาส / รายปี (นับถึง${monText(month)})`}
+        note={`ช่วงที่ไม่ครบบอกเดือนที่นับไว้ในวงเล็บ · ยอดจับคู่กับคิวได้ตั้งแต่ ${monText(data.first)} · เทียบช่วงก่อนด้วย GMV ต่อชั่วโมง`}
+      >
+        <PeriodTable rows={[...quarterSeries(data, month), ...yearSeries(data, month)]} />
+      </Section>
+
       <Section title={`GMV รายวัน ${monText(month)}`} note={SPLIT_NOTE}>
         <BarChart
           label="GMV รายวัน" categories={sum.days.map((d) => String(Number(d.date.slice(8, 10))))} tooltipTitles={sum.days.map((d) => dayText(d.date))}
@@ -274,6 +281,38 @@ function AggTable({ rows, bars = false }: { rows: (MyGmvAgg & { label: string })
                     {baht(rateOf(r))}
                   </span>
                 ) : baht(rateOf(r))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** ตารางไตรมาส / ปี: GMV · ชม. · GMV/ชม. · เทียบช่วงก่อน (GMV/ชม.) */
+function PeriodTable({ rows }: { rows: MyGmvPeriod[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs tabular-nums">
+        <thead className="text-muted-foreground">
+          <tr className="border-b text-right">
+            <th className="py-1 text-left font-medium">ช่วง</th>
+            <th className="py-1 font-medium">ชม.</th>
+            <th className="py-1 font-medium">GMV</th>
+            <th className="py-1 pl-2 font-medium">GMV/ชม.</th>
+            <th className="py-1 pl-2 font-medium">เทียบช่วงก่อน</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} className={cn("border-b last:border-0 text-right", r.size === 12 && "font-semibold")}>
+              <td className="py-1.5 pr-2 text-left">{r.label}</td>
+              <td className="py-1.5">{Number.isInteger(r.hours) ? r.hours : r.hours.toFixed(1)}</td>
+              <td className="py-1.5 pl-2">{baht(r.gmv)}</td>
+              <td className="py-1.5 pl-2">{baht(rateOf(r))}</td>
+              <td className={cn("py-1.5 pl-2", r.rateChange === null ? "text-muted-foreground" : r.rateChange >= 0 ? "text-success" : "text-destructive")}>
+                {r.rateChange === null ? "–" : `${r.rateChange >= 0 ? "▲" : "▼"} ${Math.abs(r.rateChange * 100).toFixed(1)}%`}
               </td>
             </tr>
           ))}
