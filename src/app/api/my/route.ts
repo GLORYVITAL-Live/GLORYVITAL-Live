@@ -116,6 +116,8 @@ export async function GET(request: Request) {
       commitTiers: salaried ? [] : lock ? lock.tiers : cleanTiers(staff.data.commit_tiers),
       // ค่าจ้างคิว Shopee ที่ตั้งแยก (null = เท่ากับ TikTok) — ตัวเลขเดียวกับหน้าสรุปของเจ้าของ (src/lib/pay.ts platformRates)
       shopeeRate: salaried || role !== "mc" ? null : lock ? lock.shopeeRate : Number(extraRow.data?.shopee_rate) || null,
+      // Mc ประจำ ดูยอดขายของตัวเองได้ (ปุ่ม "ยอดขายของฉัน" · /api/my/gmv ตรวจสิทธิ์ซ้ำ)
+      ...(role === "mc" && staff.data.is_salaried ? { ownGmv: true } : {}),
     },
     payments: (paid.map.get(person.id) ?? []).map((p) => ({ amount: p.amount, paidOn: p.paidOn })),
     // ชื่อช่องในรายการคิวของ Mc ในเครือ = ชื่อที่แสดง (เหมือน items)

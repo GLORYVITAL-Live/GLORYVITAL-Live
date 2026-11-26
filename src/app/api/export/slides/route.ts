@@ -2,6 +2,7 @@ import { Readable } from "stream";
 import { google } from "googleapis";
 import { fail, ok, requireMe } from "@/lib/api";
 import { googleAuth } from "@/lib/google";
+import { ownGmvMc } from "@/lib/my-gmv-db";
 
 // แปลงไฟล์สไลด์ (.pptx ที่สร้างในเบราว์เซอร์) เป็น Google Slides เฉพาะ Owner / Marketing (หน้า CEO Live)
 //   POST ?title=...  body = ไฟล์ .pptx -> สร้างในไดรฟ์ของบัญชีระบบ แชร์สิทธิ์แก้ไขให้คนที่กด แล้วคืนลิงก์ { url }
@@ -15,7 +16,10 @@ export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
   const o = r.me.owner;
-  if (!r.me.marketing && !(o && (o.see.analytics || o.see.mc || o.see.admin))) return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
+  //   + Mc ประจำ (สไลด์ยอดขายของตัวเอง · ตารางของฉัน > ยอดขายของฉัน)
+  if (!r.me.marketing && !(o && (o.see.analytics || o.see.mc || o.see.admin)) && !(await ownGmvMc(r.me))) {
+    return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
+  }
   const title = (new URL(request.url).searchParams.get("title") ?? "").trim().slice(0, 150) || "GLORY VITAL สไลด์";
   const data = Buffer.from(await request.arrayBuffer());
   if (!data.length || data.length > MAX_BYTES) return fail("ไฟล์สไลด์ว่างหรือใหญ่เกินไป");

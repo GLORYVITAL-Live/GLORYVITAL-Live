@@ -2,6 +2,7 @@ import { google, type sheets_v4 } from "googleapis";
 import { fail, ok, requireMe } from "@/lib/api";
 import { cleanBook, isUrl, sheetNames, styleAt, type Cell, type RowStyle } from "@/lib/export";
 import { googleAuth } from "@/lib/google";
+import { ownGmvMc } from "@/lib/my-gmv-db";
 
 // ส่งออกเป็น Google Sheet (หน้าเจ้าของ: สรุปรายเดือน / สถิติไลฟ์ / Plan Slot Live) เฉพาะ Owner / Marketing (หน้า CEO Live)
 //   POST { title, sheets: [{ name, rows, header }] } -> สร้างไฟล์ใหม่ในไดรฟ์ของบัญชีระบบ
@@ -60,8 +61,8 @@ export async function POST(request: Request) {
   const r = await requireMe();
   if ("res" in r) return r.res;
   const o = r.me.owner;
-  // ดูได้อย่างเดียวก็ส่งออกได้ (เป็นข้อมูลที่เห็นในหน้าอยู่แล้ว) · Marketing = ไฟล์ของหน้า CEO Live
-  if (!r.me.marketing && !(o && (o.see.mc || o.see.admin || o.see.analytics || o.see.plan || o.see.proofs))) {
+  // ดูได้อย่างเดียวก็ส่งออกได้ (เป็นข้อมูลที่เห็นในหน้าอยู่แล้ว) · Marketing = ไฟล์ของหน้า CEO Live · Mc ประจำ = ยอดขายของตัวเอง
+  if (!r.me.marketing && !(o && (o.see.mc || o.see.admin || o.see.analytics || o.see.plan || o.see.proofs)) && !(await ownGmvMc(r.me))) {
     return fail("บัญชีนี้ไม่มีสิทธิ์ส่งออกข้อมูล", 403);
   }
   const book = cleanBook(await request.json().catch(() => null));

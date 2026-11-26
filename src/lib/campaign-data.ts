@@ -30,6 +30,7 @@ export type CtxSlot = {
   hours: number;
   band: Band;
   mc: string; // "Mc ชื่อ"
+  mcId: number;
   gmv: number | null; // ยอดที่กรอกใน slot
   camp: CampInfo | null;
   /** ยอดจาก Export ที่แบ่งให้ slot นี้ (ประมาณ) */
@@ -78,7 +79,7 @@ export async function loadCampaignContext(first: string, last: string): Promise<
     const startMs = Date.parse(r.starts_at), endMs = Date.parse(r.ends_at);
     return {
       id: Number(r.id), platform: r.platform, date: r.live_date, startMs, endMs, hours: (endMs - startMs) / 3600_000,
-      band: bandOf(r.start_time), mc: `Mc ${r.person!.name}`, gmv: r.gmv === null ? null : Number(r.gmv),
+      band: bandOf(r.start_time), mc: `Mc ${r.person!.name}`, mcId: Number(r.mc_id), gmv: r.gmv === null ? null : Number(r.gmv),
       camp: camps.get(Number(r.id)) ?? null, exp: null, expRate: null, normRate: null, standby: isStandby(r.remark),
     };
   });

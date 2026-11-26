@@ -446,8 +446,9 @@ export type MyResponse = {
    * โปรไฟล์ของตัวเอง rate = ค่าจ้างต่อชั่วโมงปกติ (0 = ยังไม่ได้ตั้ง)
    * commitTiers = เทียร์ Commit (ว่าง = ไม่มี) จองถึงเทียร์ไหน ทุกชั่วโมงของเดือนคิดราคาเทียร์นั้น
    * shopeeRate = ค่าจ้างคิว Shopee ที่ตั้งแยก (null = เท่ากับ TikTok) — src/lib/pay.ts platformRates
+   * ownGmv = Mc ประจำ ดูยอดขาย (GMV) ของตัวเองได้ (src/lib/my-gmv-db.ts)
    */
-  profile: { name: string; email: string; phone: string; rate: number; commitTiers: CommitTier[]; shopeeRate?: number | null };
+  profile: { name: string; email: string; phone: string; rate: number; commitTiers: CommitTier[]; shopeeRate?: number | null; ownGmv?: boolean };
   /** การโอนค่าจ้างของเดือนนี้ (ยังไม่มี / ยังไม่ได้รัน SQL = ว่าง) */
   payments?: { amount: number; paidOn: string }[];
   /** Mc ในเครือที่จ่ายค่าตัวผ่านคนนี้: ยอดของเดือนนี้ (รวมอยู่ในยอดที่ต้องได้ / การโอน) */

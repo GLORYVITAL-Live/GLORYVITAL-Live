@@ -7,7 +7,7 @@ import { bonusPaidMinutes, lateCut, paidHours, platformRates, slotPay, tiersLabe
 import { NIGHT_CANCEL_TEXT, UNDO_MINUTES, cancelContact, inUndoWindow, isNightCancel } from "@/lib/cancel-rule";
 import Link from "next/link";
 import {
-  BookOpenIcon, CalendarIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ReceiptTextIcon, ShirtIcon, SparklesIcon, UserIcon,
+  BookOpenIcon, CalendarIcon, ChartColumnIcon, ChevronRightIcon, ClipboardListIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ReceiptTextIcon, ShirtIcon, SparklesIcon, UserIcon,
   WalletIcon,
 } from "lucide-react";
 import { FrameMedia } from "@/components/FrameMedia";
@@ -15,6 +15,7 @@ import { LookDialog } from "@/components/LookGuide";
 import {
   AppDialog, DayBadge, DialogActions, DialogBody, MonthNav, PlatformBadge, Stats, api, useToast,
 } from "@/components/shared";
+import { MyGmv } from "@/components/MyGmv";
 import { MyRank, RankChip, useMyRank } from "@/components/MyRank";
 import { MyTawi } from "@/components/MyTawi";
 import { WorkLocationLink, useWorkLocation } from "@/components/WorkLocation";
@@ -45,6 +46,8 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
   const [detail, setDetail] = useState<MyItem | null>(null);
   // Look แต่งหน้า/แต่งตัว (รูป Ref ผู้หญิง / ผู้ชาย)
   const [look, setLook] = useState(false);
+  // ยอดขายของฉัน (เฉพาะ Mc ประจำ · profile.ownGmv)
+  const [gmv, setGmv] = useState(false);
   // แร็งค์ของ Mc (ป้ายข้างชื่อ + กล่องท้ายรายการคิว)
   const rank = useMyRank(open && role === "mc");
 
@@ -121,7 +124,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
 
   return (
     <>
-      <AppDialog open={open && !cancelItem && !detail && !look} onClose={onClose} title="ตารางของฉัน">
+      <AppDialog open={open && !cancelItem && !detail && !look && !gmv} onClose={onClose} title="ตารางของฉัน">
         <div className="flex items-center gap-3 rounded-xl border px-3 py-2">
           <Avatar size="lg" aria-hidden>
             <AvatarFallback className="bg-primary text-base font-bold text-primary-foreground">
@@ -214,6 +217,11 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
         <DialogBody>
           {/* ลิงก์ + ใบ 50 ทวิ อยู่ในส่วนที่เลื่อนได้: กล่อง 50 ทวิสูงขึ้นได้ (ฟอร์มยืนยัน / เดือนอื่น) ถ้าอยู่ส่วนบนจะดันรายการคิวจนเลื่อนดูวันอื่นไม่ได้ */}
           <div className="flex flex-wrap gap-x-4">
+            {profile?.ownGmv ? (
+              <Button variant="link" onClick={() => setGmv(true)} className="h-auto px-0 font-semibold">
+                <ChartColumnIcon />ยอดขายของฉัน (GMV)
+              </Button>
+            ) : null}
             <Button variant="link" onClick={onOpenRules} className="h-auto px-0 font-semibold">
               <ClipboardListIcon />กฎการทำงาน
             </Button>
@@ -339,6 +347,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
       </AppDialog>
 
       <LookDialog open={open && look} onClose={() => setLook(false)} />
+      {profile?.ownGmv ? <MyGmv open={open && gmv} onClose={() => setGmv(false)} /> : null}
 
       <SlotDetail
         item={detail}
