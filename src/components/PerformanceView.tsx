@@ -24,20 +24,23 @@ export function PerformanceView() {
   const tab = saved === "campaign" || saved === "gmv" || (saved === "tiktok" && tiktok) ? saved : "rank";
   return (
     <div className="pb-10">
-      <ToggleGroup
-        type="single" spacing={1} value={tab}
-        onValueChange={(v) => { if (v) writeLocal(PERF_TAB_KEY, v); }}
-        aria-label="ผลงาน Mc" className="mt-1 rounded-full border bg-card p-1"
-      >
-        {tabs.map(([id, text]) => (
-          <ToggleGroupItem
-            key={id} value={id}
-            className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!"
-          >
-            {text}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
+      {/* แท็บย่อย 4 อัน กว้างเกินจอมือถือ (~425px): เลื่อนซ้ายขวาในแถบเอง ไม่ดันทั้งหน้าให้กว้างเกิน */}
+      <div className="no-scrollbar -mx-1 overflow-x-auto px-1">
+        <ToggleGroup
+          type="single" spacing={1} value={tab}
+          onValueChange={(v) => { if (v) writeLocal(PERF_TAB_KEY, v); }}
+          aria-label="ผลงาน Mc" className="mt-1 rounded-full border bg-card p-1"
+        >
+          {tabs.map(([id, text]) => (
+            <ToggleGroupItem
+              key={id} value={id}
+              className="rounded-full! px-4 text-[13px] font-semibold text-muted-foreground data-[state=on]:bg-tint! data-[state=on]:text-tint-foreground!"
+            >
+              {text}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </div>
       {tab === "rank" ? <McRankPanel /> : tab === "gmv" ? <McGmvPanel /> : tab === "tiktok" ? <TiktokMcPanel /> : <CampaignView />}
     </div>
   );

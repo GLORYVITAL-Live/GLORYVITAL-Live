@@ -49,7 +49,7 @@ export function LookDialog({ open, onClose }: { open: boolean; onClose: () => vo
   const look = data?.looks[tab] ?? null;
 
   return (
-    <AppDialog open={open} onClose={onClose} title="Look แต่งหน้า / แต่งตัว" description="โทนการแต่งหน้าแต่งตัวที่ใช้ทุกไลฟ์ ดูรูป Ref แล้วแต่งให้ใกล้เคียง">
+    <AppDialog open={open} onClose={onClose} title="Look แต่งหน้า / แต่งตัว Mc" description="โทนการแต่งหน้าแต่งตัวที่ใช้ทุกไลฟ์ ดูรูป Ref แล้วแต่งให้ใกล้เคียง">
       <ToggleGroup type="single" variant="outline" spacing={0} value={tab} onValueChange={pick} aria-label="Look" className="w-full bg-card">
         {LOOK_GENDERS.map((g) => (
           <ToggleGroupItem key={g} value={g} className="flex-1 font-semibold">{LABEL[g]}</ToggleGroupItem>

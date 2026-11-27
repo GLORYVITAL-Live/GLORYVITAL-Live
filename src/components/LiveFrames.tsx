@@ -175,9 +175,9 @@ function LookEditors() {
 
   return (
     <section className="mb-6">
-      <h2 className="mb-1 text-base font-bold">Look แต่งหน้า / แต่งตัว</h2>
+      <h2 className="mb-1 text-base font-bold">Look แต่งหน้า / แต่งตัว Mc</h2>
       <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
-        โทนการแต่งหน้าแต่งตัวที่ใช้ทุกไลฟ์ (ไม่ขึ้นกับเฟรม) — Mc / Admin เห็นในโปรไฟล์ของตัวเอง (ตารางของฉัน → Look แต่งหน้า/แต่งตัว)
+        โทนการแต่งหน้าแต่งตัวที่ใช้ทุกไลฟ์ (ไม่ขึ้นกับเฟรม) — Mc / Admin เห็นในโปรไฟล์ของตัวเอง (ตารางของฉัน → Look แต่งหน้า/แต่งตัว Mc)
       </p>
       {!data ? (
         error ? <LoadError title="โหลด Look ไม่สำเร็จ" message={error} onRetry={reload} /> : <LoadingBlock className="h-24" />

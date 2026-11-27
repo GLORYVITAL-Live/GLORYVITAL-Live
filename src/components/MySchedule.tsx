@@ -229,7 +229,7 @@ export function MySchedule({ open, onClose, role, who, onOpenRules, onOpenPayDoc
               <IdCardIcon />เอกสารทำเบิก
             </Button>
             <Button variant="link" onClick={() => setLook(true)} className="h-auto px-0 font-semibold">
-              <SparklesIcon />Look แต่งหน้า/แต่งตัว
+              <SparklesIcon />Look แต่งหน้า/แต่งตัว Mc
             </Button>
             {/* หน้าวิธีใช้ (/guide): วิดีโอเพิ่มเว็บไว้หน้าจอโฮม + แชร์ปฏิทิน */}
             <Button variant="link" className="h-auto px-0 font-semibold" asChild>
